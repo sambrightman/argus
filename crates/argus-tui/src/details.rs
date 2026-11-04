@@ -205,6 +205,10 @@ fn describe(i: &Issue, default: Option<&str>) -> (Role, String) {
         ),
         Issue::Stashes(n) => (Role::Stash, format!("{n} stash(es)")),
         Issue::Behind(n) => (Role::Behind, format!("{n} commit(s) behind upstream")),
+        Issue::DetachedCommits(n) => (
+            Role::Conflict,
+            format!("{n} commit(s) on detached HEAD in no branch: create one before switching"),
+        ),
         Issue::NoRemote => (Role::Dim, "no remote".into()),
     }
 }

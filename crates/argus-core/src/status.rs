@@ -135,6 +135,9 @@ pub struct RepoStatus {
     pub upstream: Option<Tracking>,
     pub changes: Changes,
     pub stashes: usize,
+    /// Detached HEAD only: commits reachable from HEAD but from no branch,
+    /// tag or remote ref (lost to gc once HEAD moves).
+    pub detached_orphans: usize,
     pub in_progress: Option<InProgress>,
     pub branches: Vec<BranchInfo>,
     /// Linked worktrees (excluding the main one).
@@ -144,6 +147,10 @@ pub struct RepoStatus {
     pub last_fetch: Option<Timestamp>,
     pub last_commit: Option<Timestamp>,
     pub bare: bool,
+    /// A linked worktree: shares branches with its main checkout.
+    pub linked_worktree: bool,
+    /// A submodule: a detached HEAD at the parent's pinned commit is normal.
+    pub submodule: bool,
 }
 
 impl RepoStatus {
@@ -228,6 +235,12 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
     } else {
         changes(repo, opts)?
     };
+    let detached_orphans = match &head {
+        Head::Detached(_) if repo.kind() != gix::repository::Kind::Submodule => {
+            detached_orphans(repo)?
+        }
+        _ => 0,
+    };
 
     Ok(RepoStatus {
         head,
@@ -237,6 +250,7 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         upstream,
         changes,
         stashes: stash_count(repo.common_dir()),
+        detached_orphans,
         in_progress: repo.state().map(map_state),
         branches,
         worktrees: worktrees(repo),
@@ -249,6 +263,8 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
             .and_then(|c| c.time().ok())
             .and_then(|t| Timestamp::from_second(t.seconds).ok()),
         bare,
+        linked_worktree: repo.kind() == gix::repository::Kind::LinkedWorkTree,
+        submodule: repo.kind() == gix::repository::Kind::Submodule,
     })
 }
 
@@ -555,6 +571,37 @@ fn collapse_untracked(
         }
     }
     Ok(())
+}
+
+fn detached_orphans(repo: &gix::Repository) -> Result<usize, StatusError> {
+    let Ok(head) = repo.head_id() else {
+        return Ok(0);
+    };
+    let platform = repo.references().map_err(err)?;
+    let mut tips = vec![];
+    // not `all()`: stash commits have HEAD as a parent and would hide everything
+    for prefix in ["refs/heads/", "refs/remotes/", "refs/tags/"] {
+        for r in platform.prefixed(prefix).map_err(err)? {
+            let mut r = r.map_err(err)?;
+            if let Ok(id) = r.peel_to_id() {
+                tips.push(id.detach());
+            }
+        }
+    }
+    if tips.contains(&head.detach()) {
+        return Ok(0); // e.g. a checked-out tag: no walk needed
+    }
+    let walk = repo
+        .rev_walk([head.detach()])
+        .with_hidden(tips)
+        .all()
+        .map_err(err)?;
+    let mut n = 0;
+    for info in walk {
+        info.map_err(err)?;
+        n += 1;
+    }
+    Ok(n)
 }
 
 fn stash_count(common_dir: &Path) -> usize {

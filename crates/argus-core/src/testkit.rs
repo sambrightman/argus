@@ -152,3 +152,24 @@ impl Sandbox {
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 }
+
+/// Environment for running argus/git as a subprocess in isolation: private
+/// git config, and `HOME`/XDG dirs inside `home`.
+pub fn subprocess_env(home: &Path) -> Vec<(String, String)> {
+    let cfg = global_config();
+    vec![
+        ("GIT_CONFIG_GLOBAL".into(), cfg.display().to_string()),
+        ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+        ("HOME".into(), home.display().to_string()),
+        (
+            "XDG_CONFIG_HOME".into(),
+            home.join(".config").display().to_string(),
+        ),
+        (
+            "XDG_STATE_HOME".into(),
+            home.join(".state").display().to_string(),
+        ),
+        ("NO_COLOR".into(), "1".into()),
+        ("GH_TOKEN".into(), String::new()),
+    ]
+}

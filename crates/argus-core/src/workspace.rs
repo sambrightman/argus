@@ -58,8 +58,18 @@ impl Entry {
     }
 
     pub fn display_name(&self) -> String {
-        match (&self.id, self.kind) {
-            (Some(id), RepoKind::Main | RepoKind::Bare) => id.slug(),
+        match (&self.id, self.kind, &self.parent) {
+            (Some(id), RepoKind::Main | RepoKind::Bare, _) => id.slug(),
+            // children are shown under their parent: keep them short
+            (_, RepoKind::Worktree | RepoKind::Submodule, Some(parent)) => {
+                match self.path.strip_prefix(parent) {
+                    Ok(rel) => rel.display().to_string(),
+                    Err(_) => self.path.file_name().map_or_else(
+                        || contract_tilde(&self.path),
+                        |n| n.to_string_lossy().into_owned(),
+                    ),
+                }
+            }
             _ => contract_tilde(&self.path),
         }
     }

@@ -20,6 +20,8 @@ pub enum Issue {
     /// Other local branches with commits that exist nowhere else.
     UnpushedBranches(usize),
     Detached,
+    /// Detached HEAD with commits no ref holds.
+    DetachedCommits(usize),
     OffDefault,
     Stashes(usize),
     Behind(usize),
@@ -31,6 +33,7 @@ impl Issue {
     pub fn severity(self) -> u32 {
         match self {
             Issue::Conflicts(_) | Issue::InProgress => 100,
+            Issue::DetachedCommits(_) => 70,
             Issue::Unpushed(_) => 60,
             Issue::Dirty(_) => 50,
             Issue::UpstreamGone => 40,
@@ -80,11 +83,18 @@ pub fn issues(s: &RepoStatus) -> Vec<Issue> {
         .iter()
         .filter(|b| !b.is_head && b.is_unpushed())
         .count();
-    if others > 0 {
+    // Branches are shared between worktrees; the main checkout reports them.
+    if others > 0 && !s.linked_worktree {
         v.push(Issue::UnpushedBranches(others));
     }
     match &s.head {
-        Head::Detached(_) => v.push(Issue::Detached),
+        Head::Detached(_) if s.submodule => {}
+        Head::Detached(_) => {
+            v.push(Issue::Detached);
+            if s.detached_orphans > 0 {
+                v.push(Issue::DetachedCommits(s.detached_orphans));
+            }
+        }
         Head::Branch(_) if s.default_branch.is_some() && !s.on_default() => {
             v.push(Issue::OffDefault)
         }

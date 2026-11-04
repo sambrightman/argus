@@ -9,7 +9,10 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let root = args.next().expect("root");
     let keys = args.next().unwrap_or_default();
-    let cfg = Config { roots: vec![root.into()], ..Default::default() };
+    let cfg = Config {
+        roots: vec![root.into()],
+        ..Default::default()
+    };
     let mut ws = Workspace::new(cfg, State::default()).unwrap();
     ws.scan();
     let mut app = App::new(ws);

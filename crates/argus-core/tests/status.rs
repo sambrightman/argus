@@ -500,3 +500,91 @@ fn other_branch_pushed_to_any_remote_is_not_unpushed() {
         "{is:?}"
     );
 }
+
+#[test]
+fn linked_worktree_does_not_repeat_other_branch_issues() {
+    // Seen in the wild: main ahead of origin, plus a detached worktree.
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    commit(&r, "unpushed on main");
+    let wt = sb.path("wt");
+    git(
+        &r,
+        &["worktree", "add", "-q", "--detach", wt.to_str().unwrap()],
+    );
+    let is = issues(&st(&wt));
+    assert!(
+        !is.iter().any(|i| matches!(i, Issue::UnpushedBranches(_))),
+        "{is:?}"
+    );
+    assert!(is.contains(&Issue::Detached));
+    // inverse: the main checkout still reports its own other unpushed branches
+    git(&r, &["switch", "-q", "-c", "other"]);
+    commit(&r, "other");
+    git(&r, &["switch", "-q", "main"]);
+    assert!(issues(&st(&r)).contains(&Issue::UnpushedBranches(1)));
+}
+
+#[test]
+fn detached_commits_on_no_branch_are_flagged() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    git(&r, &["checkout", "-q", "--detach"]);
+    // inverse first: detached on a pushed commit is merely "detached"
+    let is = issues(&st(&r));
+    assert!(
+        is.contains(&Issue::Detached) && !is.iter().any(|i| matches!(i, Issue::DetachedCommits(_))),
+        "{is:?}"
+    );
+    commit(&r, "orphan 1");
+    commit(&r, "orphan 2");
+    let is = issues(&st(&r));
+    assert_eq!(is[0], Issue::DetachedCommits(2), "{is:?}");
+    // once a branch holds them they're no longer at risk
+    git(&r, &["branch", "keep"]);
+    assert!(
+        !issues(&st(&r))
+            .iter()
+            .any(|i| matches!(i, Issue::DetachedCommits(_)))
+    );
+}
+
+#[test]
+fn submodule_detached_head_is_normal() {
+    // Seen in the wild: a submodule pinned to a commit its stale remote refs
+    // don't contain was reported as 218 orphaned commits.
+    let sb = Sandbox::new();
+    let lib = sb.init("lib");
+    let r = sb.init("r");
+    git(
+        &r,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            lib.to_str().unwrap(),
+            "lib",
+        ],
+    );
+    commit(&r, "sub");
+    // advance the submodule source, then pin the submodule to the new commit by id
+    commit(&lib, "new upstream work");
+    let id = git(&lib, &["rev-parse", "HEAD"]);
+    let sub = r.join("lib");
+    git(&sub, &["fetch", "-q", "origin", id.trim()]);
+    git(&sub, &["checkout", "-q", id.trim()]);
+    let s = st(&sub);
+    assert!(matches!(s.head, Head::Detached(_)));
+    let is = issues(&s);
+    assert!(
+        !is.iter()
+            .any(|i| matches!(i, Issue::Detached | Issue::DetachedCommits(_))),
+        "{is:?}"
+    );
+    // inverse: the parent sees the submodule moved
+    assert_eq!(st(&r).changes.unstaged, 1);
+}

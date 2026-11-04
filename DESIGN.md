@@ -129,3 +129,34 @@ unborn HEAD, detached HEAD, no remote, upstream gone, worktrees, submodules,
 nested repos, bare repos and symlink loops. The forge uses a fake `Forge` impl
 plus JSON fixture parsing tests. The TUI state machine is unit-tested, and
 rendering is snapshot-tested via `TestBackend`.
+
+## 8. Decisions made during the build
+
+* **"Unpushed" means "on no remote-tracking ref"**, not "ahead of upstream".
+  On real data, a fork branch that tracked `upstream/master` but was pushed
+  to `origin/<branch>` was flagged as unpushed. Worse, a `push` fix was
+  offered that would have pushed to the upstream owner's repo. `push` now
+  requires a same-named upstream. `↑n` still shows git's ahead count.
+* **Untracked collapsing is done by argus.** gix's collapsed directory walk
+  reported a directory holding only ignored files and empty directories as
+  untracked (seen in an Xcode project). We ask gix for individual files and
+  collapse to the outermost directory with no tracked content, matching
+  `git status`.
+* **Linked worktrees don't repeat branch issues** (branches are shared; the
+  main checkout reports them). **Submodules don't report detached HEAD**:
+  being detached at the pinned commit is normal, and drift shows as a
+  modification in the parent.
+* **Detached HEAD commits held by no ref** (garbage-collection risk) are
+  their own high-severity issue.
+* **Shell/git-UI hand-off suspends the TUI**, as lazygit does. An embedded pty
+  pane (portable-pty + tui-term) is the next step for "contained within the TUI".
+
+## 9. Not done yet / next steps
+
+* Embedded terminal pane; per-file actions in the details view (stage,
+  discard, diff); deleting merged branches; worktree pruning.
+* Orphans (local clones the forge no longer lists): reported only, no
+  archive/move action.
+* GitLab/Gitea forges (implement `argus_core::forge::Forge`); jj backend.
+* `argus-server` (axum, JSON over the same `Workspace`).
+* Filesystem watching for live refresh. Today: `g`, and after each operation.

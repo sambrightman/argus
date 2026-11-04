@@ -169,6 +169,12 @@ fn worktrees_and_submodules_become_children() {
     for &i in &order[1..] {
         assert_eq!(w.entries[i].parent.as_deref(), Some(app.as_path()));
     }
+    // children are named compactly: relative to the parent, else by directory name
+    let names: Vec<_> = order[1..]
+        .iter()
+        .map(|&i| w.entries[i].display_name())
+        .collect();
+    assert_eq!(names, vec!["app-wt", "lib"]);
 }
 
 #[test]

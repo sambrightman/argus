@@ -218,8 +218,10 @@ pub fn state(e: &Entry, i: &Icons) -> Vec<Badge> {
         push(Role::Stash, format!("{}{}", i.stash, s.stashes));
     }
     for issue in &e.issues {
-        if let Issue::UnpushedBranches(n) = issue {
-            push(Role::Warning, format!("{}{n}", i.branches));
+        match issue {
+            Issue::UnpushedBranches(n) => push(Role::Warning, format!("{}{n}", i.branches)),
+            Issue::DetachedCommits(n) => push(Role::Conflict, format!("{}{n}", i.detached)),
+            _ => {}
         }
     }
     v
