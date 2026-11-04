@@ -907,7 +907,7 @@ impl App {
                     .unwrap_or_default();
                 match applied {
                     Ok(list) => {
-                        for a in list {
+                        if let Some(a) = list {
                             let ok = a.outcome.success;
                             self.push_log(&path, a.fix.op.label(), ok, a.outcome.output);
                             if !ok {
