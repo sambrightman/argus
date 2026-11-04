@@ -122,7 +122,19 @@ impl Sandbox {
         let rewrite = format!("url.{forge}.insteadOf=https://github.com/");
         let url = format!("https://github.com/{owner}/{name}.git");
         let dest = self.path(rel);
-        git(&self.root(), &["-c", &rewrite, "clone", "-q", "--config", &rewrite, &url, dest.to_str().unwrap()]);
+        git(
+            &self.root(),
+            &[
+                "-c",
+                &rewrite,
+                "clone",
+                "-q",
+                "--config",
+                &rewrite,
+                &url,
+                dest.to_str().unwrap(),
+            ],
+        );
         dest
     }
 
@@ -130,7 +142,10 @@ impl Sandbox {
     pub fn advance_remote(&self, owner: &str, name: &str, file: &str) {
         let bare = self.path(&format!("forge/{owner}/{name}.git"));
         let tmp = self.path(&format!("scratch/{owner}/{name}-{file}"));
-        git(&self.root(), &["clone", "-q", bare.to_str().unwrap(), tmp.to_str().unwrap()]);
+        git(
+            &self.root(),
+            &["clone", "-q", bare.to_str().unwrap(), tmp.to_str().unwrap()],
+        );
         write(&tmp, file, "remote change\n");
         commit(&tmp, &format!("remote {file}"));
         git(&tmp, &["push", "-q", "origin", "HEAD"]);

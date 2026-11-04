@@ -49,9 +49,15 @@ pub struct State {
 #[derive(Debug, thiserror::Error)]
 pub enum StateError {
     #[error("state {path}: {source}")]
-    Io { path: PathBuf, source: std::io::Error },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("state {path}: {source}")]
-    Parse { path: PathBuf, source: toml::de::Error },
+    Parse {
+        path: PathBuf,
+        source: toml::de::Error,
+    },
     #[error("state: {0}")]
     Serialize(#[from] toml::ser::Error),
 }
@@ -59,14 +65,23 @@ pub enum StateError {
 impl State {
     pub fn load(path: &Path) -> Result<Self, StateError> {
         match std::fs::read_to_string(path) {
-            Ok(s) => toml::from_str(&s).map_err(|source| StateError::Parse { path: path.into(), source }),
+            Ok(s) => toml::from_str(&s).map_err(|source| StateError::Parse {
+                path: path.into(),
+                source,
+            }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(source) => Err(StateError::Io { path: path.into(), source }),
+            Err(source) => Err(StateError::Io {
+                path: path.into(),
+                source,
+            }),
         }
     }
 
     pub fn save(&self, path: &Path) -> Result<(), StateError> {
-        let io = |source| StateError::Io { path: path.into(), source };
+        let io = |source| StateError::Io {
+            path: path.into(),
+            source,
+        };
         let s = toml::to_string(self)?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(io)?;
@@ -107,19 +122,25 @@ mod tests {
         assert_eq!(State::load(&p).unwrap(), State::default());
         let mut s = State::default();
         s.mark("github.com/a/b", |m| m.favourite = Some(true));
-        s.snoozed.insert("x".into(), "2030-01-01T00:00:00Z".parse().unwrap());
+        s.snoozed
+            .insert("x".into(), "2030-01-01T00:00:00Z".parse().unwrap());
         s.new.insert("/p".into());
         s.save(&p).unwrap();
         assert_eq!(State::load(&p).unwrap(), s);
-        assert!(!p.with_extension(format!("tmp.{}", std::process::id())).exists());
+        assert!(
+            !p.with_extension(format!("tmp.{}", std::process::id()))
+                .exists()
+        );
     }
 
     #[test]
     fn snooze_expiry() {
         let mut s = State::default();
         let now: Timestamp = "2026-06-01T00:00:00Z".parse().unwrap();
-        s.snoozed.insert("past".into(), "2026-05-01T00:00:00Z".parse().unwrap());
-        s.snoozed.insert("future".into(), "2026-07-01T00:00:00Z".parse().unwrap());
+        s.snoozed
+            .insert("past".into(), "2026-05-01T00:00:00Z".parse().unwrap());
+        s.snoozed
+            .insert("future".into(), "2026-07-01T00:00:00Z".parse().unwrap());
         assert!(!s.is_snoozed("past", now));
         assert!(s.is_snoozed("future", now));
         assert!(!s.is_snoozed("unknown", now));
@@ -135,5 +156,39 @@ mod tests {
         assert!(s.marks.contains_key("k"));
         s.mark("k", |m| m.sync = None);
         assert!(!s.marks.contains_key("k"));
+    }
+}
+
+/// Parse a friendly duration like `90m`, `12h`, `3d`, `2w` into seconds.
+pub fn parse_duration(s: &str) -> Option<i64> {
+    let s = s.trim();
+    let split = s.find(|c: char| !c.is_ascii_digit())?;
+    let (n, unit) = s.split_at(split);
+    let n: i64 = n.parse().ok()?;
+    let mult = match unit.trim() {
+        "m" | "min" | "mins" => 60,
+        "h" | "hour" | "hours" => 3600,
+        "d" | "day" | "days" => 86_400,
+        "w" | "week" | "weeks" => 604_800,
+        _ => return None,
+    };
+    (n > 0).then(|| n.checked_mul(mult)).flatten()
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::parse_duration;
+
+    #[test]
+    fn parses_units_and_rejects_garbage() {
+        assert_eq!(parse_duration("90m"), Some(5400));
+        assert_eq!(parse_duration("3d"), Some(259_200));
+        assert_eq!(parse_duration("2 weeks"), Some(1_209_600));
+        assert_eq!(parse_duration("0d"), None);
+        assert_eq!(parse_duration("3"), None);
+        assert_eq!(parse_duration("d"), None);
+        assert_eq!(parse_duration("3y"), None);
+        assert_eq!(parse_duration("-3d"), None);
+        assert_eq!(parse_duration("99999999999999999w"), None);
     }
 }

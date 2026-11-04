@@ -2,8 +2,8 @@
 //! against local bare "forge" repositories.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 
 use argus_core::config::Config;
 use argus_core::discover::RepoKind;
@@ -24,12 +24,24 @@ fn ws(sb: &Sandbox, extra: &str) -> Workspace {
 }
 
 fn names(w: &Workspace, f: ViewFilter) -> Vec<String> {
-    w.ordered(f).into_iter().map(|i| w.entries[i].display_name()).collect()
+    w.ordered(f)
+        .into_iter()
+        .map(|i| w.entries[i].display_name())
+        .collect()
 }
 
-const ALL: ViewFilter = ViewFilter { attention_only: false, show_hidden: true };
-const DEFAULT: ViewFilter = ViewFilter { attention_only: false, show_hidden: false };
-const ATTN: ViewFilter = ViewFilter { attention_only: true, show_hidden: false };
+const ALL: ViewFilter = ViewFilter {
+    attention_only: false,
+    show_hidden: true,
+};
+const DEFAULT: ViewFilter = ViewFilter {
+    attention_only: false,
+    show_hidden: false,
+};
+const ATTN: ViewFilter = ViewFilter {
+    attention_only: true,
+    show_hidden: false,
+};
 
 #[test]
 fn identities_and_keys() {
@@ -39,11 +51,19 @@ fn identities_and_keys() {
     sb.init("dev/local");
     let w = ws(&sb, "");
     assert_eq!(w.entries.len(), 2);
-    let a = w.entries.iter().find(|e| e.path.ends_with("acme/a")).unwrap();
+    let a = w
+        .entries
+        .iter()
+        .find(|e| e.path.ends_with("acme/a"))
+        .unwrap();
     assert_eq!(a.id, Some(RepoId::new("github.com", "acme", "a")));
     assert_eq!(a.key, "github.com/acme/a");
     assert_eq!(a.display_name(), "acme/a");
-    let l = w.entries.iter().find(|e| e.path.ends_with("local")).unwrap();
+    let l = w
+        .entries
+        .iter()
+        .find(|e| e.path.ends_with("local"))
+        .unwrap();
     assert_eq!(l.id, None);
     assert_eq!(l.key, l.path.display().to_string());
 }
@@ -66,14 +86,28 @@ fn ordering_favourites_then_severity_then_changes_then_name() {
     git(&c, &["switch", "-q", "main"]);
     write(&c, "README", "m");
     commit(&c, "m");
-    let _ = std::process::Command::new("git").current_dir(&c).args(["merge", "o"]).output();
+    let _ = std::process::Command::new("git")
+        .current_dir(&c)
+        .args(["merge", "o"])
+        .output();
 
     let w = ws(&sb, "[[rule]]\nmatch='acme/fav'\nfavourite=true");
     assert_eq!(
         names(&w, DEFAULT),
-        vec!["acme/fav", "acme/conflict", "acme/dirty3", "acme/dirty1", "acme/clean-a", "acme/clean-b"]
+        vec![
+            "acme/fav",
+            "acme/conflict",
+            "acme/dirty3",
+            "acme/dirty1",
+            "acme/clean-a",
+            "acme/clean-b"
+        ]
     );
-    assert_eq!(names(&w, ATTN), vec!["acme/conflict", "acme/dirty3", "acme/dirty1"], "clean favourite is not attention");
+    assert_eq!(
+        names(&w, ATTN),
+        vec!["acme/conflict", "acme/dirty3", "acme/dirty1"],
+        "clean favourite is not attention"
+    );
 }
 
 #[test]
@@ -84,7 +118,10 @@ fn excluded_and_snoozed_hidden_by_default() {
         sb.clone_as_github("acme", n, &format!("dev/{n}"));
     }
     let mut w = ws(&sb, "[[rule]]\nmatch='acme/gone'\nexclude=true");
-    w.state.snoozed.insert("github.com/acme/nap".into(), "2999-01-01T00:00:00Z".parse().unwrap());
+    w.state.snoozed.insert(
+        "github.com/acme/nap".into(),
+        "2999-01-01T00:00:00Z".parse().unwrap(),
+    );
     w.resolve_flags();
     assert_eq!(names(&w, DEFAULT), vec!["acme/keep"]);
     assert_eq!(names(&w, ALL).len(), 3);
@@ -96,15 +133,39 @@ fn worktrees_and_submodules_become_children() {
     let lib = sb.init("libsrc");
     sb.remote("acme", "app");
     let app = sb.clone_as_github("acme", "app", "dev/app");
-    git(&app, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", lib.to_str().unwrap(), "lib"]);
+    git(
+        &app,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            lib.to_str().unwrap(),
+            "lib",
+        ],
+    );
     commit(&app, "sub");
     // worktree outside any root: must still be found via its main repo
     let wt = sb.path("elsewhere/app-wt");
-    git(&app, &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()]);
+    git(
+        &app,
+        &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()],
+    );
     let w = ws(&sb, "");
     let order = w.ordered(ALL);
-    let kinds: Vec<_> = order.iter().map(|&i| (w.entries[i].kind, w.depth(i))).collect();
-    assert_eq!(kinds, vec![(RepoKind::Main, 0), (RepoKind::Worktree, 1), (RepoKind::Submodule, 1)]);
+    let kinds: Vec<_> = order
+        .iter()
+        .map(|&i| (w.entries[i].kind, w.depth(i)))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            (RepoKind::Main, 0),
+            (RepoKind::Worktree, 1),
+            (RepoKind::Submodule, 1)
+        ]
+    );
     for &i in &order[1..] {
         assert_eq!(w.entries[i].parent.as_deref(), Some(app.as_path()));
     }
@@ -117,7 +178,10 @@ fn hidden_parent_shown_when_child_needs_attention() {
     sb.remote("acme", "app");
     let app = sb.clone_as_github("acme", "app", "dev/app");
     let wt = sb.path("dev/app-wt");
-    git(&app, &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()]);
+    git(
+        &app,
+        &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()],
+    );
     write(&wt, "dirty", "x");
     let w = ws(&sb, "");
     let n = names(&w, ATTN);
@@ -155,12 +219,29 @@ fn sync_pulls_only_syncable_visible_repos() {
     let jobs = plan_updates(&w);
     let mut labels: Vec<_> = jobs.iter().map(|j| j.label.clone()).collect();
     labels.sort();
-    assert_eq!(labels, vec!["pull acme/s1", "pull acme/s2"], "no remote => nothing to pull");
+    assert_eq!(
+        labels,
+        vec!["pull acme/s1", "pull acme/s2"],
+        "no remote => nothing to pull"
+    );
 
     let events = Mutex::new(vec![]);
-    let res = run_jobs(&jobs, 4, &AtomicBool::new(false), &|e| events.lock().unwrap().push(e));
-    assert!(res.iter().all(|r| r.as_ref().is_some_and(|o| o.success)), "{res:?}");
-    assert_eq!(events.lock().unwrap().iter().filter(|e| matches!(e, Event::Finished { .. })).count(), 2);
+    let res = run_jobs(&jobs, 4, &AtomicBool::new(false), &|e| {
+        events.lock().unwrap().push(e)
+    });
+    assert!(
+        res.iter().all(|r| r.as_ref().is_some_and(|o| o.success)),
+        "{res:?}"
+    );
+    assert_eq!(
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e, Event::Finished { .. }))
+            .count(),
+        2
+    );
     assert!(sb.path("dev/s1/new").exists());
     assert!(!sb.path("dev/nosync/new").exists());
     assert!(!sb.path("dev/excl/new").exists());
@@ -189,7 +270,10 @@ fn pull_honours_user_config_autostash() {
     let o = argus_core::ops::run(&r, &Op::Pull);
     assert!(o.success, "{}", o.output);
     assert!(r.join("remote-file").exists());
-    assert_eq!(std::fs::read_to_string(r.join("README")).unwrap(), "local edit\n");
+    assert_eq!(
+        std::fs::read_to_string(r.join("README")).unwrap(),
+        "local edit\n"
+    );
 
     // inverse: without autostash a dirty rebase-pull is refused by git, and we report it
     sb.advance_remote("acme", "r", "remote-2");
@@ -204,7 +288,10 @@ fn listing(sb: &Sandbox, owner: &str, names: &[(&str, bool, bool)]) -> Vec<Remot
     names
         .iter()
         .map(|(n, archived, fork)| {
-            let url = sb.path(&format!("forge/{owner}/{n}.git")).display().to_string();
+            let url = sb
+                .path(&format!("forge/{owner}/{n}.git"))
+                .display()
+                .to_string();
             RemoteRepo {
                 id: RepoId::new("github.com", owner, *n),
                 ssh_url: url.clone(),
@@ -240,12 +327,22 @@ fn track_clones_missing_and_reports_orphans() {
         listing(
             &sb,
             "acme",
-            &[("have", false, false), ("missing", false, false), ("old", true, false), ("forked", false, true), ("secret", false, false)],
+            &[
+                ("have", false, false),
+                ("missing", false, false),
+                ("old", true, false),
+                ("forked", false, true),
+                ("secret", false, false),
+            ],
         ),
     );
     let plan = plan_tracks(&w, &l, Protocol::Https);
     let clones: Vec<_> = plan.clones().map(|j| j.label.clone()).collect();
-    assert_eq!(clones, vec!["clone acme/missing"], "archived, forks, excluded and existing skipped");
+    assert_eq!(
+        clones,
+        vec!["clone acme/missing"],
+        "archived, forks, excluded and existing skipped"
+    );
     assert_eq!(plan.orphans, vec![sb.path("dev/acme/deleted")]);
     assert!(plan.missing.is_empty());
 
@@ -261,9 +358,15 @@ fn track_notify_mode_and_occupied_destination() {
     sb.remote("acme", "b");
     std::fs::create_dir_all(sb.path("dev/acme/b")).unwrap(); // something already there
     let into = sb.path("dev/acme").display().to_string();
-    let l = BTreeMap::from([("github.com/acme".to_string(), listing(&sb, "acme", &[("a", false, false), ("b", false, false)]))]);
+    let l = BTreeMap::from([(
+        "github.com/acme".to_string(),
+        listing(&sb, "acme", &[("a", false, false), ("b", false, false)]),
+    )]);
 
-    let w = ws(&sb, &format!("[[track]]\nowner='acme'\nclone='notify'\ninto='{into}'"));
+    let w = ws(
+        &sb,
+        &format!("[[track]]\nowner='acme'\nclone='notify'\ninto='{into}'"),
+    );
     let plan = plan_tracks(&w, &l, Protocol::Https);
     assert_eq!(plan.jobs.len(), 0);
     assert_eq!(plan.missing.len(), 2);
@@ -271,7 +374,13 @@ fn track_notify_mode_and_occupied_destination() {
     let w = ws(&sb, &format!("[[track]]\nowner='acme'\ninto='{into}'"));
     let plan = plan_tracks(&w, &l, Protocol::Https);
     assert_eq!(plan.jobs.len(), 1, "a only");
-    assert_eq!(plan.missing.iter().map(|r| r.id.name.as_str()).collect::<Vec<_>>(), vec!["b"]);
+    assert_eq!(
+        plan.missing
+            .iter()
+            .map(|r| r.id.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["b"]
+    );
 }
 
 #[test]
@@ -291,8 +400,18 @@ fn runner_serialises_a_family_and_stops_it_on_failure() {
     sb.remote("acme", "a");
     let a = sb.clone_as_github("acme", "a", "dev/a");
     let jobs = vec![
-        argus_core::sync::Job { path: sb.path("nowhere"), op: Op::Fetch, family: a.clone(), label: "bad".into() },
-        argus_core::sync::Job { path: a.clone(), op: Op::Fetch, family: a.clone(), label: "never".into() },
+        argus_core::sync::Job {
+            path: sb.path("nowhere"),
+            op: Op::Fetch,
+            family: a.clone(),
+            label: "bad".into(),
+        },
+        argus_core::sync::Job {
+            path: a.clone(),
+            op: Op::Fetch,
+            family: a.clone(),
+            label: "never".into(),
+        },
     ];
     let res = run_jobs(&jobs, 8, &AtomicBool::new(false), &|_| {});
     assert!(!res[0].as_ref().unwrap().success);
@@ -303,7 +422,107 @@ fn runner_serialises_a_family_and_stops_it_on_failure() {
 fn runner_cancel_prevents_new_jobs() {
     let sb = Sandbox::new();
     let a = sb.init("dev/a");
-    let jobs = vec![argus_core::sync::Job { path: a.clone(), op: Op::Fetch, family: a, label: "x".into() }];
+    let jobs = vec![argus_core::sync::Job {
+        path: a.clone(),
+        op: Op::Fetch,
+        family: a,
+        label: "x".into(),
+    }];
     let res = run_jobs(&jobs, 1, &AtomicBool::new(true), &|_| {});
     assert!(res[0].is_none());
+}
+
+struct FakeForge(Vec<RemoteRepo>, bool);
+
+impl argus_core::forge::Forge for FakeForge {
+    fn kind(&self) -> &str {
+        "fake"
+    }
+    fn host(&self) -> &str {
+        "github.com"
+    }
+    fn list(
+        &self,
+        _owner: &str,
+        _team: Option<&str>,
+    ) -> Result<Vec<RemoteRepo>, argus_core::forge::ForgeError> {
+        if self.1 {
+            Err(argus_core::forge::ForgeError::Auth("nope".into()))
+        } else {
+            Ok(self.0.clone())
+        }
+    }
+}
+
+#[test]
+fn full_track_sync_flags_new_clones_and_team_membership() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "fresh");
+    sb.remote("acme", "have");
+    sb.clone_as_github("acme", "have", "dev/acme/have");
+    let into = sb.path("dev/acme").display().to_string();
+    let mut w = ws(
+        &sb,
+        &format!("[[track]]\nowner='acme'\nteam='core'\ninto='{into}'"),
+    );
+    let have = w.entries[0].path.clone();
+    assert!(
+        !w.get(&have).unwrap().flags.sync,
+        "team membership unknown before listing"
+    );
+
+    let list = listing(
+        &sb,
+        "acme",
+        &[("fresh", false, false), ("have", false, false)],
+    );
+    let factory = move |_: &str,
+                        _: &str|
+          -> Result<
+        Box<dyn argus_core::forge::Forge>,
+        argus_core::forge::ForgeError,
+    > { Ok(Box::new(FakeForge(list.clone(), false))) };
+    let listings = argus_core::sync::list_tracks(&mut w, &factory);
+    assert!(listings.errors.is_empty());
+    assert!(w.get(&have).unwrap().flags.sync, "membership now known");
+    assert!(w.state.tracks["github.com/acme#core"].listed_at.is_some());
+
+    let plan = plan_tracks(&w, &listings.repos, listings.protocol);
+    let res = run_jobs(&plan.jobs, 2, &AtomicBool::new(false), &|_| {});
+    let added = argus_core::sync::record_clones(&mut w, &plan.jobs, &res);
+    assert_eq!(added, vec![sb.path("dev/acme/fresh")]);
+    let fresh = w.get(&added[0]).unwrap();
+    assert!(fresh.flags.new, "fresh clones are highlighted");
+    assert!(fresh.needs_attention());
+    // the clone came from a local path, so its key is its path; either way it's in state.new
+    assert!(w.state.new.contains(&fresh.key));
+    assert!(
+        !w.get(&have).unwrap().flags.new,
+        "existing clones are not new"
+    );
+}
+
+#[test]
+fn failed_listing_is_reported_and_keeps_old_membership() {
+    let sb = Sandbox::new();
+    let mut w = ws(&sb, "[[track]]\nowner='acme'\nteam='core'");
+    w.state
+        .tracks
+        .entry("github.com/acme#core".into())
+        .or_default()
+        .repos
+        .insert("github.com/acme/x".into());
+    let factory = |_: &str,
+                   _: &str|
+     -> Result<Box<dyn argus_core::forge::Forge>, argus_core::forge::ForgeError> {
+        Ok(Box::new(FakeForge(vec![], true)))
+    };
+    let l = argus_core::sync::list_tracks(&mut w, &factory);
+    assert_eq!(l.errors.len(), 1);
+    assert!(l.errors[0].1.contains("nope"));
+    assert_eq!(
+        w.state.tracks["github.com/acme#core"].repos.len(),
+        1,
+        "not wiped by a failure"
+    );
 }

@@ -16,14 +16,29 @@ pub enum Op {
     Pull,
     Push,
     /// First push of a branch without upstream.
-    PushSetUpstream { remote: String, branch: String },
-    Switch { branch: String },
-    Stash { message: String },
+    PushSetUpstream {
+        remote: String,
+        branch: String,
+    },
+    Switch {
+        branch: String,
+    },
+    Stash {
+        message: String,
+    },
     /// Stage everything (including untracked) and commit.
-    CommitAll { message: String },
+    CommitAll {
+        message: String,
+    },
     /// Fast-forward a local branch that is not checked out to its upstream.
-    FastForward { branch: String, upstream: String },
-    Clone { url: String, dest: PathBuf },
+    FastForward {
+        branch: String,
+        upstream: String,
+    },
+    Clone {
+        url: String,
+        dest: PathBuf,
+    },
 }
 
 impl Op {
@@ -34,9 +49,13 @@ impl Op {
             Op::Fetch => v(&["fetch"]),
             Op::Pull => v(&["pull"]),
             Op::Push => v(&["push"]),
-            Op::PushSetUpstream { remote, branch } => v(&["push", "--set-upstream", remote, branch]),
+            Op::PushSetUpstream { remote, branch } => {
+                v(&["push", "--set-upstream", remote, branch])
+            }
             Op::Switch { branch } => v(&["switch", branch]),
-            Op::Stash { message } => v(&["stash", "push", "--include-untracked", "--message", message]),
+            Op::Stash { message } => {
+                v(&["stash", "push", "--include-untracked", "--message", message])
+            }
             Op::CommitAll { message } => v(&["commit", "--message", message]),
             Op::FastForward { branch, upstream } => {
                 // `git fetch . upstream:branch` refuses non-fast-forward updates
@@ -44,14 +63,22 @@ impl Op {
                 vec!["fetch".into(), ".".into(), format!("{upstream}:{branch}")]
             }
             Op::Clone { url, dest } => {
-                vec!["clone".into(), "--".into(), url.clone(), dest.display().to_string()]
+                vec![
+                    "clone".into(),
+                    "--".into(),
+                    url.clone(),
+                    dest.display().to_string(),
+                ]
             }
         }
     }
 
     /// Network operations go through the bounded worker pool.
     pub fn is_network(&self) -> bool {
-        matches!(self, Op::Fetch | Op::Pull | Op::Push | Op::PushSetUpstream { .. } | Op::Clone { .. })
+        matches!(
+            self,
+            Op::Fetch | Op::Pull | Op::Push | Op::PushSetUpstream { .. } | Op::Clone { .. }
+        )
     }
 
     pub fn label(&self) -> String {
@@ -160,21 +187,47 @@ mod tests {
 
     #[test]
     fn args_never_put_user_text_where_it_could_be_an_option() {
-        let o = Op::Clone { url: "--upload-pack=evil".into(), dest: "/x".into() };
+        let o = Op::Clone {
+            url: "--upload-pack=evil".into(),
+            dest: "/x".into(),
+        };
         let a = o.args();
         let dd = a.iter().position(|s| s == "--").unwrap();
         assert!(a.iter().position(|s| s == "--upload-pack=evil").unwrap() > dd);
         // stash/commit messages are passed as option *values*
-        let a = Op::Stash { message: "-rf".into() }.args();
-        assert_eq!(&a[a.len() - 2..], &["--message".to_string(), "-rf".to_string()]);
+        let a = Op::Stash {
+            message: "-rf".into(),
+        }
+        .args();
+        assert_eq!(
+            &a[a.len() - 2..],
+            &["--message".to_string(), "-rf".to_string()]
+        );
     }
 
     #[test]
     fn network_classification() {
         assert!(Op::Pull.is_network());
-        assert!(Op::Clone { url: String::new(), dest: PathBuf::new() }.is_network());
-        assert!(!Op::Switch { branch: "main".into() }.is_network());
-        assert!(!Op::FastForward { branch: "a".into(), upstream: "b".into() }.is_network());
+        assert!(
+            Op::Clone {
+                url: String::new(),
+                dest: PathBuf::new()
+            }
+            .is_network()
+        );
+        assert!(
+            !Op::Switch {
+                branch: "main".into()
+            }
+            .is_network()
+        );
+        assert!(
+            !Op::FastForward {
+                branch: "a".into(),
+                upstream: "b".into()
+            }
+            .is_network()
+        );
     }
 
     #[test]

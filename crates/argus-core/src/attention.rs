@@ -11,11 +11,11 @@ pub enum Issue {
     InProgress,
     /// Uncommitted changes (staged, unstaged or untracked paths).
     Dirty(usize),
-    /// Current branch is ahead of its upstream.
+    /// Current branch has commits on no remote.
     Unpushed(usize),
-    /// Current branch's upstream was deleted on the remote.
+    /// Current branch's upstream was deleted on the remote, with work on no remote.
     UpstreamGone,
-    /// Current branch has no upstream and isn't merged into the default branch.
+    /// Current branch has no upstream and work on no remote.
     NoUpstream,
     /// Other local branches with commits that exist nowhere else.
     UnpushedBranches(usize),
@@ -67,23 +67,27 @@ pub fn issues(s: &RepoStatus) -> Vec<Issue> {
         _ => None,
     };
     let head_info = head_branch.and_then(|b| s.branches.iter().find(|bi| bi.name == b));
-    match (&s.upstream, head_info) {
-        (Some(t), _) if t.gone => {
-            if !head_info.is_some_and(|h| h.merged) {
-                v.push(Issue::UpstreamGone)
-            }
+    if let Some(h) = head_info.filter(|h| h.is_unpushed()) {
+        match &s.upstream {
+            Some(t) if t.gone => v.push(Issue::UpstreamGone),
+            Some(_) => v.push(Issue::Unpushed(h.unpushed.unwrap_or(0))),
+            None if s.remote.is_some() => v.push(Issue::NoUpstream),
+            None => {}
         }
-        (Some(t), _) if t.ahead > 0 => v.push(Issue::Unpushed(t.ahead)),
-        (None, Some(h)) if !h.merged && s.remote.is_some() => v.push(Issue::NoUpstream),
-        _ => {}
     }
-    let others = s.branches.iter().filter(|b| !b.is_head && b.is_unpushed()).count();
+    let others = s
+        .branches
+        .iter()
+        .filter(|b| !b.is_head && b.is_unpushed())
+        .count();
     if others > 0 {
         v.push(Issue::UnpushedBranches(others));
     }
     match &s.head {
         Head::Detached(_) => v.push(Issue::Detached),
-        Head::Branch(_) if s.default_branch.is_some() && !s.on_default() => v.push(Issue::OffDefault),
+        Head::Branch(_) if s.default_branch.is_some() && !s.on_default() => {
+            v.push(Issue::OffDefault)
+        }
         _ => {}
     }
     if s.stashes > 0 {
@@ -92,10 +96,11 @@ pub fn issues(s: &RepoStatus) -> Vec<Issue> {
     if s.remote.is_none() && !s.bare {
         v.push(Issue::NoRemote);
     }
-    if let Some(t) = &s.upstream {
-        if t.behind > 0 && !t.gone {
-            v.push(Issue::Behind(t.behind));
-        }
+    if let Some(t) = &s.upstream
+        && t.behind > 0
+        && !t.gone
+    {
+        v.push(Issue::Behind(t.behind));
     }
     v.sort_by_key(|i| std::cmp::Reverse(i.severity()));
     v

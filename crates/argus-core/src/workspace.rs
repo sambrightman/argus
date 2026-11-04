@@ -34,7 +34,16 @@ pub struct Entry {
 impl Entry {
     pub fn new(path: PathBuf, kind: RepoKind) -> Self {
         let key = path.display().to_string();
-        Self { path, kind, parent: None, id: None, key, flags: Flags::default(), status: None, issues: vec![] }
+        Self {
+            path,
+            kind,
+            parent: None,
+            id: None,
+            key,
+            flags: Flags::default(),
+            status: None,
+            issues: vec![],
+        }
     }
 
     pub fn status(&self) -> Option<&RepoStatus> {
@@ -42,7 +51,10 @@ impl Entry {
     }
 
     pub fn error(&self) -> Option<&str> {
-        self.status.as_ref().and_then(|s| s.as_ref().err()).map(String::as_str)
+        self.status
+            .as_ref()
+            .and_then(|s| s.as_ref().err())
+            .map(String::as_str)
     }
 
     pub fn display_name(&self) -> String {
@@ -53,7 +65,11 @@ impl Entry {
     }
 
     pub fn score(&self) -> u32 {
-        if self.error().is_some() { 90 } else { attention::score(&self.issues) }
+        if self.error().is_some() {
+            90
+        } else {
+            attention::score(&self.issues)
+        }
     }
 
     pub fn needs_attention(&self) -> bool {
@@ -69,10 +85,10 @@ impl Entry {
             self.issues = attention::issues(s);
             if self.id.is_none() {
                 self.id = s.remote_url.as_deref().and_then(RepoId::from_url);
-                if self.kind == RepoKind::Main || self.kind == RepoKind::Bare {
-                    if let Some(id) = &self.id {
-                        self.key = id.to_string();
-                    }
+                if (self.kind == RepoKind::Main || self.kind == RepoKind::Bare)
+                    && let Some(id) = &self.id
+                {
+                    self.key = id.to_string();
                 }
             }
         } else {
@@ -88,6 +104,7 @@ pub struct ViewFilter {
     pub show_hidden: bool,
 }
 
+#[derive(Clone)]
 pub struct Workspace {
     pub config: Config,
     pub state: State,
@@ -98,7 +115,12 @@ pub struct Workspace {
 impl Workspace {
     pub fn new(config: Config, state: State) -> Result<Self, ConfigError> {
         let rules = RuleSet::new(&config.rules)?;
-        Ok(Self { config, state, rules, entries: vec![] })
+        Ok(Self {
+            config,
+            state,
+            rules,
+            entries: vec![],
+        })
     }
 
     pub fn rules(&self) -> &RuleSet {
@@ -116,18 +138,29 @@ impl Workspace {
     /// Discover repos and compute every status in parallel.
     pub fn scan(&mut self) {
         let found = discover::discover(&self.config.roots, &self.discover_options());
-        let old: HashMap<PathBuf, Entry> = self.entries.drain(..).map(|e| (e.path.clone(), e)).collect();
+        let old: HashMap<PathBuf, Entry> = self
+            .entries
+            .drain(..)
+            .map(|e| (e.path.clone(), e))
+            .collect();
         self.entries = found
             .into_iter()
-            .map(|f| old.get(&f.path).cloned().unwrap_or_else(|| Entry::new(f.path, f.kind)))
+            .map(|f| {
+                old.get(&f.path)
+                    .cloned()
+                    .unwrap_or_else(|| Entry::new(f.path, f.kind))
+            })
             .collect();
         self.refresh_all();
     }
 
     pub fn refresh_all(&mut self) {
         let opts = StatusOptions::default();
-        let results: Vec<_> =
-            self.entries.par_iter().map(|e| status::status(&e.path, opts).map_err(|e| e.to_string())).collect();
+        let results: Vec<_> = self
+            .entries
+            .par_iter()
+            .map(|e| status::status(&e.path, opts).map_err(|e| e.to_string()))
+            .collect();
         for (e, r) in self.entries.iter_mut().zip(results) {
             e.set_status(r);
         }
@@ -138,8 +171,13 @@ impl Workspace {
 
     /// Re-read one repo's status (after an operation on it).
     pub fn refresh(&mut self, path: &Path) {
-        let Some(i) = self.index_of(path) else { return };
         let r = status::status(path, StatusOptions::default()).map_err(|e| e.to_string());
+        self.update_status(path, r);
+    }
+
+    /// Apply a status computed elsewhere (e.g. on a worker thread).
+    pub fn update_status(&mut self, path: &Path, r: Result<RepoStatus, String>) {
+        let Some(i) = self.index_of(path) else { return };
         self.entries[i].set_status(r);
         self.add_children();
         self.link_parents();
@@ -174,7 +212,9 @@ impl Workspace {
             let kids = kids.chain(s.submodules.iter().map(|p| (p, RepoKind::Submodule)));
             for (p, kind) in kids {
                 let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
-                if !self.entries.iter().any(|x| x.path == p) && !extra.iter().any(|x: &Entry| x.path == p) {
+                if !self.entries.iter().any(|x| x.path == p)
+                    && !extra.iter().any(|x: &Entry| x.path == p)
+                {
                     let mut child = Entry::new(p, kind);
                     child.parent = Some(e.path.clone());
                     extra.push(child);
@@ -185,8 +225,10 @@ impl Workspace {
             return;
         }
         let opts = StatusOptions::default();
-        let results: Vec<_> =
-            extra.par_iter().map(|e| status::status(&e.path, opts).map_err(|e| e.to_string())).collect();
+        let results: Vec<_> = extra
+            .par_iter()
+            .map(|e| status::status(&e.path, opts).map_err(|e| e.to_string()))
+            .collect();
         for (mut e, r) in extra.into_iter().zip(results) {
             e.set_status(r);
             self.entries.push(e);
@@ -218,7 +260,15 @@ impl Workspace {
     pub fn resolve_flags(&mut self) {
         let now = Timestamp::now();
         for e in &mut self.entries {
-            e.flags = rules::resolve(&self.config, &self.rules, &self.state, e.id.as_ref(), &e.key, &e.path, now);
+            e.flags = rules::resolve(
+                &self.config,
+                &self.rules,
+                &self.state,
+                e.id.as_ref(),
+                &e.key,
+                &e.path,
+                now,
+            );
         }
     }
 
@@ -227,10 +277,13 @@ impl Workspace {
     /// children (worktrees, submodules).
     pub fn ordered(&self, filter: ViewFilter) -> Vec<usize> {
         let visible = |e: &Entry| {
-            (filter.show_hidden || !e.flags.hidden()) && (!filter.attention_only || e.needs_attention())
+            (filter.show_hidden || !e.flags.hidden())
+                && (!filter.attention_only || e.needs_attention())
         };
         let is_top = |e: &Entry| e.parent.as_ref().is_none_or(|p| self.index_of(p).is_none());
-        let mut top: Vec<usize> = (0..self.entries.len()).filter(|&i| is_top(&self.entries[i])).collect();
+        let mut top: Vec<usize> = (0..self.entries.len())
+            .filter(|&i| is_top(&self.entries[i]))
+            .collect();
         top.sort_by(|&a, &b| {
             let (a, b) = (&self.entries[a], &self.entries[b]);
             b.flags
@@ -238,14 +291,21 @@ impl Workspace {
                 .cmp(&a.flags.favourite)
                 .then(b.score().cmp(&a.score()))
                 .then(b.change_count().cmp(&a.change_count()))
-                .then_with(|| a.display_name().to_lowercase().cmp(&b.display_name().to_lowercase()))
+                .then_with(|| {
+                    a.display_name()
+                        .to_lowercase()
+                        .cmp(&b.display_name().to_lowercase())
+                })
         });
         let mut out = vec![];
         for t in top {
             let mut fam = vec![];
             self.collect_children(t, &mut fam, &mut vec![t]);
             let parent_visible = visible(&self.entries[t]);
-            let visible_kids: Vec<usize> = fam.into_iter().filter(|&c| visible(&self.entries[c])).collect();
+            let visible_kids: Vec<usize> = fam
+                .into_iter()
+                .filter(|&c| visible(&self.entries[c]))
+                .collect();
             // A parent is shown if it, or any child, is visible.
             if parent_visible || !visible_kids.is_empty() {
                 out.push(t);
@@ -282,5 +342,43 @@ impl Workspace {
             }
         }
         d
+    }
+}
+
+impl Workspace {
+    /// Entries matching any of `patterns` (glob against display name, key and
+    /// path, or an existing path). Empty `patterns` selects every visible entry.
+    pub fn select(&self, patterns: &[String], filter: ViewFilter) -> Vec<usize> {
+        let order = self.ordered(filter);
+        if patterns.is_empty() {
+            return order;
+        }
+        let matchers: Vec<_> = patterns
+            .iter()
+            .filter_map(|p| {
+                let p = crate::paths::expand_tilde(Path::new(p))
+                    .display()
+                    .to_string();
+                globset::GlobBuilder::new(&p)
+                    .case_insensitive(true)
+                    .build()
+                    .ok()
+                    .map(|g| g.compile_matcher())
+            })
+            .collect();
+        let paths: Vec<PathBuf> = patterns
+            .iter()
+            .filter_map(|p| std::fs::canonicalize(p).ok())
+            .collect();
+        // Explicit selection also reaches hidden entries.
+        (0..self.entries.len())
+            .filter(|&i| {
+                let e = &self.entries[i];
+                paths.contains(&e.path)
+                    || matchers.iter().any(|m| {
+                        m.is_match(e.display_name()) || m.is_match(&e.key) || m.is_match(&e.path)
+                    })
+            })
+            .collect()
     }
 }

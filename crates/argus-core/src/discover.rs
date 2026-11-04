@@ -39,7 +39,11 @@ pub struct DiscoverOptions {
 
 impl Default for DiscoverOptions {
     fn default() -> Self {
-        Self { skip_dirs: vec![], max_depth: 6, scan_inside_repos: false }
+        Self {
+            skip_dirs: vec![],
+            max_depth: 6,
+            scan_inside_repos: false,
+        }
     }
 }
 
@@ -49,7 +53,9 @@ pub fn discover(roots: &[PathBuf], opts: &DiscoverOptions) -> Vec<Found> {
     let out = Mutex::new(Vec::new());
     rayon::scope(|s| {
         for root in roots {
-            let Ok(root) = fs::canonicalize(root) else { continue };
+            let Ok(root) = fs::canonicalize(root) else {
+                continue;
+            };
             let out = &out;
             s.spawn(move |s| visit(s, root, 0, opts, out));
         }
@@ -68,7 +74,10 @@ fn visit<'s>(
     out: &'s Mutex<Vec<Found>>,
 ) {
     if let Some(kind) = classify(&dir) {
-        out.lock().unwrap().push(Found { path: dir.clone(), kind });
+        out.lock().unwrap().push(Found {
+            path: dir.clone(),
+            kind,
+        });
         if kind == RepoKind::Bare || !opts.scan_inside_repos {
             return;
         }
@@ -100,12 +109,23 @@ pub fn classify(dir: &Path) -> Option<RepoKind> {
         Ok(m) if m.is_file() => return Some(classify_gitfile(&dotgit)),
         _ => {}
     }
-    if is_bare(dir) { Some(RepoKind::Bare) } else { None }
+    if is_bare(dir) {
+        Some(RepoKind::Bare)
+    } else {
+        None
+    }
 }
 
 fn classify_gitfile(dotgit: &Path) -> RepoKind {
-    let Ok(s) = fs::read_to_string(dotgit) else { return RepoKind::Main };
-    let target = s.trim().strip_prefix("gitdir:").unwrap_or("").trim().replace('\\', "/");
+    let Ok(s) = fs::read_to_string(dotgit) else {
+        return RepoKind::Main;
+    };
+    let target = s
+        .trim()
+        .strip_prefix("gitdir:")
+        .unwrap_or("")
+        .trim()
+        .replace('\\', "/");
     let parent = target.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
     if parent.ends_with("/worktrees") || parent == "worktrees" {
         RepoKind::Worktree
@@ -141,7 +161,12 @@ mod tests {
         let root = fs::canonicalize(root).unwrap();
         discover(std::slice::from_ref(&root), opts)
             .into_iter()
-            .map(|f| (f.path.strip_prefix(&root).unwrap().display().to_string(), f.kind))
+            .map(|f| {
+                (
+                    f.path.strip_prefix(&root).unwrap().display().to_string(),
+                    f.kind,
+                )
+            })
             .collect()
     }
 
@@ -153,7 +178,10 @@ mod tests {
         fake_repo(t.path(), "work/org/team/c");
         fake_repo(t.path(), "proj/node_modules/dep");
         mk(t.path(), "empty/dir");
-        let opts = DiscoverOptions { skip_dirs: vec!["node_modules".into()], ..Default::default() };
+        let opts = DiscoverOptions {
+            skip_dirs: vec!["node_modules".into()],
+            ..Default::default()
+        };
         assert_eq!(
             found(t.path(), &opts),
             vec![
@@ -168,9 +196,15 @@ mod tests {
     fn respects_max_depth() {
         let t = tempfile::tempdir().unwrap();
         fake_repo(t.path(), "1/2/3/deep");
-        let shallow = DiscoverOptions { max_depth: 3, ..Default::default() };
+        let shallow = DiscoverOptions {
+            max_depth: 3,
+            ..Default::default()
+        };
         assert!(found(t.path(), &shallow).is_empty());
-        let deep = DiscoverOptions { max_depth: 4, ..Default::default() };
+        let deep = DiscoverOptions {
+            max_depth: 4,
+            ..Default::default()
+        };
         assert_eq!(found(t.path(), &deep).len(), 1);
     }
 
@@ -180,7 +214,10 @@ mod tests {
         fake_repo(t.path(), "outer");
         fake_repo(t.path(), "outer/inner");
         assert_eq!(found(t.path(), &DiscoverOptions::default()).len(), 1);
-        let opts = DiscoverOptions { scan_inside_repos: true, ..Default::default() };
+        let opts = DiscoverOptions {
+            scan_inside_repos: true,
+            ..Default::default()
+        };
         assert_eq!(found(t.path(), &opts).len(), 2);
     }
 
@@ -192,7 +229,10 @@ mod tests {
         mk(&r, ".git/modules/sub/objects");
         mk(&r, ".git/modules/sub/refs");
         fs::write(r.join(".git/modules/sub/HEAD"), "ref: refs/heads/main\n").unwrap();
-        let opts = DiscoverOptions { scan_inside_repos: true, ..Default::default() };
+        let opts = DiscoverOptions {
+            scan_inside_repos: true,
+            ..Default::default()
+        };
         assert_eq!(found(t.path(), &opts), vec![("r".into(), RepoKind::Main)]);
     }
 
@@ -223,7 +263,10 @@ mod tests {
         fake_repo(t.path(), "a/r");
         std::os::unix::fs::symlink(t.path(), t.path().join("a/loop")).unwrap();
         std::os::unix::fs::symlink(t.path().join("a/r"), t.path().join("alias")).unwrap();
-        let opts = DiscoverOptions { max_depth: 50, ..Default::default() };
+        let opts = DiscoverOptions {
+            max_depth: 50,
+            ..Default::default()
+        };
         assert_eq!(found(t.path(), &opts), vec![("a/r".into(), RepoKind::Main)]);
     }
 
@@ -231,7 +274,11 @@ mod tests {
     fn overlapping_roots_dedupe_and_missing_roots_ignored() {
         let t = tempfile::tempdir().unwrap();
         fake_repo(t.path(), "x/r");
-        let roots = vec![t.path().to_path_buf(), t.path().join("x"), t.path().join("missing")];
+        let roots = vec![
+            t.path().to_path_buf(),
+            t.path().join("x"),
+            t.path().join("missing"),
+        ];
         assert_eq!(discover(&roots, &DiscoverOptions::default()).len(), 1);
     }
 }

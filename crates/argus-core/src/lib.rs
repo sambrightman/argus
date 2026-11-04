@@ -4,6 +4,7 @@
 //! `DESIGN.md` for why). Nothing here does terminal I/O.
 
 pub mod attention;
+pub mod badges;
 pub mod config;
 pub mod discover;
 pub mod fix;

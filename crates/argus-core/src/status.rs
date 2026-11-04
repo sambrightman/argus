@@ -45,18 +45,29 @@ pub struct BranchInfo {
     pub is_head: bool,
     /// Tip is reachable from the default branch (safe to leave/delete).
     pub merged: bool,
+    /// Commits not reachable from any remote-tracking ref; `None` when the
+    /// repo has no remote-tracking refs at all.
+    pub unpushed: Option<usize>,
 }
 
 impl BranchInfo {
-    /// Commits on this branch that exist nowhere else we know of.
+    /// Has commits that exist on no remote we know of (and aren't merged).
     pub fn is_unpushed(&self) -> bool {
         if self.merged {
             return false;
         }
-        match &self.upstream {
+        match self.unpushed {
+            Some(n) => n > 0,
             None => true,
-            Some(t) => t.gone || t.ahead > 0,
         }
+    }
+
+    /// The upstream is the same-named branch on some remote, so a plain
+    /// `git push` goes where the user expects.
+    pub fn upstream_is_same_name(&self) -> bool {
+        self.upstream
+            .as_ref()
+            .is_some_and(|t| t.name.ends_with(&format!("/{}", self.name)))
     }
 }
 
@@ -188,14 +199,22 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
     let remote = repo
         .remote_default_name(Direction::Fetch)
         .map(|n| n.to_str_lossy().into_owned())
-        .or_else(|| repo.remote_names().into_iter().next().map(|n| n.to_str_lossy().into_owned()));
+        .or_else(|| {
+            repo.remote_names()
+                .into_iter()
+                .next()
+                .map(|n| n.to_str_lossy().into_owned())
+        });
     let remote_url = remote.as_deref().and_then(|r| {
         // The URL as configured, before `insteadOf` rewrites: that is the identity.
         let r = repo.try_find_remote_without_url_rewrite(r)?.ok()?;
-        r.url(Direction::Fetch).map(|u| u.to_bstring().to_str_lossy().into_owned())
+        r.url(Direction::Fetch)
+            .map(|u| u.to_bstring().to_str_lossy().into_owned())
     });
     let default_branch = default_branch(repo, remote.as_deref());
-    let default_tip = default_branch.as_deref().and_then(|d| default_tip(repo, remote.as_deref(), d));
+    let default_tip = default_branch
+        .as_deref()
+        .and_then(|d| default_tip(repo, remote.as_deref(), d));
 
     let branches = branches(repo, head.branch(), default_tip)?;
     let upstream = head
@@ -204,7 +223,11 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         .and_then(|bi| bi.upstream.clone());
 
     let bare = repo.workdir().is_none();
-    let changes = if bare { Changes::default() } else { changes(repo, opts)? };
+    let changes = if bare {
+        Changes::default()
+    } else {
+        changes(repo, opts)?
+    };
 
     Ok(RepoStatus {
         head,
@@ -234,23 +257,24 @@ fn read_head(repo: &gix::Repository) -> Result<Head, StatusError> {
     Ok(match &head.kind {
         gix::head::Kind::Symbolic(r) => Head::Branch(r.name.shorten().to_str_lossy().into_owned()),
         gix::head::Kind::Unborn(name) => Head::Unborn(name.shorten().to_str_lossy().into_owned()),
-        gix::head::Kind::Detached { .. } => {
-            Head::Detached(head.id().map(|id| id.shorten_or_id().to_string()).unwrap_or_default())
-        }
+        gix::head::Kind::Detached { .. } => Head::Detached(
+            head.id()
+                .map(|id| id.shorten_or_id().to_string())
+                .unwrap_or_default(),
+        ),
     })
 }
 
 /// The remote's HEAD if known (`refs/remotes/origin/HEAD`), otherwise a
 /// local `main`/`master`, otherwise `init.defaultBranch`.
 fn default_branch(repo: &gix::Repository, remote: Option<&str>) -> Option<String> {
-    if let Some(remote) = remote {
-        if let Ok(Some(r)) = repo.try_find_reference(format!("refs/remotes/{remote}/HEAD").as_str()) {
-            if let gix::refs::TargetRef::Symbolic(target) = r.target() {
-                let prefix = format!("refs/remotes/{remote}/");
-                if let Some(b) = target.as_bstr().to_str_lossy().strip_prefix(&prefix) {
-                    return Some(b.to_string());
-                }
-            }
+    if let Some(remote) = remote
+        && let Ok(Some(r)) = repo.try_find_reference(format!("refs/remotes/{remote}/HEAD").as_str())
+        && let gix::refs::TargetRef::Symbolic(target) = r.target()
+    {
+        let prefix = format!("refs/remotes/{remote}/");
+        if let Some(b) = target.as_bstr().to_str_lossy().strip_prefix(&prefix) {
+            return Some(b.to_string());
         }
     }
     for candidate in ["main", "master"] {
@@ -260,7 +284,9 @@ fn default_branch(repo: &gix::Repository, remote: Option<&str>) -> Option<String
             return Some(candidate.to_string());
         }
     }
-    repo.config_snapshot().string("init.defaultBranch").map(|s| s.to_str_lossy().into_owned())
+    repo.config_snapshot()
+        .string("init.defaultBranch")
+        .map(|s| s.to_str_lossy().into_owned())
 }
 
 fn exists(repo: &gix::Repository, name: &str) -> bool {
@@ -269,7 +295,11 @@ fn exists(repo: &gix::Repository, name: &str) -> bool {
 
 /// Commit the default branch points to: remote-tracking ref preferred, as it
 /// is what "pushed/merged" means; local branch as a fallback.
-fn default_tip(repo: &gix::Repository, remote: Option<&str>, default: &str) -> Option<gix::ObjectId> {
+fn default_tip(
+    repo: &gix::Repository,
+    remote: Option<&str>,
+    default: &str,
+) -> Option<gix::ObjectId> {
     let mut names = vec![];
     if let Some(r) = remote {
         names.push(format!("refs/remotes/{r}/{default}"));
@@ -284,7 +314,11 @@ fn peel(repo: &gix::Repository, name: &str) -> Option<gix::ObjectId> {
 }
 
 /// Number of commits reachable from `a` but not from `b`.
-fn count_exclusive(repo: &gix::Repository, a: gix::ObjectId, b: gix::ObjectId) -> Result<usize, StatusError> {
+fn count_exclusive(
+    repo: &gix::Repository,
+    a: gix::ObjectId,
+    b: gix::ObjectId,
+) -> Result<usize, StatusError> {
     if a == b {
         return Ok(0);
     }
@@ -303,6 +337,18 @@ fn branches(
     default_tip: Option<gix::ObjectId>,
 ) -> Result<Vec<BranchInfo>, StatusError> {
     let platform = repo.references().map_err(err)?;
+    let mut remote_tips: Vec<gix::ObjectId> = vec![];
+    for r in platform.remote_branches().map_err(err)? {
+        let mut r = r.map_err(err)?;
+        if let gix::refs::TargetRef::Symbolic(_) = r.target() {
+            continue; // origin/HEAD
+        }
+        if let Ok(id) = r.peel_to_id() {
+            remote_tips.push(id.detach());
+        }
+    }
+    remote_tips.sort();
+    remote_tips.dedup();
     let mut out = vec![];
     for r in platform.local_branches().map_err(err)? {
         let mut r = r.map_err(err)?;
@@ -320,7 +366,12 @@ fn branches(
                         behind: count_exclusive(repo, up, tip)?,
                         gone: false,
                     }),
-                    None => Some(Tracking { name: short, ahead: 0, behind: 0, gone: true }),
+                    None => Some(Tracking {
+                        name: short,
+                        ahead: 0,
+                        behind: 0,
+                        gone: true,
+                    }),
                 }
             }
             _ => None,
@@ -329,7 +380,30 @@ fn branches(
             Some(d) => count_exclusive(repo, tip, d)? == 0,
             None => false,
         };
-        out.push(BranchInfo { is_head: head_branch == Some(name.as_str()), name, upstream, merged });
+        let unpushed = if remote_tips.is_empty() {
+            None
+        } else if remote_tips.binary_search(&tip).is_ok() {
+            Some(0)
+        } else {
+            let walk = repo
+                .rev_walk([tip])
+                .with_hidden(remote_tips.iter().copied())
+                .all()
+                .map_err(err)?;
+            let mut n = 0;
+            for info in walk {
+                info.map_err(err)?;
+                n += 1;
+            }
+            Some(n)
+        };
+        out.push(BranchInfo {
+            is_head: head_branch == Some(name.as_str()),
+            name,
+            upstream,
+            merged,
+            unpushed,
+        });
     }
     out.sort_by(|a, b| b.is_head.cmp(&a.is_head).then_with(|| a.name.cmp(&b.name)));
     Ok(out)
@@ -342,12 +416,17 @@ fn changes(repo: &gix::Repository, opts: StatusOptions) -> Result<Changes, Statu
     let submodules = if opts.submodules {
         gix::status::Submodule::AsConfigured { check_dirty: true }
     } else {
-        gix::status::Submodule::Given { ignore: gix::submodule::config::Ignore::All, check_dirty: false }
+        gix::status::Submodule::Given {
+            ignore: gix::submodule::config::Ignore::All,
+            check_dirty: false,
+        }
     };
     let iter = repo
         .status(gix::progress::Discard)
         .map_err(err)?
-        .untracked_files(gix::status::UntrackedFiles::Collapsed)
+        // Per-file, then collapsed below like git does. gix's own collapsing
+        // reports directories holding only ignored files/empty dirs as untracked.
+        .untracked_files(gix::status::UntrackedFiles::Files)
         .index_worktree_submodules(submodules)
         .into_iter(None)
         .map_err(err)?;
@@ -366,13 +445,18 @@ fn changes(repo: &gix::Repository, opts: StatusOptions) -> Result<Changes, Statu
                     C::Rewrite { copy: true, .. } => 'C',
                     C::Rewrite { .. } => 'R',
                 };
-                files.entry(change.location().to_str_lossy().into_owned()).or_insert((' ', ' ')).0 = code;
+                files
+                    .entry(change.location().to_str_lossy().into_owned())
+                    .or_insert((' ', ' '))
+                    .0 = code;
             }
             gix::status::Item::IndexWorktree(iw) => {
                 let mut path = iw.rela_path().to_str_lossy().into_owned();
                 if let IW::DirectoryContents { entry, .. } = &iw {
                     // like `git status`, mark collapsed directories with a slash
-                    if entry.disk_kind == Some(gix::dir::entry::Kind::Directory) && !path.ends_with('/') {
+                    if entry.disk_kind == Some(gix::dir::entry::Kind::Directory)
+                        && !path.ends_with('/')
+                    {
                         path.push('/');
                     }
                 }
@@ -405,6 +489,7 @@ fn changes(repo: &gix::Repository, opts: StatusOptions) -> Result<Changes, Statu
         }
     }
 
+    collapse_untracked(repo, &mut files)?;
     let mut c = Changes::default();
     for (path, (x, y)) in files {
         match (x, y) {
@@ -420,10 +505,56 @@ fn changes(repo: &gix::Repository, opts: StatusOptions) -> Result<Changes, Statu
             }
         }
         if c.files.len() < MAX_FILES {
-            c.files.push(FileChange { path, index: x, worktree: y });
+            c.files.push(FileChange {
+                path,
+                index: x,
+                worktree: y,
+            });
         }
     }
     Ok(c)
+}
+
+/// Replace untracked files inside directories with no tracked content by the
+/// outermost such directory (`dir/`), matching `git status` "normal" mode.
+fn collapse_untracked(
+    repo: &gix::Repository,
+    files: &mut BTreeMap<String, (char, char)>,
+) -> Result<(), StatusError> {
+    if !files.values().any(|c| c.0 == '?') {
+        return Ok(());
+    }
+    let index = repo.index_or_empty().map_err(err)?;
+    let mut tracked_dirs: std::collections::HashSet<&[u8]> = std::collections::HashSet::new();
+    for e in index.entries() {
+        let p: &[u8] = e.path(&index).as_ref();
+        let mut i = 0;
+        while let Some(off) = p[i..].iter().position(|&b| b == b'/') {
+            i += off;
+            tracked_dirs.insert(&p[..i]);
+            i += 1;
+        }
+    }
+    let untracked: Vec<String> = files
+        .iter()
+        .filter(|(_, c)| c.0 == '?')
+        .map(|(p, _)| p.clone())
+        .collect();
+    for path in untracked {
+        let bytes = path.trim_end_matches('/').as_bytes();
+        let mut collapsed = None;
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'/' && !tracked_dirs.contains(&bytes[..i]) {
+                collapsed = Some(format!("{}/", &path[..i]));
+                break;
+            }
+        }
+        if let Some(dir) = collapsed {
+            files.remove(&path);
+            files.insert(dir, ('?', '?'));
+        }
+    }
+    Ok(())
 }
 
 fn stash_count(common_dir: &Path) -> usize {
@@ -450,14 +581,18 @@ fn worktrees(repo: &gix::Repository) -> Vec<PathBuf> {
     if repo.kind() == gix::repository::Kind::LinkedWorkTree {
         return vec![];
     }
-    let Ok(wts) = repo.worktrees() else { return vec![] };
+    let Ok(wts) = repo.worktrees() else {
+        return vec![];
+    };
     let mut v: Vec<PathBuf> = wts.iter().filter_map(|p| p.base().ok()).collect();
     v.sort();
     v
 }
 
 fn submodules(repo: &gix::Repository) -> Vec<PathBuf> {
-    let Ok(Some(sms)) = repo.submodules() else { return vec![] };
+    let Ok(Some(sms)) = repo.submodules() else {
+        return vec![];
+    };
     let mut v: Vec<PathBuf> = sms
         .filter(|sm| sm.state().is_ok_and(|s| s.worktree_checkout))
         .filter_map(|sm| sm.work_dir().ok())

@@ -30,11 +30,13 @@ impl Flags {
     }
 }
 
+#[derive(Clone)]
 struct CompiledRule {
     matcher: GlobMatcher,
     rule: Rule,
 }
 
+#[derive(Clone)]
 pub struct RuleSet {
     rules: Vec<CompiledRule>,
 }
@@ -49,8 +51,14 @@ impl RuleSet {
                     .literal_separator(true)
                     .case_insensitive(true)
                     .build()
-                    .map_err(|source| ConfigError::Pattern { pattern: r.pattern.clone(), source })?;
-                Ok(CompiledRule { matcher: glob.compile_matcher(), rule: r.clone() })
+                    .map_err(|source| ConfigError::Pattern {
+                        pattern: r.pattern.clone(),
+                        source,
+                    })?;
+                Ok(CompiledRule {
+                    matcher: glob.compile_matcher(),
+                    rule: r.clone(),
+                })
             })
             .collect::<Result<_, ConfigError>>()?;
         Ok(Self { rules })
@@ -70,7 +78,8 @@ impl RuleSet {
 
     /// Whether a (possibly not yet cloned) repo is excluded by rules alone.
     pub fn excludes(&self, id: &RepoId, path: &Path) -> bool {
-        self.matching(Some(id), path).fold(false, |acc, r| r.exclude.unwrap_or(acc))
+        self.matching(Some(id), path)
+            .fold(false, |acc, r| r.exclude.unwrap_or(acc))
     }
 }
 
@@ -83,10 +92,11 @@ pub fn track_for<'a>(config: &'a Config, state: &State, id: &RepoId) -> Option<&
         }
         match &t.team {
             None => true,
-            Some(_) => state
-                .tracks
-                .get(&t.key())
-                .is_some_and(|ts| ts.repos.iter().any(|r| r.eq_ignore_ascii_case(&id.to_string()))),
+            Some(_) => state.tracks.get(&t.key()).is_some_and(|ts| {
+                ts.repos
+                    .iter()
+                    .any(|r| r.eq_ignore_ascii_case(&id.to_string()))
+            }),
         }
     })
 }
@@ -147,7 +157,10 @@ mod tests {
         let c = Config::parse(cfg).unwrap();
         let rs = RuleSet::new(&c.rules).unwrap();
         let id = RepoId::from_url(id);
-        let key = id.as_ref().map(|i| i.to_string()).unwrap_or(path.to_string());
+        let key = id
+            .as_ref()
+            .map(|i| i.to_string())
+            .unwrap_or(path.to_string());
         resolve(&c, &rs, state, id.as_ref(), &key, Path::new(path), now())
     }
 
@@ -155,20 +168,74 @@ mod tests {
 
     #[test]
     fn nothing_configured_means_no_flags() {
-        assert_eq!(flags("", &State::default(), URL, "/r/widget"), Flags::default());
+        assert_eq!(
+            flags("", &State::default(), URL, "/r/widget"),
+            Flags::default()
+        );
     }
 
     #[test]
     fn rules_match_identity_slug_and_path() {
         let s = State::default();
-        assert!(flags("[[rule]]\nmatch='github.com/acme/*'\nfavourite=true", &s, URL, "/x").favourite);
-        assert!(flags("[[rule]]\nmatch='acme/widget'\nfavourite=true", &s, URL, "/x").favourite);
-        assert!(flags("[[rule]]\nmatch='/r/**'\nfavourite=true", &s, URL, "/r/a/widget").favourite);
-        assert!(flags("[[rule]]\nmatch='ACME/*'\nfavourite=true", &s, URL, "/x").favourite, "case-insensitive");
+        assert!(
+            flags(
+                "[[rule]]\nmatch='github.com/acme/*'\nfavourite=true",
+                &s,
+                URL,
+                "/x"
+            )
+            .favourite
+        );
+        assert!(
+            flags(
+                "[[rule]]\nmatch='acme/widget'\nfavourite=true",
+                &s,
+                URL,
+                "/x"
+            )
+            .favourite
+        );
+        assert!(
+            flags(
+                "[[rule]]\nmatch='/r/**'\nfavourite=true",
+                &s,
+                URL,
+                "/r/a/widget"
+            )
+            .favourite
+        );
+        assert!(
+            flags("[[rule]]\nmatch='ACME/*'\nfavourite=true", &s, URL, "/x").favourite,
+            "case-insensitive"
+        );
         // inverse: other owners, and `*` must not cross `/`
-        assert!(!flags("[[rule]]\nmatch='github.com/other/*'\nfavourite=true", &s, URL, "/x").favourite);
-        assert!(!flags("[[rule]]\nmatch='github.com/*'\nfavourite=true", &s, URL, "/x").favourite);
-        assert!(!flags("[[rule]]\nmatch='/r/*'\nfavourite=true", &s, URL, "/r/a/widget").favourite);
+        assert!(
+            !flags(
+                "[[rule]]\nmatch='github.com/other/*'\nfavourite=true",
+                &s,
+                URL,
+                "/x"
+            )
+            .favourite
+        );
+        assert!(
+            !flags(
+                "[[rule]]\nmatch='github.com/*'\nfavourite=true",
+                &s,
+                URL,
+                "/x"
+            )
+            .favourite
+        );
+        assert!(
+            !flags(
+                "[[rule]]\nmatch='/r/*'\nfavourite=true",
+                &s,
+                URL,
+                "/r/a/widget"
+            )
+            .favourite
+        );
     }
 
     #[test]
@@ -186,19 +253,40 @@ mod tests {
         assert!(f.sync);
         assert_eq!(f.tracked.as_deref(), Some("github.com/acme"));
         assert!(!flags("[[track]]\nowner='acme'\nsync=false", &s, URL, "/x").sync);
-        assert!(!flags("[[track]]\nowner='acme'\n[[rule]]\nmatch='acme/widget'\nsync=false", &s, URL, "/x").sync);
-        assert_eq!(flags("[[track]]\nowner='other'", &s, URL, "/x").tracked, None);
-        assert_eq!(flags("[[track]]\nowner='acme'\nhost='gitlab.com'", &s, URL, "/x").tracked, None);
+        assert!(
+            !flags(
+                "[[track]]\nowner='acme'\n[[rule]]\nmatch='acme/widget'\nsync=false",
+                &s,
+                URL,
+                "/x"
+            )
+            .sync
+        );
+        assert_eq!(
+            flags("[[track]]\nowner='other'", &s, URL, "/x").tracked,
+            None
+        );
+        assert_eq!(
+            flags("[[track]]\nowner='acme'\nhost='gitlab.com'", &s, URL, "/x").tracked,
+            None
+        );
     }
 
     #[test]
     fn team_track_uses_last_listing() {
         let cfg = "[[track]]\nowner='acme'\nteam='core'";
-        assert_eq!(flags(cfg, &State::default(), URL, "/x").tracked, None, "unknown membership");
+        assert_eq!(
+            flags(cfg, &State::default(), URL, "/x").tracked,
+            None,
+            "unknown membership"
+        );
         let mut s = State::default();
         s.tracks.insert(
             "github.com/acme#core".into(),
-            TrackState { repos: ["github.com/acme/widget".to_string()].into(), listed_at: None },
+            TrackState {
+                repos: ["github.com/acme/widget".to_string()].into(),
+                listed_at: None,
+            },
         );
         assert!(flags(cfg, &s, URL, "/x").sync);
         assert!(!flags(cfg, &s, "git@github.com:acme/notinteam.git", "/x").sync);
@@ -216,17 +304,28 @@ mod tests {
     #[test]
     fn snooze_and_new_from_state() {
         let mut s = State::default();
-        s.snoozed.insert("github.com/acme/widget".into(), "2026-02-01T00:00:00Z".parse().unwrap());
+        s.snoozed.insert(
+            "github.com/acme/widget".into(),
+            "2026-02-01T00:00:00Z".parse().unwrap(),
+        );
         s.new.insert("github.com/acme/widget".into());
         let f = flags("", &s, URL, "/x");
         assert!(f.snoozed && f.new && f.hidden());
-        s.snoozed.insert("github.com/acme/widget".into(), "2025-12-01T00:00:00Z".parse().unwrap());
+        s.snoozed.insert(
+            "github.com/acme/widget".into(),
+            "2025-12-01T00:00:00Z".parse().unwrap(),
+        );
         assert!(!flags("", &s, URL, "/x").snoozed, "expired snooze");
     }
 
     #[test]
     fn repos_without_identity_match_by_path_only() {
-        let f = flags("[[rule]]\nmatch='/local/**'\nexclude=true", &State::default(), "", "/local/thing");
+        let f = flags(
+            "[[rule]]\nmatch='/local/**'\nexclude=true",
+            &State::default(),
+            "",
+            "/local/thing",
+        );
         assert!(f.excluded);
     }
 

@@ -35,7 +35,9 @@ pub fn run_jobs(
         for _ in 0..workers {
             s.spawn(|| {
                 loop {
-                    let Some(family) = queue.lock().unwrap().pop_front() else { break };
+                    let Some(family) = queue.lock().unwrap().pop_front() else {
+                        break;
+                    };
                     for index in family {
                         if cancel.load(Ordering::Relaxed) {
                             return;

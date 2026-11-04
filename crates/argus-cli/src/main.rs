@@ -1,3 +1,657 @@
+//! `argus`: the command-line front-end. With no subcommand it starts the TUI.
+
+use std::io::{IsTerminal, Write};
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+
+use anyhow::{Context, Result, bail};
+use argus_core::badges::{self, Badge, Icons, Role};
+use argus_core::fix::{self, FixKind};
+use argus_core::runner::{self, Event};
+use argus_core::sync;
+use argus_core::{Config, State, ViewFilter, Workspace, paths};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use unicode_width::UnicodeWidthStr;
+
+#[derive(Parser)]
+#[command(
+    name = "argus",
+    version,
+    about = "Overview, clean up and sync many git clones"
+)]
+struct Cli {
+    /// Config file [default: $XDG_CONFIG_HOME/argus/config.toml]
+    #[arg(long, global = true, env = "ARGUS_CONFIG")]
+    config: Option<PathBuf>,
+    /// State file [default: $XDG_STATE_HOME/argus/state.toml]
+    #[arg(long, global = true, env = "ARGUS_STATE")]
+    state: Option<PathBuf>,
+    /// Scan these roots instead of the configured ones.
+    #[arg(long = "root", global = true)]
+    roots: Vec<PathBuf>,
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Interactive TUI (default).
+    Tui,
+    /// Print status of all repositories.
+    Status {
+        #[command(flatten)]
+        view: View,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Pull syncable repos; list tracked owners and clone new repos.
+    Sync {
+        /// Show what would happen.
+        #[arg(long, short = 'n')]
+        dry_run: bool,
+        /// Don't query forges or clone; only pull.
+        #[arg(long)]
+        no_forge: bool,
+        /// Only these repos (glob on name/key/path).
+        patterns: Vec<String>,
+    },
+    /// Apply safe fixes (default: those in `[fix] auto`).
+    Fix {
+        /// Fix kinds to apply.
+        #[arg(long = "kind", short = 'k', value_enum)]
+        kinds: Vec<FixArg>,
+        #[arg(long, short = 'n')]
+        dry_run: bool,
+        /// Repos to fix (glob on name/key/path); default all visible.
+        patterns: Vec<String>,
+    },
+    /// Set favourite / sync / exclude marks, or snooze repos.
+    Mark(MarkArgs),
+    /// Acknowledge "new" repos (all, or matching patterns).
+    Ack { patterns: Vec<String> },
+    /// Forge queries.
+    Forge {
+        #[command(subcommand)]
+        cmd: ForgeCmd,
+    },
+    /// Write a starter config.
+    Init {
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print config and state file locations.
+    Paths,
+}
+
+#[derive(Args, Clone, Copy)]
+struct View {
+    /// Only repos needing attention.
+    #[arg(long, short = 'a')]
+    attention: bool,
+    /// Include excluded and snoozed repos.
+    #[arg(long)]
+    all: bool,
+}
+
+impl From<View> for ViewFilter {
+    fn from(v: View) -> Self {
+        ViewFilter {
+            attention_only: v.attention,
+            show_hidden: v.all,
+        }
+    }
+}
+
+#[derive(Args)]
+struct MarkArgs {
+    /// Repos (glob on name/key/path).
+    #[arg(required = true)]
+    patterns: Vec<String>,
+    #[arg(long, overrides_with = "no_favourite")]
+    favourite: bool,
+    #[arg(long)]
+    no_favourite: bool,
+    #[arg(long, overrides_with = "no_sync")]
+    sync: bool,
+    #[arg(long)]
+    no_sync: bool,
+    #[arg(long, overrides_with = "include")]
+    exclude: bool,
+    #[arg(long)]
+    include: bool,
+    /// Hide temporarily, e.g. `3d`, `12h`, `2w`.
+    #[arg(long, value_name = "DURATION")]
+    snooze: Option<String>,
+    #[arg(long)]
+    unsnooze: bool,
+    /// Remove all marks (fall back to config rules).
+    #[arg(long)]
+    clear: bool,
+}
+
+#[derive(Subcommand)]
+enum ForgeCmd {
+    /// List an org's or user's repositories.
+    List {
+        owner: String,
+        #[arg(long)]
+        team: Option<String>,
+        #[arg(long, default_value = "github.com")]
+        host: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum FixArg {
+    SwitchDefault,
+    Push,
+    Publish,
+    FastForward,
+    Pull,
+    Stash,
+}
+
+impl From<FixArg> for FixKind {
+    fn from(f: FixArg) -> Self {
+        match f {
+            FixArg::SwitchDefault => FixKind::SwitchDefault,
+            FixArg::Push => FixKind::Push,
+            FixArg::Publish => FixKind::Publish,
+            FixArg::FastForward => FixKind::FastForward,
+            FixArg::Pull => FixKind::Pull,
+            FixArg::Stash => FixKind::Stash,
+        }
+    }
+}
+
+struct Ctx {
+    config_path: PathBuf,
+    state_path: PathBuf,
+}
+
 fn main() {
-    println!("Hello, world!");
+    if let Err(e) = run() {
+        eprintln!("argus: {e:#}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<()> {
+    let cli = Cli::parse();
+    let ctx = Ctx {
+        config_path: cli.config.clone().unwrap_or_else(paths::config_file),
+        state_path: cli.state.clone().unwrap_or_else(paths::state_file),
+    };
+    match cli.cmd {
+        Some(Cmd::Init { force }) => return init(&ctx, force),
+        Some(Cmd::Paths) => {
+            println!("config: {}", ctx.config_path.display());
+            println!("state:  {}", ctx.state_path.display());
+            return Ok(());
+        }
+        Some(Cmd::Forge { cmd }) => return forge_cmd(cmd),
+        _ => {}
+    }
+    let mut ws = load(&ctx, &cli.roots)?;
+    match cli.cmd.unwrap_or(Cmd::Tui) {
+        Cmd::Tui => {
+            let opts = argus_tui::Options {
+                state_path: ctx.state_path.clone(),
+                forge_factory: forge_factory(),
+            };
+            argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))?;
+        }
+        Cmd::Status { view, json } => {
+            ws.scan();
+            status(&ws, view.into(), json)?;
+        }
+        Cmd::Sync {
+            dry_run,
+            no_forge,
+            patterns,
+        } => {
+            ws.scan();
+            sync_cmd(&mut ws, &ctx, dry_run, no_forge, &patterns)?;
+        }
+        Cmd::Fix {
+            kinds,
+            dry_run,
+            patterns,
+        } => {
+            ws.scan();
+            let kinds: Vec<FixKind> = if kinds.is_empty() {
+                ws.config.fix.auto.clone()
+            } else {
+                kinds.into_iter().map(Into::into).collect()
+            };
+            fix_cmd(&mut ws, &kinds, dry_run, &patterns)?;
+        }
+        Cmd::Mark(m) => {
+            ws.scan();
+            mark(&mut ws, &m)?;
+            save_state(&ws, &ctx)?;
+        }
+        Cmd::Ack { patterns } => {
+            ws.scan();
+            let sel = ws.select(
+                &patterns,
+                ViewFilter {
+                    show_hidden: true,
+                    ..Default::default()
+                },
+            );
+            let keys: Vec<String> = sel.iter().map(|&i| ws.entries[i].key.clone()).collect();
+            let before = ws.state.new.len();
+            ws.state.new.retain(|k| !keys.contains(k));
+            println!("acknowledged {}", before - ws.state.new.len());
+            save_state(&ws, &ctx)?;
+        }
+        Cmd::Init { .. } | Cmd::Paths | Cmd::Forge { .. } => unreachable!(),
+    }
+    Ok(())
+}
+
+fn load(ctx: &Ctx, roots: &[PathBuf]) -> Result<Workspace> {
+    let mut config = Config::load(&ctx.config_path)?;
+    if !roots.is_empty() {
+        config.roots = roots.iter().map(|r| paths::expand_tilde(r)).collect();
+    }
+    if config.roots.is_empty() {
+        bail!(
+            "no roots configured: run `argus init` and edit {}, or pass --root",
+            ctx.config_path.display()
+        );
+    }
+    let mut state = State::load(&ctx.state_path)?;
+    state.expire_snoozes(jiff::Timestamp::now());
+    Ok(Workspace::new(config, state)?)
+}
+
+fn save_state(ws: &Workspace, ctx: &Ctx) -> Result<()> {
+    ws.state.save(&ctx.state_path).context("saving state")
+}
+
+fn init(ctx: &Ctx, force: bool) -> Result<()> {
+    if ctx.config_path.exists() && !force {
+        bail!(
+            "{} exists (use --force to overwrite)",
+            ctx.config_path.display()
+        );
+    }
+    if let Some(d) = ctx.config_path.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    std::fs::write(&ctx.config_path, argus_core::config::EXAMPLE)?;
+    println!("wrote {}", ctx.config_path.display());
+    Ok(())
+}
+
+fn forge_factory() -> sync::ForgeFactory<'static> {
+    &|kind, host| argus_forge::for_track(kind, host)
+}
+
+// ---------- output ----------
+
+struct Paint {
+    color: bool,
+}
+
+impl Paint {
+    fn detect() -> Self {
+        Self {
+            color: std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none(),
+        }
+    }
+
+    fn role(&self, role: Role, s: &str) -> String {
+        if !self.color {
+            return s.to_string();
+        }
+        let code = match role {
+            Role::Favourite => "33",
+            Role::New => "1;36",
+            Role::Hidden | Role::Dim => "2",
+            Role::Branch => "35",
+            Role::DefaultBranch => "2;35",
+            Role::Detached => "1;35",
+            Role::Ahead => "32",
+            Role::Behind => "36",
+            Role::Staged => "32",
+            Role::Unstaged => "33",
+            Role::Untracked => "2",
+            Role::Conflict | Role::Error => "1;31",
+            Role::Stash => "34",
+            Role::Warning => "31",
+        };
+        format!("\x1b[{code}m{s}\x1b[0m")
+    }
+
+    fn badges(&self, b: &[Badge]) -> String {
+        b.iter()
+            .map(|b| self.role(b.role, &b.text))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+fn pad(s: &str, width: usize) -> String {
+    let w = UnicodeWidthStr::width(s);
+    format!("{s}{}", " ".repeat(width.saturating_sub(w)))
+}
+
+fn icons(ws: &Workspace) -> Icons {
+    badges::by_name(&ws.config.ui.icons)
+}
+
+fn status(ws: &Workspace, filter: ViewFilter, json: bool) -> Result<()> {
+    let order = ws.ordered(filter);
+    if json {
+        let v: Vec<_> = order.iter().map(|&i| &ws.entries[i]).collect();
+        serde_json::to_writer_pretty(std::io::stdout().lock(), &v)?;
+        println!();
+        return Ok(());
+    }
+    let p = Paint::detect();
+    let ic = icons(ws);
+    let rows: Vec<(String, String, String, String)> = order
+        .iter()
+        .map(|&i| {
+            let e = &ws.entries[i];
+            let flags = badges::flags(e, &ic);
+            let flag_w: usize = flags
+                .iter()
+                .map(|b| UnicodeWidthStr::width(b.text.as_str()))
+                .sum();
+            let indent = "  ".repeat(ws.depth(i));
+            let name = format!("{indent}{}", e.display_name());
+            let br = badges::branch(e, &ic)
+                .map(|b| p.role(b.role, &b.text))
+                .unwrap_or_default();
+            let br_plain = badges::branch(e, &ic).map(|b| b.text).unwrap_or_default();
+            (
+                format!(
+                    "{}{}",
+                    " ".repeat(2usize.saturating_sub(flag_w)),
+                    p.badges(&flags).replace(' ', "")
+                ),
+                name,
+                format!("{br}\u{0}{br_plain}"),
+                p.badges(&badges::state(e, &ic)),
+            )
+        })
+        .collect();
+    let name_w = rows
+        .iter()
+        .map(|r| UnicodeWidthStr::width(r.1.as_str()))
+        .max()
+        .unwrap_or(0);
+    let br_w = rows
+        .iter()
+        .map(|r| UnicodeWidthStr::width(r.2.split('\0').nth(1).unwrap_or("")))
+        .max()
+        .unwrap_or(0);
+    let mut out = std::io::stdout().lock();
+    for (flags, name, br, state) in rows {
+        let (br_col, br_plain) = br.split_once('\0').unwrap();
+        let br_pad = " ".repeat(br_w.saturating_sub(UnicodeWidthStr::width(br_plain)));
+        writeln!(
+            out,
+            "{flags} {}  {br_col}{br_pad}  {state}",
+            pad(&name, name_w)
+        )?;
+    }
+    let attention = order
+        .iter()
+        .filter(|&&i| ws.entries[i].needs_attention())
+        .count();
+    writeln!(
+        out,
+        "{}",
+        p.role(
+            Role::Dim,
+            &format!("{} repos, {attention} need attention", order.len())
+        )
+    )?;
+    Ok(())
+}
+
+// ---------- sync ----------
+
+fn sync_cmd(
+    ws: &mut Workspace,
+    ctx: &Ctx,
+    dry_run: bool,
+    no_forge: bool,
+    patterns: &[String],
+) -> Result<()> {
+    let p = Paint::detect();
+    let mut jobs = vec![];
+    let mut tracks = sync::SyncPlan::default();
+    if !no_forge && !ws.config.tracks.is_empty() {
+        let listings = sync::list_tracks(ws, forge_factory());
+        for (k, e) in &listings.errors {
+            eprintln!("{} {k}: {e}", p.role(Role::Error, "forge error"));
+        }
+        tracks = sync::plan_tracks(ws, &listings.repos, listings.protocol);
+        jobs.extend(tracks.jobs.iter().cloned());
+    }
+    let mut updates = sync::plan_updates(ws);
+    if !patterns.is_empty() {
+        let sel: Vec<PathBuf> = ws
+            .select(patterns, ViewFilter::default())
+            .into_iter()
+            .map(|i| ws.entries[i].path.clone())
+            .collect();
+        updates.retain(|j| sel.contains(&j.path));
+    }
+    jobs.extend(updates);
+
+    for r in &tracks.missing {
+        println!(
+            "{} {} (not cloned)",
+            p.role(Role::New, "new on forge:"),
+            r.id.slug()
+        );
+    }
+    for o in &tracks.orphans {
+        println!(
+            "{} {} (no longer listed by the forge)",
+            p.role(Role::Warning, "orphan:"),
+            paths::contract_tilde(o)
+        );
+    }
+    if dry_run {
+        for j in &jobs {
+            println!("would {}", j.label);
+        }
+        return Ok(());
+    }
+    let total = jobs.len();
+    let done = std::sync::atomic::AtomicUsize::new(0);
+    let tty = std::io::stderr().is_terminal();
+    let results = runner::run_jobs(
+        &jobs,
+        ws.config.concurrency,
+        &AtomicBool::new(false),
+        &|ev| {
+            if let Event::Finished { index, outcome } = ev {
+                let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if !outcome.success {
+                    eprintln!(
+                        "{} {}\n{}",
+                        p.role(Role::Error, "failed:"),
+                        jobs[index].label,
+                        indent(&outcome.output)
+                    );
+                } else if tty {
+                    eprint!("\r\x1b[K[{n}/{total}] {}", jobs[index].label);
+                }
+            }
+        },
+    );
+    if tty {
+        eprint!("\r\x1b[K");
+    }
+    let added = sync::record_clones(ws, &jobs, &results);
+    for a in &added {
+        println!(
+            "{} {}",
+            p.role(Role::New, "cloned:"),
+            paths::contract_tilde(a)
+        );
+    }
+    let failed = results
+        .iter()
+        .filter(|r| r.as_ref().is_some_and(|o| !o.success))
+        .count();
+    let skipped = results.iter().filter(|r| r.is_none()).count();
+    println!(
+        "{total} jobs: {} ok, {failed} failed, {skipped} skipped",
+        total - failed - skipped
+    );
+    ws.state.last_sync = Some(jiff::Timestamp::now());
+    save_state(ws, ctx)?;
+    if failed > 0 {
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
+fn indent(s: &str) -> String {
+    s.lines()
+        .map(|l| format!("    {l}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+// ---------- fix ----------
+
+fn fix_cmd(
+    ws: &mut Workspace,
+    kinds: &[FixKind],
+    dry_run: bool,
+    patterns: &[String],
+) -> Result<()> {
+    let p = Paint::detect();
+    let sel = ws.select(patterns, ViewFilter::default());
+    let mut any = false;
+    for i in sel {
+        let e = &ws.entries[i];
+        let Some(s) = e.status() else { continue };
+        let name = e.display_name();
+        let path = e.path.clone();
+        if dry_run {
+            for f in fix::plan(s).into_iter().filter(|f| kinds.contains(&f.kind)) {
+                any = true;
+                println!("{name}: would {} ({})", f.op.label(), f.reason);
+            }
+            continue;
+        }
+        for a in fix::apply_fixes(&path, kinds, 8)? {
+            any = true;
+            if a.outcome.success {
+                println!("{name}: {} {}", p.role(Role::Ahead, "✓"), a.fix.op.label());
+            } else {
+                println!(
+                    "{name}: {} {}\n{}",
+                    p.role(Role::Error, "✗"),
+                    a.fix.op.label(),
+                    indent(&a.outcome.output)
+                );
+            }
+        }
+    }
+    if !any {
+        println!("nothing to fix");
+    }
+    Ok(())
+}
+
+// ---------- mark ----------
+
+fn mark(ws: &mut Workspace, m: &MarkArgs) -> Result<()> {
+    let sel = ws.select(
+        &m.patterns,
+        ViewFilter {
+            show_hidden: true,
+            ..Default::default()
+        },
+    );
+    if sel.is_empty() {
+        bail!("no repos match {:?}", m.patterns);
+    }
+    let snooze_until = match &m.snooze {
+        Some(d) => {
+            let secs = argus_core::state::parse_duration(d)
+                .with_context(|| format!("bad duration {d:?}"))?;
+            Some(jiff::Timestamp::now() + jiff::SignedDuration::from_secs(secs))
+        }
+        None => None,
+    };
+    let tri = |yes: bool, no: bool| {
+        if yes {
+            Some(Some(true))
+        } else if no {
+            Some(Some(false))
+        } else {
+            None
+        }
+    };
+    for i in sel {
+        let key = ws.entries[i].key.clone();
+        ws.state.mark(&key, |mk| {
+            if m.clear {
+                *mk = Default::default();
+            }
+            if let Some(v) = tri(m.favourite, m.no_favourite) {
+                mk.favourite = v;
+            }
+            if let Some(v) = tri(m.sync, m.no_sync) {
+                mk.sync = v;
+            }
+            if let Some(v) = tri(m.exclude, m.include) {
+                mk.exclude = v;
+            }
+        });
+        if let Some(t) = snooze_until {
+            ws.state.snoozed.insert(key.clone(), t);
+        }
+        if m.unsnooze || m.clear {
+            ws.state.snoozed.remove(&key);
+        }
+        println!("{}", ws.entries[i].display_name());
+    }
+    Ok(())
+}
+
+// ---------- forge ----------
+
+fn forge_cmd(cmd: ForgeCmd) -> Result<()> {
+    match cmd {
+        ForgeCmd::List {
+            owner,
+            team,
+            host,
+            json,
+        } => {
+            let f = argus_forge::for_track("github", &host)?;
+            let repos = f.list(&owner, team.as_deref())?;
+            if json {
+                serde_json::to_writer_pretty(std::io::stdout().lock(), &repos)?;
+                println!();
+            } else {
+                for r in repos {
+                    let tags = [(r.archived, " [archived]"), (r.fork, " [fork]")]
+                        .iter()
+                        .filter(|t| t.0)
+                        .map(|t| t.1)
+                        .collect::<String>();
+                    println!("{}{tags}", r.id.slug());
+                }
+            }
+        }
+    }
+    Ok(())
 }

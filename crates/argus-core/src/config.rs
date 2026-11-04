@@ -20,6 +20,8 @@ pub struct Config {
     pub max_depth: usize,
     /// Maximum concurrent network operations (fetch/pull/push/clone).
     pub concurrency: usize,
+    /// Protocol for new clones; default asks the forge (`gh config get git_protocol`).
+    pub clone_protocol: Option<crate::forge::Protocol>,
     /// Pattern rules applied in order; later rules win.
     #[serde(rename = "rule")]
     pub rules: Vec<Rule>,
@@ -36,14 +38,26 @@ impl Default for Config {
         Self {
             roots: vec![],
             skip_dirs: [
-                "node_modules", "target", ".venv", "venv", "__pycache__", ".tox", "vendor",
-                "dist", "build", ".cache", ".direnv", ".terraform", "Library",
+                "node_modules",
+                "target",
+                ".venv",
+                "venv",
+                "__pycache__",
+                ".tox",
+                "vendor",
+                "dist",
+                "build",
+                ".cache",
+                ".direnv",
+                ".terraform",
+                "Library",
             ]
             .into_iter()
             .map(String::from)
             .collect(),
             max_depth: 6,
             concurrency: 8,
+            clone_protocol: None,
             rules: vec![],
             tracks: vec![],
             fix: FixConfig::default(),
@@ -128,7 +142,9 @@ pub struct FixConfig {
 
 impl Default for FixConfig {
     fn default() -> Self {
-        Self { auto: vec![FixKind::SwitchDefault] }
+        Self {
+            auto: vec![FixKind::SwitchDefault],
+        }
     }
 }
 
@@ -151,35 +167,55 @@ pub struct UiConfig {
     pub theme: String,
     /// Per-role colour overrides, e.g. `branch = "magenta"`, `favourite = "#ffcc00"`.
     pub colors: BTreeMap<String, String>,
-    /// Use Nerd Font / extended icons; `false` falls back to plain ASCII.
-    pub icons: bool,
+    /// Icon set: `unicode` (default), `nerd` (Nerd Font glyphs) or `ascii`.
+    pub icons: String,
     /// Show only repos needing attention at startup.
     pub attention_only: bool,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
-        Self { theme: "terminal".into(), colors: BTreeMap::new(), icons: true, attention_only: false }
+        Self {
+            theme: "terminal".into(),
+            colors: BTreeMap::new(),
+            icons: "unicode".into(),
+            attention_only: false,
+        }
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("reading {path}: {source}")]
-    Io { path: PathBuf, source: std::io::Error },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("parsing {path}: {source}")]
-    Parse { path: PathBuf, source: toml::de::Error },
+    Parse {
+        path: PathBuf,
+        source: toml::de::Error,
+    },
     #[error("invalid rule pattern {pattern:?}: {source}")]
-    Pattern { pattern: String, source: globset::Error },
+    Pattern {
+        pattern: String,
+        source: globset::Error,
+    },
 }
 
 impl Config {
     /// Load from `path`; a missing file yields the default config.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         match std::fs::read_to_string(path) {
-            Ok(s) => Self::parse(&s).map_err(|source| ConfigError::Parse { path: path.into(), source }),
+            Ok(s) => Self::parse(&s).map_err(|source| ConfigError::Parse {
+                path: path.into(),
+                source,
+            }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(source) => Err(ConfigError::Io { path: path.into(), source }),
+            Err(source) => Err(ConfigError::Io {
+                path: path.into(),
+                source,
+            }),
         }
     }
 
@@ -203,7 +239,10 @@ impl Config {
 
     /// Directory new clones for `track` land in.
     pub fn clone_dir(&self, track: &Track) -> Option<PathBuf> {
-        track.into.clone().or_else(|| self.roots.first().map(|r| r.join(&track.owner)))
+        track
+            .into
+            .clone()
+            .or_else(|| self.roots.first().map(|r| r.join(&track.owner)))
     }
 }
 
@@ -241,7 +280,7 @@ auto = ["switch-default"]   # also: "push", "fast-forward"
 
 [ui]
 theme = "terminal"          # terminal | dark | light | mono
-icons = true
+icons = "unicode"          # unicode | nerd | ascii
 # [ui.colors]
 # favourite = "yellow"
 "#;
@@ -266,7 +305,10 @@ mod tests {
     #[test]
     fn rejects_unknown_keys() {
         assert!(Config::parse("rootz = []").is_err());
-        assert!(Config::parse("[[rule]]\nmatch='x'\nfavorite=true").is_err(), "US spelling is a typo here");
+        assert!(
+            Config::parse("[[rule]]\nmatch='x'\nfavorite=true").is_err(),
+            "US spelling is a typo here"
+        );
     }
 
     #[test]
@@ -290,6 +332,9 @@ mod tests {
     #[test]
     fn missing_file_is_default() {
         let d = tempfile::tempdir().unwrap();
-        assert_eq!(Config::load(&d.path().join("nope.toml")).unwrap(), Config::default());
+        assert_eq!(
+            Config::load(&d.path().join("nope.toml")).unwrap(),
+            Config::default()
+        );
     }
 }

@@ -66,56 +66,82 @@ pub fn plan(s: &RepoStatus) -> Vec<Fix> {
     let head_info = head_branch.and_then(|b| s.branches.iter().find(|bi| bi.name == b));
 
     if let (Some(b), Some(default)) = (head_branch, &s.default_branch) {
-        let safe = head_info.is_some_and(|h| {
-            h.merged || h.upstream.as_ref().is_some_and(|t| !t.gone && t.ahead == 0)
-        });
+        // Switching never loses commits, but it hides them; only do it when
+        // the work is merged or exists on a remote.
+        let safe = head_info.is_some_and(|h| !h.is_unpushed());
         if b != default && !tracked_dirty && safe {
             v.push(Fix {
                 kind: FixKind::SwitchDefault,
-                op: Op::Switch { branch: default.clone() },
+                op: Op::Switch {
+                    branch: default.clone(),
+                },
                 reason: format!("{b} has nothing unpushed"),
             });
         }
     }
 
     if let Some(t) = &s.upstream {
-        if !t.gone && t.ahead > 0 && t.behind == 0 {
-            v.push(Fix { kind: FixKind::Push, op: Op::Push, reason: format!("{} commit(s) ahead of {}", t.ahead, t.name) });
-        }
-        if !t.gone && t.behind > 0 {
-            v.push(Fix { kind: FixKind::Pull, op: Op::Pull, reason: format!("{} commit(s) behind {}", t.behind, t.name) });
-        }
-    } else if let (Some(b), Some(h), Some(remote)) = (head_branch, head_info, &s.remote) {
-        if !h.merged {
+        let same_name = head_info.is_some_and(|h| h.upstream_is_same_name());
+        if !t.gone && t.ahead > 0 && t.behind == 0 && same_name {
             v.push(Fix {
-                kind: FixKind::Publish,
-                op: Op::PushSetUpstream { remote: remote.clone(), branch: b.to_string() },
-                reason: format!("{b} has no upstream"),
+                kind: FixKind::Push,
+                op: Op::Push,
+                reason: format!("{} commit(s) ahead of {}", t.ahead, t.name),
             });
         }
+        if !t.gone && t.behind > 0 {
+            v.push(Fix {
+                kind: FixKind::Pull,
+                op: Op::Pull,
+                reason: format!("{} commit(s) behind {}", t.behind, t.name),
+            });
+        }
+    } else if let (Some(b), Some(h), Some(remote)) = (head_branch, head_info, &s.remote)
+        && h.is_unpushed()
+    {
+        v.push(Fix {
+            kind: FixKind::Publish,
+            op: Op::PushSetUpstream {
+                remote: remote.clone(),
+                branch: b.to_string(),
+            },
+            reason: format!("{b} has no upstream"),
+        });
     }
 
     for b in s.branches.iter().filter(|b| !b.is_head) {
-        if let Some(t) = &b.upstream {
-            if !t.gone && t.ahead == 0 && t.behind > 0 {
-                v.push(Fix {
-                    kind: FixKind::FastForward,
-                    op: Op::FastForward { branch: b.name.clone(), upstream: t.name.clone() },
-                    reason: format!("{} is {} behind {}", b.name, t.behind, t.name),
-                });
-            }
+        if let Some(t) = &b.upstream
+            && !t.gone
+            && t.ahead == 0
+            && t.behind > 0
+        {
+            v.push(Fix {
+                kind: FixKind::FastForward,
+                op: Op::FastForward {
+                    branch: b.name.clone(),
+                    upstream: t.name.clone(),
+                },
+                reason: format!("{} is {} behind {}", b.name, t.behind, t.name),
+            });
         }
     }
 
     if any_dirty {
         v.push(Fix {
             kind: FixKind::Stash,
-            op: Op::Stash { message: format!("argus {}", jiff::Timestamp::now().strftime("%Y-%m-%d %H:%M")) },
+            op: Op::Stash {
+                message: format!(
+                    "argus {}",
+                    jiff::Timestamp::now().strftime("%Y-%m-%d %H:%M")
+                ),
+            },
             reason: format!("{} uncommitted path(s)", s.changes.total()),
         });
         v.push(Fix {
             kind: FixKind::Commit,
-            op: Op::CommitAll { message: String::new() },
+            op: Op::CommitAll {
+                message: String::new(),
+            },
             reason: format!("{} uncommitted path(s)", s.changes.total()),
         });
     }
@@ -131,12 +157,18 @@ pub struct Applied {
 /// Repeatedly plan and apply the first allowed fix until none apply, a fix
 /// fails, or `max_steps` is reached. Each kind is applied at most once per
 /// branch name to guarantee termination.
-pub fn apply_fixes(path: &Path, allowed: &[FixKind], max_steps: usize) -> Result<Vec<Applied>, status::StatusError> {
+pub fn apply_fixes(
+    path: &Path,
+    allowed: &[FixKind],
+    max_steps: usize,
+) -> Result<Vec<Applied>, status::StatusError> {
     let mut done: Vec<Applied> = vec![];
     for _ in 0..max_steps {
         let s = status::status(path, StatusOptions { submodules: false })?;
         let next = plan(&s).into_iter().find(|f| {
-            allowed.contains(&f.kind) && !f.kind.needs_input() && !done.iter().any(|d| d.fix.op == f.op)
+            allowed.contains(&f.kind)
+                && !f.kind.needs_input()
+                && !done.iter().any(|d| d.fix.op == f.op)
         });
         let Some(fix) = next else { break };
         let outcome = ops::run(path, &fix.op);

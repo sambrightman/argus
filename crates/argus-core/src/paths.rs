@@ -5,11 +5,15 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 pub fn home() -> Option<PathBuf> {
-    env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from)
+    env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
 }
 
 pub fn expand_tilde(p: &Path) -> PathBuf {
-    let Ok(rest) = p.strip_prefix("~") else { return p.to_path_buf() };
+    let Ok(rest) = p.strip_prefix("~") else {
+        return p.to_path_buf();
+    };
     match home() {
         Some(h) => h.join(rest),
         None => p.to_path_buf(),
@@ -20,7 +24,9 @@ pub fn expand_tilde(p: &Path) -> PathBuf {
 pub fn contract_tilde(p: &Path) -> String {
     match home() {
         Some(h) if p.starts_with(&h) && h != Path::new("/") => {
-            format!("~/{}", p.strip_prefix(&h).unwrap().display()).trim_end_matches('/').to_string()
+            format!("~/{}", p.strip_prefix(&h).unwrap().display())
+                .trim_end_matches('/')
+                .to_string()
         }
         _ => p.display().to_string(),
     }

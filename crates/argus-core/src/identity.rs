@@ -16,7 +16,11 @@ pub struct RepoId {
 
 impl RepoId {
     pub fn new(host: impl Into<String>, owner: impl Into<String>, name: impl Into<String>) -> Self {
-        Self { host: host.into().to_lowercase(), owner: owner.into(), name: name.into() }
+        Self {
+            host: host.into().to_lowercase(),
+            owner: owner.into(),
+            name: name.into(),
+        }
     }
 
     /// `owner/name`
@@ -52,7 +56,10 @@ impl RepoId {
             return None;
         }
         let path = path.trim_matches('/');
-        let path = path.strip_suffix(".git").unwrap_or(path).trim_end_matches('/');
+        let path = path
+            .strip_suffix(".git")
+            .unwrap_or(path)
+            .trim_end_matches('/');
         let (owner, name) = path.rsplit_once('/')?;
         let owner = owner.trim_start_matches('~').trim_matches('/');
         if owner.is_empty() || name.is_empty() {
@@ -65,7 +72,11 @@ impl RepoId {
 fn strip_port(host: &str) -> &str {
     if host.starts_with('[') {
         // IPv6 literal
-        return host.split(']').next().map(|h| h.trim_start_matches('[')).unwrap_or(host);
+        return host
+            .split(']')
+            .next()
+            .map(|h| h.trim_start_matches('['))
+            .unwrap_or(host);
     }
     host.split(':').next().unwrap_or(host)
 }
@@ -101,7 +112,10 @@ mod tests {
 
     #[test]
     fn nested_groups_go_into_owner() {
-        assert_eq!(id("git@gitlab.com:group/sub/proj.git"), Some("gitlab.com/group/sub/proj".into()));
+        assert_eq!(
+            id("git@gitlab.com:group/sub/proj.git"),
+            Some("gitlab.com/group/sub/proj".into())
+        );
     }
 
     #[test]
