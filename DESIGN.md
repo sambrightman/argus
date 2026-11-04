@@ -151,6 +151,11 @@ rendering is snapshot-tested via `TestBackend`.
 * **Shell/git-UI hand-off suspends the TUI**, as lazygit does. An embedded pty
   pane (portable-pty + tui-term) is the next step for "contained within the TUI".
 
+* **One fix per auto-fix action.** No chaining (push *then* switch is two
+  actions); the user can snooze or tolerate in between. A future
+  "auto-fix all" may chain. Defaults: `push` (fast-forward, same-named
+  upstream only) and `switch-default`.
+
 ## 9. Not done yet / next steps
 
 * Embedded terminal pane; per-file actions in the details view (stage,

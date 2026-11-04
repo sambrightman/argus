@@ -1,5 +1,5 @@
 //! Fix planning. A plan is derived purely from a [`RepoStatus`], so it is
-//! cheap, deterministic and testable; execution re-plans after every step.
+//! cheap, deterministic and testable. Applying is one fix per user action.
 
 use std::path::Path;
 
@@ -154,29 +154,18 @@ pub struct Applied {
     pub outcome: OpOutcome,
 }
 
-/// Repeatedly plan and apply the first allowed fix until none apply, a fix
-/// fails, or `max_steps` is reached. Each kind is applied at most once per
-/// branch name to guarantee termination.
-pub fn apply_fixes(
-    path: &Path,
-    allowed: &[FixKind],
-    max_steps: usize,
-) -> Result<Vec<Applied>, status::StatusError> {
-    let mut done: Vec<Applied> = vec![];
-    for _ in 0..max_steps {
-        let s = status::status(path, StatusOptions { submodules: false })?;
-        let next = plan(&s).into_iter().find(|f| {
-            allowed.contains(&f.kind)
-                && !f.kind.needs_input()
-                && !done.iter().any(|d| d.fix.op == f.op)
-        });
-        let Some(fix) = next else { break };
-        let outcome = ops::run(path, &fix.op);
-        let ok = outcome.success;
-        done.push(Applied { fix, outcome });
-        if !ok {
-            break;
-        }
-    }
-    Ok(done)
+/// Apply the first allowed fix for the repo's current state, if any.
+///
+/// Deliberately one fix per call: each auto-fix is a separate user action
+/// (e.g. push, then a later action switches to the default branch).
+pub fn apply_fix(path: &Path, allowed: &[FixKind]) -> Result<Option<Applied>, status::StatusError> {
+    let s = status::status(path, StatusOptions { submodules: false })?;
+    let Some(fix) = plan(&s)
+        .into_iter()
+        .find(|f| allowed.contains(&f.kind) && !f.kind.needs_input())
+    else {
+        return Ok(None);
+    };
+    let outcome = ops::run(path, &fix.op);
+    Ok(Some(Applied { fix, outcome }))
 }

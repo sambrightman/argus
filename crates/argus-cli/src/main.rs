@@ -549,7 +549,7 @@ fn fix_cmd(
             }
             continue;
         }
-        for a in fix::apply_fixes(&path, kinds, 8)? {
+        if let Some(a) = fix::apply_fix(&path, kinds)? {
             any = true;
             if a.outcome.success {
                 println!("{name}: {} {}", p.role(Role::Ahead, "✓"), a.fix.op.label());

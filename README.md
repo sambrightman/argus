@@ -137,7 +137,9 @@ behind upstream (sync-only).
 Fixes are planned from status and are never destructive. `switch-default`
 needs a clean tracked tree and nothing unpushed. `push` (a default auto-fix) is fast-forward only,
 and only to a same-named upstream branch. Nothing is offered during a conflict.
-Auto-fix re-plans after every step, so for example *stash → switch* chains.
+Each auto-fix action applies **one** fix: an unpushed feature branch is
+pushed by one `x x` (or `argus fix`) and switched back to the default
+branch by the next. Or snooze it in between (`m z`).
 
 ## Development
 

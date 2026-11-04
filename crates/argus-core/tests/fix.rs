@@ -1,7 +1,7 @@
 //! Fix planning and application. Each fix has tests for when it must *not*
 //! be offered, since an unsafe fix is far worse than a missing one.
 
-use argus_core::fix::{FixKind, apply_fixes, plan};
+use argus_core::fix::{FixKind, apply_fix, plan};
 use argus_core::ops::Op;
 use argus_core::status::{Head, StatusOptions, status};
 use argus_core::testkit::{Sandbox, commit, git, write};
@@ -135,7 +135,7 @@ fn fast_forward_offered_for_stale_non_head_branch() {
     let k = kinds(&r);
     assert!(k.contains(&FixKind::FastForward), "{k:?}");
     // inverse: once fast-forwarded it's no longer offered
-    apply_fixes(&r, &[FixKind::FastForward], 5).unwrap();
+    apply_fix(&r, &[FixKind::FastForward]).unwrap().unwrap();
     assert!(!kinds(&r).contains(&FixKind::FastForward));
     assert!(
         kinds(&r).contains(&FixKind::SwitchDefault),
@@ -147,38 +147,45 @@ fn fast_forward_offered_for_stale_non_head_branch() {
 fn apply_switch_default() {
     let sb = Sandbox::new();
     let r = pushed_feature(&sb);
-    let applied = apply_fixes(&r, &[FixKind::SwitchDefault], 5).unwrap();
-    assert_eq!(applied.len(), 1);
-    assert!(applied[0].outcome.success, "{}", applied[0].outcome.output);
+    let a = apply_fix(&r, &[FixKind::SwitchDefault]).unwrap().unwrap();
+    assert!(a.outcome.success, "{}", a.outcome.output);
     assert_eq!(head(&r), Head::Branch("main".into()));
     // idempotent
-    assert!(
-        apply_fixes(&r, &[FixKind::SwitchDefault], 5)
-            .unwrap()
-            .is_empty()
-    );
+    assert!(apply_fix(&r, &[FixKind::SwitchDefault]).unwrap().is_none());
 }
 
 #[test]
 fn apply_respects_allowed_kinds() {
     let sb = Sandbox::new();
     let r = pushed_feature(&sb);
-    assert!(apply_fixes(&r, &[FixKind::Push], 5).unwrap().is_empty());
+    assert!(apply_fix(&r, &[FixKind::Push]).unwrap().is_none());
     assert_eq!(head(&r), Head::Branch("feat".into()));
 }
 
 #[test]
-fn apply_chains_stash_then_switch() {
+fn one_fix_per_action_stash_then_switch() {
+    // No chaining: each auto-fix action applies a single fix.
     let sb = Sandbox::new();
     let r = pushed_feature(&sb);
     write(&r, "README", "dirty");
-    let applied = apply_fixes(&r, &[FixKind::Stash, FixKind::SwitchDefault], 5).unwrap();
-    let ks: Vec<_> = applied.iter().map(|a| a.fix.kind).collect();
-    assert_eq!(ks, vec![FixKind::Stash, FixKind::SwitchDefault]);
+    let allowed = [FixKind::Stash, FixKind::SwitchDefault];
+    assert_eq!(
+        apply_fix(&r, &allowed).unwrap().unwrap().fix.kind,
+        FixKind::Stash
+    );
     let s = status(&r, StatusOptions::default()).unwrap();
-    assert_eq!(s.head, Head::Branch("main".into()));
+    assert_eq!(
+        s.head,
+        Head::Branch("feat".into()),
+        "not switched in the same action"
+    );
     assert_eq!(s.stashes, 1);
-    assert!(s.changes.is_clean());
+    assert_eq!(
+        apply_fix(&r, &allowed).unwrap().unwrap().fix.kind,
+        FixKind::SwitchDefault
+    );
+    assert_eq!(head(&r), Head::Branch("main".into()));
+    assert!(apply_fix(&r, &allowed).unwrap().is_none());
 }
 
 #[test]
@@ -186,7 +193,7 @@ fn commit_is_never_auto_applied() {
     let sb = Sandbox::new();
     let r = sb.init("r");
     write(&r, "README", "dirty");
-    assert!(apply_fixes(&r, &[FixKind::Commit], 5).unwrap().is_empty());
+    assert!(apply_fix(&r, &[FixKind::Commit]).unwrap().is_none());
 }
 
 #[test]
@@ -237,26 +244,27 @@ fn failed_fix_stops_the_chain() {
             "/nonexistent/repo.git",
         ],
     );
-    let applied = apply_fixes(&r, &[FixKind::Push, FixKind::SwitchDefault], 5).unwrap();
-    assert_eq!(applied.len(), 1);
-    assert_eq!(applied[0].fix.kind, FixKind::Push);
-    assert!(!applied[0].outcome.success);
+    let a = apply_fix(&r, &[FixKind::Push, FixKind::SwitchDefault])
+        .unwrap()
+        .unwrap();
+    assert_eq!(a.fix.kind, FixKind::Push);
+    assert!(!a.outcome.success);
     assert_eq!(head(&r), Head::Branch("feat".into()));
 }
 
 #[test]
-fn push_then_switch() {
+fn push_then_switch_takes_two_actions() {
     let sb = Sandbox::new();
     let r = pushed_feature(&sb);
     commit(&r, "unpushed");
-    let applied = apply_fixes(&r, &[FixKind::Push, FixKind::SwitchDefault], 5).unwrap();
-    let ks: Vec<_> = applied
-        .iter()
-        .map(|a| (a.fix.kind, a.outcome.success))
-        .collect();
+    let allowed = [FixKind::Push, FixKind::SwitchDefault];
+    let a = apply_fix(&r, &allowed).unwrap().unwrap();
+    assert_eq!((a.fix.kind, a.outcome.success), (FixKind::Push, true));
+    assert_eq!(head(&r), Head::Branch("feat".into()), "push alone");
+    let a = apply_fix(&r, &allowed).unwrap().unwrap();
     assert_eq!(
-        ks,
-        vec![(FixKind::Push, true), (FixKind::SwitchDefault, true)]
+        (a.fix.kind, a.outcome.success),
+        (FixKind::SwitchDefault, true)
     );
     assert_eq!(head(&r), Head::Branch("main".into()));
 }
@@ -299,20 +307,14 @@ fn push_not_offered_when_upstream_has_another_name() {
 }
 
 #[test]
-fn default_auto_fixes_push_then_switch_but_never_force() {
+fn default_auto_fix_pushes_but_never_force() {
     let auto = argus_core::Config::default().fix.auto;
     let sb = Sandbox::new();
     let r = pushed_feature(&sb);
     commit(&r, "unpushed");
-    let ks: Vec<_> = apply_fixes(&r, &auto, 5)
-        .unwrap()
-        .iter()
-        .map(|a| (a.fix.kind, a.outcome.success))
-        .collect();
-    assert_eq!(
-        ks,
-        vec![(FixKind::Push, true), (FixKind::SwitchDefault, true)]
-    );
+    let a = apply_fix(&r, &auto).unwrap().unwrap();
+    assert_eq!((a.fix.kind, a.outcome.success), (FixKind::Push, true));
+    assert_eq!(head(&r), Head::Branch("feat".into()));
     // inverse: diverged from upstream -> no push, and so no switch either
     let sb = Sandbox::new();
     let r = pushed_feature(&sb);
@@ -332,6 +334,6 @@ fn default_auto_fixes_push_then_switch_but_never_force() {
     commit(&tmp, "remote");
     git(&tmp, &["push", "-q"]);
     git(&r, &["fetch", "-q"]);
-    assert!(apply_fixes(&r, &auto, 5).unwrap().is_empty());
+    assert!(apply_fix(&r, &auto).unwrap().is_none());
     assert_eq!(head(&r), Head::Branch("feat".into()));
 }

@@ -113,7 +113,7 @@ pub enum Msg {
     },
     FixDone {
         path: PathBuf,
-        applied: Result<Vec<Applied>, String>,
+        applied: Result<Option<Applied>, String>,
     },
     SyncPlanned {
         tracks: argus_core::State,

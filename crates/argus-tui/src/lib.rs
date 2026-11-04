@@ -149,8 +149,7 @@ impl Runtime {
                     let work = || {
                         use rayon::prelude::*;
                         paths.into_par_iter().for_each(|p| {
-                            let applied =
-                                fix::apply_fixes(&p, &kinds, 8).map_err(|e| e.to_string());
+                            let applied = fix::apply_fix(&p, &kinds).map_err(|e| e.to_string());
                             let _ = tx.send(Msg::FixDone { path: p, applied });
                         });
                     };

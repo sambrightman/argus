@@ -253,3 +253,15 @@ fn bad_config_is_reported() {
         .failure()
         .stderr(predicate::str::contains("rootz"));
 }
+
+#[test]
+fn each_fix_run_applies_one_fix() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let f = sb.path("dev/feature");
+    commit(&f, "unpushed");
+    argus(&sb).args(["fix", "acme/feature"]).assert().success().stdout(predicate::str::contains("✓ push").and(predicate::str::contains("switch").not()));
+    assert_eq!(git(&f, &["branch", "--show-current"]).trim(), "feat");
+    argus(&sb).args(["fix", "acme/feature"]).assert().success().stdout(predicate::str::contains("✓ switch main"));
+    assert_eq!(git(&f, &["branch", "--show-current"]).trim(), "main");
+}
