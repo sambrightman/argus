@@ -54,7 +54,7 @@ match = "~/dev/scratch/**"
 exclude = true
 
 [fix]
-auto = ["switch-default"]        # kinds `x x` / `argus fix` apply without asking
+auto = ["push", "switch-default"]  # kinds `x x` / `argus fix` apply without asking
 
 [tools]
 git_ui = "lazygit"               # or "emacsclient -t -e '(magit-status)'"
@@ -135,8 +135,8 @@ unpushed work › detached HEAD › not on default branch › stashes › no rem
 behind upstream (sync-only).
 
 Fixes are planned from status and are never destructive. `switch-default`
-needs a clean tracked tree and nothing unpushed. `push` is fast-forward only,
-and only to a same-named upstream. Nothing is offered during a conflict.
+needs a clean tracked tree and nothing unpushed. `push` (a default auto-fix) is fast-forward only,
+and only to a same-named upstream branch. Nothing is offered during a conflict.
 Auto-fix re-plans after every step, so for example *stash → switch* chains.
 
 ## Development

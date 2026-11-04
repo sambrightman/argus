@@ -297,3 +297,41 @@ fn push_not_offered_when_upstream_has_another_name() {
         "work is safe on origin: {k:?}"
     );
 }
+
+#[test]
+fn default_auto_fixes_push_then_switch_but_never_force() {
+    let auto = argus_core::Config::default().fix.auto;
+    let sb = Sandbox::new();
+    let r = pushed_feature(&sb);
+    commit(&r, "unpushed");
+    let ks: Vec<_> = apply_fixes(&r, &auto, 5)
+        .unwrap()
+        .iter()
+        .map(|a| (a.fix.kind, a.outcome.success))
+        .collect();
+    assert_eq!(
+        ks,
+        vec![(FixKind::Push, true), (FixKind::SwitchDefault, true)]
+    );
+    // inverse: diverged from upstream -> no push, and so no switch either
+    let sb = Sandbox::new();
+    let r = pushed_feature(&sb);
+    commit(&r, "local");
+    let tmp = sb.path("other");
+    git(
+        &sb.root(),
+        &[
+            "clone",
+            "-q",
+            "-b",
+            "feat",
+            sb.path("forge/acme/w.git").to_str().unwrap(),
+            tmp.to_str().unwrap(),
+        ],
+    );
+    commit(&tmp, "remote");
+    git(&tmp, &["push", "-q"]);
+    git(&r, &["fetch", "-q"]);
+    assert!(apply_fixes(&r, &auto, 5).unwrap().is_empty());
+    assert_eq!(head(&r), Head::Branch("feat".into()));
+}

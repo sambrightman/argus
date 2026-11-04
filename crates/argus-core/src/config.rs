@@ -143,7 +143,7 @@ pub struct FixConfig {
 impl Default for FixConfig {
     fn default() -> Self {
         Self {
-            auto: vec![FixKind::SwitchDefault],
+            auto: vec![FixKind::Push, FixKind::SwitchDefault],
         }
     }
 }
@@ -273,7 +273,7 @@ roots = ["~/dev"]
 # exclude = true
 
 [fix]
-auto = ["switch-default"]   # also: "push", "fast-forward"
+auto = ["push", "switch-default"]   # also: "publish", "fast-forward", "stash"
 
 [tools]
 # git_ui = "lazygit"
@@ -294,7 +294,7 @@ mod tests {
         let c = Config::parse(EXAMPLE).unwrap();
         assert_eq!(c.roots.len(), 1);
         assert!(!c.roots[0].starts_with("~"), "tilde must be expanded");
-        assert_eq!(c.fix.auto, vec![FixKind::SwitchDefault]);
+        assert_eq!(c.fix.auto, vec![FixKind::Push, FixKind::SwitchDefault]);
     }
 
     #[test]
