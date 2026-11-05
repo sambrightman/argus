@@ -679,3 +679,17 @@ fn follow_symlinks_flag_and_config() {
     std::fs::write(&cfg, "follow_symlinks = true\n").unwrap();
     assert!(status(&["--config", cfg.to_str().unwrap()]).contains("1 repos, 1 need attention"));
 }
+
+#[test]
+fn tui_without_a_terminal_explains_instead_of_panicking() {
+    let sb = Sandbox::new();
+    std::fs::create_dir_all(sb.path("dev")).unwrap();
+    for args in [&[][..], &["tui"], &["demo"]] {
+        argus(&sb)
+            .args(args)
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("needs a terminal"))
+            .stderr(predicate::str::contains("panicked").not());
+    }
+}

@@ -254,7 +254,11 @@ fn run() -> Result<()> {
             return Ok(());
         }
         Some(Cmd::Forge { cmd }) => return forge_cmd(cmd),
-        Some(Cmd::Demo { theme, icons }) => return demo(&ctx, theme, icons),
+        Some(Cmd::Demo { theme, icons }) => {
+            argus_tui::check_terminal().map_err(|e| anyhow::anyhow!(e))?;
+            return demo(&ctx, theme, icons);
+        }
+        None | Some(Cmd::Tui) => argus_tui::check_terminal().map_err(|e| anyhow::anyhow!(e))?,
         _ => {}
     }
     let (mut ws, notices) = load(&ctx, &cli.roots, cli.max_depth)?;

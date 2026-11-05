@@ -33,7 +33,19 @@ pub struct Options {
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
+/// The TUI needs a terminal on stdin and stdout (not a pipe, or a tool
+/// that runs commands without one).
+pub fn check_terminal() -> Result<(), Error> {
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        Ok(())
+    } else {
+        Err("the TUI needs a terminal; run argus from one, or use `argus status`".into())
+    }
+}
+
 pub fn run(ws: Workspace, opts: Options) -> Result<(), Error> {
+    check_terminal()?;
     let (mut theme, warnings) = theme::Theme::build(&ws.config.ui.theme, &ws.config.ui.colors);
     let mut theme_name = ws.config.ui.theme.clone();
     let mut app = App::new(ws);
