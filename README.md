@@ -157,7 +157,7 @@ Each auto-fix action applies **one** fix: the first kind in `[fix] auto`
 branch is pushed by one `x x` (or `argus fix`) and switched back to the
 default branch by the next. Or snooze it in between (`m z`).
 Kinds you don't list rank after the ones you do, in the default order:
-stash, commit, push, publish, pull, fast-forward, switch-default.
+stash, commit, push, publish, switch-default, pull, fast-forward.
 
 `argus fix -n` shows, per repo, the fix this run would apply, then the
 chain later runs would continue with, then other fixes available now

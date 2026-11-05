@@ -31,25 +31,25 @@ pub enum FixKind {
     Push,
     /// Push a branch that has no upstream yet.
     Publish,
+    /// Leave a fully pushed / merged branch for the default branch.
+    SwitchDefault,
     /// Pull the current branch (your pull settings apply).
     Pull,
     /// Fast-forward local branches that aren't checked out.
     FastForward,
-    /// Leave a fully pushed / merged branch for the default branch.
-    SwitchDefault,
 }
 
 impl FixKind {
-    /// Default priority: clean up uncommitted work, then share commits,
-    /// then catch up, then leave the branch.
+    /// Default priority: clean up uncommitted work, share commits, leave
+    /// the branch, then catch up (on the branch you end up on).
     pub const ALL: [FixKind; 7] = [
         FixKind::Stash,
         FixKind::Commit,
         FixKind::Push,
         FixKind::Publish,
+        FixKind::SwitchDefault,
         FixKind::Pull,
         FixKind::FastForward,
-        FixKind::SwitchDefault,
     ];
 
     /// Requires a message from the user.

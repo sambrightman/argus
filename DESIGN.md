@@ -161,8 +161,10 @@ rendering is snapshot-tested via `TestBackend`.
 * **The order of `[fix] auto` (or `-k`) is the priority.** Each action
   applies the first listed kind the repo needs; unlisted kinds rank after,
   in `FixKind::ALL` order: clean up uncommitted work (stash, commit), share
-  commits (push, publish), catch up (pull, fast-forward), then leave the
-  branch (switch-default).
+  commits (push, publish), leave the branch (switch-default), then catch
+  up (pull, fast-forward) on the branch you end up on. "Behind" comes from
+  the remote-tracking refs as of the last fetch: status never fetches
+  (`f`/`F` in the TUI, `argus sync` or cron do).
 * **Previews separate the chain from the alternatives.** `fix::simulate`
   predicts the status after a fix (pure, no git), and `fix::chain`
   repeats choose+simulate to give what successive auto-fix actions would

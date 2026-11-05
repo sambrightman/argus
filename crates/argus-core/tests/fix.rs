@@ -544,3 +544,15 @@ fn chain_is_empty_when_nothing_is_allowed() {
     assert_chain_matches_reality(&r, &[], &[]);
     assert_chain_matches_reality(&r, &[FixKind::Commit], &[]);
 }
+
+#[test]
+fn default_order_switches_before_catching_up() {
+    let sb = Sandbox::new();
+    let r = main_behind(&sb);
+    assert_eq!(
+        ranked_kinds(&r, &[]),
+        [FixKind::SwitchDefault, FixKind::FastForward]
+    );
+    use FixKind::*;
+    assert_chain_matches_reality(&r, &FixKind::ALL, &[SwitchDefault, Pull]);
+}
