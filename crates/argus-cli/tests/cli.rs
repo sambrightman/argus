@@ -191,6 +191,8 @@ fn root_add_list_remove() {
 fn warns_when_max_depth_stops_the_scan() {
     let sb = Sandbox::new();
     sb.init("dev/a/b/c/deep");
+    // deep directories with no repos (e.g. a Go module cache) aren't reported
+    std::fs::create_dir_all(sb.path("dev/go/pkg/mod/cache/download/x")).unwrap();
     let cfg = sb.path("cfg.toml");
     std::fs::write(&cfg, "max_depth = 2\n").unwrap();
     argus(&sb)
@@ -201,7 +203,7 @@ fn warns_when_max_depth_stops_the_scan() {
         .success()
         .stdout(predicate::str::contains("0 repos"))
         .stderr(predicate::str::contains(
-            "1 directory below max_depth (2) not scanned, e.g. ~/dev/a/b; raise max_depth",
+            "argus: 1 repo below max_depth (2) not included, e.g. ~/dev/a/b/c/deep; raise max_depth",
         ));
     std::fs::write(&cfg, "max_depth = 6\n").unwrap();
     argus(&sb)
@@ -561,5 +563,70 @@ fn dry_run_explains_why_a_pull_is_not_automatic() {
         String::from_utf8(o.stdout).unwrap(),
         "acme/w: would pull (diverged from origin/feat: 1 ahead, 1 behind; merges cleanly)\n  \
          then: push (1 commit(s) ahead of origin/feat)\n"
+    );
+}
+
+#[test]
+fn fix_fetch_updates_remotes_before_planning() {
+    let sb = Sandbox::new();
+    for n in ["r", "other"] {
+        sb.remote("acme", n);
+        sb.clone_as_github("acme", n, &format!("dev/{n}"));
+        sb.advance_remote("acme", n, "new.txt");
+    }
+    // without --fetch the remote commits are unknown
+    let o = argus(&sb)
+        .args(["fix", "-n", "-k", "pull"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(o.stdout).unwrap(), "nothing to fix\n");
+    // --fetch only fetches the selected repos
+    let o = argus(&sb)
+        .args(["fix", "-n", "--fetch", "-k", "pull", "acme/r"])
+        .output()
+        .unwrap();
+    assert!(o.status.success());
+    assert_eq!(
+        String::from_utf8(o.stdout).unwrap(),
+        "acme/r: would pull (1 commit(s) behind origin/main)\n"
+    );
+    let behind = |n: &str| {
+        git(
+            &sb.path(&format!("dev/{n}")),
+            &["rev-list", "--count", "HEAD..origin/main"],
+        )
+        .trim()
+        .to_string()
+    };
+    assert_eq!(behind("r"), "1");
+    assert_eq!(behind("other"), "0");
+    // and a real run applies the fix with fresh information
+    argus(&sb)
+        .args(["fix", "-F", "-k", "pull"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("acme/other: ✓ pull"));
+    assert_eq!(behind("other"), "0");
+    assert!(sb.path("dev/other/new.txt").exists());
+}
+
+#[test]
+fn fix_fetch_failures_are_reported_and_planning_continues() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "gone");
+    sb.clone_as_github("acme", "gone", "dev/gone");
+    write(&sb.path("dev/gone"), "README", "changed\n");
+    std::fs::remove_dir_all(sb.path("forge/acme/gone.git")).unwrap();
+    let o = argus(&sb)
+        .args(["fix", "-n", "--fetch", "-k", "stash"])
+        .output()
+        .unwrap();
+    assert!(o.status.success());
+    let err = String::from_utf8(o.stderr).unwrap();
+    assert!(err.contains("fetch failed: acme/gone"), "{err}");
+    assert!(
+        String::from_utf8(o.stdout)
+            .unwrap()
+            .starts_with("acme/gone: would stash"),
     );
 }

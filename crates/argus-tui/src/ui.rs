@@ -1,5 +1,6 @@
 //! Rendering. Reads [`App`], never mutates anything but scroll bookkeeping.
 
+use argus_core::ViewFilter;
 use argus_core::badges::{self, Icons};
 use argus_core::discover::RepoKind;
 use ratatui::Frame;
@@ -59,10 +60,18 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
             .iter()
             .filter(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].needs_attention()))
             .count();
-        let mut s = format!(" argus  {n} repos · {attn} need attention");
-        if app.view.attention_only {
-            s.push_str(" · attention only");
-        }
+        let mut s = if app.view.attention_only {
+            let total = app
+                .ws
+                .ordered(ViewFilter {
+                    attention_only: false,
+                    ..app.view
+                })
+                .len();
+            format!(" argus  {attn} of {total} repos need attention · a: show all")
+        } else {
+            format!(" argus  {n} repos · {attn} need attention")
+        };
         if app.view.show_hidden {
             s.push_str(" · showing hidden");
         }
@@ -97,7 +106,7 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
     if app.rows.is_empty() {
         let msg = if app.scanning {
             "scanning…"
-        } else if app.view.attention_only {
+        } else if app.view.attention_only && !app.ws.entries.is_empty() {
             "nothing needs attention 🎉  (a: show all)"
         } else {
             "no repositories (check roots in config; R rescans)"

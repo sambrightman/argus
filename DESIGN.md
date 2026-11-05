@@ -198,11 +198,19 @@ rendering is snapshot-tested via `TestBackend`.
   (schemars) supplies doc comments, `Default` values and `example`
   annotations, so the documentation can't drift from the code. Roots
   are managed with `argus root add|remove|list` (toml_edit, so comments are kept).
-* **`max_depth` is reported**, not silent: a scan names a directory it
-  didn't enter.
+* **`max_depth` is reported**, not silent: below the limit the walk only
+  looks for repos (stopping at each, honouring `skip_dirs`) and the warning
+  counts the repos left out. Directories with nothing below aren't
+  reported, so a Go module cache doesn't cause a false alarm. The cost is
+  that `max_depth` no longer bounds the walk; `skip_dirs` does.
 * **`argus status` lists only repos needing attention**; `--all` adds clean
   ones, `--hidden` excluded/snoozed ones, and the footer counts what was
-  left out. `--json` uses the same filter.
+  left out. `--json` uses the same filter. The TUI starts the same way
+  (`[ui] attention_only = true`); the header says how many repos there are
+  in all and that `a` shows them.
+* **`fix --fetch`** fetches only the selected repos (once per family, as
+  worktrees share refs), then refreshes their status before planning.
+  Fetch failures are reported and planning continues with what is known.
 
 ## 9. Not done yet / next steps
 
@@ -222,3 +230,7 @@ rendering is snapshot-tested via `TestBackend`.
   (git has no config for this). Today: staged + unstaged + untracked.
 * Path subsets for operations (stash/commit/discard selected files), e.g.
   from the details view.
+* Shell completions for bash/zsh/fish (`clap_complete`, e.g.
+  `argus completions <shell>`), ideally completing repo patterns too.
+* Python bindings to `argus-core` (pyo3/maturin), for scripting over the
+  same workspace, status and fix planning.

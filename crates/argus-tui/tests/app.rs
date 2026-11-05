@@ -46,7 +46,12 @@ fn setup_with(extra: &str, prep: impl Fn(&Sandbox)) -> (Sandbox, App) {
     git(&f, &["push", "-q", "-u", "origin", "feat"]);
     prep(&sb);
     let cfg = format!("roots = ['{}']\n{extra}", sb.path("dev").display());
-    let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    let mut config = Config::parse(&cfg).unwrap();
+    if !extra.contains("attention_only") {
+        // Most tests look at every repo; the default view has its own test.
+        config.ui.attention_only = false;
+    }
+    let mut ws = Workspace::new(config, State::default()).unwrap();
     ws.scan();
     (sb, App::new(ws))
 }
@@ -461,8 +466,6 @@ fn render_empty_states() {
     ws.scan();
     let mut app = App::new(ws);
     assert!(render(&mut app, 80, 5).contains("no repositories"));
-    app.act(Action::ToggleAttention);
-    assert!(render(&mut app, 80, 5).contains("nothing needs attention"));
     // actions on an empty list are harmless
     for a in [
         Action::Down,
@@ -483,12 +486,12 @@ fn scanned_message_replaces_entries_and_keeps_cursor_repo() {
     let path = app.current().unwrap().path.clone();
     let entries = app.ws.entries.clone();
     app.notices = vec!["no roots configured".into()];
-    let truncated = vec![PathBuf::from("/deep/dir")];
+    let truncated = vec![PathBuf::from("/deep/repo")];
     app.on_msg(Msg::Scanned { entries, truncated });
     assert_eq!(app.current().unwrap().path, path);
     let (msg, is_error) = app.message.clone().unwrap();
     assert!(!is_error);
-    assert!(msg.starts_with("3 repos · no roots configured · 1 directory below max_depth (6) not scanned, e.g. /deep/dir"), "{msg}");
+    assert!(msg.starts_with("3 repos · no roots configured · 1 repo below max_depth (6) not included, e.g. /deep/repo"), "{msg}");
     let _ = PathBuf::new();
 }
 
@@ -566,4 +569,65 @@ fn details_say_why_a_fix_is_not_automatic() {
         fixes[0].ends_with("not automatic: would conflict in README"),
         "{fixes:?}"
     );
+}
+
+#[test]
+fn starts_showing_only_repos_needing_attention() {
+    let sb = Sandbox::new();
+    for n in ["clean", "dirty"] {
+        sb.remote("acme", n);
+        sb.clone_as_github("acme", n, &format!("dev/{n}"));
+    }
+    write(&sb.path("dev/dirty"), "README", "changed\n");
+    let cfg = format!("roots = ['{}']", sb.path("dev").display());
+    let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    ws.scan();
+    let mut app = App::new(ws);
+    assert_eq!(names(&app), vec!["acme/dirty"]);
+    let out = render(&mut app, 80, 6);
+    assert!(
+        out.lines()
+            .next()
+            .unwrap()
+            .contains("1 of 2 repos need attention · a: show all"),
+        "{out}"
+    );
+    // inverse: `a` shows everything, and the header says so
+    app.act(Action::ToggleAttention);
+    assert_eq!(names(&app), vec!["acme/dirty", "acme/clean"]);
+    let out = render(&mut app, 80, 6);
+    assert!(
+        out.lines()
+            .next()
+            .unwrap()
+            .contains("2 repos · 1 need attention"),
+        "{out}"
+    );
+    // and the config can start with everything shown
+    let cfg = format!(
+        "roots = ['{}']\n[ui]\nattention_only = false",
+        sb.path("dev").display()
+    );
+    let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    ws.scan();
+    assert_eq!(names(&App::new(ws)).len(), 2);
+}
+
+#[test]
+fn no_repositories_is_not_reported_as_nothing_needing_attention() {
+    let sb = Sandbox::new();
+    std::fs::create_dir_all(sb.path("dev")).unwrap();
+    let cfg = format!("roots = ['{}']", sb.path("dev").display());
+    let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    ws.scan();
+    let mut app = App::new(ws);
+    assert!(render(&mut app, 80, 5).contains("no repositories"));
+    app.act(Action::ToggleAttention);
+    assert!(render(&mut app, 80, 5).contains("no repositories"));
+    // inverse: repos that are all clean do need nothing
+    sb.remote("acme", "clean");
+    sb.clone_as_github("acme", "clean", "dev/clean");
+    app.ws.scan();
+    app.act(Action::ToggleAttention);
+    assert!(render(&mut app, 80, 5).contains("nothing needs attention"));
 }

@@ -18,8 +18,8 @@ pub struct Config {
     pub roots: Vec<PathBuf>,
     /// Directory names never descended into.
     pub skip_dirs: Vec<String>,
-    /// Maximum directory depth below a root; deeper directories are skipped
-    /// (with a warning).
+    /// Maximum directory depth below a root; deeper repos are left out
+    /// (with a warning naming them).
     pub max_depth: usize,
     /// Maximum concurrent network operations (fetch/pull/push/clone).
     pub concurrency: usize,
@@ -206,7 +206,7 @@ pub struct UiConfig {
     pub colors: BTreeMap<String, String>,
     /// Icon set: `unicode` (default), `nerd` (Nerd Font glyphs) or `ascii`.
     pub icons: String,
-    /// Show only repos needing attention at startup.
+    /// Show only repos needing attention at startup (`a` toggles).
     pub attention_only: bool,
 }
 
@@ -216,7 +216,7 @@ impl Default for UiConfig {
             theme: "terminal".into(),
             colors: BTreeMap::new(),
             icons: "unicode".into(),
-            attention_only: false,
+            attention_only: true,
         }
     }
 }

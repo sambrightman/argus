@@ -74,6 +74,30 @@ pub fn plan_updates(ws: &Workspace) -> Vec<Job> {
     jobs
 }
 
+/// Fetch the repos at `indices` that have a remote: one job per family,
+/// since worktrees and their main repo share refs.
+pub fn plan_fetches(ws: &Workspace, indices: &[usize]) -> Vec<Job> {
+    let mut seen = HashSet::new();
+    let mut jobs = vec![];
+    for &i in indices {
+        let e = &ws.entries[i];
+        if !e.status().is_some_and(|s| s.remote.is_some()) {
+            continue;
+        }
+        let family = e.parent.clone().unwrap_or_else(|| e.path.clone());
+        if !seen.insert(family.clone()) {
+            continue;
+        }
+        jobs.push(Job {
+            label: format!("fetch {}", e.display_name()),
+            path: e.path.clone(),
+            op: Op::Fetch,
+            family,
+        });
+    }
+    jobs
+}
+
 /// Compare forge listings with local clones.
 ///
 /// `listings` maps track key to that track's listing; tracks whose listing

@@ -30,8 +30,9 @@ With no roots configured, argus scans the current directory and says so.
 On first run it writes `~/.config/argus/config.toml`: every setting with
 its default and documentation, commented out, generated from the code (so
 it can't drift). `argus root add|remove|list` edit it in place, keeping
-your comments. If `max_depth` stops a scan before the bottom of a tree,
-argus warns and names a directory it skipped.
+your comments. If there are repos deeper than `max_depth`, argus warns,
+counts them and names one; deep trees without repos (caches, build
+output) don't trigger it.
 
 ## Configuration
 
@@ -97,7 +98,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `Tab` `Enter` | unfold details: issues, available fixes, branches, files |
 | `Space` / `U` | mark / unmark (actions apply to marked repos, else current) |
 | `/` `C-s` | filter (readline editing) |
-| `a` / `H` | attention-only / show hidden |
+| `a` / `H` | show all / attention only (the default, `[ui] attention_only`); show hidden |
 | `g` `C-l` / `R` | refresh statuses / rescan roots |
 | `!` | shell in repo (TUI suspends; `exit` returns) |
 | `$` | process log |
@@ -117,7 +118,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 ```sh
 argus status [-a|--all] [--hidden] [--json]  # repos needing attention; -a: clean too
 argus sync [-n] [--no-forge] [PATTERNS…]
-argus fix [-n] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine
+argus fix [-n] [-F] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine; -F fetches first
 argus mark PATTERNS… [--favourite|--no-favourite] [--sync|--no-sync] [--exclude|--include] [--snooze 3d|--unsnooze] [--clear]
 argus ack [PATTERNS…]
 argus forge list ORG [--team T] [--json]
@@ -171,7 +172,9 @@ acme/feature: would stash (1 uncommitted path(s))
 ```
 
 The chain is predicted from status, assuming each step succeeds. The TUI
-details show the same (`auto-fix`, `then`, `fix`).
+details show the same (`auto-fix`, `then`, `fix`). Status never fetches,
+so "behind" is as of the last fetch (`sync`, `f` in the TUI, cron);
+`fix --fetch` (`-F`) fetches the selected repos first, with `-n` too.
 
 `pull` on a branch that has diverged from its upstream (commits on both
 sides) is only automatic when a trial merge (`git merge-tree`) predicts

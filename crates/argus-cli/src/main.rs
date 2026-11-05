@@ -65,6 +65,10 @@ enum Cmd {
         /// Show what would be fixed.
         #[arg(long, short = 'n')]
         dry_run: bool,
+        /// Fetch the selected repos first, so "behind" and conflict
+        /// predictions are current (with --dry-run too).
+        #[arg(long, short = 'F')]
+        fetch: bool,
         /// Repos to fix (glob on name/key/path); default all visible.
         patterns: Vec<String>,
     },
@@ -265,6 +269,7 @@ fn run() -> Result<()> {
         Cmd::Fix {
             kinds,
             dry_run,
+            fetch,
             patterns,
         } => {
             scan(&mut ws);
@@ -273,6 +278,9 @@ fn run() -> Result<()> {
             } else {
                 kinds.into_iter().map(Into::into).collect()
             };
+            if fetch {
+                fetch_selected(&mut ws, &patterns);
+            }
             fix_cmd(&mut ws, &kinds, dry_run, &patterns)?;
         }
         Cmd::Mark(m) => {
@@ -620,6 +628,43 @@ fn indent(s: &str) -> String {
 }
 
 // ---------- fix ----------
+
+/// Fetch the repos `patterns` select and refresh their status. Failures are
+/// reported; planning continues with what is known.
+fn fetch_selected(ws: &mut Workspace, patterns: &[String]) {
+    let p = Paint::detect();
+    let sel = ws.select(patterns, ViewFilter::default());
+    let jobs = sync::plan_fetches(ws, &sel);
+    let tty = std::io::stderr().is_terminal();
+    let done = std::sync::atomic::AtomicUsize::new(0);
+    runner::run_jobs(
+        &jobs,
+        ws.config.concurrency,
+        &AtomicBool::new(false),
+        &|ev| {
+            if let Event::Finished { index, outcome } = ev {
+                let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if !outcome.success {
+                    eprintln!(
+                        "{} {}\n{}",
+                        p.role(Role::Error, "fetch failed:"),
+                        jobs[index].label.trim_start_matches("fetch "),
+                        indent(&outcome.output)
+                    );
+                } else if tty {
+                    eprint!("\r\x1b[K[{n}/{}] {}", jobs.len(), jobs[index].label);
+                }
+            }
+        },
+    );
+    if tty {
+        eprint!("\r\x1b[K");
+    }
+    for i in sel {
+        let path = ws.entries[i].path.clone();
+        ws.refresh(&path);
+    }
+}
 
 fn fix_cmd(
     ws: &mut Workspace,
