@@ -261,16 +261,22 @@ fn marks_select_targets_and_space_advances() {
 #[test]
 fn toggle_favourite_persists_in_state_and_resorts() {
     let (_sb, mut app) = setup("");
-    app.act(Action::Bottom); // clean
+    assert_eq!(names(&app), ["acme/dirty", "acme/feature", "acme/clean"]);
+    app.on_key(key('j')); // feature
     app.on_key(key('m'));
     let fx = app.on_key(key('f'));
     assert!(fx.contains(&Effect::SaveState));
     assert_eq!(
-        app.ws.state.marks["github.com/acme/clean"].favourite,
+        app.ws.state.marks["github.com/acme/feature"].favourite,
         Some(true)
     );
-    assert_eq!(names(&app)[0], "acme/clean");
-    assert_eq!(current(&app), "acme/clean", "cursor follows the repo");
+    assert_eq!(names(&app), ["acme/feature", "acme/dirty", "acme/clean"]);
+    assert_eq!(current(&app), "acme/feature", "cursor follows the repo");
+    // inverse: a clean favourite stays below unclean repos
+    app.act(Action::Bottom);
+    app.on_key(key('m'));
+    app.on_key(key('f'));
+    assert_eq!(names(&app)[2], "acme/clean");
     app.on_key(key('m'));
     app.on_key(key('f'));
     assert_eq!(

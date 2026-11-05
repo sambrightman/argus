@@ -139,7 +139,8 @@ A daily crontab entry:
 
 ## What counts as needing attention
 
-Sorted favourites first, then by severity, then by amount of change:
+Repos needing attention come before clean ones; within each group,
+favourites first, then by severity, then by amount of change:
 
 conflicts / in-progress merge or rebase › commits on a detached HEAD held by no
 ref › **unpushed** work (on *no* remote, so a fork branch pushed to `origin`

@@ -171,7 +171,7 @@ fn root_add_list_remove() {
     std::fs::remove_dir(sb.path("work")).unwrap();
     a(&["root", "list"])
         .success()
-        .stdout(predicate::str::contains("~/work  (no such directory)"));
+        .stdout(predicate::str::contains("~/work  (missing)"));
     a(&["root", "remove", "~/work"])
         .success()
         .stdout("removed ~/work\n");
@@ -280,20 +280,29 @@ fn fix_with_explicit_kind_and_pattern() {
 fn mark_snooze_and_ack_roundtrip_through_state() {
     let sb = Sandbox::new();
     three(&sb);
+    // favourites lead their group, but unclean repos still come first
     argus(&sb)
-        .args(["mark", "acme/clean", "--favourite"])
+        .args(["mark", "acme/clean", "acme/feature", "--favourite"])
         .assert()
         .success();
     let out = argus(&sb).args(["status", "--all"]).output().unwrap();
-    let first = String::from_utf8(out.stdout)
+    let lines: Vec<String> = String::from_utf8(out.stdout)
         .unwrap()
         .lines()
-        .next()
-        .unwrap()
-        .to_string();
+        .map(String::from)
+        .collect();
+    let order: Vec<&str> = lines
+        .iter()
+        .filter_map(|l| {
+            ["feature", "dirty", "clean"]
+                .into_iter()
+                .find(|n| l.contains(&format!("acme/{n}")))
+        })
+        .collect();
+    assert_eq!(order, ["feature", "dirty", "clean"], "{lines:?}");
     assert!(
-        first.contains("★") && first.contains("acme/clean"),
-        "{first}"
+        lines[0].contains("★") && lines[2].contains("★"),
+        "{lines:?}"
     );
 
     argus(&sb)

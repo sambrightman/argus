@@ -301,9 +301,9 @@ impl Workspace {
             .collect();
         top.sort_by(|&a, &b| {
             let (a, b) = (&self.entries[a], &self.entries[b]);
-            b.flags
-                .favourite
-                .cmp(&a.flags.favourite)
+            b.needs_attention()
+                .cmp(&a.needs_attention())
+                .then(b.flags.favourite.cmp(&a.flags.favourite))
                 .then(b.score().cmp(&a.score()))
                 .then(b.change_count().cmp(&a.change_count()))
                 .then_with(|| {

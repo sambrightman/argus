@@ -69,13 +69,24 @@ fn identities_and_keys() {
 }
 
 #[test]
-fn ordering_favourites_then_severity_then_changes_then_name() {
+/// Unclean before clean; within each, favourites first, then severity,
+/// amount of change and name.
+fn ordering_attention_then_favourites_then_severity_then_changes_then_name() {
     let sb = Sandbox::new();
-    for n in ["clean-b", "clean-a", "dirty1", "dirty3", "fav", "conflict"] {
+    for n in [
+        "clean-b",
+        "clean-a",
+        "dirty1",
+        "dirty3",
+        "fav",
+        "fav-dirty",
+        "conflict",
+    ] {
         sb.remote("acme", n);
         sb.clone_as_github("acme", n, &format!("dev/{n}"));
     }
     write(&sb.path("dev/dirty1"), "x", "1");
+    write(&sb.path("dev/fav-dirty"), "x", "1");
     for f in ["x", "y", "z"] {
         write(&sb.path("dev/dirty3"), f, "1");
     }
@@ -91,21 +102,27 @@ fn ordering_favourites_then_severity_then_changes_then_name() {
         .args(["merge", "o"])
         .output();
 
-    let w = ws(&sb, "[[rule]]\nmatch='acme/fav'\nfavourite=true");
+    let w = ws(&sb, "[[rule]]\nmatch='acme/fav*'\nfavourite=true");
     assert_eq!(
         names(&w, DEFAULT),
         vec![
-            "acme/fav",
+            "acme/fav-dirty",
             "acme/conflict",
             "acme/dirty3",
             "acme/dirty1",
+            "acme/fav",
             "acme/clean-a",
             "acme/clean-b"
         ]
     );
     assert_eq!(
         names(&w, ATTN),
-        vec!["acme/conflict", "acme/dirty3", "acme/dirty1"],
+        vec![
+            "acme/fav-dirty",
+            "acme/conflict",
+            "acme/dirty3",
+            "acme/dirty1"
+        ],
         "clean favourite is not attention"
     );
 }

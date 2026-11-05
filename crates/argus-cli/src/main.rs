@@ -347,7 +347,7 @@ fn root_cmd(ctx: &Ctx, cmd: RootCmd) -> Result<()> {
                 println!("no roots configured (the current directory is scanned)");
             }
             for r in &config.roots {
-                let missing = if r.is_dir() { "" } else { "  (no such directory)" };
+                let missing = if r.is_dir() { "" } else { "  (missing)" };
                 println!("{}{missing}", paths::contract_tilde(r));
             }
         }
