@@ -263,12 +263,36 @@ fn fix_with_explicit_kind_and_pattern() {
             .count(),
         1
     );
-    // -k takes a comma-separated list; an unknown kind is rejected
+    write(&sb.path("dev/dirty"), "README", "changed again\n");
+    // -k takes a comma-separated list
     argus(&sb)
         .args(["fix", "-n", "-k", "push,switch-default", "acme/feature"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("push"));
+        .stdout(predicate::str::contains("acme/feature: would switch main"));
+    // repeated -k flags combine, each with its own comma list
+    argus(&sb)
+        .args(["fix", "-n", "-k", "publish,stash", "--kind", "pull"])
+        .args(["-k", "switch-default", "acme/dirty", "acme/feature"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("acme/dirty: would stash"))
+        .stdout(predicate::str::contains("acme/feature: would switch main"));
+    // inverse: without the second flag, feature has nothing to do
+    argus(&sb)
+        .args([
+            "fix",
+            "-n",
+            "-k",
+            "publish,stash",
+            "acme/dirty",
+            "acme/feature",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("acme/dirty: would stash"))
+        .stdout(predicate::str::contains("acme/feature").not());
+    // an unknown kind is rejected
     argus(&sb)
         .args(["fix", "-n", "-k", "push,shove"])
         .assert()
@@ -433,4 +457,45 @@ fn each_fix_run_applies_one_fix() {
         .success()
         .stdout(predicate::str::contains("✓ switch main"));
     assert_eq!(git(&f, &["branch", "--show-current"]).trim(), "main");
+}
+
+#[test]
+fn help_documents_every_flag_and_repeatable_options() {
+    let sb = Sandbox::new();
+    for cmd in [
+        &["status"][..],
+        &["sync"],
+        &["fix"],
+        &["mark"],
+        &["ack"],
+        &["forge", "list"],
+        &["root", "add"],
+        &["root", "remove"],
+    ] {
+        let out = argus(&sb).args(cmd).arg("--help").output().unwrap();
+        let help = String::from_utf8(out.stdout).unwrap();
+        for line in help.lines().filter(|l| l.trim_start().starts_with('-')) {
+            let l = line.trim_start();
+            assert!(
+                l.starts_with("--") || l.contains(", --"),
+                "no long form: {l}"
+            );
+            assert!(
+                l.split("  ").filter(|s| !s.is_empty()).count() >= 2,
+                "{cmd:?} undocumented: {l}"
+            );
+        }
+    }
+    let fix = argus(&sb).args(["fix", "--help"]).output().unwrap();
+    assert!(
+        String::from_utf8(fix.stdout)
+            .unwrap()
+            .contains("comma-separated, repeatable")
+    );
+    let top = argus(&sb).arg("--help").output().unwrap();
+    assert!(
+        String::from_utf8(top.stdout)
+            .unwrap()
+            .contains("(repeatable)")
+    );
 }

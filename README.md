@@ -117,7 +117,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 ```sh
 argus status [-a|--all] [--hidden] [--json]  # repos needing attention; -a: clean too
 argus sync [-n] [--no-forge] [PATTERNS…]
-argus fix [-n] [-k KINDS] [PATTERNS…]  # KINDS: comma-separated, e.g. push,switch-default
+argus fix [-n] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine
 argus mark PATTERNS… [--favourite|--no-favourite] [--sync|--no-sync] [--exclude|--include] [--snooze 3d|--unsnooze] [--clear]
 argus ack [PATTERNS…]
 argus forge list ORG [--team T] [--json]

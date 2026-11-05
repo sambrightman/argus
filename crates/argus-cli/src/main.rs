@@ -41,6 +41,7 @@ enum Cmd {
     Status {
         #[command(flatten)]
         view: View,
+        /// Print JSON instead of text (same filter).
         #[arg(long)]
         json: bool,
     },
@@ -57,9 +58,11 @@ enum Cmd {
     },
     /// Apply safe fixes (default: those in `[fix] auto`).
     Fix {
-        /// Fix kinds to apply, comma-separated.
+        /// Fix kinds to apply instead of `[fix] auto`; comma-separated,
+        /// repeatable.
         #[arg(long = "kind", short = 'k', value_enum, value_delimiter = ',')]
         kinds: Vec<FixArg>,
+        /// Show what would be fixed.
         #[arg(long, short = 'n')]
         dry_run: bool,
         /// Repos to fix (glob on name/key/path); default all visible.
@@ -110,21 +113,28 @@ struct MarkArgs {
     /// Repos (glob on name/key/path).
     #[arg(required = true)]
     patterns: Vec<String>,
+    /// Sort above other repos in the same group.
     #[arg(long, overrides_with = "no_favourite")]
     favourite: bool,
+    /// Not a favourite, whatever the config rules say.
     #[arg(long)]
     no_favourite: bool,
+    /// Pull on sync.
     #[arg(long, overrides_with = "no_sync")]
     sync: bool,
+    /// Don't pull on sync, whatever the config rules say.
     #[arg(long)]
     no_sync: bool,
+    /// Hide and skip in bulk operations.
     #[arg(long, overrides_with = "include")]
     exclude: bool,
+    /// Not excluded, whatever the config rules say.
     #[arg(long)]
     include: bool,
     /// Hide temporarily, e.g. `3d`, `12h`, `2w`.
     #[arg(long, value_name = "DURATION")]
     snooze: Option<String>,
+    /// End a snooze early.
     #[arg(long)]
     unsnooze: bool,
     /// Remove all marks (fall back to config rules).
@@ -153,11 +163,15 @@ enum RootCmd {
 enum ForgeCmd {
     /// List an org's or user's repositories.
     List {
+        /// Org or user.
         owner: String,
+        /// Only this org team's repositories (team slug).
         #[arg(long)]
         team: Option<String>,
+        /// Forge host (GitHub Enterprise: your host).
         #[arg(long, default_value = "github.com")]
         host: String,
+        /// Print JSON instead of text.
         #[arg(long)]
         json: bool,
     },
