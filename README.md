@@ -128,7 +128,11 @@ argus paths                            # config and state file locations
 Every command takes `--config FILE` / `--state FILE`, or the environment
 variables `ARGUS_CONFIG` / `ARGUS_STATE`, and `--root DIR` (repeatable)
 to scan other directories just this once; `--max-depth N` overrides
-`max_depth` for one run.
+`max_depth` for one run, and `-L` / `--follow-symlinks` follows symlinked
+directories (or set `follow_symlinks = true`).
+
+Directories whose name starts with `.` are skipped (`skip_hidden`); add
+one as a root to scan it, e.g. `argus root add ~/.emacs.d`.
 
 A daily crontab entry:
 

@@ -646,3 +646,26 @@ fn fix_fetch_failures_are_reported_and_planning_continues() {
             .starts_with("acme/gone: would stash"),
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn follow_symlinks_flag_and_config() {
+    let sb = Sandbox::new();
+    sb.init("elsewhere/linked");
+    std::fs::create_dir_all(sb.path("dev")).unwrap();
+    std::os::unix::fs::symlink(sb.path("elsewhere"), sb.path("dev/link")).unwrap();
+    let status = |args: &[&str]| {
+        let o = argus(&sb).args(args).arg("status").output().unwrap();
+        String::from_utf8(o.stdout).unwrap()
+    };
+    assert!(status(&[]).contains("0 repos"));
+    for flag in ["-L", "--follow-symlinks"] {
+        assert!(
+            status(&[flag]).contains("1 repos, 1 need attention"),
+            "{flag}"
+        );
+    }
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "follow_symlinks = true\n").unwrap();
+    assert!(status(&["--config", cfg.to_str().unwrap()]).contains("1 repos, 1 need attention"));
+}

@@ -33,6 +33,10 @@ struct Cli {
     /// `max_depth`.
     #[arg(long, global = true, value_name = "N")]
     max_depth: Option<usize>,
+    /// Follow symlinks to directories (cycles are cut; a repo reached by
+    /// several paths is listed once).
+    #[arg(long, short = 'L', global = true)]
+    follow_symlinks: bool,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -243,6 +247,9 @@ fn run() -> Result<()> {
         _ => {}
     }
     let (mut ws, notices) = load(&ctx, &cli.roots, cli.max_depth)?;
+    if cli.follow_symlinks {
+        ws.config.follow_symlinks = true;
+    }
     let tui = matches!(cli.cmd, None | Some(Cmd::Tui));
     if !tui {
         for n in &notices {

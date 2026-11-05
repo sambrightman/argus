@@ -200,6 +200,18 @@ rendering is snapshot-tested via `TestBackend`.
   are managed with `argus root add|remove|list` (toml_edit, so comments are kept).
 * **`max_depth` is reported**, not silent: a scan names a directory it
   didn't enter.
+* **Discovery syscalls:** per directory, one `lstat` of `.git` (settles
+  the common case, a work tree) and otherwise one listing, which also
+  serves bare-repo detection (`HEAD`, `objects/`, `refs/`) and yields the
+  subdirectories with their types (no per-entry stat).
+* **Hidden directories are skipped** (`skip_hidden = true`): in a home
+  directory they're mostly caches, so this avoids a long exclude list.
+  Roots are always scanned, so a dot directory can be added as a root.
+* **Symlinks** are not followed unless asked (`-L`, `follow_symlinks`).
+  When followed, cycles are cut by remembering the real directory at each
+  link taken on the way down; a link whose target contains one of them
+  would walk in a circle. A repo reached by several paths is listed once,
+  by its real path if that was walked, else the first path in sort order.
 * **`argus status` lists only repos needing attention**; `--all` adds clean
   ones, `--hidden` excluded/snoozed ones, and the footer counts what was
   left out. `--json` uses the same filter. The TUI starts the same way

@@ -1,11 +1,16 @@
 //! Fast, parallel discovery of repositories under root directories.
 //!
 //! This is pure filesystem work (no git parsing beyond reading a `.git` file),
-//! parallelised with rayon. Symlinks are not followed, which avoids loops.
+//! parallelised with rayon. Each directory costs one `lstat` of `.git` and,
+//! unless that settles it, one listing (which also detects bare repos).
+//! Symlinks are only followed when asked, with cycle detection.
 
-use std::fs;
+use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
+use std::ffi::OsString;
+use std::fs::{self, FileType};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +40,13 @@ pub struct DiscoverOptions {
     pub max_depth: usize,
     /// Keep descending into a repository's work tree looking for nested repos.
     pub scan_inside_repos: bool,
+    /// Don't descend into directories whose name starts with `.` (roots
+    /// themselves are always scanned).
+    pub skip_hidden: bool,
+    /// Follow symlinks to directories. Cycles are cut, and a repo reachable
+    /// by several paths is reported once: by its real path if that was
+    /// walked, else by the first path in sort order.
+    pub follow_symlinks: bool,
 }
 
 impl Default for DiscoverOptions {
@@ -43,6 +55,8 @@ impl Default for DiscoverOptions {
             skip_dirs: vec![],
             max_depth: 6,
             scan_inside_repos: false,
+            skip_hidden: true,
+            follow_symlinks: false,
         }
     }
 }
@@ -69,12 +83,15 @@ pub fn discover_all(roots: &[PathBuf], opts: &DiscoverOptions) -> Discovery {
                 continue;
             };
             let sink = &sink;
-            s.spawn(move |s| visit(s, root, 0, opts, sink));
+            s.spawn(move |s| visit(s, root, 0, opts, sink, Arc::default()));
         }
     });
     let mut found = sink.found.into_inner().unwrap();
     found.sort_by(|a, b| a.path.cmp(&b.path));
     found.dedup_by(|a, b| a.path == b.path);
+    if opts.follow_symlinks {
+        found = dedup_real(found);
+    }
     let mut truncated = sink.truncated.into_inner().unwrap();
     truncated.sort();
     truncated.dedup();
@@ -87,62 +104,146 @@ struct Sink {
     truncated: Mutex<Vec<PathBuf>>,
 }
 
+/// Real directories at which the walk to here followed a symlink: entering
+/// a link whose target contains any of them (or the current directory)
+/// would walk in a circle.
+type Links = Arc<Vec<PathBuf>>;
+
 fn visit<'s>(
     s: &rayon::Scope<'s>,
     dir: PathBuf,
     depth: usize,
     opts: &'s DiscoverOptions,
     sink: &'s Sink,
+    links: Links,
 ) {
-    if let Some(kind) = classify(&dir) {
+    let mut kind = classify_dotgit(&dir);
+    if let Some(kind) = kind
+        && !opts.scan_inside_repos
+    {
+        sink.found.lock().unwrap().push(Found { path: dir, kind });
+        return;
+    }
+    let entries = list(&dir);
+    if kind.is_none() && is_bare_listing(&entries) {
+        kind = Some(RepoKind::Bare);
+    }
+    if let Some(kind) = kind {
         sink.found.lock().unwrap().push(Found {
             path: dir.clone(),
             kind,
         });
-        if kind == RepoKind::Bare || !opts.scan_inside_repos {
+        if kind == RepoKind::Bare {
             return;
         }
     }
-    let subdirs = subdirs(&dir, opts);
+    let subdirs = subdirs(&dir, entries, opts, &links);
     if depth >= opts.max_depth {
         if !subdirs.is_empty() {
             sink.truncated.lock().unwrap().push(dir);
         }
         return;
     }
-    for path in subdirs {
-        s.spawn(move |s| visit(s, path, depth + 1, opts, sink));
+    for (path, links) in subdirs {
+        s.spawn(move |s| visit(s, path, depth + 1, opts, sink, links));
     }
 }
 
-/// Directories worth descending into (no symlinks, `.git` or skipped names).
-fn subdirs(dir: &Path, opts: &DiscoverOptions) -> Vec<PathBuf> {
+struct DirEntry {
+    name: OsString,
+    path: PathBuf,
+    ty: FileType,
+}
+
+fn list(dir: &Path) -> Vec<DirEntry> {
     let Ok(rd) = fs::read_dir(dir) else {
         return vec![];
     };
     rd.flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir())) // symlinks: never followed
-        .filter(|e| {
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            name != ".git" && !opts.skip_dirs.iter().any(|s| s == name.as_ref())
+        .filter_map(|e| {
+            Some(DirEntry {
+                ty: e.file_type().ok()?, // from the listing; no extra stat
+                name: e.file_name(),
+                path: e.path(),
+            })
         })
-        .map(|e| e.path())
         .collect()
+}
+
+/// Directories worth descending into, each with the links taken to reach it.
+fn subdirs(
+    dir: &Path,
+    entries: Vec<DirEntry>,
+    opts: &DiscoverOptions,
+    links: &Links,
+) -> Vec<(PathBuf, Links)> {
+    let mut real_dir = None;
+    entries
+        .into_iter()
+        .filter(|e| {
+            let name = e.name.to_string_lossy();
+            name != ".git"
+                && !(opts.skip_hidden && name.starts_with('.'))
+                && !opts.skip_dirs.iter().any(|s| s == name.as_ref())
+        })
+        .filter_map(|e| {
+            if e.ty.is_dir() {
+                return Some((e.path, links.clone()));
+            }
+            if !(opts.follow_symlinks && e.ty.is_symlink()) {
+                return None;
+            }
+            let target = fs::canonicalize(&e.path).ok()?;
+            if !target.is_dir() {
+                return None;
+            }
+            let here = real_dir
+                .get_or_insert_with(|| fs::canonicalize(dir).unwrap_or_else(|_| dir.into()))
+                .clone();
+            let mut taken = links.as_ref().clone();
+            taken.push(here);
+            if taken.iter().any(|l| l.starts_with(&target)) {
+                return None; // would walk in a circle
+            }
+            Some((e.path, Arc::new(taken)))
+        })
+        .collect()
+}
+
+/// With symlinks followed, keep one path per real repo: the real path if it
+/// was found, else the first in sort order (`found` is sorted).
+fn dedup_real(found: Vec<Found>) -> Vec<Found> {
+    let mut by_real: BTreeMap<PathBuf, Found> = BTreeMap::new();
+    for f in found {
+        let real = fs::canonicalize(&f.path).unwrap_or_else(|_| f.path.clone());
+        match by_real.entry(real) {
+            Entry::Vacant(v) => {
+                v.insert(f);
+            }
+            Entry::Occupied(mut o) => {
+                if &f.path == o.key() {
+                    o.insert(f);
+                }
+            }
+        }
+    }
+    let mut v: Vec<Found> = by_real.into_values().collect();
+    v.sort_by(|a, b| a.path.cmp(&b.path));
+    v
 }
 
 /// Decide whether `dir` is a repository, and which kind.
 pub fn classify(dir: &Path) -> Option<RepoKind> {
+    classify_dotgit(dir).or_else(|| is_bare_listing(&list(dir)).then_some(RepoKind::Bare))
+}
+
+/// A work tree's kind, from its `.git` (one `lstat`).
+fn classify_dotgit(dir: &Path) -> Option<RepoKind> {
     let dotgit = dir.join(".git");
     match fs::symlink_metadata(&dotgit) {
-        Ok(m) if m.is_dir() => return Some(RepoKind::Main),
-        Ok(m) if m.is_file() => return Some(classify_gitfile(&dotgit)),
-        _ => {}
-    }
-    if is_bare(dir) {
-        Some(RepoKind::Bare)
-    } else {
-        None
+        Ok(m) if m.is_dir() => Some(RepoKind::Main),
+        Ok(m) if m.is_file() => Some(classify_gitfile(&dotgit)),
+        _ => None,
     }
 }
 
@@ -167,8 +268,14 @@ fn classify_gitfile(dotgit: &Path) -> RepoKind {
     }
 }
 
-fn is_bare(dir: &Path) -> bool {
-    dir.join("HEAD").is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir()
+/// A bare repo has `HEAD`, `objects/` and `refs/`; read from the listing.
+fn is_bare_listing(entries: &[DirEntry]) -> bool {
+    let has = |name: &str, want: fn(&FileType) -> bool| {
+        entries.iter().any(|e| e.name == name && want(&e.ty))
+    };
+    has("HEAD", FileType::is_file)
+        && has("objects", FileType::is_dir)
+        && has("refs", FileType::is_dir)
 }
 
 #[cfg(test)]
@@ -315,6 +422,53 @@ mod tests {
         assert_eq!(classify(t.path()), None);
     }
 
+    fn bare(dir: &Path, rel: &str) -> PathBuf {
+        let p = mk(dir, rel);
+        mk(&p, "objects");
+        mk(&p, "refs");
+        fs::write(p.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        p
+    }
+
+    #[test]
+    fn finds_bare_repos_from_the_listing_but_not_lookalikes() {
+        let t = tempfile::tempdir().unwrap();
+        bare(t.path(), "org/b.git");
+        let fake = mk(t.path(), "org/not-bare");
+        mk(&fake, "refs");
+        fs::write(fake.join("HEAD"), "x").unwrap();
+        fs::write(fake.join("objects"), "a file, not a dir").unwrap();
+        mk(&fake, "inside/x");
+        fake_repo(t.path(), "org/not-bare/inside/real");
+        assert_eq!(
+            found(t.path(), &DiscoverOptions::default()),
+            vec![
+                ("org/b.git".into(), RepoKind::Bare),
+                ("org/not-bare/inside/real".into(), RepoKind::Main),
+            ]
+        );
+    }
+
+    #[test]
+    fn hidden_directories_are_skipped_unless_a_root_or_enabled() {
+        let t = tempfile::tempdir().unwrap();
+        fake_repo(t.path(), "a");
+        fake_repo(t.path(), ".config/emacs");
+        fake_repo(t.path(), "dev/.hidden-repo");
+        let opts = DiscoverOptions::default();
+        assert_eq!(found(t.path(), &opts), vec![("a".into(), RepoKind::Main)]);
+        // a hidden root is scanned (its hidden children still aren't)
+        assert_eq!(
+            found(&t.path().join(".config"), &opts),
+            vec![("emacs".into(), RepoKind::Main)]
+        );
+        let opts = DiscoverOptions {
+            skip_hidden: false,
+            ..opts
+        };
+        assert_eq!(found(t.path(), &opts).len(), 3);
+    }
+
     #[cfg(unix)]
     #[test]
     fn symlink_loops_are_not_followed() {
@@ -327,6 +481,54 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(found(t.path(), &opts), vec![("a/r".into(), RepoKind::Main)]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn followed_symlinks_find_repos_once_and_never_loop() {
+        use std::os::unix::fs::symlink;
+        let t = tempfile::tempdir().unwrap();
+        let root = mk(t.path(), "root");
+        let out = mk(t.path(), "elsewhere");
+        fake_repo(&out, "ext/r");
+        fake_repo(&root, "own");
+        symlink(out.join("ext"), root.join("l1")).unwrap();
+        symlink(out.join("ext"), root.join("l2")).unwrap(); // same target twice
+        symlink(root.join("own"), root.join("an-alias")).unwrap(); // sorts before the real one
+        // a cycle through two directories, neither an ancestor of the other
+        let x = mk(&root, "x");
+        let y = mk(&root, "y");
+        fake_repo(&x, "rx");
+        symlink(&y, x.join("to-y")).unwrap();
+        symlink(&x, y.join("to-x")).unwrap();
+        symlink(&root, root.join("self")).unwrap();
+        let opts = DiscoverOptions {
+            follow_symlinks: true,
+            // below the OS's own symlink limit (ELOOP), so only our cycle
+            // check can keep the walk from reaching max_depth
+            max_depth: 12,
+            ..Default::default()
+        };
+        assert_eq!(
+            found(&root, &opts),
+            vec![
+                ("l1/r".into(), RepoKind::Main), // first of the links by path
+                ("own".into(), RepoKind::Main),  // the real path wins over an alias
+                ("x/rx".into(), RepoKind::Main),
+            ]
+        );
+        // cycles are cut, not merely stopped by max_depth
+        let canon = fs::canonicalize(&root).unwrap();
+        let d = discover_all(std::slice::from_ref(&canon), &opts);
+        assert!(d.truncated.is_empty(), "{:?}", d.truncated);
+        // inverse: not followed by default
+        assert_eq!(
+            found(&root, &DiscoverOptions::default()),
+            vec![
+                ("own".into(), RepoKind::Main),
+                ("x/rx".into(), RepoKind::Main)
+            ]
+        );
     }
 
     #[test]

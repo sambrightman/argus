@@ -21,6 +21,12 @@ pub struct Config {
     /// Maximum directory depth below a root; deeper directories are skipped
     /// (with a warning).
     pub max_depth: usize,
+    /// Skip directories whose name starts with `.`; add one as a root to
+    /// scan it.
+    pub skip_hidden: bool,
+    /// Follow symlinks to directories (`-L`). Cycles are cut and a repo
+    /// reachable by several paths is listed once.
+    pub follow_symlinks: bool,
     /// Maximum concurrent network operations (fetch/pull/push/clone).
     pub concurrency: usize,
     /// Protocol for new clones; unset asks the forge (`gh config get git_protocol`).
@@ -65,6 +71,8 @@ impl Default for Config {
             .map(String::from)
             .collect(),
             max_depth: 6,
+            skip_hidden: true,
+            follow_symlinks: false,
             concurrency: 8,
             clone_protocol: None,
             rules: vec![],

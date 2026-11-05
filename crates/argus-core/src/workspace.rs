@@ -145,6 +145,8 @@ impl Workspace {
             skip_dirs: self.config.skip_dirs.clone(),
             max_depth: self.config.max_depth,
             scan_inside_repos: false,
+            skip_hidden: self.config.skip_hidden,
+            follow_symlinks: self.config.follow_symlinks,
         }
     }
 
