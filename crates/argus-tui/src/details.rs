@@ -3,7 +3,7 @@
 use argus_core::Entry;
 use argus_core::attention::Issue;
 use argus_core::badges::Role;
-use argus_core::fix;
+use argus_core::fix::{self, FixKind};
 use argus_core::paths::contract_tilde;
 
 /// A detail line: styled parts. `None` uses the plain detail style.
@@ -36,7 +36,9 @@ fn ago(t: jiff::Timestamp) -> String {
     }
 }
 
-pub fn details(e: &Entry) -> Vec<DetailLine> {
+/// Detail lines for `e`. Fixes are listed in `priority` order (`[fix] auto`),
+/// the one an auto-fix action would apply marked as such.
+pub fn details(e: &Entry, priority: &[FixKind]) -> Vec<DetailLine> {
     let mut v = vec![line(vec![
         styled(Role::Dim, "path      "),
         plain(contract_tilde(&e.path)),
@@ -97,12 +99,18 @@ pub fn details(e: &Entry) -> Vec<DetailLine> {
             styled(role, text),
         ]));
     }
-    for f in fix::plan(s) {
+    let auto = fix::choose(s, priority);
+    for f in fix::ranked(s, priority) {
         if f.kind.needs_input() {
             continue;
         }
+        let label = if Some(&f) == auto.as_ref() {
+            "auto-fix  "
+        } else {
+            "fix       "
+        };
         v.push(line(vec![
-            styled(Role::Dim, "fix       "),
+            styled(Role::Dim, label),
             styled(Role::Ahead, f.op.label()),
             styled(Role::Dim, format!("  {}", f.reason)),
         ]));

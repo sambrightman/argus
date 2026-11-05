@@ -152,9 +152,15 @@ behind upstream (sync-only).
 Fixes are planned from status and are never destructive. `switch-default`
 needs a clean tracked tree and nothing unpushed. `push` (a default auto-fix) is fast-forward only,
 and only to a same-named upstream branch. Nothing is offered during a conflict.
-Each auto-fix action applies **one** fix: an unpushed feature branch is
-pushed by one `x x` (or `argus fix`) and switched back to the default
-branch by the next. Or snooze it in between (`m z`).
+Each auto-fix action applies **one** fix: the first kind in `[fix] auto`
+(or `-k`, in the order given) that the repo needs. An unpushed feature
+branch is pushed by one `x x` (or `argus fix`) and switched back to the
+default branch by the next. Or snooze it in between (`m z`).
+`argus fix -n` shows the fix each repo would get, followed by the
+alternatives in priority order; the TUI details mark it as `auto-fix`.
+
+`stash` saves staged, unstaged and untracked changes (not ignored files);
+`git stash pop --index` puts them back as they were.
 
 ## Development
 

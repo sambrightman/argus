@@ -1,7 +1,7 @@
 //! Fix planning and application. Each fix has tests for when it must *not*
 //! be offered, since an unsafe fix is far worse than a missing one.
 
-use argus_core::fix::{FixKind, apply_fix, plan};
+use argus_core::fix::{FixKind, apply_fix, choose, plan, ranked};
 use argus_core::ops::Op;
 use argus_core::status::{Head, StatusOptions, status};
 use argus_core::testkit::{Sandbox, commit, git, write};
@@ -336,4 +336,102 @@ fn default_auto_fix_pushes_but_never_force() {
     git(&r, &["fetch", "-q"]);
     assert!(apply_fix(&r, &auto).unwrap().is_none());
     assert_eq!(head(&r), Head::Branch("feat".into()));
+}
+
+/// A pushed feature branch with an untracked file offers both
+/// switch-default and stash.
+fn switch_or_stash(sb: &Sandbox) -> std::path::PathBuf {
+    let r = pushed_feature(sb);
+    write(&r, "new.txt", "untracked");
+    let k = kinds(&r);
+    assert!(
+        k.contains(&FixKind::SwitchDefault) && k.contains(&FixKind::Stash),
+        "{k:?}"
+    );
+    r
+}
+
+fn ranked_kinds(p: &std::path::Path, priority: &[FixKind]) -> Vec<FixKind> {
+    ranked(&status(p, StatusOptions::default()).unwrap(), priority)
+        .into_iter()
+        .map(|f| f.kind)
+        .collect()
+}
+
+#[test]
+fn the_order_given_is_the_priority() {
+    let sb = Sandbox::new();
+    let r = switch_or_stash(&sb);
+    let s = status(&r, StatusOptions::default()).unwrap();
+    let stash_first = [FixKind::Stash, FixKind::SwitchDefault];
+    let switch_first = [FixKind::SwitchDefault, FixKind::Stash];
+    assert_eq!(choose(&s, &stash_first).unwrap().kind, FixKind::Stash);
+    assert_eq!(
+        choose(&s, &switch_first).unwrap().kind,
+        FixKind::SwitchDefault
+    );
+    assert_eq!(
+        apply_fix(&r, &stash_first).unwrap().unwrap().fix.kind,
+        FixKind::Stash
+    );
+    assert_eq!(
+        head(&r),
+        Head::Branch("feat".into()),
+        "stashed, not switched"
+    );
+}
+
+#[test]
+fn unlisted_kinds_rank_after_listed_ones_in_default_order() {
+    let sb = Sandbox::new();
+    let r = switch_or_stash(&sb);
+    // commit is available too (needs a message, so never chosen)
+    assert_eq!(
+        ranked_kinds(&r, &[FixKind::Stash]),
+        [FixKind::Stash, FixKind::SwitchDefault, FixKind::Commit]
+    );
+    assert_eq!(
+        ranked_kinds(&r, &[]),
+        [FixKind::SwitchDefault, FixKind::Stash, FixKind::Commit]
+    );
+    let s = status(&r, StatusOptions::default()).unwrap();
+    assert!(choose(&s, &[]).is_none(), "nothing allowed, nothing chosen");
+    assert!(choose(&s, &[FixKind::Commit]).is_none());
+}
+
+#[test]
+fn stash_keeps_index_work_tree_and_untracked_apart() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "staged.txt", "base\n");
+    write(&r, "unstaged.txt", "base\n");
+    write(&r, ".gitignore", "*.log\n");
+    git(&r, &["add", "."]);
+    commit(&r, "files");
+    write(&r, "staged.txt", "staged\n");
+    git(&r, &["add", "staged.txt"]);
+    write(&r, "unstaged.txt", "unstaged\n");
+    write(&r, "untracked.txt", "new\n");
+    write(&r, "ignored.log", "noise\n");
+    let a = apply_fix(&r, &[FixKind::Stash]).unwrap().unwrap();
+    assert!(a.outcome.success, "{}", a.outcome.output);
+    assert_eq!(
+        git(&r, &["status", "--porcelain"]),
+        "",
+        "everything stashed"
+    );
+    assert!(
+        r.join("ignored.log").exists(),
+        "ignored files are left alone"
+    );
+
+    git(&r, &["stash", "pop", "--index"]);
+    let st = git(&r, &["status", "--porcelain"]);
+    let mut lines: Vec<&str> = st.lines().collect();
+    lines.sort();
+    assert_eq!(
+        lines,
+        [" M unstaged.txt", "?? untracked.txt", "M  staged.txt"],
+        "staged stays staged, unstaged stays unstaged, untracked comes back"
+    );
 }

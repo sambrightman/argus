@@ -278,7 +278,7 @@ fn fix_with_explicit_kind_and_pattern() {
         .success()
         .stdout(predicate::str::contains("acme/dirty: would stash"))
         .stdout(predicate::str::contains("acme/feature: would switch main"));
-    // inverse: without the second flag, feature has nothing to do
+    // inverse: without the second flag, feature only gets a hint
     argus(&sb)
         .args([
             "fix",
@@ -291,7 +291,7 @@ fn fix_with_explicit_kind_and_pattern() {
         .assert()
         .success()
         .stdout(predicate::str::contains("acme/dirty: would stash"))
-        .stdout(predicate::str::contains("acme/feature").not());
+        .stdout(predicate::str::contains("acme/feature: nothing automatic"));
     // an unknown kind is rejected
     argus(&sb)
         .args(["fix", "-n", "-k", "push,shove"])
@@ -497,5 +497,43 @@ fn help_documents_every_flag_and_repeatable_options() {
         String::from_utf8(top.stdout)
             .unwrap()
             .contains("(repeatable)")
+    );
+}
+
+#[test]
+fn dry_run_shows_the_fix_then_alternatives_in_priority_order() {
+    let sb = Sandbox::new();
+    three(&sb);
+    write(&sb.path("dev/feature"), "notes.txt", "untracked\n");
+    let out = |args: &[&str]| {
+        let o = argus(&sb).args(args).output().unwrap();
+        assert!(o.status.success());
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // default [fix] auto = push, switch-default: stash is not automatic
+    let s = out(&["fix", "-n", "acme/feature", "acme/dirty"]);
+    assert!(
+        s.contains(
+            "acme/feature: would switch main (feat has nothing unpushed)\n  \
+             also: stash (1 uncommitted path(s)), with -k stash\n"
+        ),
+        "{s}"
+    );
+    assert!(
+        s.contains(
+            "acme/dirty: nothing automatic\n  \
+             also: stash (1 uncommitted path(s)), with -k stash\n"
+        ),
+        "{s}"
+    );
+    assert!(
+        !s.contains("-k commit"),
+        "commit needs a message: not offered\n{s}"
+    );
+    // -k order is the priority; both kinds allowed, so no hints
+    let s = out(&["fix", "-n", "-k", "stash,switch-default", "acme/feature"]);
+    assert_eq!(
+        s,
+        "acme/feature: would stash (1 uncommitted path(s))\n  also: switch main (feat has nothing unpushed)\n"
     );
 }

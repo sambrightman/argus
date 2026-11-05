@@ -29,6 +29,11 @@ fn code(c: KeyCode) -> KeyEvent {
 
 /// Three clones: `clean`, `dirty` (modified file), `feature` (pushed feature branch).
 fn setup(extra: &str) -> (Sandbox, App) {
+    setup_with(extra, |_| {})
+}
+
+/// Like [`setup`], with `prep` run on the sandbox before the scan.
+fn setup_with(extra: &str, prep: impl Fn(&Sandbox)) -> (Sandbox, App) {
     let sb = Sandbox::new();
     for n in ["clean", "dirty", "feature"] {
         sb.remote("acme", n);
@@ -39,6 +44,7 @@ fn setup(extra: &str) -> (Sandbox, App) {
     git(&f, &["switch", "-q", "-c", "feat"]);
     commit(&f, "feat");
     git(&f, &["push", "-q", "-u", "origin", "feat"]);
+    prep(&sb);
     let cfg = format!("roots = ['{}']\n{extra}", sb.path("dev").display());
     let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
     ws.scan();
@@ -484,4 +490,44 @@ fn scanned_message_replaces_entries_and_keeps_cursor_repo() {
     assert!(!is_error);
     assert!(msg.starts_with("3 repos · no roots configured · 1 directory below max_depth (6) not scanned, e.g. /deep/dir"), "{msg}");
     let _ = PathBuf::new();
+}
+
+fn detail_texts(app: &App) -> Vec<String> {
+    app.rows
+        .iter()
+        .filter_map(|r| match r {
+            Row::Detail { line, .. } => Some(
+                line.parts
+                    .iter()
+                    .map(|(_, t)| t.as_str())
+                    .collect::<String>(),
+            ),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn details_list_fixes_in_priority_order_marking_the_auto_fix() {
+    let untracked = |sb: &Sandbox| write(&sb.path("dev/feature"), "notes.txt", "x\n");
+    let fixes = |auto: &str| {
+        let (_sb, mut app) = setup_with(&format!("[fix]\nauto = {auto}"), untracked);
+        app.on_key(key('j')); // feature
+        app.on_key(code(KeyCode::Tab));
+        detail_texts(&app)
+            .into_iter()
+            .filter(|t| t.contains("fix "))
+            .map(|t| t.split_whitespace().take(3).collect::<Vec<_>>().join(" "))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        fixes("['stash', 'switch-default']"),
+        ["auto-fix stash 1", "fix switch main"]
+    );
+    assert_eq!(
+        fixes("['switch-default', 'stash']"),
+        ["auto-fix switch main", "fix stash 1"]
+    );
+    // nothing allowed: no auto-fix marked, default order
+    assert_eq!(fixes("[]"), ["fix switch main", "fix stash 1"]);
 }

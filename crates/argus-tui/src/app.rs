@@ -228,7 +228,7 @@ impl App {
             rows.push(Row::Repo(i));
             if self.expanded.contains(&e.path) {
                 rows.extend(
-                    details(e)
+                    details(e, &self.ws.config.fix.auto)
                         .into_iter()
                         .map(|line| Row::Detail { repo: i, line }),
                 );
@@ -611,7 +611,7 @@ impl App {
                     .filter(|&i| {
                         self.ws.entries[i]
                             .status()
-                            .is_some_and(|s| fix::plan(s).iter().any(|f| kinds.contains(&f.kind)))
+                            .is_some_and(|s| fix::choose(s, &kinds).is_some())
                     })
                     .map(|i| self.ws.entries[i].path.clone())
                     .filter(|p| !self.running.contains_key(p))

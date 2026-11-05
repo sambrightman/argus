@@ -95,13 +95,16 @@ consume the same events.
 * **Attention.** A repo needs attention if it has any of: conflicts or an
   in-progress operation, uncommitted changes, unpushed commits, a non-default
   branch, detached HEAD, stashes, a gone upstream, or no upstream for the
-  current branch. Sort order: favourites, then severity, then amount of
-  change, then name.
+  current branch. Sort order: needing attention before clean, then
+  favourites, then severity, then amount of change, then name.
 * **Auto-fixes** (planned and shown first, then executed; never destructive):
   * `switch-default`: on a non-default branch, worktree clean, branch fully
     pushed (or merged into default) → `git switch <default>`.
   * `push`: ahead of upstream, nothing behind → `git push`.
-  * `stash`: dirty → `git stash push -u -m "argus <timestamp>"`.
+  * `stash`: dirty → `git stash push -u -m "argus <timestamp>"`: staged,
+    unstaged and untracked changes (not ignored files). `git stash pop
+    --index` restores each as it was. git has no config for this, so it's
+    fixed for now.
   * `commit`: needs a message (TUI prompt / `--message`) → `git add -A && git commit`.
   * `pull` / `fetch`: plain `git pull` / `git fetch`, so your config decides.
 
@@ -155,6 +158,12 @@ rendering is snapshot-tested via `TestBackend`.
   actions); the user can snooze or tolerate in between. A future
   "auto-fix all" may chain. Defaults: `push` (fast-forward, same-named
   upstream only) and `switch-default`.
+* **The order of `[fix] auto` (or `-k`) is the priority.** Each action
+  applies the first listed kind the repo needs; unlisted kinds rank after,
+  in `FixKind::ALL` order. `fix --dry-run` prints the fix that would be
+  applied, then the alternatives in priority order (with a `-k` hint for
+  kinds not allowed); the TUI details mark the auto-fix the same way. If
+  chaining ever arrives, the dry run must show every fix it would apply.
 
 * **No `init`.** Without configured roots the current directory is
   scanned (with a hint). The config file is created on first run as a
@@ -182,3 +191,7 @@ rendering is snapshot-tested via `TestBackend`.
   contract. Consider a versioned JSON schema and/or a line-oriented
   `--porcelain` format (like `git status --porcelain=v2`) for `status`,
   `sync`, `fix` and `root list`.
+* Stash options: let the user choose whether untracked files are included
+  (git has no config for this). Today: staged + unstaged + untracked.
+* Path subsets for operations (stash/commit/discard selected files), e.g.
+  from the details view.

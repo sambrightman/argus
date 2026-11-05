@@ -636,9 +636,28 @@ fn fix_cmd(
         let name = e.display_name();
         let path = e.path.clone();
         if dry_run {
-            for f in fix::plan(s).into_iter().filter(|f| kinds.contains(&f.kind)) {
-                any = true;
-                println!("{name}: would {} ({})", f.op.label(), f.reason);
+            // The fix this run would apply, then the others in priority
+            // order (what later runs would do, or what `-k` could add).
+            let chosen = fix::choose(s, kinds);
+            let others: Vec<_> = fix::ranked(s, kinds)
+                .into_iter()
+                .filter(|f| !f.kind.needs_input() && Some(f) != chosen.as_ref())
+                .collect();
+            if chosen.is_none() && others.is_empty() {
+                continue;
+            }
+            any = true;
+            match &chosen {
+                Some(f) => println!("{name}: would {} ({})", f.op.label(), f.reason),
+                None => println!("{name}: nothing automatic"),
+            }
+            for f in others {
+                let hint = if kinds.contains(&f.kind) {
+                    String::new()
+                } else {
+                    format!(", with -k {}", f.kind.name())
+                };
+                println!("  also: {} ({}){hint}", f.op.label(), f.reason);
             }
             continue;
         }

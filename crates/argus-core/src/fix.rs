@@ -33,7 +33,7 @@ pub enum FixKind {
     FastForward,
     /// Pull the current branch (your pull settings apply).
     Pull,
-    /// Stash all changes, including untracked files.
+    /// Stash staged, unstaged and untracked changes (not ignored files).
     Stash,
     /// Commit everything (never automatic: needs a message).
     Commit,
@@ -53,6 +53,19 @@ impl FixKind {
     /// Requires a message from the user.
     pub fn needs_input(self) -> bool {
         matches!(self, FixKind::Commit)
+    }
+
+    /// The name used in config and on the command line.
+    pub fn name(self) -> &'static str {
+        match self {
+            FixKind::SwitchDefault => "switch-default",
+            FixKind::Push => "push",
+            FixKind::Publish => "publish",
+            FixKind::FastForward => "fast-forward",
+            FixKind::Pull => "pull",
+            FixKind::Stash => "stash",
+            FixKind::Commit => "commit",
+        }
     }
 }
 
@@ -169,16 +182,34 @@ pub struct Applied {
     pub outcome: OpOutcome,
 }
 
-/// Apply the first allowed fix for the repo's current state, if any.
+/// Every applicable fix in priority order: kinds in `priority` in the order
+/// given, then the rest in [`FixKind::ALL`] order.
+pub fn ranked(s: &RepoStatus, priority: &[FixKind]) -> Vec<Fix> {
+    let mut v = plan(s);
+    v.sort_by_key(|f| {
+        priority
+            .iter()
+            .position(|&k| k == f.kind)
+            .unwrap_or(priority.len() + FixKind::ALL.iter().position(|&k| k == f.kind).unwrap())
+    });
+    v
+}
+
+/// The fix an auto-fix action applies: the highest-priority one in `allowed`
+/// that needs no input.
+pub fn choose(s: &RepoStatus, allowed: &[FixKind]) -> Option<Fix> {
+    ranked(s, allowed)
+        .into_iter()
+        .find(|f| allowed.contains(&f.kind) && !f.kind.needs_input())
+}
+
+/// Apply the [`choose`]n fix for the repo's current state, if any.
 ///
 /// Deliberately one fix per call: each auto-fix is a separate user action
 /// (e.g. push, then a later action switches to the default branch).
 pub fn apply_fix(path: &Path, allowed: &[FixKind]) -> Result<Option<Applied>, status::StatusError> {
     let s = status::status(path, StatusOptions { submodules: false })?;
-    let Some(fix) = plan(&s)
-        .into_iter()
-        .find(|f| allowed.contains(&f.kind) && !f.kind.needs_input())
-    else {
+    let Some(fix) = choose(&s, allowed) else {
         return Ok(None);
     };
     let outcome = ops::run(path, &fix.op);

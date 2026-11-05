@@ -167,7 +167,8 @@ fn example_colors() -> BTreeMap<&'static str, &'static str> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct FixConfig {
-    /// Fixes an auto-fix action may apply (one per action), in priority order.
+    /// Fixes an auto-fix action may apply, highest priority first. Each
+    /// action applies one: the first in this list that the repo needs.
     pub auto: Vec<FixKind>,
 }
 
