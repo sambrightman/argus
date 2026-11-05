@@ -198,11 +198,8 @@ rendering is snapshot-tested via `TestBackend`.
   (schemars) supplies doc comments, `Default` values and `example`
   annotations, so the documentation can't drift from the code. Roots
   are managed with `argus root add|remove|list` (toml_edit, so comments are kept).
-* **`max_depth` is reported**, not silent: below the limit the walk only
-  looks for repos (stopping at each, honouring `skip_dirs`) and the warning
-  counts the repos left out. Directories with nothing below aren't
-  reported, so a Go module cache doesn't cause a false alarm. The cost is
-  that `max_depth` no longer bounds the walk; `skip_dirs` does.
+* **`max_depth` is reported**, not silent: a scan names a directory it
+  didn't enter.
 * **`argus status` lists only repos needing attention**; `--all` adds clean
   ones, `--hidden` excluded/snoozed ones, and the footer counts what was
   left out. `--json` uses the same filter. The TUI starts the same way

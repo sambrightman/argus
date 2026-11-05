@@ -101,7 +101,7 @@ pub enum Effect {
 pub enum Msg {
     Scanned {
         entries: Vec<Entry>,
-        /// Repos left out because of `max_depth`.
+        /// Directories skipped because of `max_depth`.
         truncated: Vec<PathBuf>,
     },
     Status(PathBuf, Result<RepoStatus, String>),

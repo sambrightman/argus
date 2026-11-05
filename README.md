@@ -30,9 +30,8 @@ With no roots configured, argus scans the current directory and says so.
 On first run it writes `~/.config/argus/config.toml`: every setting with
 its default and documentation, commented out, generated from the code (so
 it can't drift). `argus root add|remove|list` edit it in place, keeping
-your comments. If there are repos deeper than `max_depth`, argus warns,
-counts them and names one; deep trees without repos (caches, build
-output) don't trigger it.
+your comments. If `max_depth` stops a scan before the bottom of a tree,
+argus warns and names a directory it skipped.
 
 ## Configuration
 

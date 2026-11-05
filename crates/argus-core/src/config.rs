@@ -18,8 +18,8 @@ pub struct Config {
     pub roots: Vec<PathBuf>,
     /// Directory names never descended into.
     pub skip_dirs: Vec<String>,
-    /// Maximum directory depth below a root; deeper repos are left out
-    /// (with a warning naming them).
+    /// Maximum directory depth below a root; deeper directories are skipped
+    /// (with a warning).
     pub max_depth: usize,
     /// Maximum concurrent network operations (fetch/pull/push/clone).
     pub concurrency: usize,

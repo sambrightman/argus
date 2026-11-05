@@ -486,12 +486,12 @@ fn scanned_message_replaces_entries_and_keeps_cursor_repo() {
     let path = app.current().unwrap().path.clone();
     let entries = app.ws.entries.clone();
     app.notices = vec!["no roots configured".into()];
-    let truncated = vec![PathBuf::from("/deep/repo")];
+    let truncated = vec![PathBuf::from("/deep/dir")];
     app.on_msg(Msg::Scanned { entries, truncated });
     assert_eq!(app.current().unwrap().path, path);
     let (msg, is_error) = app.message.clone().unwrap();
     assert!(!is_error);
-    assert!(msg.starts_with("3 repos · no roots configured · 1 repo below max_depth (6) not included, e.g. /deep/repo"), "{msg}");
+    assert!(msg.starts_with("3 repos · no roots configured · 1 directory below max_depth (6) not scanned, e.g. /deep/dir"), "{msg}");
     let _ = PathBuf::new();
 }
 

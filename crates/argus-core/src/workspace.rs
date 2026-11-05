@@ -120,7 +120,7 @@ pub struct Workspace {
     pub state: State,
     rules: RuleSet,
     pub entries: Vec<Entry>,
-    /// Repos the last scan left out because of `max_depth`.
+    /// Directories the last scan didn't enter because of `max_depth`.
     pub truncated: Vec<PathBuf>,
 }
 
@@ -344,13 +344,13 @@ impl Workspace {
         }
     }
 
-    /// One-line warning about repos left out by `max_depth`, if any.
+    /// One-line warning about directories skipped by `max_depth`, if any.
     pub fn truncation_warning(&self) -> Option<String> {
         let first = self.truncated.first()?;
         let n = self.truncated.len();
         Some(format!(
-            "{n} repo{} below max_depth ({}) not included, e.g. {}; raise max_depth to include {}",
-            if n == 1 { "" } else { "s" },
+            "{n} director{} below max_depth ({}) not scanned, e.g. {}; raise max_depth to include {}",
+            if n == 1 { "y" } else { "ies" },
             self.config.max_depth,
             contract_tilde(first),
             if n == 1 { "it" } else { "them" },

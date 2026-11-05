@@ -50,7 +50,7 @@ impl Default for DiscoverOptions {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Discovery {
     pub found: Vec<Found>,
-    /// Repositories below `max_depth`, found but not included.
+    /// Directories at `max_depth` that had subdirectories we didn't enter.
     pub truncated: Vec<PathBuf>,
 }
 
@@ -94,13 +94,7 @@ fn visit<'s>(
     opts: &'s DiscoverOptions,
     sink: &'s Sink,
 ) {
-    let beyond = depth > opts.max_depth;
     if let Some(kind) = classify(&dir) {
-        if beyond {
-            // Only looking, to report it: never inside it.
-            sink.truncated.lock().unwrap().push(dir);
-            return;
-        }
         sink.found.lock().unwrap().push(Found {
             path: dir.clone(),
             kind,
@@ -109,9 +103,14 @@ fn visit<'s>(
             return;
         }
     }
-    // Below `max_depth` the walk continues only to find repos it would have
-    // missed, so the warning names real repos rather than every deep tree.
-    for path in subdirs(&dir, opts) {
+    let subdirs = subdirs(&dir, opts);
+    if depth >= opts.max_depth {
+        if !subdirs.is_empty() {
+            sink.truncated.lock().unwrap().push(dir);
+        }
+        return;
+    }
+    for path in subdirs {
         s.spawn(move |s| visit(s, path, depth + 1, opts, sink));
     }
 }
@@ -224,14 +223,12 @@ mod tests {
     }
 
     #[test]
-    fn reports_repos_below_max_depth_but_not_empty_trees() {
+    fn reports_where_max_depth_stopped_the_walk() {
         let t = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(t.path()).unwrap();
         fake_repo(&root, "a/b/deep");
-        fake_repo(&root, "a/b/c/d/e/deeper");
-        fake_repo(&root, "a/b/deep/nested"); // inside a repo: not looked for
-        mk(&root, "cache/x/y/z/w"); // deep, but no repos: nothing missed
-        mk(&root, "x/y/node_modules/m/.git"); // only under skipped dirs
+        mk(&root, "a/leaf"); // at the limit but empty: nothing missed
+        mk(&root, "x/y/node_modules"); // only skipped dirs below: nothing missed
         fake_repo(&root, "a/repo-at-limit");
         let opts = DiscoverOptions {
             max_depth: 2,
@@ -239,22 +236,19 @@ mod tests {
             ..Default::default()
         };
         let d = discover_all(std::slice::from_ref(&root), &opts);
-        assert_eq!(
-            d.truncated,
-            vec![root.join("a/b/c/d/e/deeper"), root.join("a/b/deep")]
-        );
+        assert_eq!(d.truncated, vec![root.join("a/b")]);
         assert_eq!(
             d.found.iter().map(|f| f.path.clone()).collect::<Vec<_>>(),
             vec![root.join("a/repo-at-limit")]
         );
-        // inverse: deep enough, nothing below the limit
+        // inverse: deep enough, nothing truncated
         let opts = DiscoverOptions {
             max_depth: 10,
             ..opts
         };
         let d = discover_all(std::slice::from_ref(&root), &opts);
         assert!(d.truncated.is_empty(), "{:?}", d.truncated);
-        assert_eq!(d.found.len(), 3);
+        assert_eq!(d.found.len(), 2);
     }
 
     #[test]

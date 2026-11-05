@@ -191,8 +191,6 @@ fn root_add_list_remove() {
 fn warns_when_max_depth_stops_the_scan() {
     let sb = Sandbox::new();
     sb.init("dev/a/b/c/deep");
-    // deep directories with no repos (e.g. a Go module cache) aren't reported
-    std::fs::create_dir_all(sb.path("dev/go/pkg/mod/cache/download/x")).unwrap();
     let cfg = sb.path("cfg.toml");
     std::fs::write(&cfg, "max_depth = 2\n").unwrap();
     argus(&sb)
@@ -203,7 +201,7 @@ fn warns_when_max_depth_stops_the_scan() {
         .success()
         .stdout(predicate::str::contains("0 repos"))
         .stderr(predicate::str::contains(
-            "argus: 1 repo below max_depth (2) not included, e.g. ~/dev/a/b/c/deep; raise max_depth",
+            "1 directory below max_depth (2) not scanned, e.g. ~/dev/a/b; raise max_depth",
         ));
     std::fs::write(&cfg, "max_depth = 6\n").unwrap();
     argus(&sb)
