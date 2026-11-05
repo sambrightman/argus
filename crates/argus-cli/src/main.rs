@@ -29,6 +29,10 @@ struct Cli {
     /// Scan this root instead of the configured ones (repeatable).
     #[arg(long = "root", global = true, value_name = "DIR")]
     roots: Vec<PathBuf>,
+    /// Scan this many directory levels below each root instead of
+    /// `max_depth`.
+    #[arg(long, global = true, value_name = "N")]
+    max_depth: Option<usize>,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -238,7 +242,7 @@ fn run() -> Result<()> {
         Some(Cmd::Forge { cmd }) => return forge_cmd(cmd),
         _ => {}
     }
-    let (mut ws, notices) = load(&ctx, &cli.roots)?;
+    let (mut ws, notices) = load(&ctx, &cli.roots, cli.max_depth)?;
     let tui = matches!(cli.cmd, None | Some(Cmd::Tui));
     if !tui {
         for n in &notices {
@@ -310,9 +314,16 @@ fn run() -> Result<()> {
 
 /// Load config and state. With no roots configured (and none given), the
 /// current directory is scanned; the returned notices say so.
-fn load(ctx: &Ctx, roots: &[PathBuf]) -> Result<(Workspace, Vec<String>)> {
+fn load(
+    ctx: &Ctx,
+    roots: &[PathBuf],
+    max_depth: Option<usize>,
+) -> Result<(Workspace, Vec<String>)> {
     let mut config = Config::load(&ctx.config_path)?;
     let mut notices = vec![];
+    if let Some(d) = max_depth {
+        config.max_depth = d;
+    }
     if !roots.is_empty() {
         config.roots = roots.iter().map(|r| paths::expand_tilde(r)).collect();
     }

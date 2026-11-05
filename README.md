@@ -127,7 +127,8 @@ argus paths                            # config and state file locations
 
 Every command takes `--config FILE` / `--state FILE`, or the environment
 variables `ARGUS_CONFIG` / `ARGUS_STATE`, and `--root DIR` (repeatable)
-to scan other directories just this once.
+to scan other directories just this once; `--max-depth N` overrides
+`max_depth` for one run.
 
 A daily crontab entry:
 

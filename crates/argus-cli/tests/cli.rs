@@ -212,6 +212,24 @@ fn warns_when_max_depth_stops_the_scan() {
         .success()
         .stdout(predicate::str::contains("1 repos, 1 need attention"))
         .stderr(predicate::str::contains("max_depth").not());
+    // --max-depth overrides the config, both ways
+    argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--max-depth", "2", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 repos"))
+        .stderr(predicate::str::contains("below max_depth (2)"));
+    std::fs::write(&cfg, "max_depth = 2\n").unwrap();
+    argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["status", "--max-depth", "4"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 repos, 1 need attention"))
+        .stderr(predicate::str::contains("max_depth").not());
 }
 
 #[test]
