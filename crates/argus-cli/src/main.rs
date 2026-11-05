@@ -26,8 +26,8 @@ struct Cli {
     /// State file [default: $XDG_STATE_HOME/argus/state.toml]
     #[arg(long, global = true, env = "ARGUS_STATE")]
     state: Option<PathBuf>,
-    /// Scan these roots instead of the configured ones.
-    #[arg(long = "root", global = true)]
+    /// Scan this root instead of the configured ones (repeatable).
+    #[arg(long = "root", global = true, value_name = "DIR")]
     roots: Vec<PathBuf>,
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -37,7 +37,7 @@ struct Cli {
 enum Cmd {
     /// Interactive TUI (default).
     Tui,
-    /// Print status of all repositories.
+    /// Print repositories needing attention (`--all`: clean ones too).
     Status {
         #[command(flatten)]
         view: View,
@@ -57,8 +57,8 @@ enum Cmd {
     },
     /// Apply safe fixes (default: those in `[fix] auto`).
     Fix {
-        /// Fix kinds to apply.
-        #[arg(long = "kind", short = 'k', value_enum)]
+        /// Fix kinds to apply, comma-separated.
+        #[arg(long = "kind", short = 'k', value_enum, value_delimiter = ',')]
         kinds: Vec<FixArg>,
         #[arg(long, short = 'n')]
         dry_run: bool,
@@ -68,7 +68,10 @@ enum Cmd {
     /// Set favourite / sync / exclude marks, or snooze repos.
     Mark(MarkArgs),
     /// Acknowledge "new" repos (all, or matching patterns).
-    Ack { patterns: Vec<String> },
+    Ack {
+        /// Repos (glob on name/key/path).
+        patterns: Vec<String>,
+    },
     /// Forge queries.
     Forge {
         #[command(subcommand)]
@@ -85,19 +88,19 @@ enum Cmd {
 
 #[derive(Args, Clone, Copy)]
 struct View {
-    /// Only repos needing attention.
+    /// Include clean repos.
     #[arg(long, short = 'a')]
-    attention: bool,
+    all: bool,
     /// Include excluded and snoozed repos.
     #[arg(long)]
-    all: bool,
+    hidden: bool,
 }
 
 impl From<View> for ViewFilter {
     fn from(v: View) -> Self {
         ViewFilter {
-            attention_only: v.attention,
-            show_hidden: v.all,
+            attention_only: !v.all,
+            show_hidden: v.hidden,
         }
     }
 }
@@ -132,13 +135,17 @@ struct MarkArgs {
 #[derive(Subcommand)]
 enum RootCmd {
     /// Add directories (default: the current directory).
-    Add { dirs: Vec<PathBuf> },
+    Add {
+        /// Existing directories; stored as `~/…` where possible.
+        dirs: Vec<PathBuf>,
+    },
     /// Remove directories.
     Remove {
+        /// Configured roots (they need not exist any more).
         #[arg(required = true)]
         dirs: Vec<PathBuf>,
     },
-    /// List configured roots.
+    /// List configured roots, flagging any that no longer exist.
     List,
 }
 
@@ -340,7 +347,7 @@ fn root_cmd(ctx: &Ctx, cmd: RootCmd) -> Result<()> {
                 println!("no roots configured (the current directory is scanned)");
             }
             for r in &config.roots {
-                let missing = if r.is_dir() { "" } else { "  (missing)" };
+                let missing = if r.is_dir() { "" } else { "  (no such directory)" };
                 println!("{}{missing}", paths::contract_tilde(r));
             }
         }
@@ -462,19 +469,31 @@ fn status(ws: &Workspace, filter: ViewFilter, json: bool) -> Result<()> {
             pad(&name, name_w)
         )?;
     }
-    let attention = order
-        .iter()
-        .filter(|&&i| ws.entries[i].needs_attention())
-        .count();
-    writeln!(
-        out,
-        "{}",
-        p.role(
-            Role::Dim,
-            &format!("{} repos, {attention} need attention", order.len())
-        )
-    )?;
+    writeln!(out, "{}", p.role(Role::Dim, &status_summary(ws, filter)))?;
     Ok(())
+}
+
+/// Footer counts, naming the flag that shows whatever the filter left out.
+fn status_summary(ws: &Workspace, filter: ViewFilter) -> String {
+    let shown = |e: &&argus_core::Entry| filter.show_hidden || !e.flags.hidden();
+    let total = ws.entries.iter().filter(shown).count();
+    let attention = ws
+        .entries
+        .iter()
+        .filter(shown)
+        .filter(|e| e.needs_attention())
+        .count();
+    let clean = total - attention;
+    let mut s = if filter.attention_only && clean > 0 {
+        format!("{attention} of {total} repos need attention; {clean} clean not shown (--all)")
+    } else {
+        format!("{total} repos, {attention} need attention")
+    };
+    let hidden = ws.entries.len() - total;
+    if hidden > 0 {
+        s += &format!("; {hidden} hidden (--hidden)");
+    }
+    s
 }
 
 // ---------- sync ----------

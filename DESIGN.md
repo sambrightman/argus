@@ -164,6 +164,9 @@ rendering is snapshot-tested via `TestBackend`.
   are managed with `argus root add|remove|list` (toml_edit, so comments are kept).
 * **`max_depth` is reported**, not silent: a scan names a directory it
   didn't enter.
+* **`argus status` lists only repos needing attention**; `--all` adds clean
+  ones, `--hidden` excluded/snoozed ones, and the footer counts what was
+  left out. `--json` uses the same filter.
 
 ## 9. Not done yet / next steps
 
@@ -174,3 +177,8 @@ rendering is snapshot-tested via `TestBackend`.
 * GitLab/Gitea forges (implement `argus_core::forge::Forge`); jj backend.
 * `argus-server` (axum, JSON over the same `Workspace`).
 * Filesystem watching for live refresh. Today: `g`, and after each operation.
+* Machine-readable output for scripts. Today `status --json` and
+  `forge list --json` serialise internal structs, which isn't a stable
+  contract. Consider a versioned JSON schema and/or a line-oriented
+  `--porcelain` format (like `git status --porcelain=v2`) for `status`,
+  `sync`, `fix` and `root list`.

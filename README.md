@@ -115,15 +115,19 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 ## CLI
 
 ```sh
-argus status [-a] [--all] [--json]     # -a: attention only
-argus sync [-n] [--no-forge] [PATTERN…]
-argus fix [-n] [-k switch-default|push|publish|fast-forward|pull|stash]… [PATTERN…]
-argus mark PATTERN… [--favourite|--no-favourite] [--sync|--no-sync] [--exclude|--include] [--snooze 3d|--unsnooze] [--clear]
-argus ack [PATTERN…]
+argus status [-a|--all] [--hidden] [--json]  # repos needing attention; -a: clean too
+argus sync [-n] [--no-forge] [PATTERNS…]
+argus fix [-n] [-k KINDS] [PATTERNS…]  # KINDS: comma-separated, e.g. push,switch-default
+argus mark PATTERNS… [--favourite|--no-favourite] [--sync|--no-sync] [--exclude|--include] [--snooze 3d|--unsnooze] [--clear]
+argus ack [PATTERNS…]
 argus forge list ORG [--team T] [--json]
-argus root add [DIR…] | remove DIR… | list
+argus root add [DIRS…] | remove DIRS… | list
 argus paths                            # config and state file locations
 ```
+
+Every command takes `--config FILE` / `--state FILE`, or the environment
+variables `ARGUS_CONFIG` / `ARGUS_STATE`, and `--root DIR` (repeatable)
+to scan other directories just this once.
 
 A daily crontab entry:
 
@@ -154,7 +158,7 @@ branch by the next. Or snooze it in between (`m z`).
 ## Development
 
 ```sh
-cargo test --workspace      # ~140 tests, real git repos in temp dirs
+cargo test --workspace      # ~160 tests, real git repos in temp dirs
 cargo clippy --workspace --all-targets
 cargo run -p argus-tui --example snapshot -- ~/dev 'jj\t'   # render a frame as text
 ```

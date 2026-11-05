@@ -30,27 +30,55 @@ fn three(sb: &Sandbox) {
 fn status_text_and_json() {
     let sb = Sandbox::new();
     three(&sb);
+    // default: clean repos are left out, and the footer says how to see them
     argus(&sb)
         .arg("status")
         .assert()
         .success()
         .stdout(predicate::str::contains("acme/dirty").and(predicate::str::contains("✚1")))
-        .stdout(predicate::str::contains("3 repos, 2 need attention"))
+        .stdout(predicate::str::contains("acme/clean").not())
+        .stdout(predicate::str::contains(
+            "2 of 3 repos need attention; 1 clean not shown (--all)",
+        ))
         .stdout(predicate::str::contains("\x1b[").not());
+    // inverse: --all / -a includes them
+    for all in ["--all", "-a"] {
+        argus(&sb)
+            .args(["status", all])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("acme/clean"))
+            .stdout(predicate::str::contains("3 repos, 2 need attention"))
+            .stdout(predicate::str::contains("not shown").not());
+    }
 
-    let out = argus(&sb)
-        .args(["status", "--json", "--attention"])
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    let names: Vec<_> = v
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|e| e["id"]["name"].as_str().unwrap().to_string())
-        .collect();
-    assert_eq!(names, vec!["dirty", "feature"]);
+    let names = |args: &[&str]| -> Vec<String> {
+        let out = argus(&sb).args(args).output().unwrap();
+        assert!(out.status.success());
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"]["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(names(&["status", "--json"]), vec!["dirty", "feature"]);
+    assert_eq!(
+        names(&["status", "--json", "--all"]),
+        vec!["dirty", "feature", "clean"]
+    );
+}
+
+#[test]
+fn status_when_everything_is_clean() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "clean");
+    sb.clone_as_github("acme", "clean", "dev/clean");
+    argus(&sb)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout("0 of 1 repos need attention; 1 clean not shown (--all)\n");
 }
 
 /// argus with an isolated environment but no `--root`, run from `cwd`.
@@ -73,7 +101,7 @@ fn no_roots_scans_current_directory_with_a_hint() {
         .arg("status")
         .assert()
         .success()
-        .stdout(predicate::str::contains("3 repos"))
+        .stdout(predicate::str::contains("of 3 repos"))
         .stderr(predicate::str::contains(
             "no roots configured; scanning the current directory",
         ));
@@ -86,7 +114,7 @@ fn no_roots_scans_current_directory_with_a_hint() {
         .arg("status")
         .assert()
         .success()
-        .stdout(predicate::str::contains("3 repos"))
+        .stdout(predicate::str::contains("of 3 repos"))
         .stderr(predicate::str::contains("no roots configured").not());
 }
 
@@ -143,7 +171,7 @@ fn root_add_list_remove() {
     std::fs::remove_dir(sb.path("work")).unwrap();
     a(&["root", "list"])
         .success()
-        .stdout(predicate::str::contains("~/work  (missing)"));
+        .stdout(predicate::str::contains("~/work  (no such directory)"));
     a(&["root", "remove", "~/work"])
         .success()
         .stdout("removed ~/work\n");
@@ -182,7 +210,7 @@ fn warns_when_max_depth_stops_the_scan() {
         .arg("status")
         .assert()
         .success()
-        .stdout(predicate::str::contains("1 repos"))
+        .stdout(predicate::str::contains("1 repos, 1 need attention"))
         .stderr(predicate::str::contains("max_depth").not());
 }
 
@@ -235,6 +263,17 @@ fn fix_with_explicit_kind_and_pattern() {
             .count(),
         1
     );
+    // -k takes a comma-separated list; an unknown kind is rejected
+    argus(&sb)
+        .args(["fix", "-n", "-k", "push,switch-default", "acme/feature"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("push"));
+    argus(&sb)
+        .args(["fix", "-n", "-k", "push,shove"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid value 'shove'"));
 }
 
 #[test]
@@ -245,7 +284,7 @@ fn mark_snooze_and_ack_roundtrip_through_state() {
         .args(["mark", "acme/clean", "--favourite"])
         .assert()
         .success();
-    let out = argus(&sb).arg("status").output().unwrap();
+    let out = argus(&sb).args(["status", "--all"]).output().unwrap();
     let first = String::from_utf8(out.stdout)
         .unwrap()
         .lines()
@@ -264,11 +303,17 @@ fn mark_snooze_and_ack_roundtrip_through_state() {
     argus(&sb)
         .arg("status")
         .assert()
-        .stdout(predicate::str::contains("acme/dirty").not());
+        .stdout(predicate::str::contains("acme/dirty").not())
+        .stdout(predicate::str::contains("1 hidden (--hidden)"));
     argus(&sb)
         .args(["status", "--all"])
         .assert()
-        .stdout(predicate::str::contains("acme/dirty"));
+        .stdout(predicate::str::contains("acme/dirty").not());
+    argus(&sb)
+        .args(["status", "--hidden"])
+        .assert()
+        .stdout(predicate::str::contains("acme/dirty"))
+        .stdout(predicate::str::contains("hidden (--hidden)").not());
     argus(&sb)
         .args(["mark", "acme/dirty", "--unsnooze"])
         .assert()
