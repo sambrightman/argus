@@ -9,7 +9,7 @@ use argus_core::badges::{self, Badge, Icons, Role};
 use argus_core::fix::{self, FixKind};
 use argus_core::runner::{self, Event};
 use argus_core::sync;
-use argus_core::{Config, State, ViewFilter, Workspace, paths};
+use argus_core::{Config, State, ViewFilter, Workspace, configfile, paths};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use unicode_width::UnicodeWidthStr;
 
@@ -74,10 +74,10 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ForgeCmd,
     },
-    /// Write a starter config.
-    Init {
-        #[arg(long)]
-        force: bool,
+    /// Manage the directories scanned for repositories.
+    Root {
+        #[command(subcommand)]
+        cmd: RootCmd,
     },
     /// Print config and state file locations.
     Paths,
@@ -127,6 +127,19 @@ struct MarkArgs {
     /// Remove all marks (fall back to config rules).
     #[arg(long)]
     clear: bool,
+}
+
+#[derive(Subcommand)]
+enum RootCmd {
+    /// Add directories (default: the current directory).
+    Add { dirs: Vec<PathBuf> },
+    /// Remove directories.
+    Remove {
+        #[arg(required = true)]
+        dirs: Vec<PathBuf>,
+    },
+    /// List configured roots.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -184,8 +197,14 @@ fn run() -> Result<()> {
         config_path: cli.config.clone().unwrap_or_else(paths::config_file),
         state_path: cli.state.clone().unwrap_or_else(paths::state_file),
     };
+    if !matches!(cli.cmd, Some(Cmd::Paths)) && configfile::ensure_exists(&ctx.config_path)? {
+        eprintln!(
+            "argus: created {} (every setting listed with its default, commented out)",
+            paths::contract_tilde(&ctx.config_path)
+        );
+    }
     match cli.cmd {
-        Some(Cmd::Init { force }) => return init(&ctx, force),
+        Some(Cmd::Root { cmd }) => return root_cmd(&ctx, cmd),
         Some(Cmd::Paths) => {
             println!("config: {}", ctx.config_path.display());
             println!("state:  {}", ctx.state_path.display());
@@ -194,17 +213,24 @@ fn run() -> Result<()> {
         Some(Cmd::Forge { cmd }) => return forge_cmd(cmd),
         _ => {}
     }
-    let mut ws = load(&ctx, &cli.roots)?;
+    let (mut ws, notices) = load(&ctx, &cli.roots)?;
+    let tui = matches!(cli.cmd, None | Some(Cmd::Tui));
+    if !tui {
+        for n in &notices {
+            eprintln!("argus: {n}");
+        }
+    }
     match cli.cmd.unwrap_or(Cmd::Tui) {
         Cmd::Tui => {
             let opts = argus_tui::Options {
                 state_path: ctx.state_path.clone(),
                 forge_factory: forge_factory(),
+                notices,
             };
             argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))?;
         }
         Cmd::Status { view, json } => {
-            ws.scan();
+            scan(&mut ws);
             status(&ws, view.into(), json)?;
         }
         Cmd::Sync {
@@ -212,7 +238,7 @@ fn run() -> Result<()> {
             no_forge,
             patterns,
         } => {
-            ws.scan();
+            scan(&mut ws);
             sync_cmd(&mut ws, &ctx, dry_run, no_forge, &patterns)?;
         }
         Cmd::Fix {
@@ -220,7 +246,7 @@ fn run() -> Result<()> {
             dry_run,
             patterns,
         } => {
-            ws.scan();
+            scan(&mut ws);
             let kinds: Vec<FixKind> = if kinds.is_empty() {
                 ws.config.fix.auto.clone()
             } else {
@@ -229,12 +255,12 @@ fn run() -> Result<()> {
             fix_cmd(&mut ws, &kinds, dry_run, &patterns)?;
         }
         Cmd::Mark(m) => {
-            ws.scan();
+            scan(&mut ws);
             mark(&mut ws, &m)?;
             save_state(&ws, &ctx)?;
         }
         Cmd::Ack { patterns } => {
-            ws.scan();
+            scan(&mut ws);
             let sel = ws.select(
                 &patterns,
                 ViewFilter {
@@ -248,43 +274,77 @@ fn run() -> Result<()> {
             println!("acknowledged {}", before - ws.state.new.len());
             save_state(&ws, &ctx)?;
         }
-        Cmd::Init { .. } | Cmd::Paths | Cmd::Forge { .. } => unreachable!(),
+        Cmd::Root { .. } | Cmd::Paths | Cmd::Forge { .. } => unreachable!(),
     }
     Ok(())
 }
 
-fn load(ctx: &Ctx, roots: &[PathBuf]) -> Result<Workspace> {
+/// Load config and state. With no roots configured (and none given), the
+/// current directory is scanned; the returned notices say so.
+fn load(ctx: &Ctx, roots: &[PathBuf]) -> Result<(Workspace, Vec<String>)> {
     let mut config = Config::load(&ctx.config_path)?;
+    let mut notices = vec![];
     if !roots.is_empty() {
         config.roots = roots.iter().map(|r| paths::expand_tilde(r)).collect();
     }
     if config.roots.is_empty() {
-        bail!(
-            "no roots configured: run `argus init` and edit {}, or pass --root",
-            ctx.config_path.display()
+        let cwd = std::env::current_dir().context("current directory")?;
+        notices.push(
+            "no roots configured; scanning the current directory (save it with `argus root add`)"
+                .to_string(),
         );
+        config.roots = vec![cwd];
     }
     let mut state = State::load(&ctx.state_path)?;
     state.expire_snoozes(jiff::Timestamp::now());
-    Ok(Workspace::new(config, state)?)
+    Ok((Workspace::new(config, state)?, notices))
+}
+
+/// Scan, warning about directories skipped because of `max_depth`.
+fn scan(ws: &mut Workspace) {
+    ws.scan();
+    if let Some(w) = ws.truncation_warning() {
+        eprintln!("argus: {w}");
+    }
 }
 
 fn save_state(ws: &Workspace, ctx: &Ctx) -> Result<()> {
     ws.state.save(&ctx.state_path).context("saving state")
 }
 
-fn init(ctx: &Ctx, force: bool) -> Result<()> {
-    if ctx.config_path.exists() && !force {
-        bail!(
-            "{} exists (use --force to overwrite)",
-            ctx.config_path.display()
-        );
+fn root_cmd(ctx: &Ctx, cmd: RootCmd) -> Result<()> {
+    let path = &ctx.config_path;
+    match cmd {
+        RootCmd::Add { dirs } => {
+            let dirs = if dirs.is_empty() {
+                vec![std::env::current_dir()?]
+            } else {
+                dirs
+            };
+            let added = configfile::add_roots(path, &dirs)?;
+            if added.is_empty() {
+                println!("already configured");
+            }
+            for a in added {
+                println!("added {a}");
+            }
+        }
+        RootCmd::Remove { dirs } => {
+            for r in configfile::remove_roots(path, &dirs)? {
+                println!("removed {r}");
+            }
+        }
+        RootCmd::List => {
+            let config = Config::load(path)?;
+            if config.roots.is_empty() {
+                println!("no roots configured (the current directory is scanned)");
+            }
+            for r in &config.roots {
+                let missing = if r.is_dir() { "" } else { "  (missing)" };
+                println!("{}{missing}", paths::contract_tilde(r));
+            }
+        }
     }
-    if let Some(d) = ctx.config_path.parent() {
-        std::fs::create_dir_all(d)?;
-    }
-    std::fs::write(&ctx.config_path, argus_core::config::EXAMPLE)?;
-    println!("wrote {}", ctx.config_path.display());
     Ok(())
 }
 

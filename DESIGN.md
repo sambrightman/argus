@@ -156,6 +156,15 @@ rendering is snapshot-tested via `TestBackend`.
   "auto-fix all" may chain. Defaults: `push` (fast-forward, same-named
   upstream only) and `switch-default`.
 
+* **No `init`.** Without configured roots the current directory is
+  scanned (with a hint). The config file is created on first run as a
+  fully commented example generated from the code: the JSON schema
+  (schemars) supplies doc comments, `Default` values and `example`
+  annotations, so the documentation can't drift from the code. Roots
+  are managed with `argus root add|remove|list` (toml_edit, so comments are kept).
+* **`max_depth` is reported**, not silent: a scan names a directory it
+  didn't enter.
+
 ## 9. Not done yet / next steps
 
 * Embedded terminal pane; per-file actions in the details view (stage,

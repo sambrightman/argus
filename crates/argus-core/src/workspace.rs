@@ -120,6 +120,8 @@ pub struct Workspace {
     pub state: State,
     rules: RuleSet,
     pub entries: Vec<Entry>,
+    /// Directories the last scan didn't enter because of `max_depth`.
+    pub truncated: Vec<PathBuf>,
 }
 
 impl Workspace {
@@ -130,6 +132,7 @@ impl Workspace {
             state,
             rules,
             entries: vec![],
+            truncated: vec![],
         })
     }
 
@@ -147,7 +150,9 @@ impl Workspace {
 
     /// Discover repos and compute every status in parallel.
     pub fn scan(&mut self) {
-        let found = discover::discover(&self.config.roots, &self.discover_options());
+        let discovery = discover::discover_all(&self.config.roots, &self.discover_options());
+        self.truncated = discovery.truncated;
+        let found = discovery.found;
         let old: HashMap<PathBuf, Entry> = self
             .entries
             .drain(..)
@@ -337,6 +342,19 @@ impl Workspace {
             out.push(c);
             self.collect_children(c, out, seen);
         }
+    }
+
+    /// One-line warning about directories skipped by `max_depth`, if any.
+    pub fn truncation_warning(&self) -> Option<String> {
+        let first = self.truncated.first()?;
+        let n = self.truncated.len();
+        Some(format!(
+            "{n} director{} below max_depth ({}) not scanned, e.g. {}; raise max_depth to include {}",
+            if n == 1 { "y" } else { "ies" },
+            self.config.max_depth,
+            contract_tilde(first),
+            if n == 1 { "it" } else { "them" },
+        ))
     }
 
     pub fn depth(&self, i: usize) -> usize {

@@ -27,6 +27,8 @@ use app::{App, Effect, Msg};
 pub struct Options {
     pub state_path: PathBuf,
     pub forge_factory: ForgeFactory<'static>,
+    /// Startup notices (e.g. the current-directory fallback), shown after scans.
+    pub notices: Vec<String>,
 }
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -35,6 +37,7 @@ pub fn run(ws: Workspace, opts: Options) -> Result<(), Error> {
     let (theme, warnings) = theme::Theme::build(&ws.config.ui.theme, &ws.config.ui.colors);
     let icons = argus_core::badges::by_name(&ws.config.ui.icons);
     let mut app = App::new(ws);
+    app.notices = opts.notices.clone();
     if let Some(w) = warnings.first() {
         app.on_msg(Msg::Suspended(Err(format!("config: {w}"))));
     }
@@ -108,7 +111,10 @@ impl Runtime {
                 std::thread::spawn(move || {
                     ws.entries.clear();
                     ws.scan();
-                    let _ = tx.send(Msg::Scanned(ws.entries));
+                    let _ = tx.send(Msg::Scanned {
+                        entries: ws.entries,
+                        truncated: ws.truncated,
+                    });
                 });
             }
             Effect::Refresh(paths) => {

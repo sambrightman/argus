@@ -8,7 +8,19 @@ use serde::{Deserialize, Serialize};
 use crate::ops::{self, Op, OpOutcome};
 use crate::status::{self, Head, RepoStatus, StatusOptions};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum FixKind {
     /// Leave a fully pushed / merged branch for the default branch.
@@ -19,8 +31,11 @@ pub enum FixKind {
     Publish,
     /// Fast-forward local branches that aren't checked out.
     FastForward,
+    /// Pull the current branch (your pull settings apply).
     Pull,
+    /// Stash all changes, including untracked files.
     Stash,
+    /// Commit everything (never automatic: needs a message).
     Commit,
 }
 

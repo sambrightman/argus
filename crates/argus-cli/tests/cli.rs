@@ -53,30 +53,137 @@ fn status_text_and_json() {
     assert_eq!(names, vec!["dirty", "feature"]);
 }
 
-#[test]
-fn no_roots_is_a_helpful_error() {
-    let sb = Sandbox::new();
+/// argus with an isolated environment but no `--root`, run from `cwd`.
+fn argus_in(sb: &Sandbox, cwd: &std::path::Path) -> Command {
     let mut c = Command::cargo_bin("argus").unwrap();
     for (k, v) in subprocess_env(&sb.root()) {
         c.env(k, v);
     }
-    c.arg("status")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("argus init"));
+    c.env_remove("ARGUS_CONFIG")
+        .env_remove("ARGUS_STATE")
+        .current_dir(cwd);
+    c
 }
 
 #[test]
-fn init_writes_config_once() {
+fn no_roots_scans_current_directory_with_a_hint() {
     let sb = Sandbox::new();
-    argus(&sb).arg("init").assert().success();
-    assert!(sb.path(".config/argus/config.toml").exists());
-    argus(&sb)
-        .arg("init")
+    three(&sb);
+    argus_in(&sb, &sb.path("dev"))
+        .arg("status")
         .assert()
+        .success()
+        .stdout(predicate::str::contains("3 repos"))
+        .stderr(predicate::str::contains(
+            "no roots configured; scanning the current directory",
+        ));
+    // inverse: configured roots win over the current directory, and no hint
+    argus_in(&sb, &sb.root())
+        .args(["root", "add", "dev"])
+        .assert()
+        .success();
+    argus_in(&sb, &sb.path("dev/clean"))
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3 repos"))
+        .stderr(predicate::str::contains("no roots configured").not());
+}
+
+#[test]
+fn first_run_writes_commented_example_without_roots() {
+    let sb = Sandbox::new();
+    std::fs::create_dir_all(sb.path("dev")).unwrap();
+    let cfg = sb.path(".config/argus/config.toml");
+    argus_in(&sb, &sb.path("dev"))
+        .arg("status")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "created ~/.config/argus/config.toml",
+        ));
+    let text = std::fs::read_to_string(&cfg).unwrap();
+    assert!(
+        text.contains("# roots = []") && !text.lines().any(|l| l.starts_with("roots")),
+        "roots never guessed"
+    );
+    assert_eq!(text, argus_core::configfile::example());
+    // second run: no rewrite, no message
+    std::fs::write(&cfg, "# mine\n").unwrap();
+    argus_in(&sb, &sb.path("dev"))
+        .arg("status")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("created").not());
+    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), "# mine\n");
+}
+
+#[test]
+fn root_add_list_remove() {
+    let sb = Sandbox::new();
+    std::fs::create_dir_all(sb.path("dev")).unwrap();
+    std::fs::create_dir_all(sb.path("work")).unwrap();
+    let a = |args: &[&str]| argus_in(&sb, &sb.path("dev")).args(args).assert();
+    a(&["root", "list"])
+        .success()
+        .stdout(predicate::str::contains("no roots configured"));
+    a(&["root", "add"])
+        .success()
+        .stdout(predicate::str::contains("added ~/dev"));
+    a(&["root", "add", "../work", "."]).success().stdout(
+        predicate::str::contains("added ~/work").and(predicate::str::contains("~/dev").not()),
+    );
+    a(&["root", "add"])
+        .success()
+        .stdout(predicate::str::contains("already configured"));
+    a(&["root", "list"]).success().stdout("~/dev\n~/work\n");
+    a(&["root", "add", "nope"])
         .failure()
-        .stderr(predicate::str::contains("--force"));
-    argus(&sb).args(["init", "--force"]).assert().success();
+        .stderr(predicate::str::contains("no such directory"));
+    std::fs::remove_dir(sb.path("work")).unwrap();
+    a(&["root", "list"])
+        .success()
+        .stdout(predicate::str::contains("~/work  (missing)"));
+    a(&["root", "remove", "~/work"])
+        .success()
+        .stdout("removed ~/work\n");
+    a(&["root", "remove", "~/work"])
+        .failure()
+        .stderr(predicate::str::contains("not configured as a root"));
+    a(&["root", "list"]).success().stdout("~/dev\n");
+    // the generated documentation survived the edits
+    let text = std::fs::read_to_string(sb.path(".config/argus/config.toml")).unwrap();
+    assert!(
+        text.contains("## Maximum directory depth below a root"),
+        "{text}"
+    );
+}
+
+#[test]
+fn warns_when_max_depth_stops_the_scan() {
+    let sb = Sandbox::new();
+    sb.init("dev/a/b/c/deep");
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "max_depth = 2\n").unwrap();
+    argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 repos"))
+        .stderr(predicate::str::contains(
+            "1 directory below max_depth (2) not scanned, e.g. ~/dev/a/b; raise max_depth",
+        ));
+    std::fs::write(&cfg, "max_depth = 6\n").unwrap();
+    argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 repos"))
+        .stderr(predicate::str::contains("max_depth").not());
 }
 
 #[test]
@@ -260,8 +367,16 @@ fn each_fix_run_applies_one_fix() {
     three(&sb);
     let f = sb.path("dev/feature");
     commit(&f, "unpushed");
-    argus(&sb).args(["fix", "acme/feature"]).assert().success().stdout(predicate::str::contains("✓ push").and(predicate::str::contains("switch").not()));
+    argus(&sb)
+        .args(["fix", "acme/feature"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("✓ push").and(predicate::str::contains("switch").not()));
     assert_eq!(git(&f, &["branch", "--show-current"]).trim(), "feat");
-    argus(&sb).args(["fix", "acme/feature"]).assert().success().stdout(predicate::str::contains("✓ switch main"));
+    argus(&sb)
+        .args(["fix", "acme/feature"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("✓ switch main"));
     assert_eq!(git(&f, &["branch", "--show-current"]).trim(), "main");
 }

@@ -99,7 +99,11 @@ pub enum Effect {
 /// Results coming back from the runtime.
 #[derive(Debug)]
 pub enum Msg {
-    Scanned(Vec<Entry>),
+    Scanned {
+        entries: Vec<Entry>,
+        /// Directories skipped because of `max_depth`.
+        truncated: Vec<PathBuf>,
+    },
     Status(PathBuf, Result<RepoStatus, String>),
     JobStarted {
         path: PathBuf,
@@ -169,6 +173,8 @@ pub struct App {
     pub show_log: bool,
     pub message: Option<(String, bool)>,
     pub scanning: bool,
+    /// Shown with each scan result, e.g. "no roots configured…".
+    pub notices: Vec<String>,
     pub quit: bool,
     /// Pending "g" for vi-style `gg`.
     pending_g: bool,
@@ -196,6 +202,7 @@ impl App {
             show_log: false,
             message: None,
             scanning: false,
+            notices: vec![],
             quit: false,
             pending_g: false,
         };
@@ -848,12 +855,15 @@ impl App {
 
     pub fn on_msg(&mut self, m: Msg) -> Vec<Effect> {
         match m {
-            Msg::Scanned(entries) => {
+            Msg::Scanned { entries, truncated } => {
                 self.scanning = false;
                 self.ws.entries = entries;
+                self.ws.truncated = truncated;
                 self.ws.resolve_flags();
-                let n = self.ws.entries.len();
-                self.info(format!("{n} repos"));
+                let mut parts = vec![format!("{} repos", self.ws.entries.len())];
+                parts.extend(self.notices.iter().cloned());
+                parts.extend(self.ws.truncation_warning());
+                self.info(parts.join(" · "));
                 self.rebuild();
             }
             Msg::Status(path, st) => {

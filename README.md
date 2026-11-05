@@ -22,12 +22,20 @@ language choice and architecture.
 
 ```sh
 cargo install --path crates/argus-cli
-argus init            # writes ~/.config/argus/config.toml
-$EDITOR ~/.config/argus/config.toml
-argus                 # TUI
+cd ~/dev && argus     # TUI over the current directory
+argus root add ~/dev ~/work   # save roots; then `argus` works from anywhere
 ```
 
+With no roots configured, argus scans the current directory and says so.
+On first run it writes `~/.config/argus/config.toml`: every setting with
+its default and documentation, commented out, generated from the code (so
+it can't drift). `argus root add|remove|list` edit it in place, keeping
+your comments. If `max_depth` stops a scan before the bottom of a tree,
+argus warns and names a directory it skipped.
+
 ## Configuration
+
+A taste (see the generated file for everything):
 
 ```toml
 roots = ["~/dev", "~/work"]
@@ -113,6 +121,8 @@ argus fix [-n] [-k switch-default|push|publish|fast-forward|pull|stash]… [PATT
 argus mark PATTERN… [--favourite|--no-favourite] [--sync|--no-sync] [--exclude|--include] [--snooze 3d|--unsnooze] [--clear]
 argus ack [PATTERN…]
 argus forge list ORG [--team T] [--json]
+argus root add [DIR…] | remove DIR… | list
+argus paths                            # config and state file locations
 ```
 
 A daily crontab entry:

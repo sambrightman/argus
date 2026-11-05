@@ -9,27 +9,36 @@ use serde::{Deserialize, Serialize};
 use crate::fix::FixKind;
 use crate::paths::expand_tilde;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// Directories scanned (recursively) for repositories.
+    /// Directories scanned (recursively) for repositories. When empty, the
+    /// current directory is scanned. Manage with `argus root add|remove|list`.
+    #[schemars(example = vec!["~/dev"])]
     pub roots: Vec<PathBuf>,
     /// Directory names never descended into.
     pub skip_dirs: Vec<String>,
-    /// Maximum directory depth below a root.
+    /// Maximum directory depth below a root; deeper directories are skipped
+    /// (with a warning).
     pub max_depth: usize,
     /// Maximum concurrent network operations (fetch/pull/push/clone).
     pub concurrency: usize,
-    /// Protocol for new clones; default asks the forge (`gh config get git_protocol`).
+    /// Protocol for new clones; unset asks the forge (`gh config get git_protocol`).
+    #[schemars(example = crate::forge::Protocol::Ssh)]
     pub clone_protocol: Option<crate::forge::Protocol>,
-    /// Pattern rules applied in order; later rules win.
+    /// Pattern rules, applied in order; later rules win. Marks set from the
+    /// TUI or `argus mark` override them.
     #[serde(rename = "rule")]
     pub rules: Vec<Rule>,
-    /// Forge owners (orgs/users/teams) whose repos should all be cloned and synced.
+    /// Forge owners (orgs/users/teams) whose repos should all be cloned and
+    /// synced. Their repos are syncable unless a rule says otherwise.
     #[serde(rename = "track")]
     pub tracks: Vec<Track>,
+    /// Auto-fix behaviour.
     pub fix: FixConfig,
+    /// External programs.
     pub tools: Tools,
+    /// Appearance and startup view of the TUI.
     pub ui: UiConfig,
 }
 
@@ -70,17 +79,27 @@ impl Default for Config {
 /// A rule matches repositories by glob against any of:
 /// identity (`github.com/acme/widget`), slug (`acme/widget`) or absolute path.
 /// `*` does not cross `/`; use `**` for that.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
+    /// Glob, e.g. `my-org/*`, `github.com/someone/dotfiles`, `~/dev/scratch/**`.
     #[serde(rename = "match")]
+    #[schemars(example = &"my-org/important-*")]
     pub pattern: String,
+    /// Sort above everything else (unset: leave as is).
+    #[schemars(example = true)]
     pub favourite: Option<bool>,
+    /// Pull on sync (unset: leave as is).
+    #[schemars(example = true)]
     pub sync: Option<bool>,
+    /// Hide and skip in bulk operations (unset: leave as is).
+    #[schemars(example = true)]
     pub exclude: Option<bool>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum CloneMode {
     /// Clone repos missing locally during sync (they are flagged as new).
@@ -90,25 +109,34 @@ pub enum CloneMode {
     Notify,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Track {
+    /// Forge kind; only `github` so far.
     #[serde(default = "default_forge")]
     pub forge: String,
+    /// Forge host (GitHub Enterprise: your host).
     #[serde(default = "default_host")]
     pub host: String,
     /// Org or user.
+    #[schemars(example = &"my-org")]
     pub owner: String,
     /// Restrict to an org team's repositories (team slug).
+    #[schemars(example = &"platform")]
     pub team: Option<String>,
-    /// Where new clones go; default `<first root>/<owner>`.
+    /// Where new clones go; unset means `<first root>/<owner>`.
+    #[schemars(example = &"~/dev/my-org")]
     pub into: Option<PathBuf>,
+    /// What sync does with repos missing locally.
     #[serde(default)]
     pub clone: CloneMode,
+    /// Pull this owner's repos on sync.
     #[serde(default = "yes")]
     pub sync: bool,
+    /// Also clone archived repos.
     #[serde(default)]
     pub include_archived: bool,
+    /// Also clone forks.
     #[serde(default = "yes")]
     pub include_forks: bool,
 }
@@ -132,11 +160,14 @@ fn default_host() -> String {
 fn yes() -> bool {
     true
 }
+fn example_colors() -> BTreeMap<&'static str, &'static str> {
+    BTreeMap::from([("favourite", "yellow"), ("branch", "bold magenta")])
+}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct FixConfig {
-    /// Fixes applied by "auto fix" without asking.
+    /// Fixes an auto-fix action may apply (one per action), in priority order.
     pub auto: Vec<FixKind>,
 }
 
@@ -148,24 +179,29 @@ impl Default for FixConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Tools {
-    /// Shell for "drop to shell"; default `$SHELL`.
+    /// Shell for "drop to shell"; unset means `$SHELL`.
+    #[schemars(example = &"/bin/zsh")]
     pub shell: Option<String>,
     /// Command for a full git UI, run in the repo dir, e.g. `lazygit` or
     /// `emacsclient -t -e '(magit-status)'`.
+    #[schemars(example = &"lazygit")]
     pub git_ui: Option<String>,
-    /// Editor for opening a repo; default `$VISUAL`/`$EDITOR`.
+    /// Editor for opening a repo; unset means `$VISUAL`, then `$EDITOR`.
+    #[schemars(example = &"code --wait")]
     pub editor: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct UiConfig {
     /// Built-in theme name (`terminal`, `dark`, `light`, `mono`).
     pub theme: String,
-    /// Per-role colour overrides, e.g. `branch = "magenta"`, `favourite = "#ffcc00"`.
+    /// Per-role colour overrides: a name, `#rrggbb`, 0-255, optionally with
+    /// modifiers and background, e.g. `"bold black on #ffcc00"`.
+    #[schemars(example = example_colors())]
     pub colors: BTreeMap<String, String>,
     /// Icon set: `unicode` (default), `nerd` (Nerd Font glyphs) or `ascii`.
     pub icons: String,
@@ -246,56 +282,9 @@ impl Config {
     }
 }
 
-/// Starter config written by `argus init`.
-pub const EXAMPLE: &str = r#"# argus configuration
-roots = ["~/dev"]
-# concurrency = 8          # parallel network operations
-
-# Track a whole org: missing repos are cloned (clone = "auto") or reported
-# (clone = "notify") on sync, and all its repos are pulled.
-# [[track]]
-# owner = "my-org"
-# into = "~/dev/my-org"
-# clone = "auto"
-# team = "platform"         # optionally only one team's repos
-
-# Rules match identity (github.com/org/repo), slug (org/repo) or path.
-# [[rule]]
-# match = "my-org/important-*"
-# favourite = true
-#
-# [[rule]]
-# match = "github.com/someone/dotfiles"
-# sync = true
-#
-# [[rule]]
-# match = "~/dev/scratch/**"
-# exclude = true
-
-[fix]
-auto = ["push", "switch-default"]   # also: "publish", "fast-forward", "stash"
-
-[tools]
-# git_ui = "lazygit"
-
-[ui]
-theme = "terminal"          # terminal | dark | light | mono
-icons = "unicode"          # unicode | nerd | ascii
-# [ui.colors]
-# favourite = "yellow"
-"#;
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn example_parses() {
-        let c = Config::parse(EXAMPLE).unwrap();
-        assert_eq!(c.roots.len(), 1);
-        assert!(!c.roots[0].starts_with("~"), "tilde must be expanded");
-        assert_eq!(c.fix.auto, vec![FixKind::Push, FixKind::SwitchDefault]);
-    }
 
     #[test]
     fn empty_is_default() {

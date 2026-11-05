@@ -47,23 +47,44 @@ impl Default for DiscoverOptions {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Discovery {
+    pub found: Vec<Found>,
+    /// Directories at `max_depth` that had subdirectories we didn't enter.
+    pub truncated: Vec<PathBuf>,
+}
+
 /// Find repositories under `roots`. Results are sorted by path and de-duplicated
 /// (roots may overlap).
 pub fn discover(roots: &[PathBuf], opts: &DiscoverOptions) -> Vec<Found> {
-    let out = Mutex::new(Vec::new());
+    discover_all(roots, opts).found
+}
+
+/// Like [`discover`], also reporting where `max_depth` cut the walk short.
+pub fn discover_all(roots: &[PathBuf], opts: &DiscoverOptions) -> Discovery {
+    let sink = Sink::default();
     rayon::scope(|s| {
         for root in roots {
             let Ok(root) = fs::canonicalize(root) else {
                 continue;
             };
-            let out = &out;
-            s.spawn(move |s| visit(s, root, 0, opts, out));
+            let sink = &sink;
+            s.spawn(move |s| visit(s, root, 0, opts, sink));
         }
     });
-    let mut v = out.into_inner().unwrap();
-    v.sort_by(|a, b| a.path.cmp(&b.path));
-    v.dedup_by(|a, b| a.path == b.path);
-    v
+    let mut found = sink.found.into_inner().unwrap();
+    found.sort_by(|a, b| a.path.cmp(&b.path));
+    found.dedup_by(|a, b| a.path == b.path);
+    let mut truncated = sink.truncated.into_inner().unwrap();
+    truncated.sort();
+    truncated.dedup();
+    Discovery { found, truncated }
+}
+
+#[derive(Default)]
+struct Sink {
+    found: Mutex<Vec<Found>>,
+    truncated: Mutex<Vec<PathBuf>>,
 }
 
 fn visit<'s>(
@@ -71,10 +92,10 @@ fn visit<'s>(
     dir: PathBuf,
     depth: usize,
     opts: &'s DiscoverOptions,
-    out: &'s Mutex<Vec<Found>>,
+    sink: &'s Sink,
 ) {
     if let Some(kind) = classify(&dir) {
-        out.lock().unwrap().push(Found {
+        sink.found.lock().unwrap().push(Found {
             path: dir.clone(),
             kind,
         });
@@ -82,23 +103,32 @@ fn visit<'s>(
             return;
         }
     }
+    let subdirs = subdirs(&dir, opts);
     if depth >= opts.max_depth {
+        if !subdirs.is_empty() {
+            sink.truncated.lock().unwrap().push(dir);
+        }
         return;
     }
-    let Ok(rd) = fs::read_dir(&dir) else { return };
-    for entry in rd.flatten() {
-        let Ok(ft) = entry.file_type() else { continue };
-        if !ft.is_dir() {
-            continue; // includes symlinks: never followed
-        }
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name == ".git" || opts.skip_dirs.iter().any(|s| s == name.as_ref()) {
-            continue;
-        }
-        let path = entry.path();
-        s.spawn(move |s| visit(s, path, depth + 1, opts, out));
+    for path in subdirs {
+        s.spawn(move |s| visit(s, path, depth + 1, opts, sink));
     }
+}
+
+/// Directories worth descending into (no symlinks, `.git` or skipped names).
+fn subdirs(dir: &Path, opts: &DiscoverOptions) -> Vec<PathBuf> {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return vec![];
+    };
+    rd.flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir())) // symlinks: never followed
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name != ".git" && !opts.skip_dirs.iter().any(|s| s == name.as_ref())
+        })
+        .map(|e| e.path())
+        .collect()
 }
 
 /// Decide whether `dir` is a repository, and which kind.
@@ -190,6 +220,35 @@ mod tests {
                 ("work/org/team/c".into(), RepoKind::Main)
             ]
         );
+    }
+
+    #[test]
+    fn reports_where_max_depth_stopped_the_walk() {
+        let t = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(t.path()).unwrap();
+        fake_repo(&root, "a/b/deep");
+        mk(&root, "a/leaf"); // at the limit but empty: nothing missed
+        mk(&root, "x/y/node_modules"); // only skipped dirs below: nothing missed
+        fake_repo(&root, "a/repo-at-limit");
+        let opts = DiscoverOptions {
+            max_depth: 2,
+            skip_dirs: vec!["node_modules".into()],
+            ..Default::default()
+        };
+        let d = discover_all(std::slice::from_ref(&root), &opts);
+        assert_eq!(d.truncated, vec![root.join("a/b")]);
+        assert_eq!(
+            d.found.iter().map(|f| f.path.clone()).collect::<Vec<_>>(),
+            vec![root.join("a/repo-at-limit")]
+        );
+        // inverse: deep enough, nothing truncated
+        let opts = DiscoverOptions {
+            max_depth: 10,
+            ..opts
+        };
+        let d = discover_all(std::slice::from_ref(&root), &opts);
+        assert!(d.truncated.is_empty(), "{:?}", d.truncated);
+        assert_eq!(d.found.len(), 2);
     }
 
     #[test]
