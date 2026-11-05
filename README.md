@@ -6,12 +6,12 @@ them (and whole GitHub orgs) up to date. TUI first, CLI for scripts and cron.
 ```
  argus  15 repos · 8 need attention
     acme/widget                           main                 ↑7
-    sambrightman/dotfiles                 master               ↑2 ✚1 …1
-    ~/dev/argus                           main                 ✚9 …2
-    emacs-mirror/emacs                    ➦a360712c9d2
+    sambrightman/dotfiles                 master               ↑2 ±1 ?1
+    ~/dev/argus                           main                 ±9 ?2
+    emacs-mirror/emacs                    @a360712c9d2
     sambrightman/imapclient               allow-sequence-sets  ↑1
     acme/site                             main
-      vendor/widget                       ➦8a624e3
+      vendor/widget                       @8a624e3
 ```
 
 Status for 300 repos takes ~0.1s warm: in-process gix reads, parallelised
@@ -69,10 +69,21 @@ git_ui = "lazygit"               # or "emacsclient -t -e '(magit-status)'"
 
 [ui]
 theme = "terminal"               # terminal | dark | light | mono
-icons = "unicode"                # unicode | nerd | ascii
+icons = "unicode"                # unicode | nerd (Nerd Font) | ascii
 [ui.colors]                      # any role: name, #rrggbb, 0-255, "bold red on black"
 favourite = "yellow"
 ```
+
+`argus demo` opens the TUI on throwaway sample repos in every state
+(dirty, ahead, behind, diverged, mid-merge, detached on a tag, worktrees,
+submodules, errors…), deleted when you quit. In the TUI, `v t` and `v i`
+cycle themes and icon sets for the session, and `?` ends with a legend of
+every icon. The `unicode` icons only use characters common monospace fonts
+have; with a Nerd Font, `icons = "nerd"` uses its glyphs.
+
+A detached HEAD shows its tag if the commit has one (`@v1.2 +1` when there
+are more: annotated tags first, then the highest version), otherwise the
+commit id. Details list the commit and all its tags.
 
 Marks you set in the TUI (favourite, sync, exclude, snooze, "new") live in
 `~/.local/state/argus/state.toml`, never in your hand-written config. They

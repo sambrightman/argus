@@ -56,6 +56,14 @@ pub fn details(e: &Entry, priority: &[FixKind]) -> Vec<DetailLine> {
             plain(format!("{} {u}", s.remote.as_deref().unwrap_or(""))),
         ]));
     }
+    if let Some(id) = &s.head_commit {
+        let mut parts = vec![styled(Role::Dim, "commit    "), plain(id.clone())];
+        if !s.tags.is_empty() {
+            parts.push(styled(Role::Dim, "  tags "));
+            parts.push(styled(Role::Detached, s.tags.join(", ")));
+        }
+        v.push(line(parts));
+    }
     let mut times = vec![];
     if let Some(t) = s.last_commit {
         times.push(format!("commit {}", ago(t)));

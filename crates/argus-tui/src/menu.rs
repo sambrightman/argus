@@ -160,6 +160,8 @@ impl MenuId {
                     item('l', "toggle process log", Action::ToggleLog),
                     item('g', "refresh statuses", Action::Refresh),
                     item('G', "rescan roots", Action::Rescan),
+                    item('t', "next theme (this session)", Action::NextTheme),
+                    item('i', "next icon set (this session)", Action::NextIcons),
                 ],
             ),
         };

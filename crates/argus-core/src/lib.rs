@@ -24,6 +24,9 @@ pub mod workspace;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 
+#[cfg(feature = "demo")]
+pub mod demo;
+
 pub use config::Config;
 pub use identity::RepoId;
 pub use state::State;

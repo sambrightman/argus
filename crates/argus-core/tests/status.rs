@@ -588,3 +588,59 @@ fn submodule_detached_head_is_normal() {
     // inverse: the parent sees the submodule moved
     assert_eq!(st(&r).changes.unstaged, 1);
 }
+
+#[test]
+fn tags_on_head_annotated_first_then_newest_version() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    commit(&r, "second");
+    git(&r, &["tag", "v1.9"]);
+    git(&r, &["tag", "v1.10"]);
+    git(&r, &["tag", "-a", "-m", "release", "release-1"]);
+    git(&r, &["tag", "-a", "-m", "release", "release-2"]);
+    git(&r, &["tag", "old", "HEAD~1"]); // elsewhere: not listed
+    let check = |what: &str| {
+        let s = st(&r);
+        assert_eq!(
+            s.tags,
+            ["release-2", "release-1", "v1.10", "v1.9"],
+            "{what}"
+        );
+        let id = git(&r, &["rev-parse", "--short", "HEAD"]);
+        assert_eq!(s.head_commit.as_deref(), Some(id.trim()), "{what}");
+    };
+    check("loose refs, on a branch");
+    git(&r, &["pack-refs", "--all"]);
+    check("packed refs");
+    git(&r, &["switch", "-q", "--detach", "release-1"]);
+    check("detached on the tag");
+    // inverse: no tags on HEAD
+    git(&r, &["switch", "-q", "--detach", "HEAD~1"]);
+    git(&r, &["tag", "-d", "old"]);
+    let s = st(&r);
+    assert!(s.tags.is_empty(), "{:?}", s.tags);
+    // unborn: no commit, no tags
+    let u = sb.path("u");
+    std::fs::create_dir_all(&u).unwrap();
+    git(&u, &["init", "-q"]);
+    let s = st(&u);
+    assert!(s.tags.is_empty() && s.head_commit.is_none());
+}
+
+#[test]
+fn version_order_compares_numbers_as_numbers() {
+    use argus_core::status::version_cmp;
+    use std::cmp::Ordering::*;
+    for (a, b, o) in [
+        ("v1.10", "v1.9", Greater),
+        ("v2", "v10", Less),
+        ("1.0.1", "1.0", Greater),
+        ("v1.01", "v1.1", Less), // equal numerically; tie broken by text
+        ("v1.0-rc1", "v1.0-rc2", Less),
+        ("", "a", Less),
+        ("abc", "abc", Equal),
+    ] {
+        assert_eq!(version_cmp(a, b), o, "{a} vs {b}");
+        assert_eq!(version_cmp(b, a), o.reverse(), "{b} vs {a}");
+    }
+}

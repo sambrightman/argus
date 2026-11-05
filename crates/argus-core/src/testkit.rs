@@ -53,6 +53,23 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+/// Run git in `dir` where failure is expected (e.g. a conflicting merge);
+/// returns whether it succeeded.
+pub fn git_may_fail(dir: &Path, args: &[&str]) -> bool {
+    let cfg = global_config();
+    Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", cfg)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_EDITOR", "true")
+        .output()
+        .expect("spawn git")
+        .status
+        .success()
+}
+
 pub fn write(dir: &Path, rel: &str, content: &str) {
     let p = dir.join(rel);
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();

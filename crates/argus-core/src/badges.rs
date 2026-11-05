@@ -59,37 +59,61 @@ pub struct Icons {
     pub submodule: &'static str,
 }
 
+/// Glyphs that common monospace fonts (Menlo, SF Mono, Inconsolata, DejaVu
+/// Sans Mono, Fira Code, Hack, Source Code Pro) all have, so none is drawn
+/// from a fallback font that can overlap the next character.
 pub const UNICODE: Icons = Icons {
-    favourite: "★",
-    new: "✦",
-    excluded: "⊘",
-    snoozed: "☾",
+    favourite: "◆",
+    new: "+",
+    excluded: "×",
+    snoozed: "z",
     branch: "",
-    detached: "➦",
+    detached: "@",
     ahead: "↑",
     behind: "↓",
     staged: "●",
-    unstaged: "✚",
-    untracked: "…",
-    conflict: "✖",
-    stash: "⚑",
-    in_progress: "⚠",
-    gone: "✗",
-    no_upstream: "⌀",
-    branches: "⑂",
-    error: "‼",
-    sync: "⟳",
+    unstaged: "±",
+    untracked: "?",
+    conflict: "≠",
+    stash: "$",
+    in_progress: "!",
+    gone: "×",
+    no_upstream: "↑?",
+    branches: "»",
+    error: "!!",
+    sync: "~",
     worktree: "├",
-    submodule: "◫",
+    submodule: "§",
 };
 
-/// Nerd Font / Powerline glyphs where they add something.
+/// Nerd Font glyphs (codicons, Powerline). Each is followed by a space:
+/// non-Mono Nerd Fonts draw them up to two cells wide.
 pub const NERD: Icons = Icons {
-    branch: "\u{e0a0} ",
-    stash: "\u{f01c} ",
-    error: "\u{f071} ",
-    ..UNICODE
+    favourite: "\u{eb59} ",   // cod-star_full
+    new: "\u{ec21} ",         // cod-sparkle_filled
+    excluded: "\u{eae7} ",    // cod-eye_closed
+    snoozed: "\u{ec08} ",     // cod-bell_slash
+    branch: "\u{e0a0} ",      // Powerline branch
+    detached: "\u{eafc} ",    // cod-git_commit
+    ahead: "\u{eaa0} ",       // cod-arrow_small_up
+    behind: "\u{ea9d} ",      // cod-arrow_small_down
+    staged: "\u{eadc} ",      // cod-diff_added
+    unstaged: "\u{eade} ",    // cod-diff_modified
+    untracked: "\u{eb32} ",   // cod-question
+    conflict: "\u{ea76} ",    // cod-close
+    stash: "\u{ea98} ",       // cod-archive
+    in_progress: "\u{ea6c} ", // cod-warning
+    gone: "\u{eac1} ",        // cod-close_all
+    no_upstream: "\u{ead0} ", // cod-debug_disconnect
+    branches: "\u{ea63} ",    // cod-repo_forked
+    error: "\u{ea87} ",       // cod-error
+    sync: "\u{ea77} ",        // cod-sync
+    worktree: "├",
+    submodule: "\u{eaec} ", // cod-file_submodule
 };
+
+/// Names accepted by [`by_name`] (`[ui] icons`).
+pub const SETS: &[&str] = &["unicode", "nerd", "ascii"];
 
 pub fn by_name(name: &str) -> Icons {
     match name {
@@ -156,9 +180,14 @@ pub fn branch(e: &Entry, i: &Icons) -> Option<Badge> {
             },
             text: format!("{}{b}", i.branch),
         },
+        // On a tag, the tag says more than the commit id.
         Head::Detached(id) => Badge {
             role: Role::Detached,
-            text: format!("{}{id}", i.detached),
+            text: match s.tags.as_slice() {
+                [] => format!("{}{id}", i.detached),
+                [t] => format!("{}{t}", i.detached),
+                [t, rest @ ..] => format!("{}{t} +{}", i.detached, rest.len()),
+            },
         },
     })
 }
@@ -170,14 +199,17 @@ pub fn state(e: &Entry, i: &Icons) -> Vec<Badge> {
         let first = err.lines().next().unwrap_or(err);
         v.push(Badge {
             role: Role::Error,
-            text: format!("{} {first}", i.error),
+            text: format!("{} {first}", i.error.trim_end()),
         });
         return v;
     }
     let Some(s) = e.status() else { return v };
     let mut push = |role, text: String| v.push(Badge { role, text });
     if let Some(op) = s.in_progress {
-        push(Role::Conflict, format!("{} {}", i.in_progress, op.label()));
+        push(
+            Role::Conflict,
+            format!("{} {}", i.in_progress.trim_end(), op.label()),
+        );
     }
     if s.changes.conflicted > 0 {
         push(

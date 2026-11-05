@@ -69,6 +69,10 @@ pub enum Action {
     ToggleHidden,
     Refresh,
     Rescan,
+    /// Next built-in theme, for this session only.
+    NextTheme,
+    /// Next icon set, for this session only.
+    NextIcons,
 }
 
 /// Something for the runtime to do.
@@ -104,7 +108,7 @@ pub enum Msg {
         /// Directories skipped because of `max_depth`.
         truncated: Vec<PathBuf>,
     },
-    Status(PathBuf, Result<RepoStatus, String>),
+    Status(PathBuf, Box<Result<RepoStatus, String>>),
     JobStarted {
         path: PathBuf,
         label: String,
@@ -541,6 +545,18 @@ impl App {
                     "showing all repos"
                 });
             }
+            NextTheme => {
+                let ui = &mut self.ws.config.ui;
+                ui.theme = next(crate::theme::BUILTIN, &ui.theme).to_string();
+                let msg = format!("theme {} (this session; set [ui] theme to keep)", ui.theme);
+                self.info(msg);
+            }
+            NextIcons => {
+                let ui = &mut self.ws.config.ui;
+                ui.icons = next(argus_core::badges::SETS, &ui.icons).to_string();
+                let msg = format!("icons {} (this session; set [ui] icons to keep)", ui.icons);
+                self.info(msg);
+            }
             ToggleHidden => {
                 self.view.show_hidden = !self.view.show_hidden;
                 self.rebuild();
@@ -867,7 +883,7 @@ impl App {
                 self.rebuild();
             }
             Msg::Status(path, st) => {
-                self.ws.update_status(&path, st);
+                self.ws.update_status(&path, *st);
                 self.rebuild();
             }
             Msg::JobStarted { path, label } => {
@@ -1027,4 +1043,10 @@ fn shell_command(cmd: &str, cwd: PathBuf) -> Effect {
         args: vec!["-c".into(), cmd.into()],
         cwd,
     }
+}
+
+/// The name after `current` in `names`, wrapping; the first if unknown.
+fn next<'a>(names: &[&'a str], current: &str) -> &'a str {
+    let i = names.iter().position(|n| *n == current);
+    names[i.map_or(0, |i| (i + 1) % names.len())]
 }

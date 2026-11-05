@@ -426,7 +426,7 @@ fn render_main_screen() {
     let lines: Vec<&str> = out.lines().collect();
     assert!(lines[0].contains("3 repos · 2 need attention"), "{out}");
     assert!(
-        lines[1].contains("acme/dirty") && lines[1].contains("main") && lines[1].contains("✚1"),
+        lines[1].contains("acme/dirty") && lines[1].contains("main") && lines[1].contains("±1"),
         "{out}"
     );
     assert!(
@@ -630,4 +630,112 @@ fn no_repositories_is_not_reported_as_nothing_needing_attention() {
     app.ws.scan();
     app.act(Action::ToggleAttention);
     assert!(render(&mut app, 80, 5).contains("nothing needs attention"));
+}
+
+#[test]
+fn details_show_the_commit_and_its_tags() {
+    let tag = |sb: &Sandbox| {
+        let c = sb.path("dev/clean");
+        git(&c, &["tag", "v1.0"]);
+        git(&c, &["tag", "-a", "-m", "r", "release"]);
+    };
+    let (sb, mut app) = setup_with("", tag);
+    app.act(Action::Bottom); // clean
+    app.on_key(code(KeyCode::Tab));
+    let id = git(&sb.path("dev/clean"), &["rev-parse", "--short", "HEAD"]);
+    let texts = detail_texts(&app);
+    assert!(
+        texts.contains(&format!("commit    {}  tags release, v1.0", id.trim())),
+        "{texts:?}"
+    );
+    // inverse: no tags, just the commit
+    let (sb, mut app) = setup("");
+    app.act(Action::Bottom);
+    app.on_key(code(KeyCode::Tab));
+    let id = git(&sb.path("dev/clean"), &["rev-parse", "--short", "HEAD"]);
+    assert!(detail_texts(&app).contains(&format!("commit    {}", id.trim())));
+}
+
+#[test]
+fn view_menu_cycles_themes_and_icon_sets_for_this_session() {
+    let (_sb, mut app) = setup("[ui]\ntheme = 'light'\nicons = 'nerd'");
+    let mut themes = vec![];
+    for _ in 0..4 {
+        app.on_key(key('v'));
+        app.on_key(key('t'));
+        themes.push(app.ws.config.ui.theme.clone());
+    }
+    assert_eq!(themes, ["mono", "terminal", "dark", "light"]);
+    assert!(
+        app.message.as_ref().unwrap().0.contains("theme light"),
+        "{:?}",
+        app.message
+    );
+    let mut sets = vec![];
+    for _ in 0..3 {
+        app.on_key(key('v'));
+        app.on_key(key('i'));
+        sets.push(app.ws.config.ui.icons.clone());
+    }
+    assert_eq!(sets, ["ascii", "unicode", "nerd"]);
+    // an unknown configured name starts the cycle from the beginning
+    let (_sb, mut app) = setup("[ui]\ntheme = 'nope'");
+    app.act(Action::NextTheme);
+    assert_eq!(app.ws.config.ui.theme, "terminal");
+}
+
+#[test]
+fn help_has_a_legend_of_every_icon() {
+    let (_sb, mut app) = setup("");
+    app.on_key(key('?'));
+    let out = render(&mut app, 100, 80);
+    for (icon, meaning) in [
+        ("◆", "favourite"),
+        ("±", "unstaged changes"),
+        ("?", "untracked files"),
+        ("@", "detached HEAD (tag or commit)"),
+        ("$", "stashes"),
+        ("≠", "conflicts"),
+    ] {
+        assert!(
+            out.lines().any(|l| l.contains(icon) && l.contains(meaning)),
+            "{icon} {meaning}\n{out}"
+        );
+    }
+}
+
+#[test]
+fn demo_renders_in_every_theme_and_icon_set() {
+    let d = argus_core::demo::build();
+    let cfg = format!(
+        "roots = ['{}']\n[ui]\nattention_only = false",
+        d.root.display()
+    );
+    let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    ws.scan();
+    d.apply_marks(&mut ws);
+    let mut app = App::new(ws);
+    app.act(Action::ExpandAll);
+    let out = render(&mut app, 120, 200);
+    if std::env::var_os("ARGUS_SHOW_DEMO").is_some() {
+        println!("{out}");
+    }
+    assert!(
+        out.contains("demo/tagged") && out.contains("@release-1.0 +1"),
+        "{out}"
+    );
+    assert!(out.contains("tags release-1.0, v1.0"), "{out}");
+    for theme in argus_tui::theme::BUILTIN {
+        for icons in argus_core::badges::SETS {
+            let (t, warnings) = Theme::build(theme, &Default::default());
+            assert!(warnings.is_empty(), "{theme}: {warnings:?}");
+            let mut term = Terminal::new(TestBackend::new(100, 60)).unwrap();
+            let view = ui::View {
+                theme: &t,
+                icons: argus_core::badges::by_name(icons),
+                tick: 0,
+            };
+            term.draw(|f| ui::draw(f, &mut app, &view)).unwrap();
+        }
+    }
 }

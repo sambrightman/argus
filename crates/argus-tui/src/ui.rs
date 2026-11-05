@@ -1,7 +1,7 @@
 //! Rendering. Reads [`App`], never mutates anything but scroll bookkeeping.
 
 use argus_core::ViewFilter;
-use argus_core::badges::{self, Icons};
+use argus_core::badges::{self, Icons, Role};
 use argus_core::discover::RepoKind;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -194,8 +194,8 @@ fn repo_line<'a>(app: &App, v: &View, i: usize, name_w: usize, branch_w: usize) 
 
     let depth = app.ws.depth(i);
     let tree = match e.kind {
-        RepoKind::Worktree => format!("{} ", v.icons.worktree),
-        RepoKind::Submodule => format!("{} ", v.icons.submodule),
+        RepoKind::Worktree => format!("{} ", v.icons.worktree.trim_end()),
+        RepoKind::Submodule => format!("{} ", v.icons.submodule.trim_end()),
         _ => String::new(),
     };
     let name = format!("{}{tree}{}", "  ".repeat(depth), e.display_name());
@@ -424,9 +424,51 @@ pub fn help_lines() -> Vec<(String, String)> {
     v
 }
 
+/// Every icon in `i` with its meaning and colour role, for the help legend.
+pub fn legend(i: &Icons) -> Vec<(&'static str, Role, &'static str)> {
+    vec![
+        (i.favourite, Role::Favourite, "favourite"),
+        (
+            i.new,
+            Role::New,
+            "new (cloned or found, not yet acknowledged)",
+        ),
+        (i.excluded, Role::Hidden, "excluded"),
+        (i.snoozed, Role::Hidden, "snoozed"),
+        (
+            i.branch,
+            Role::DefaultBranch,
+            "default branch (others in the branch colour)",
+        ),
+        (i.detached, Role::Detached, "detached HEAD (tag or commit)"),
+        (i.ahead, Role::Ahead, "commits to push"),
+        (
+            i.behind,
+            Role::Behind,
+            "commits to pull (as of the last fetch)",
+        ),
+        (i.staged, Role::Staged, "staged changes"),
+        (i.unstaged, Role::Unstaged, "unstaged changes"),
+        (i.untracked, Role::Untracked, "untracked files"),
+        (i.conflict, Role::Conflict, "conflicts"),
+        (i.in_progress, Role::Conflict, "merge/rebase/… in progress"),
+        (i.stash, Role::Stash, "stashes"),
+        (i.gone, Role::Warning, "upstream branch deleted"),
+        (i.no_upstream, Role::Warning, "branch has no upstream"),
+        (
+            i.branches,
+            Role::Warning,
+            "other branches with unpushed work",
+        ),
+        (i.error, Role::Error, "error reading the repo"),
+        (i.worktree, Role::Dim, "linked worktree"),
+        (i.submodule, Role::Dim, "submodule"),
+    ]
+}
+
 fn draw_help(f: &mut Frame, v: &View, area: Rect, scroll: u16) {
     let t = v.theme;
-    let lines: Vec<Line> = help_lines()
+    let mut lines: Vec<Line> = help_lines()
         .into_iter()
         .map(|(k, d)| {
             Line::from(vec![
@@ -435,6 +477,19 @@ fn draw_help(f: &mut Frame, v: &View, area: Rect, scroll: u16) {
             ])
         })
         .collect();
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        format!("{:>26}  ", "legend"),
+        t.ui(Ui::Title),
+    )));
+    for (icon, role, meaning) in legend(&v.icons) {
+        let icon = if icon.is_empty() { "main" } else { icon };
+        lines.push(Line::from(vec![
+            Span::raw(format!("{:>w$}", "", w = 26 - icon.chars().count().min(26))),
+            Span::styled(icon.to_string(), t.role(role)),
+            Span::raw(format!("  {meaning}")),
+        ]));
+    }
     let r = Rect {
         x: area.x + 2,
         y: area.y + 1,

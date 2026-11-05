@@ -128,6 +128,10 @@ impl InProgress {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoStatus {
     pub head: Head,
+    /// Short id of the commit HEAD points at (none when unborn).
+    pub head_commit: Option<String>,
+    /// Tags on that commit: annotated first, then newest version first.
+    pub tags: Vec<String>,
     pub default_branch: Option<String>,
     /// Remote used for fetching, usually `origin`.
     pub remote: Option<String>,
@@ -262,6 +266,8 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
 
     Ok(RepoStatus {
         head,
+        head_commit: repo.head_id().ok().map(|id| id.shorten_or_id().to_string()),
+        tags: head_tags(repo),
         default_branch,
         remote,
         remote_url,
@@ -659,6 +665,74 @@ fn collapse_untracked(
         }
     }
     Ok(())
+}
+
+/// Tags pointing at HEAD's commit. Packed refs record where annotated tags
+/// lead, so only loose annotated tags cost an object read.
+fn head_tags(repo: &gix::Repository) -> Vec<String> {
+    let Ok(head) = repo.head_id() else {
+        return vec![];
+    };
+    let head = head.detach();
+    let Ok(platform) = repo.references() else {
+        return vec![];
+    };
+    let Ok(refs) = platform.prefixed("refs/tags/") else {
+        return vec![];
+    };
+    let mut found: Vec<(bool, String)> = vec![];
+    for mut r in refs.flatten() {
+        let gix::refs::Target::Object(target) = r.inner.target.clone() else {
+            continue;
+        };
+        let peeled = match r.inner.peeled {
+            Some(p) => p,
+            None if target == head => head,
+            None => match repo.find_header(target) {
+                Ok(h) if h.kind() == gix::object::Kind::Tag => match r.peel_to_id() {
+                    Ok(id) => id.detach(),
+                    Err(_) => continue,
+                },
+                _ => continue,
+            },
+        };
+        if peeled == head {
+            let annotated = target != head;
+            found.push((annotated, r.name().shorten().to_str_lossy().into_owned()));
+        }
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| version_cmp(&b.1, &a.1)));
+    found.into_iter().map(|(_, name)| name).collect()
+}
+
+/// Compare names with digit runs as numbers, so `v1.10` > `v1.9`.
+pub fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    fn chunks(s: &str) -> Vec<(bool, &str)> {
+        let mut v = vec![];
+        let mut start = 0;
+        let bytes = s.as_bytes();
+        for i in 1..=bytes.len() {
+            if i == bytes.len() || bytes[i].is_ascii_digit() != bytes[start].is_ascii_digit() {
+                v.push((bytes[start].is_ascii_digit(), &s[start..i]));
+                start = i;
+            }
+        }
+        v
+    }
+    let (ca, cb) = (chunks(a), chunks(b));
+    for (x, y) in ca.iter().zip(&cb) {
+        let o = match (x, y) {
+            ((true, x), (true, y)) => {
+                let (x, y) = (x.trim_start_matches('0'), y.trim_start_matches('0'));
+                x.len().cmp(&y.len()).then_with(|| x.cmp(y))
+            }
+            ((_, x), (_, y)) => x.cmp(y),
+        };
+        if o.is_ne() {
+            return o;
+        }
+    }
+    ca.len().cmp(&cb.len()).then_with(|| a.cmp(b))
 }
 
 fn detached_orphans(repo: &gix::Repository) -> Result<usize, StatusError> {

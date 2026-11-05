@@ -92,7 +92,7 @@ consume the same events.
 * **Tracked owners.** `[[track]] forge="github" owner="acme" [team="platform"] into="~/dev/acme" clone="auto"|"notify"`.
   Sync lists the forge, diffs it against local clones, and clones missing repos
   (`auto`) or flags them as *new on forge* (`notify`). Newly cloned repos are
-  marked ✦ new until acknowledged. Tracked owners are implicitly syncable.
+  marked + new until acknowledged. Tracked owners are implicitly syncable.
 * **Attention.** A repo needs attention if it has any of: conflicts or an
   in-progress operation, uncommitted changes, unpushed commits, a non-default
   branch, detached HEAD, stashes, a gone upstream, or no upstream for the
@@ -111,9 +111,24 @@ consume the same events.
 
 ## 6. TUI
 
-* Table, one line per repo: `★ ✦ name  branch  ↑2 ↓1  ●3 ✚1 …4  ⚑2  ⚠ rebase`.
+* Table, one line per repo: `◆ + name  branch  ↑2 ↓1  ●3 ±1 ?4  $2  ! rebase`.
   Grouping by owner, with folding.
-* Enter / Tab unfolds detail: files, branches, stashes, worktrees, submodules.
+* Enter / Tab unfolds detail: commit and tags, files, branches, stashes,
+  worktrees, submodules.
+* **Icons:** the `unicode` set only uses characters present in common
+  monospace fonts (Menlo, SF Mono, Inconsolata, DejaVu, Fira Code, Hack,
+  Source Code Pro; a test enforces the list). A glyph missing from the
+  font is drawn from a fallback font and can overlap its neighbour. The
+  `nerd` set uses Nerd Font glyphs for every icon, each followed by a
+  space, since non-Mono Nerd Fonts draw them up to two cells wide.
+* **Detached on a tag** shows the tag (annotated first, then highest
+  version by numeric comparison, `+N` for the rest). Tags on HEAD are
+  found from packed refs' peeled ids, so this costs no object reads
+  except for loose annotated tags.
+* **`argus demo`** builds sample repos in every state (a test checks the
+  list against every issue, kind and flag) in a temp dir, with git
+  isolated from the user's config, and opens the TUI with the user's
+  theme and icons. `v t` / `v i` cycle theme and icons for the session.
 * Two input styles at once:
   * arrows/Enter plus menus you can navigate with the cursor;
   * transient-style prefix keys: `f` fix, `s` sync, `m` mark, `o` open, `?` help.

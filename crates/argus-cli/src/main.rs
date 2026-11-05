@@ -99,6 +99,16 @@ enum Cmd {
     },
     /// Print config and state file locations.
     Paths,
+    /// Open the TUI on sample repos in every state (deleted on quit), to see
+    /// the whole UI and try themes and icons (`v t`, `v i`; `?` legend).
+    Demo {
+        /// Theme to start with [default: `[ui] theme`].
+        #[arg(long, value_name = "NAME")]
+        theme: Option<String>,
+        /// Icon set to start with: unicode, nerd or ascii [default: `[ui] icons`].
+        #[arg(long, value_name = "SET")]
+        icons: Option<String>,
+    },
 }
 
 #[derive(Args, Clone, Copy)]
@@ -244,6 +254,7 @@ fn run() -> Result<()> {
             return Ok(());
         }
         Some(Cmd::Forge { cmd }) => return forge_cmd(cmd),
+        Some(Cmd::Demo { theme, icons }) => return demo(&ctx, theme, icons),
         _ => {}
     }
     let (mut ws, notices) = load(&ctx, &cli.roots, cli.max_depth)?;
@@ -314,7 +325,7 @@ fn run() -> Result<()> {
             println!("acknowledged {}", before - ws.state.new.len());
             save_state(&ws, &ctx)?;
         }
-        Cmd::Root { .. } | Cmd::Paths | Cmd::Forge { .. } => unreachable!(),
+        Cmd::Root { .. } | Cmd::Paths | Cmd::Forge { .. } | Cmd::Demo { .. } => unreachable!(),
     }
     Ok(())
 }
@@ -643,6 +654,42 @@ fn indent(s: &str) -> String {
         .map(|l| format!("    {l}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+// ---------- demo ----------
+
+fn demo(ctx: &Ctx, theme: Option<String>, icons: Option<String>) -> Result<()> {
+    eprintln!("argus: building sample repos…");
+    let d = argus_core::demo::build();
+    // Only the user's look carries over; everything else is the demo's own.
+    let mut config = Config {
+        roots: vec![d.root.clone()],
+        ..Config::default()
+    };
+    if let Ok(c) = Config::load(&ctx.config_path) {
+        config.ui = c.ui;
+    }
+    config.ui.attention_only = false;
+    if let Some(t) = theme {
+        config.ui.theme = t;
+    }
+    if let Some(i) = icons {
+        config.ui.icons = i;
+    }
+    let mut ws = Workspace::new(config, State::default())?;
+    ws.scan();
+    d.apply_marks(&mut ws);
+    let state_path = d.sandbox.path("state.toml");
+    ws.state.save(&state_path)?;
+    let opts = argus_tui::Options {
+        state_path,
+        forge_factory: forge_factory(),
+        notices: vec![format!(
+            "demo repos in {} (deleted on quit) · v t: theme · v i: icons · ?: legend",
+            d.root.display()
+        )],
+    };
+    argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))
 }
 
 // ---------- fix ----------

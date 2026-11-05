@@ -18,9 +18,10 @@ toml_edit = "0.25.18"
 serde_json = "1.0.154"
 
 [dev-dependencies]
-argus-core = { path = ".", features = ["testkit"] }
+argus-core = { path = ".", features = ["testkit", "demo"] }
 pretty_assertions = "1.4.1"
 tempfile = "3.27.0"
 
 [features]
 testkit = ["dep:tempfile"]
+demo = ["testkit"]

@@ -34,8 +34,8 @@ pub struct Options {
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 pub fn run(ws: Workspace, opts: Options) -> Result<(), Error> {
-    let (theme, warnings) = theme::Theme::build(&ws.config.ui.theme, &ws.config.ui.colors);
-    let icons = argus_core::badges::by_name(&ws.config.ui.icons);
+    let (mut theme, warnings) = theme::Theme::build(&ws.config.ui.theme, &ws.config.ui.colors);
+    let mut theme_name = ws.config.ui.theme.clone();
     let mut app = App::new(ws);
     app.notices = opts.notices.clone();
     if let Some(w) = warnings.first() {
@@ -56,9 +56,14 @@ pub fn run(ws: Workspace, opts: Options) -> Result<(), Error> {
     let result = (|| -> Result<(), Error> {
         while !app.quit {
             tick = tick.wrapping_add(1);
+            // The View menu can switch theme and icons for the session.
+            if app.ws.config.ui.theme != theme_name {
+                theme_name = app.ws.config.ui.theme.clone();
+                theme = theme::Theme::build(&theme_name, &app.ws.config.ui.colors).0;
+            }
             let view = ui::View {
                 theme: &theme,
-                icons,
+                icons: argus_core::badges::by_name(&app.ws.config.ui.icons),
                 tick,
             };
             terminal.draw(|f| ui::draw(f, &mut app, &view))?;
@@ -123,7 +128,7 @@ impl Runtime {
                     paths.into_par_iter().for_each(|p| {
                         let r =
                             status::status(&p, StatusOptions::default()).map_err(|e| e.to_string());
-                        let _ = tx.send(Msg::Status(p, r));
+                        let _ = tx.send(Msg::Status(p, Box::new(r)));
                     });
                 });
             }

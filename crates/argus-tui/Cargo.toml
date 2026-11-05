@@ -14,7 +14,7 @@ rayon = "1.12.0"
 unicode-width = "0.2.3"
 
 [dev-dependencies]
-argus-core = { path = "../argus-core", features = ["testkit"] }
+argus-core = { path = "../argus-core", features = ["testkit", "demo"] }
 insta = "1.49.0"
 pretty_assertions = "1.4.1"
 tempfile = "3.27.0"

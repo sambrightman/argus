@@ -35,7 +35,7 @@ fn status_text_and_json() {
         .arg("status")
         .assert()
         .success()
-        .stdout(predicate::str::contains("acme/dirty").and(predicate::str::contains("✚1")))
+        .stdout(predicate::str::contains("acme/dirty").and(predicate::str::contains("±1")))
         .stdout(predicate::str::contains("acme/clean").not())
         .stdout(predicate::str::contains(
             "2 of 3 repos need attention; 1 clean not shown (--all)",
@@ -343,7 +343,7 @@ fn mark_snooze_and_ack_roundtrip_through_state() {
         .collect();
     assert_eq!(order, ["feature", "dirty", "clean"], "{lines:?}");
     assert!(
-        lines[0].contains("★") && lines[2].contains("★"),
+        lines[0].contains("◆") && lines[2].contains("◆"),
         "{lines:?}"
     );
 
@@ -489,6 +489,7 @@ fn help_documents_every_flag_and_repeatable_options() {
         &["forge", "list"],
         &["root", "add"],
         &["root", "remove"],
+        &["demo"],
     ] {
         let out = argus(&sb).args(cmd).arg("--help").output().unwrap();
         let help = String::from_utf8(out.stdout).unwrap();
