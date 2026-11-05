@@ -9,7 +9,7 @@ use crate::config::{CloneMode, Track};
 use crate::discover::RepoKind;
 use crate::forge::{Protocol, RemoteRepo};
 use crate::ops::Op;
-use crate::status::Head;
+use crate::status::{Head, Integration};
 use crate::workspace::Workspace;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -52,7 +52,15 @@ pub fn plan_updates(ws: &Workspace) -> Vec<Job> {
         }
         let op = match (&s.head, &s.upstream, e.kind) {
             (_, _, RepoKind::Bare) => Op::Fetch,
-            (Head::Branch(_), Some(t), _) if !t.gone => Op::Pull,
+            // Only pull what can integrate cleanly; fetch the rest so the
+            // repo is still up to date with its remote.
+            (Head::Branch(_), Some(t), _)
+                if !t.gone
+                    && s.in_progress.is_none()
+                    && matches!(s.integration, None | Some(Integration::Clean)) =>
+            {
+                Op::Pull
+            }
             _ => Op::Fetch,
         };
         let family = e.parent.clone().unwrap_or_else(|| e.path.clone());

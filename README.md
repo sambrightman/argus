@@ -173,13 +173,22 @@ acme/feature: would stash (1 uncommitted path(s))
 The chain is predicted from status, assuming each step succeeds. The TUI
 details show the same (`auto-fix`, `then`, `fix`).
 
+`pull` on a branch that has diverged from its upstream (commits on both
+sides) is only automatic when a trial merge (`git merge-tree`) predicts
+no conflicts and your config says whether to merge or rebase
+(`pull.rebase`, or `pull.ff`); otherwise `fix -n` says why
+(`not automatic: would conflict in README`). `sync` fetches such repos
+instead of pulling them. Any pull argus runs that still stops with
+conflicts is aborted, leaving the repo as it was, autostash included.
+`pull` isn't in the default `[fix] auto`.
+
 `stash` saves staged, unstaged and untracked changes (not ignored files);
 `git stash pop --index` puts them back as they were.
 
 ## Development
 
 ```sh
-cargo test --workspace      # ~160 tests, real git repos in temp dirs
+cargo test --workspace      # ~190 tests, real git repos in temp dirs
 cargo clippy --workspace --all-targets
 cargo run -p argus-tui --example snapshot -- ~/dev 'jj\t'   # render a frame as text
 ```

@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::ops::{self, Op, OpOutcome};
-use crate::status::{self, BranchInfo, Head, RepoStatus, StatusOptions, Tracking};
+use crate::status::{self, BranchInfo, Head, Integration, RepoStatus, StatusOptions, Tracking};
 
 #[derive(
     Debug,
@@ -76,6 +76,8 @@ pub struct Fix {
     pub kind: FixKind,
     pub op: Op,
     pub reason: String,
+    /// Why this can't be applied automatically (shown, never chosen).
+    pub blocked: Option<String>,
 }
 
 /// Every fix applicable to the repo in its current state.
@@ -101,6 +103,7 @@ pub fn plan(s: &RepoStatus) -> Vec<Fix> {
         let safe = head_info.is_some_and(|h| !h.is_unpushed());
         if b != default && !tracked_dirty && safe {
             v.push(Fix {
+                blocked: None,
                 kind: FixKind::SwitchDefault,
                 op: Op::Switch {
                     branch: default.clone(),
@@ -114,22 +117,53 @@ pub fn plan(s: &RepoStatus) -> Vec<Fix> {
         let same_name = head_info.is_some_and(|h| h.upstream_is_same_name());
         if !t.gone && t.ahead > 0 && t.behind == 0 && same_name {
             v.push(Fix {
+                blocked: None,
                 kind: FixKind::Push,
                 op: Op::Push,
                 reason: format!("{} commit(s) ahead of {}", t.ahead, t.name),
             });
         }
         if !t.gone && t.behind > 0 {
+            let diverged = t.ahead > 0;
+            let mut reason = if diverged {
+                format!(
+                    "diverged from {}: {} ahead, {} behind",
+                    t.name, t.ahead, t.behind
+                )
+            } else {
+                format!("{} commit(s) behind {}", t.behind, t.name)
+            };
+            // Don't rely on autostash: its re-apply can itself conflict.
+            let blocked = if tracked_dirty {
+                Some("uncommitted changes".to_string())
+            } else if diverged {
+                match &s.integration {
+                    Some(Integration::Clean) => {
+                        reason.push_str("; merges cleanly");
+                        None
+                    }
+                    Some(Integration::Conflicts(paths)) => {
+                        Some(format!("would conflict in {}", list(paths, 3)))
+                    }
+                    Some(Integration::Refused(why)) => Some(why.clone()),
+                    Some(Integration::Unknown(e)) => Some(format!("can't predict conflicts: {e}")),
+                    None => Some("can't predict conflicts".to_string()),
+                }
+            } else {
+                None
+            };
             v.push(Fix {
                 kind: FixKind::Pull,
                 op: Op::Pull,
-                reason: format!("{} commit(s) behind {}", t.behind, t.name),
+                reason,
+                blocked,
             });
         }
     } else if let (Some(b), Some(h), Some(remote)) = (head_branch, head_info, &s.remote)
         && h.is_unpushed()
     {
         v.push(Fix {
+            blocked: None,
             kind: FixKind::Publish,
             op: Op::PushSetUpstream {
                 remote: remote.clone(),
@@ -146,6 +180,7 @@ pub fn plan(s: &RepoStatus) -> Vec<Fix> {
             && t.behind > 0
         {
             v.push(Fix {
+                blocked: None,
                 kind: FixKind::FastForward,
                 op: Op::FastForward {
                     branch: b.name.clone(),
@@ -158,6 +193,7 @@ pub fn plan(s: &RepoStatus) -> Vec<Fix> {
 
     if any_dirty {
         v.push(Fix {
+            blocked: None,
             kind: FixKind::Stash,
             op: Op::Stash {
                 message: format!(
@@ -168,6 +204,7 @@ pub fn plan(s: &RepoStatus) -> Vec<Fix> {
             reason: format!("{} uncommitted path(s)", s.changes.total()),
         });
         v.push(Fix {
+            blocked: None,
             kind: FixKind::Commit,
             op: Op::CommitAll {
                 message: String::new(),
@@ -176,6 +213,15 @@ pub fn plan(s: &RepoStatus) -> Vec<Fix> {
         });
     }
     v
+}
+
+/// `a, b, c and 2 more`
+fn list(items: &[String], max: usize) -> String {
+    let mut s = items[..items.len().min(max)].join(", ");
+    if items.len() > max {
+        s.push_str(&format!(" and {} more", items.len() - max));
+    }
+    s
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,11 +244,11 @@ pub fn ranked(s: &RepoStatus, priority: &[FixKind]) -> Vec<Fix> {
 }
 
 /// The fix an auto-fix action applies: the highest-priority one in `allowed`
-/// that needs no input.
+/// that needs no input and isn't blocked.
 pub fn choose(s: &RepoStatus, allowed: &[FixKind]) -> Option<Fix> {
     ranked(s, allowed)
         .into_iter()
-        .find(|f| allowed.contains(&f.kind) && !f.kind.needs_input())
+        .find(|f| allowed.contains(&f.kind) && !f.kind.needs_input() && f.blocked.is_none())
 }
 
 /// The fixes successive auto-fix actions would apply, starting with
@@ -300,6 +346,7 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
             }
         }
         Op::Pull => {
+            s.integration = None;
             if let Some(t) = &mut s.upstream {
                 t.behind = 0;
             }

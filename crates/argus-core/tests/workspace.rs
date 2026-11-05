@@ -549,3 +549,25 @@ fn failed_listing_is_reported_and_keeps_old_membership() {
         "not wiped by a failure"
     );
 }
+
+#[test]
+fn sync_fetches_instead_of_pulling_when_a_pull_would_not_be_clean() {
+    let sb = Sandbox::new();
+    for (n, conflict) in [("clean", false), ("conflict", true), ("busy", true)] {
+        let r = sb.diverged("acme", n, &format!("dev/{n}"), conflict);
+        git(&r, &["config", "pull.rebase", "false"]);
+    }
+    let _ = std::process::Command::new("git")
+        .current_dir(sb.path("dev/busy"))
+        .args(["merge", "-q", "@{u}"])
+        .envs(argus_core::testkit::subprocess_env(&sb.root()))
+        .output()
+        .unwrap();
+    let w = ws(&sb, "[[rule]]\nmatch='acme/*'\nsync=true");
+    let mut labels: Vec<_> = plan_updates(&w).into_iter().map(|j| j.label).collect();
+    labels.sort();
+    assert_eq!(
+        labels,
+        ["fetch acme/busy", "fetch acme/conflict", "pull acme/clean"]
+    );
+}

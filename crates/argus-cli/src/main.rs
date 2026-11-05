@@ -654,7 +654,9 @@ fn fix_cmd(
                 println!("  then: {} ({})", f.op.label(), f.reason);
             }
             for f in alternatives {
-                let hint = if kinds.contains(&f.kind) {
+                let hint = if let Some(why) = &f.blocked {
+                    format!("; not automatic: {why}")
+                } else if kinds.contains(&f.kind) {
                     String::new()
                 } else {
                     format!(", with -k {}", f.kind.name())

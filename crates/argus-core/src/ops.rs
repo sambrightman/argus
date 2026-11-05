@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::status::InProgress;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
 pub enum Op {
@@ -135,6 +137,9 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
         }
         _ => dir.to_path_buf(),
     };
+    if let Op::Pull = op {
+        return pull(&cwd, started);
+    }
     if let Op::CommitAll { .. } = op {
         let add = git(&cwd, &["add".into(), "--all".into()], started);
         if !add.success {
@@ -142,6 +147,51 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
         }
     }
     git(&cwd, &op.args(), started)
+}
+
+fn in_progress(dir: &Path) -> Option<InProgress> {
+    crate::isolation::open(dir)
+        .ok()?
+        .state()
+        .map(crate::status::map_state)
+}
+
+/// `git pull`, but never started during an operation in progress, and never
+/// leaving one behind: a pull that stops with conflicts is aborted, which
+/// also restores anything `rebase.autoStash`/`merge.autoStash` stashed.
+fn pull(cwd: &Path, started: Instant) -> OpOutcome {
+    if let Some(p) = in_progress(cwd) {
+        return OpOutcome {
+            success: false,
+            code: None,
+            output: format!("{} in progress; not pulling", p.label()),
+            duration: started.elapsed(),
+        };
+    }
+    let mut o = git(cwd, &Op::Pull.args(), started);
+    if !o.success
+        && let Some(p) = in_progress(cwd)
+    {
+        let cmd = match p {
+            InProgress::Merge => "merge",
+            InProgress::Rebase => "rebase",
+            _ => return o,
+        };
+        let a = git(cwd, &[cmd.into(), "--abort".into()], started);
+        o.output.push_str(&if a.success {
+            format!("\nargus: pull stopped with conflicts; aborted (git {cmd} --abort), repo left as it was")
+        } else {
+            format!("\nargus: pull stopped with conflicts and `git {cmd} --abort` failed:\n{}", a.output)
+        });
+        o.duration = started.elapsed();
+    }
+    o
+}
+
+/// Run a read-only git command for status (no network, no prompts).
+pub(crate) fn git_in(cwd: &Path, args: &[&str]) -> OpOutcome {
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    git(cwd, &args, Instant::now())
 }
 
 fn git(cwd: &Path, args: &[String], started: Instant) -> OpOutcome {

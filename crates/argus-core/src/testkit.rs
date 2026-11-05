@@ -151,6 +151,32 @@ impl Sandbox {
         git(&tmp, &["push", "-q", "origin", "HEAD"]);
         std::fs::remove_dir_all(&tmp).unwrap();
     }
+
+    /// Clone `owner/name` at `rel` on a pushed branch `feat` that has then
+    /// diverged: one local commit, one new commit on `origin/feat` (fetched).
+    /// With `conflict`, both change `README`; otherwise separate files.
+    /// A tracked `notes.txt` exists for dirtying.
+    pub fn diverged(&self, owner: &str, name: &str, rel: &str, conflict: bool) -> PathBuf {
+        self.remote(owner, name);
+        let r = self.clone_as_github(owner, name, rel);
+        git(&r, &["switch", "-q", "-c", "feat"]);
+        write(&r, "notes.txt", "notes\n");
+        commit(&r, "base");
+        git(&r, &["push", "-q", "-u", "origin", "feat"]);
+        let other = self.clone_as_github(owner, name, &format!("scratch/{owner}/{name}-other"));
+        git(&other, &["switch", "-q", "feat"]);
+        write(
+            &other,
+            if conflict { "README" } else { "theirs.txt" },
+            "theirs\n",
+        );
+        commit(&other, "theirs");
+        git(&other, &["push", "-q"]);
+        write(&r, if conflict { "README" } else { "ours.txt" }, "ours\n");
+        commit(&r, "ours");
+        git(&r, &["fetch", "-q"]);
+        r
+    }
 }
 
 /// Environment for running argus/git as a subprocess in isolation: private

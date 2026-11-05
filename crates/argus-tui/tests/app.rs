@@ -539,3 +539,31 @@ fn details_show_the_auto_fix_its_chain_and_alternatives() {
     // nothing allowed: no auto-fix, alternatives in the default order
     assert_eq!(fixes("[]"), ["fix stash 1", "fix switch main"]);
 }
+
+#[test]
+fn details_say_why_a_fix_is_not_automatic() {
+    let sb = Sandbox::new();
+    let r = sb.diverged("acme", "w", "dev/w", true);
+    git(&r, &["config", "pull.rebase", "false"]);
+    let cfg = format!(
+        "roots = ['{}']\n[fix]\nauto = ['pull']",
+        sb.path("dev").display()
+    );
+    let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    ws.scan();
+    let mut app = App::new(ws);
+    app.on_key(code(KeyCode::Tab));
+    let fixes: Vec<_> = detail_texts(&app)
+        .into_iter()
+        .filter(|t| t.starts_with("fix") || t.starts_with("auto-fix"))
+        .collect();
+    assert_eq!(fixes.len(), 1, "{fixes:?}");
+    assert!(
+        fixes[0].starts_with("fix       pull"),
+        "never the auto-fix: {fixes:?}"
+    );
+    assert!(
+        fixes[0].ends_with("not automatic: would conflict in README"),
+        "{fixes:?}"
+    );
+}

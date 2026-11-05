@@ -151,6 +151,23 @@ pub struct RepoStatus {
     pub linked_worktree: bool,
     /// A submodule: a detached HEAD at the parent's pinned commit is normal.
     pub submodule: bool,
+    /// Whether `git pull` could integrate the upstream; only computed when
+    /// the current branch has diverged from it (ahead *and* behind).
+    pub integration: Option<Integration>,
+}
+
+/// Predicted outcome of pulling a diverged branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "result", content = "detail", rename_all = "kebab-case")]
+pub enum Integration {
+    /// Merging the upstream applies without conflicts.
+    Clean,
+    /// Paths that would conflict.
+    Conflicts(Vec<String>),
+    /// `git pull` would refuse, e.g. no `pull.rebase`/`pull.ff` setting.
+    Refused(String),
+    /// Prediction failed (e.g. git older than 2.38).
+    Unknown(String),
 }
 
 impl RepoStatus {
@@ -235,6 +252,7 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
     } else {
         changes(repo, opts)?
     };
+    let integration = integration(repo, &head, upstream.as_ref());
     let detached_orphans = match &head {
         Head::Detached(_) if repo.kind() != gix::repository::Kind::Submodule => {
             detached_orphans(repo)?
@@ -265,7 +283,77 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         bare,
         linked_worktree: repo.kind() == gix::repository::Kind::LinkedWorkTree,
         submodule: repo.kind() == gix::repository::Kind::Submodule,
+        integration,
     })
+}
+
+/// Porcelain: `git merge-tree --write-tree` (git 2.38+) is a read-only trial
+/// merge that matches what `git pull` will do; it's only run for diverged
+/// branches, which are rare, so the process cost doesn't matter. A clean
+/// merge doesn't guarantee a clean rebase (commits replay one by one), but
+/// it's a good predictor, and a pull that does conflict is aborted anyway.
+fn integration(
+    repo: &gix::Repository,
+    head: &Head,
+    upstream: Option<&Tracking>,
+) -> Option<Integration> {
+    let branch = match head {
+        Head::Branch(b) => b,
+        _ => return None,
+    };
+    let t = upstream?;
+    if t.gone || t.ahead == 0 || t.behind == 0 {
+        return None;
+    }
+    let dir = repo.workdir()?;
+    if let Some(why) = pull_refusal(repo, branch) {
+        return Some(Integration::Refused(why));
+    }
+    let o = crate::ops::git_in(
+        dir,
+        &[
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "--no-messages",
+            "HEAD",
+            "@{upstream}",
+        ],
+    );
+    Some(match o.code {
+        Some(0) => Integration::Clean,
+        Some(1) => Integration::Conflicts(
+            o.output
+                .lines()
+                .skip(1) // the tree id
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect(),
+        ),
+        _ => Integration::Unknown(o.output.lines().next().unwrap_or("git failed").to_string()),
+    })
+}
+
+/// Why `git pull` would refuse to reconcile a diverged branch, if it would:
+/// without `branch.<b>.rebase`, `pull.rebase` or `pull.ff` it asks how to,
+/// and `pull.ff = only` refuses outright. (Conservative: `only` is treated as
+/// refusing even alongside a rebase setting.)
+fn pull_refusal(repo: &gix::Repository, branch: &str) -> Option<String> {
+    let cfg = repo.config_snapshot();
+    let ff = cfg
+        .string("pull.ff")
+        .map(|v| v.to_str_lossy().to_lowercase());
+    if ff.as_deref() == Some("only") {
+        return Some("pull.ff = only refuses diverged branches".into());
+    }
+    let rebase = cfg
+        .string(format!("branch.{branch}.rebase").as_str())
+        .is_some()
+        || cfg.string("pull.rebase").is_some();
+    if !rebase && ff.is_none() {
+        return Some("git pull would refuse: set pull.rebase (or pull.ff) to choose".into());
+    }
+    None
 }
 
 fn read_head(repo: &gix::Repository) -> Result<Head, StatusError> {
@@ -610,7 +698,7 @@ fn stash_count(common_dir: &Path) -> usize {
         .unwrap_or(0)
 }
 
-fn map_state(s: gix::state::InProgress) -> InProgress {
+pub(crate) fn map_state(s: gix::state::InProgress) -> InProgress {
     use gix::state::InProgress as S;
     match s {
         S::Merge => InProgress::Merge,

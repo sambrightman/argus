@@ -532,3 +532,34 @@ fn dry_run_shows_the_fix_the_chain_and_alternatives() {
          then: stash (1 uncommitted path(s))\n"
     );
 }
+
+#[test]
+fn dry_run_explains_why_a_pull_is_not_automatic() {
+    let sb = Sandbox::new();
+    let r = sb.diverged("acme", "w", "dev/w", true);
+    git(&r, &["config", "pull.rebase", "false"]);
+    let o = argus(&sb)
+        .args(["fix", "-n", "-k", "pull"])
+        .output()
+        .unwrap();
+    assert!(o.status.success());
+    assert_eq!(
+        String::from_utf8(o.stdout).unwrap(),
+        "acme/w: nothing automatic\n  \
+         alternative: pull (diverged from origin/feat: 1 ahead, 1 behind); \
+         not automatic: would conflict in README\n"
+    );
+    // inverse: a clean merge is applied, then push
+    git(&sb.path("dev/w"), &["reset", "-q", "--hard", "HEAD~1"]);
+    write(&r, "ours.txt", "ours\n");
+    commit(&r, "ours, no conflict");
+    let o = argus(&sb)
+        .args(["fix", "-n", "-k", "pull,push"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(o.stdout).unwrap(),
+        "acme/w: would pull (diverged from origin/feat: 1 ahead, 1 behind; merges cleanly)\n  \
+         then: push (1 commit(s) ahead of origin/feat)\n"
+    );
+}

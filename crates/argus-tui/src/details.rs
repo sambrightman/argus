@@ -106,11 +106,15 @@ pub fn details(e: &Entry, priority: &[FixKind]) -> Vec<DetailLine> {
         .enumerate()
         .map(|(i, f)| (if i == 0 { "auto-fix  " } else { "then      " }, f));
     for (label, f) in labelled.chain(p.alternatives.iter().map(|f| ("fix       ", f))) {
-        v.push(line(vec![
+        let mut parts = vec![
             styled(Role::Dim, label),
             styled(Role::Ahead, f.op.label()),
             styled(Role::Dim, format!("  {}", f.reason)),
-        ]));
+        ];
+        if let Some(why) = &f.blocked {
+            parts.push(styled(Role::Warning, format!("  not automatic: {why}")));
+        }
+        v.push(line(parts));
     }
     if !s.branches.is_empty() {
         v.push(line(vec![styled(Role::Dim, "branches")]));

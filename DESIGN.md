@@ -50,6 +50,7 @@ The rule: **read with gix, mutate with `git`.**
 | discovery, HEAD, branches, upstream, ahead/behind, default branch, stash count, worktree list, submodule list, in-progress op (rebase/merge…), dirty/untracked counts | **gix** (in-process, parallel) | Pure reads. This is the hot path across hundreds of repos, and spawning processes would dominate. |
 | fetch, pull, push, clone | **`git` CLI** | Must honour *your* credentials (credential helpers, ssh-agent, `~/.ssh/config`, `insteadOf`) and *your* pull settings (`pull.rebase`, `rebase.autoStash`, `pull.ff`, hooks). gix has no pull/rebase orchestration and push is incomplete. libgit2 has no `pull` and ignores much of that config. |
 | commit, stash push, switch branch | **`git` CLI** | Runs hooks (pre-commit, post-checkout), honours `commit.gpgsign`, LFS/filters, sparse checkout and submodule recursion settings. gix lists these as "needs plumbing". |
+| conflict prediction for a diverged branch | **`git merge-tree --write-tree`** (git 2.38+), the one porcelain read | A read-only trial merge that matches what `git pull` will do, including merge settings. It only runs for branches that are ahead *and* behind, which are rare, so the process cost is negligible. gix's tree merge exists but needn't agree with git's. |
 | forge listing (org/team repos) | HTTPS to GitHub REST API, token from `GH_TOKEN`/`GITHUB_TOKEN`, falling back to `gh auth token` | Reuses existing `gh` login, no new credential store. Clone protocol defaults to `gh config get git_protocol`. |
 
 Mutations run non-interactively with `GIT_TERMINAL_PROMPT=0` and stdin
@@ -165,6 +166,23 @@ rendering is snapshot-tested via `TestBackend`.
   up (pull, fast-forward) on the branch you end up on. "Behind" comes from
   the remote-tracking refs as of the last fetch: status never fetches
   (`f`/`F` in the TUI, `argus sync` or cron do).
+* **Pulls are made safe rather than avoided.**
+  * A diverged branch gets a conflict prediction (`merge-tree`, above) and
+    a check of `pull.rebase`/`branch.<b>.rebase`/`pull.ff`: without them
+    git refuses to reconcile, and `pull.ff = only` always refuses. The
+    pull fix is shown but *blocked* (never chosen) when it would conflict
+    or be refused, or when tracked files are dirty (autostash's re-apply can
+    itself conflict).
+  * `sync` fetches instead of pulling such repos, and repos mid-operation.
+  * `Op::Pull` refuses to start during an operation in progress, and
+    aborts (`git merge|rebase --abort`) a pull that stops with conflicts,
+    which also restores any autostash: an automatic pull completes or
+    leaves the repo as it found it.
+  * A merge commit never waits for an editor: git only edits when on a
+    terminal, which argus never gives it, and `GIT_MERGE_AUTOEDIT=no` is
+    set as well.
+  * A clean trial merge doesn't guarantee a clean rebase; the abort covers
+    that case.
 * **Previews separate the chain from the alternatives.** `fix::simulate`
   predicts the status after a fix (pure, no git), and `fix::chain`
   repeats choose+simulate to give what successive auto-fix actions would
