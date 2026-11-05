@@ -36,8 +36,8 @@ fn ago(t: jiff::Timestamp) -> String {
     }
 }
 
-/// Detail lines for `e`. Fixes are listed in `priority` order (`[fix] auto`),
-/// the one an auto-fix action would apply marked as such.
+/// Detail lines for `e`. Fixes: the auto-fix (by `priority`, i.e. `[fix]
+/// auto`), what later auto-fixes would apply, then the other fixes.
 pub fn details(e: &Entry, priority: &[FixKind]) -> Vec<DetailLine> {
     let mut v = vec![line(vec![
         styled(Role::Dim, "path      "),
@@ -99,16 +99,13 @@ pub fn details(e: &Entry, priority: &[FixKind]) -> Vec<DetailLine> {
             styled(role, text),
         ]));
     }
-    let auto = fix::choose(s, priority);
-    for f in fix::ranked(s, priority) {
-        if f.kind.needs_input() {
-            continue;
-        }
-        let label = if Some(&f) == auto.as_ref() {
-            "auto-fix  "
-        } else {
-            "fix       "
-        };
+    let p = fix::preview(s, priority);
+    let labelled = p
+        .chain
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (if i == 0 { "auto-fix  " } else { "then      " }, f));
+    for (label, f) in labelled.chain(p.alternatives.iter().map(|f| ("fix       ", f))) {
         v.push(line(vec![
             styled(Role::Dim, label),
             styled(Role::Ahead, f.op.label()),

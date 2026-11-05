@@ -501,7 +501,7 @@ fn help_documents_every_flag_and_repeatable_options() {
 }
 
 #[test]
-fn dry_run_shows_the_fix_then_alternatives_in_priority_order() {
+fn dry_run_shows_the_fix_the_chain_and_alternatives() {
     let sb = Sandbox::new();
     three(&sb);
     write(&sb.path("dev/feature"), "notes.txt", "untracked\n");
@@ -510,30 +510,25 @@ fn dry_run_shows_the_fix_then_alternatives_in_priority_order() {
         assert!(o.status.success());
         String::from_utf8(o.stdout).unwrap()
     };
-    // default [fix] auto = push, switch-default: stash is not automatic
+    // default [fix] auto = push, switch-default: stash is only an alternative
     let s = out(&["fix", "-n", "acme/feature", "acme/dirty"]);
-    assert!(
-        s.contains(
-            "acme/feature: would switch main (feat has nothing unpushed)\n  \
-             also: stash (1 uncommitted path(s)), with -k stash\n"
-        ),
-        "{s}"
-    );
-    assert!(
-        s.contains(
-            "acme/dirty: nothing automatic\n  \
-             also: stash (1 uncommitted path(s)), with -k stash\n"
-        ),
-        "{s}"
-    );
-    assert!(
-        !s.contains("-k commit"),
-        "commit needs a message: not offered\n{s}"
-    );
-    // -k order is the priority; both kinds allowed, so no hints
-    let s = out(&["fix", "-n", "-k", "stash,switch-default", "acme/feature"]);
     assert_eq!(
         s,
-        "acme/feature: would stash (1 uncommitted path(s))\n  also: switch main (feat has nothing unpushed)\n"
+        "acme/dirty: nothing automatic\n  \
+         alternative: stash (1 uncommitted path(s)), with -k stash\n\
+         acme/feature: would switch main (feat has nothing unpushed)\n  \
+         alternative: stash (1 uncommitted path(s)), with -k stash\n"
+    );
+    // both allowed: what later runs would do is the chain, not an alternative
+    assert_eq!(
+        out(&["fix", "-n", "-k", "stash,switch-default", "acme/feature"]),
+        "acme/feature: would stash (1 uncommitted path(s))\n  \
+         then: switch main (feat has nothing unpushed)\n"
+    );
+    // reversed priority: switch first, and the untracked file still needs a stash
+    assert_eq!(
+        out(&["fix", "-n", "-k", "switch-default,stash", "acme/feature"]),
+        "acme/feature: would switch main (feat has nothing unpushed)\n  \
+         then: stash (1 uncommitted path(s))\n"
     );
 }

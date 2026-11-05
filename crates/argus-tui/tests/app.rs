@@ -508,7 +508,7 @@ fn detail_texts(app: &App) -> Vec<String> {
 }
 
 #[test]
-fn details_list_fixes_in_priority_order_marking_the_auto_fix() {
+fn details_show_the_auto_fix_its_chain_and_alternatives() {
     let untracked = |sb: &Sandbox| write(&sb.path("dev/feature"), "notes.txt", "x\n");
     let fixes = |auto: &str| {
         let (_sb, mut app) = setup_with(&format!("[fix]\nauto = {auto}"), untracked);
@@ -516,18 +516,26 @@ fn details_list_fixes_in_priority_order_marking_the_auto_fix() {
         app.on_key(code(KeyCode::Tab));
         detail_texts(&app)
             .into_iter()
-            .filter(|t| t.contains("fix "))
+            .filter(|t| {
+                ["auto-fix", "then", "fix "]
+                    .iter()
+                    .any(|p| t.starts_with(p))
+            })
             .map(|t| t.split_whitespace().take(3).collect::<Vec<_>>().join(" "))
             .collect::<Vec<_>>()
     };
     assert_eq!(
         fixes("['stash', 'switch-default']"),
-        ["auto-fix stash 1", "fix switch main"]
+        ["auto-fix stash 1", "then switch main"]
     );
     assert_eq!(
         fixes("['switch-default', 'stash']"),
+        ["auto-fix switch main", "then stash 1"]
+    );
+    assert_eq!(
+        fixes("['switch-default']"),
         ["auto-fix switch main", "fix stash 1"]
     );
-    // nothing allowed: no auto-fix marked, default order
-    assert_eq!(fixes("[]"), ["fix switch main", "fix stash 1"]);
+    // nothing allowed: no auto-fix, alternatives in the default order
+    assert_eq!(fixes("[]"), ["fix stash 1", "fix switch main"]);
 }

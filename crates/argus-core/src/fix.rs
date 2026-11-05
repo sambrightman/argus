@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::ops::{self, Op, OpOutcome};
-use crate::status::{self, Head, RepoStatus, StatusOptions};
+use crate::status::{self, BranchInfo, Head, RepoStatus, StatusOptions, Tracking};
 
 #[derive(
     Debug,
@@ -23,31 +23,33 @@ use crate::status::{self, Head, RepoStatus, StatusOptions};
 )]
 #[serde(rename_all = "kebab-case")]
 pub enum FixKind {
-    /// Leave a fully pushed / merged branch for the default branch.
-    SwitchDefault,
-    /// Push commits to an existing upstream (fast-forward only).
-    Push,
-    /// Push a branch that has no upstream yet.
-    Publish,
-    /// Fast-forward local branches that aren't checked out.
-    FastForward,
-    /// Pull the current branch (your pull settings apply).
-    Pull,
     /// Stash staged, unstaged and untracked changes (not ignored files).
     Stash,
     /// Commit everything (never automatic: needs a message).
     Commit,
+    /// Push commits to an existing upstream (fast-forward only).
+    Push,
+    /// Push a branch that has no upstream yet.
+    Publish,
+    /// Pull the current branch (your pull settings apply).
+    Pull,
+    /// Fast-forward local branches that aren't checked out.
+    FastForward,
+    /// Leave a fully pushed / merged branch for the default branch.
+    SwitchDefault,
 }
 
 impl FixKind {
+    /// Default priority: clean up uncommitted work, then share commits,
+    /// then catch up, then leave the branch.
     pub const ALL: [FixKind; 7] = [
-        FixKind::SwitchDefault,
-        FixKind::Push,
-        FixKind::Publish,
-        FixKind::FastForward,
-        FixKind::Pull,
         FixKind::Stash,
         FixKind::Commit,
+        FixKind::Push,
+        FixKind::Publish,
+        FixKind::Pull,
+        FixKind::FastForward,
+        FixKind::SwitchDefault,
     ];
 
     /// Requires a message from the user.
@@ -201,6 +203,154 @@ pub fn choose(s: &RepoStatus, allowed: &[FixKind]) -> Option<Fix> {
     ranked(s, allowed)
         .into_iter()
         .find(|f| allowed.contains(&f.kind) && !f.kind.needs_input())
+}
+
+/// The fixes successive auto-fix actions would apply, starting with
+/// [`choose`]: predicted with [`simulate`], assuming each one succeeds.
+pub fn chain(s: &RepoStatus, allowed: &[FixKind]) -> Vec<Fix> {
+    let mut out: Vec<Fix> = vec![];
+    let mut cur = s.clone();
+    while let Some(f) = choose(&cur, allowed) {
+        // a repeat would mean the simulation made no progress
+        if out.iter().any(|g| g.kind == f.kind && g.op == f.op)
+            || out.len() > 2 * FixKind::ALL.len()
+        {
+            break;
+        }
+        cur = simulate(&cur, &f);
+        out.push(f);
+    }
+    out
+}
+
+/// What auto-fix would do, for showing before doing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Preview {
+    /// The fix the next action applies, then the ones later actions would
+    /// (see [`chain`]).
+    pub chain: Vec<Fix>,
+    /// Other fixes available now that the chain doesn't include, in
+    /// priority order; possibly not allowed. Never ones needing input.
+    pub alternatives: Vec<Fix>,
+}
+
+pub fn preview(s: &RepoStatus, allowed: &[FixKind]) -> Preview {
+    let chain = chain(s, allowed);
+    // compare by label: a stash's message carries a timestamp
+    let in_chain = |f: &Fix| {
+        chain
+            .iter()
+            .any(|c| c.kind == f.kind && c.op.label() == f.op.label())
+    };
+    let alternatives = ranked(s, allowed)
+        .into_iter()
+        .filter(|f| !f.kind.needs_input() && !in_chain(f))
+        .collect();
+    Preview {
+        chain,
+        alternatives,
+    }
+}
+
+/// The status expected after `f` succeeds, for previews. Pull is assumed to
+/// integrate cleanly; nothing is read from disk.
+pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
+    let mut s = s.clone();
+    let head = s.head.branch().map(str::to_string);
+    match &f.op {
+        Op::Stash { .. } => {
+            s.changes = Default::default();
+            s.stashes += 1;
+        }
+        Op::CommitAll { .. } => {
+            s.changes = Default::default();
+            if let Some(t) = &mut s.upstream {
+                t.ahead += 1;
+            }
+            if let Some(b) = head_info(&mut s, head.as_deref()) {
+                b.merged = false;
+                b.unpushed = Some(b.unpushed.unwrap_or(0) + 1);
+                if let Some(t) = &mut b.upstream {
+                    t.ahead += 1;
+                }
+            }
+        }
+        Op::Push => {
+            if let Some(t) = &mut s.upstream {
+                t.ahead = 0;
+            }
+            if let Some(b) = head_info(&mut s, head.as_deref()) {
+                b.unpushed = Some(0);
+                if let Some(t) = &mut b.upstream {
+                    t.ahead = 0;
+                }
+            }
+        }
+        Op::PushSetUpstream { remote, branch } => {
+            let t = Tracking {
+                name: format!("{remote}/{branch}"),
+                ahead: 0,
+                behind: 0,
+                gone: false,
+            };
+            s.upstream = Some(t.clone());
+            if let Some(b) = head_info(&mut s, head.as_deref()) {
+                b.unpushed = Some(0);
+                b.upstream = Some(t);
+            }
+        }
+        Op::Pull => {
+            if let Some(t) = &mut s.upstream {
+                t.behind = 0;
+            }
+            if let Some(b) = head_info(&mut s, head.as_deref())
+                && let Some(t) = &mut b.upstream
+            {
+                t.behind = 0;
+            }
+        }
+        Op::FastForward { branch, .. } => {
+            if let Some(b) = s.branches.iter_mut().find(|b| &b.name == branch)
+                && let Some(t) = &mut b.upstream
+            {
+                t.behind = 0;
+            }
+        }
+        Op::Switch { branch } => {
+            if !s.branches.iter().any(|b| &b.name == branch) {
+                // `git switch` creates it from the remote branch
+                s.branches.push(BranchInfo {
+                    name: branch.clone(),
+                    upstream: s.remote.as_ref().map(|r| Tracking {
+                        name: format!("{r}/{branch}"),
+                        ahead: 0,
+                        behind: 0,
+                        gone: false,
+                    }),
+                    is_head: false,
+                    merged: true,
+                    unpushed: Some(0),
+                });
+            }
+            for b in &mut s.branches {
+                b.is_head = &b.name == branch;
+            }
+            s.upstream = s
+                .branches
+                .iter()
+                .find(|b| b.is_head)
+                .and_then(|b| b.upstream.clone());
+            s.head = Head::Branch(branch.clone());
+        }
+        Op::Fetch | Op::Clone { .. } => {}
+    }
+    s
+}
+
+fn head_info<'a>(s: &'a mut RepoStatus, head: Option<&str>) -> Option<&'a mut BranchInfo> {
+    s.branches
+        .iter_mut()
+        .find(|b| Some(b.name.as_str()) == head)
 }
 
 /// Apply the [`choose`]n fix for the repo's current state, if any.

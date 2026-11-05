@@ -156,8 +156,22 @@ Each auto-fix action applies **one** fix: the first kind in `[fix] auto`
 (or `-k`, in the order given) that the repo needs. An unpushed feature
 branch is pushed by one `x x` (or `argus fix`) and switched back to the
 default branch by the next. Or snooze it in between (`m z`).
-`argus fix -n` shows the fix each repo would get, followed by the
-alternatives in priority order; the TUI details mark it as `auto-fix`.
+Kinds you don't list rank after the ones you do, in the default order:
+stash, commit, push, publish, pull, fast-forward, switch-default.
+
+`argus fix -n` shows, per repo, the fix this run would apply, then the
+chain later runs would continue with, then other fixes available now
+(with the `-k` that would allow them):
+
+```
+acme/feature: would stash (1 uncommitted path(s))
+  then: push (1 commit(s) ahead of origin/feat)
+  then: switch main (feat has nothing unpushed)
+  alternative: fast-forward dev (dev is 2 behind origin/dev), with -k fast-forward
+```
+
+The chain is predicted from status, assuming each step succeeds. The TUI
+details show the same (`auto-fix`, `then`, `fix`).
 
 `stash` saves staged, unstaged and untracked changes (not ignored files);
 `git stash pop --index` puts them back as they were.

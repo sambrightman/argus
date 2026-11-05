@@ -1,7 +1,7 @@
 //! Fix planning and application. Each fix has tests for when it must *not*
 //! be offered, since an unsafe fix is far worse than a missing one.
 
-use argus_core::fix::{FixKind, apply_fix, choose, plan, ranked};
+use argus_core::fix::{FixKind, apply_fix, chain, choose, plan, ranked};
 use argus_core::ops::Op;
 use argus_core::status::{Head, StatusOptions, status};
 use argus_core::testkit::{Sandbox, commit, git, write};
@@ -387,12 +387,13 @@ fn unlisted_kinds_rank_after_listed_ones_in_default_order() {
     let r = switch_or_stash(&sb);
     // commit is available too (needs a message, so never chosen)
     assert_eq!(
-        ranked_kinds(&r, &[FixKind::Stash]),
-        [FixKind::Stash, FixKind::SwitchDefault, FixKind::Commit]
+        ranked_kinds(&r, &[FixKind::SwitchDefault]),
+        [FixKind::SwitchDefault, FixKind::Stash, FixKind::Commit]
     );
+    // default order: clean up uncommitted work first
     assert_eq!(
         ranked_kinds(&r, &[]),
-        [FixKind::SwitchDefault, FixKind::Stash, FixKind::Commit]
+        [FixKind::Stash, FixKind::Commit, FixKind::SwitchDefault]
     );
     let s = status(&r, StatusOptions::default()).unwrap();
     assert!(choose(&s, &[]).is_none(), "nothing allowed, nothing chosen");
@@ -434,4 +435,112 @@ fn stash_keeps_index_work_tree_and_untracked_apart() {
         [" M unstaged.txt", "?? untracked.txt", "M  staged.txt"],
         "staged stays staged, unstaged stays unstaged, untracked comes back"
     );
+}
+
+#[test]
+fn default_order_cleans_up_before_pushing() {
+    let sb = Sandbox::new();
+    let r = pushed_feature(&sb);
+    commit(&r, "more");
+    write(&r, "README", "dirty");
+    assert_eq!(
+        ranked_kinds(&r, &[]),
+        [FixKind::Stash, FixKind::Commit, FixKind::Push]
+    );
+}
+
+/// The predicted chain must match what repeated auto-fix actions really do.
+fn assert_chain_matches_reality(r: &std::path::Path, allowed: &[FixKind], expect: &[FixKind]) {
+    let s = status(r, StatusOptions::default()).unwrap();
+    let predicted: Vec<_> = chain(&s, allowed).into_iter().map(|f| f.kind).collect();
+    assert_eq!(predicted, expect, "predicted chain");
+    let mut actual = vec![];
+    while let Some(a) = apply_fix(r, allowed).unwrap() {
+        assert!(a.outcome.success, "{:?}: {}", a.fix.kind, a.outcome.output);
+        actual.push(a.fix.kind);
+        assert!(actual.len() <= 10, "runaway: {actual:?}");
+    }
+    assert_eq!(actual, expect, "actual successive auto-fixes");
+}
+
+/// Feature branch with one unpushed commit and a dirty tracked file.
+fn ahead_and_dirty(sb: &Sandbox) -> std::path::PathBuf {
+    let r = pushed_feature(sb);
+    commit(&r, "more");
+    write(&r, "README", "dirty");
+    r
+}
+
+#[test]
+fn chain_stash_push_switch() {
+    let sb = Sandbox::new();
+    let r = ahead_and_dirty(&sb);
+    use FixKind::*;
+    assert_chain_matches_reality(
+        &r,
+        &[Stash, Push, SwitchDefault],
+        &[Stash, Push, SwitchDefault],
+    );
+}
+
+#[test]
+fn chain_stops_where_the_allowed_kinds_run_out() {
+    // default auto (push, switch-default): the dirty tree blocks the switch
+    let sb = Sandbox::new();
+    let r = ahead_and_dirty(&sb);
+    use FixKind::*;
+    assert_chain_matches_reality(&r, &[Push, SwitchDefault], &[Push]);
+}
+
+#[test]
+fn chain_publish_then_switch() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    git(&r, &["switch", "-q", "-c", "feat"]);
+    commit(&r, "feat");
+    use FixKind::*;
+    assert_chain_matches_reality(&r, &[Publish, SwitchDefault], &[Publish, SwitchDefault]);
+}
+
+/// Pushed feature branch checked out while `main` is behind origin/main.
+fn main_behind(sb: &Sandbox) -> std::path::PathBuf {
+    let r = pushed_feature(sb);
+    let other = sb.clone_as_github("acme", "w", "other");
+    commit(&other, "upstream work");
+    git(&other, &["push", "-q", "origin", "main"]);
+    git(&r, &["fetch", "-q"]);
+    r
+}
+
+#[test]
+fn chain_switch_then_pull_the_default_branch() {
+    let sb = Sandbox::new();
+    let r = main_behind(&sb);
+    use FixKind::*;
+    assert_chain_matches_reality(
+        &r,
+        &[SwitchDefault, Pull, FastForward],
+        &[SwitchDefault, Pull],
+    );
+}
+
+#[test]
+fn chain_fast_forward_first_makes_the_pull_unnecessary() {
+    let sb = Sandbox::new();
+    let r = main_behind(&sb);
+    use FixKind::*;
+    assert_chain_matches_reality(
+        &r,
+        &[FastForward, SwitchDefault, Pull],
+        &[FastForward, SwitchDefault],
+    );
+}
+
+#[test]
+fn chain_is_empty_when_nothing_is_allowed() {
+    let sb = Sandbox::new();
+    let r = ahead_and_dirty(&sb);
+    assert_chain_matches_reality(&r, &[], &[]);
+    assert_chain_matches_reality(&r, &[FixKind::Commit], &[]);
 }

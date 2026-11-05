@@ -160,10 +160,17 @@ rendering is snapshot-tested via `TestBackend`.
   upstream only) and `switch-default`.
 * **The order of `[fix] auto` (or `-k`) is the priority.** Each action
   applies the first listed kind the repo needs; unlisted kinds rank after,
-  in `FixKind::ALL` order. `fix --dry-run` prints the fix that would be
-  applied, then the alternatives in priority order (with a `-k` hint for
-  kinds not allowed); the TUI details mark the auto-fix the same way. If
-  chaining ever arrives, the dry run must show every fix it would apply.
+  in `FixKind::ALL` order: clean up uncommitted work (stash, commit), share
+  commits (push, publish), catch up (pull, fast-forward), then leave the
+  branch (switch-default).
+* **Previews separate the chain from the alternatives.** `fix::simulate`
+  predicts the status after a fix (pure, no git), and `fix::chain`
+  repeats choose+simulate to give what successive auto-fix actions would
+  do. Tests compare each predicted chain with repeatedly applying fixes to
+  a real repo. `fix --dry-run` and the TUI details show the next fix, the
+  rest of the chain (`then`), and other fixes available now
+  (`alternative`, with a `-k` hint). If chaining in one action ever
+  arrives, the same chain is what it would apply.
 
 * **No `init`.** Without configured roots the current directory is
   scanned (with a hint). The config file is created on first run as a
