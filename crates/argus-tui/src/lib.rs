@@ -133,7 +133,7 @@ impl Runtime {
                 });
             }
             Effect::Jobs(jobs) => {
-                let n = app.ws.config.concurrency;
+                let n = app.ws.config.network_jobs();
                 let cancel = self.cancel.clone();
                 std::thread::spawn(move || {
                     runner::run_jobs(&jobs, n, &cancel, &|ev| {
@@ -154,7 +154,7 @@ impl Runtime {
                 });
             }
             Effect::Fix { paths, kinds } => {
-                let n = app.ws.config.concurrency;
+                let n = app.ws.config.network_jobs();
                 std::thread::spawn(move || {
                     let pool = rayon::ThreadPoolBuilder::new().num_threads(n).build();
                     let work = || {

@@ -37,6 +37,7 @@ pub struct Found {
 #[derive(Debug, Clone)]
 pub struct DiscoverOptions {
     pub skip_dirs: Vec<String>,
+    /// 0: no limit.
     pub max_depth: usize,
     /// Keep descending into a repository's work tree looking for nested repos.
     pub scan_inside_repos: bool,
@@ -138,7 +139,7 @@ fn visit<'s>(
         }
     }
     let subdirs = subdirs(&dir, entries, opts, &links);
-    if depth >= opts.max_depth {
+    if opts.max_depth != 0 && depth >= opts.max_depth {
         if !subdirs.is_empty() {
             sink.truncated.lock().unwrap().push(dir);
         }
@@ -356,6 +357,20 @@ mod tests {
         let d = discover_all(std::slice::from_ref(&root), &opts);
         assert!(d.truncated.is_empty(), "{:?}", d.truncated);
         assert_eq!(d.found.len(), 2);
+    }
+
+    #[test]
+    fn max_depth_zero_means_no_limit() {
+        let t = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(t.path()).unwrap();
+        fake_repo(&root, "1/2/3/4/5/6/7/8/9/deep");
+        let opts = DiscoverOptions {
+            max_depth: 0,
+            ..Default::default()
+        };
+        let d = discover_all(std::slice::from_ref(&root), &opts);
+        assert_eq!(d.found.len(), 1);
+        assert!(d.truncated.is_empty(), "{:?}", d.truncated);
     }
 
     #[test]

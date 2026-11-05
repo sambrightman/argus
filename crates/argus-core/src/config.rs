@@ -19,7 +19,7 @@ pub struct Config {
     /// Directory names never descended into.
     pub skip_dirs: Vec<String>,
     /// Maximum directory depth below a root; deeper directories are skipped
-    /// (with a warning).
+    /// (with a warning). 0: no limit.
     pub max_depth: usize,
     /// Skip directories whose name starts with `.`; add one as a root to
     /// scan it.
@@ -27,7 +27,9 @@ pub struct Config {
     /// Follow symlinks to directories (`-L`). Cycles are cut and a repo
     /// reachable by several paths is listed once.
     pub follow_symlinks: bool,
-    /// Maximum concurrent network operations (fetch/pull/push/clone).
+    /// Maximum concurrent network operations (fetch/pull/push/clone). 0:
+    /// automatic, i.e. git's `fetch.parallel` if set above 0, else the CPU
+    /// count up to 8 (forges and ssh limit simultaneous connections).
     pub concurrency: usize,
     /// Protocol for new clones; unset asks the forge (`gh config get git_protocol`).
     #[schemars(example = crate::forge::Protocol::Ssh)]
@@ -73,7 +75,7 @@ impl Default for Config {
             max_depth: 6,
             skip_hidden: true,
             follow_symlinks: false,
-            concurrency: 8,
+            concurrency: 0,
             clone_protocol: None,
             rules: vec![],
             tracks: vec![],
@@ -279,7 +281,18 @@ impl Config {
                 *p = expand_tilde(p);
             }
         }
-        self.concurrency = self.concurrency.max(1);
+    }
+
+    /// How many network operations to run at once: see `concurrency`.
+    pub fn network_jobs(&self) -> usize {
+        if self.concurrency > 0 {
+            return self.concurrency;
+        }
+        let fetch_parallel = gix::config::File::from_globals()
+            .ok()
+            .and_then(|f| f.integer("fetch.parallel").ok().flatten());
+        let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+        auto_jobs(fetch_parallel, cpus)
     }
 
     /// Directory new clones for `track` land in.
@@ -288,6 +301,20 @@ impl Config {
             .into
             .clone()
             .or_else(|| self.roots.first().map(|r| r.join(&track.owner)))
+    }
+}
+
+/// Upper bound for automatic concurrency: OpenSSH allows 10 sessions per
+/// multiplexed connection by default, and forges throttle parallel clones.
+const AUTO_MAX_JOBS: usize = 8;
+
+/// Automatic concurrency: git's `fetch.parallel` when positive (0 there
+/// also means "pick a default"), otherwise the CPU count up to
+/// [`AUTO_MAX_JOBS`].
+pub fn auto_jobs(fetch_parallel: Option<i64>, cpus: usize) -> usize {
+    match fetch_parallel {
+        Some(n) if n > 0 => n as usize,
+        _ => cpus.clamp(1, AUTO_MAX_JOBS),
     }
 }
 
@@ -323,8 +350,26 @@ mod tests {
     }
 
     #[test]
-    fn concurrency_never_zero() {
-        assert_eq!(Config::parse("concurrency = 0").unwrap().concurrency, 1);
+    fn concurrency_zero_is_automatic() {
+        assert_eq!(Config::default().concurrency, 0, "automatic by default");
+        assert_eq!(Config::parse("concurrency = 3").unwrap().network_jobs(), 3);
+        assert!(Config::default().network_jobs() >= 1);
+        // git's fetch.parallel when positive (0 there also means "pick one"),
+        // else the CPU count, capped for forge/ssh connection limits
+        for (fetch_parallel, cpus, want) in [
+            (None, 4, 4),
+            (None, 32, 8),
+            (Some(0), 32, 8),
+            (Some(-1), 2, 2),
+            (Some(20), 4, 20),
+            (None, 0, 1),
+        ] {
+            assert_eq!(
+                auto_jobs(fetch_parallel, cpus),
+                want,
+                "{fetch_parallel:?} {cpus}"
+            );
+        }
     }
 
     #[test]

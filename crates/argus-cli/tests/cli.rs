@@ -230,6 +230,15 @@ fn warns_when_max_depth_stops_the_scan() {
         .success()
         .stdout(predicate::str::contains("1 repos, 1 need attention"))
         .stderr(predicate::str::contains("max_depth").not());
+    // 0: no limit
+    argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["status", "--max-depth", "0"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 repos, 1 need attention"))
+        .stderr(predicate::str::contains("max_depth").not());
 }
 
 #[test]

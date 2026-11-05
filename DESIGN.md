@@ -214,7 +214,13 @@ rendering is snapshot-tested via `TestBackend`.
   annotations, so the documentation can't drift from the code. Roots
   are managed with `argus root add|remove|list` (toml_edit, so comments are kept).
 * **`max_depth` is reported**, not silent: a scan names a directory it
-  didn't enter.
+  didn't enter. `max_depth = 0` means no limit (0 as "the root only" had no
+  use: the walk stops at a repo anyway).
+* **Automatic concurrency** (`concurrency = 0`, the default): git's
+  `fetch.parallel` when set above 0 (git's own 0 also means "pick a
+  default"), else the CPU count capped at 8. The work is network-bound,
+  and OpenSSH allows 10 sessions per multiplexed connection by default,
+  so more CPUs don't mean more useful parallelism.
 * **Discovery syscalls:** per directory, one `lstat` of `.git` (settles
   the common case, a work tree) and otherwise one listing, which also
   serves bare-repo detection (`HEAD`, `objects/`, `refs/`) and yields the

@@ -30,7 +30,7 @@ struct Cli {
     #[arg(long = "root", global = true, value_name = "DIR")]
     roots: Vec<PathBuf>,
     /// Scan this many directory levels below each root instead of
-    /// `max_depth`.
+    /// `max_depth` (0: no limit).
     #[arg(long, global = true, value_name = "N")]
     max_depth: Option<usize>,
     /// Follow symlinks to directories (cycles are cut; a repo reached by
@@ -603,7 +603,7 @@ fn sync_cmd(
     let tty = std::io::stderr().is_terminal();
     let results = runner::run_jobs(
         &jobs,
-        ws.config.concurrency,
+        ws.config.network_jobs(),
         &AtomicBool::new(false),
         &|ev| {
             if let Event::Finished { index, outcome } = ev {
@@ -704,7 +704,7 @@ fn fetch_selected(ws: &mut Workspace, patterns: &[String]) {
     let done = std::sync::atomic::AtomicUsize::new(0);
     runner::run_jobs(
         &jobs,
-        ws.config.concurrency,
+        ws.config.network_jobs(),
         &AtomicBool::new(false),
         &|ev| {
             if let Event::Finished { index, outcome } = ev {
