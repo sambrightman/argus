@@ -1,6 +1,9 @@
 //! Succinct, UI-agnostic summary of an entry as a list of badges. Front-ends
 //! map [`Role`] to colours/styles; the text is already compact.
 
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 
 use crate::attention::Issue;
@@ -34,82 +37,157 @@ pub struct Badge {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Copy)]
+/// One glyph per thing argus marks. Built-in sets are constants; config
+/// can override single icons (`[ui.icon_overrides]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Icons {
-    pub favourite: &'static str,
-    pub new: &'static str,
-    pub excluded: &'static str,
-    pub snoozed: &'static str,
-    pub branch: &'static str,
-    pub detached: &'static str,
-    pub ahead: &'static str,
-    pub behind: &'static str,
-    pub staged: &'static str,
-    pub unstaged: &'static str,
-    pub untracked: &'static str,
-    pub conflict: &'static str,
-    pub stash: &'static str,
-    pub in_progress: &'static str,
-    pub gone: &'static str,
-    pub no_upstream: &'static str,
-    pub branches: &'static str,
-    pub error: &'static str,
-    pub sync: &'static str,
-    pub worktree: &'static str,
-    pub submodule: &'static str,
+    pub favourite: Cow<'static, str>,
+    pub new: Cow<'static, str>,
+    pub excluded: Cow<'static, str>,
+    pub snoozed: Cow<'static, str>,
+    pub branch: Cow<'static, str>,
+    pub detached: Cow<'static, str>,
+    pub ahead: Cow<'static, str>,
+    pub behind: Cow<'static, str>,
+    pub staged: Cow<'static, str>,
+    pub unstaged: Cow<'static, str>,
+    pub untracked: Cow<'static, str>,
+    pub conflict: Cow<'static, str>,
+    pub stash: Cow<'static, str>,
+    pub in_progress: Cow<'static, str>,
+    pub gone: Cow<'static, str>,
+    pub no_upstream: Cow<'static, str>,
+    pub branches: Cow<'static, str>,
+    pub error: Cow<'static, str>,
+    pub sync: Cow<'static, str>,
+    pub worktree: Cow<'static, str>,
+    pub submodule: Cow<'static, str>,
+}
+
+/// Icon names, as used in `[ui.icon_overrides]`.
+pub const ICON_NAMES: &[&str] = &[
+    "favourite",
+    "new",
+    "excluded",
+    "snoozed",
+    "branch",
+    "detached",
+    "ahead",
+    "behind",
+    "staged",
+    "unstaged",
+    "untracked",
+    "conflict",
+    "stash",
+    "in_progress",
+    "gone",
+    "no_upstream",
+    "branches",
+    "error",
+    "sync",
+    "worktree",
+    "submodule",
+];
+
+impl Icons {
+    fn get_mut(&mut self, name: &str) -> Option<&mut Cow<'static, str>> {
+        Some(match name {
+            "favourite" => &mut self.favourite,
+            "new" => &mut self.new,
+            "excluded" => &mut self.excluded,
+            "snoozed" => &mut self.snoozed,
+            "branch" => &mut self.branch,
+            "detached" => &mut self.detached,
+            "ahead" => &mut self.ahead,
+            "behind" => &mut self.behind,
+            "staged" => &mut self.staged,
+            "unstaged" => &mut self.unstaged,
+            "untracked" => &mut self.untracked,
+            "conflict" => &mut self.conflict,
+            "stash" => &mut self.stash,
+            "in_progress" => &mut self.in_progress,
+            "gone" => &mut self.gone,
+            "no_upstream" => &mut self.no_upstream,
+            "branches" => &mut self.branches,
+            "error" => &mut self.error,
+            "sync" => &mut self.sync,
+            "worktree" => &mut self.worktree,
+            "submodule" => &mut self.submodule,
+            _ => return None,
+        })
+    }
+
+    /// Replace single icons; returns warnings for unknown names.
+    pub fn with_overrides(mut self, overrides: &BTreeMap<String, String>) -> (Self, Vec<String>) {
+        let mut warnings = vec![];
+        for (name, glyph) in overrides {
+            match self.get_mut(name) {
+                Some(slot) => *slot = Cow::Owned(glyph.clone()),
+                None => warnings.push(format!(
+                    "unknown icon in [ui.icon_overrides]: {name} (known: {})",
+                    ICON_NAMES.join(", ")
+                )),
+            }
+        }
+        (self, warnings)
+    }
+}
+
+const fn s(glyph: &'static str) -> Cow<'static, str> {
+    Cow::Borrowed(glyph)
 }
 
 /// Glyphs that common monospace fonts (Menlo, SF Mono, Inconsolata, DejaVu
 /// Sans Mono, Fira Code, Hack, Source Code Pro) all have, so none is drawn
 /// from a fallback font that can overlap the next character.
 pub const UNICODE: Icons = Icons {
-    favourite: "◆",
-    new: "+",
-    excluded: "×",
-    snoozed: "z",
-    branch: "",
-    detached: "@",
-    ahead: "↑",
-    behind: "↓",
-    staged: "●",
-    unstaged: "±",
-    untracked: "?",
-    conflict: "≠",
-    stash: "$",
-    in_progress: "!",
-    gone: "×",
-    no_upstream: "↑?",
-    branches: "»",
-    error: "!!",
-    sync: "~",
-    worktree: "├",
-    submodule: "§",
+    favourite: s("◆"),
+    new: s("+"),
+    excluded: s("×"),
+    snoozed: s("z"),
+    branch: s(""),
+    detached: s("@"),
+    ahead: s("↑"),
+    behind: s("↓"),
+    staged: s("●"),
+    unstaged: s("±"),
+    untracked: s("?"),
+    conflict: s("≠"),
+    stash: s("$"),
+    in_progress: s("!"),
+    gone: s("×"),
+    no_upstream: s("↑?"),
+    branches: s("»"),
+    error: s("!!"),
+    sync: s("~"),
+    worktree: s("├"),
+    submodule: s("§"),
 };
 
 /// Nerd Font glyphs (codicons, Powerline). Each is followed by a space:
 /// non-Mono Nerd Fonts draw them up to two cells wide.
 pub const NERD: Icons = Icons {
-    favourite: "\u{eb59} ",   // cod-star_full
-    new: "\u{ec21} ",         // cod-sparkle_filled
-    excluded: "\u{eae7} ",    // cod-eye_closed
-    snoozed: "\u{ec08} ",     // cod-bell_slash
-    branch: "\u{e0a0} ",      // Powerline branch
-    detached: "\u{eafc} ",    // cod-git_commit
-    ahead: "\u{eaa0} ",       // cod-arrow_small_up
-    behind: "\u{ea9d} ",      // cod-arrow_small_down
-    staged: "\u{eadc} ",      // cod-diff_added
-    unstaged: "\u{eade} ",    // cod-diff_modified
-    untracked: "\u{eb32} ",   // cod-question
-    conflict: "\u{ea76} ",    // cod-close
-    stash: "\u{ea98} ",       // cod-archive
-    in_progress: "\u{ea6c} ", // cod-warning
-    gone: "\u{eac1} ",        // cod-close_all
-    no_upstream: "\u{ead0} ", // cod-debug_disconnect
-    branches: "\u{ea63} ",    // cod-repo_forked
-    error: "\u{ea87} ",       // cod-error
-    sync: "\u{ea77} ",        // cod-sync
-    worktree: "├",
-    submodule: "\u{eaec} ", // cod-file_submodule
+    favourite: s("\u{eb59} "),   // cod-star_full
+    new: s("\u{ec21} "),         // cod-sparkle_filled
+    excluded: s("\u{eae7} "),    // cod-eye_closed
+    snoozed: s("\u{ec08} "),     // cod-bell_slash
+    branch: s("\u{e0a0} "),      // Powerline branch
+    detached: s("\u{eafc} "),    // cod-git_commit
+    ahead: s("\u{eaa0} "),       // cod-arrow_small_up
+    behind: s("\u{ea9d} "),      // cod-arrow_small_down
+    staged: s("\u{eadc} "),      // cod-diff_added
+    unstaged: s("\u{eade} "),    // cod-diff_modified
+    untracked: s("\u{eb32} "),   // cod-question
+    conflict: s("\u{ea76} "),    // cod-close
+    stash: s("\u{ea98} "),       // cod-archive
+    in_progress: s("\u{ea6c} "), // cod-warning
+    gone: s("\u{eac1} "),        // cod-close_all
+    no_upstream: s("\u{ead0} "), // cod-debug_disconnect
+    branches: s("\u{ea63} "),    // cod-repo_forked
+    error: s("\u{ea87} "),       // cod-error
+    sync: s("\u{ea77} "),        // cod-sync
+    worktree: s("├"),
+    submodule: s("\u{eaec} "), // cod-file_submodule
 };
 
 /// Names accepted by [`by_name`] (`[ui] icons`).
@@ -124,27 +202,27 @@ pub fn by_name(name: &str) -> Icons {
 }
 
 pub const ASCII: Icons = Icons {
-    favourite: "*",
-    new: "+",
-    excluded: "x",
-    snoozed: "z",
-    branch: "",
-    detached: "@",
-    ahead: "^",
-    behind: "v",
-    staged: "S",
-    unstaged: "M",
-    untracked: "?",
-    conflict: "!",
-    stash: "$",
-    in_progress: "!!",
-    gone: "gone",
-    no_upstream: "-u",
-    branches: "b",
-    error: "ERR",
-    sync: "~",
-    worktree: "|",
-    submodule: "[]",
+    favourite: s("*"),
+    new: s("+"),
+    excluded: s("x"),
+    snoozed: s("z"),
+    branch: s(""),
+    detached: s("@"),
+    ahead: s("^"),
+    behind: s("v"),
+    staged: s("S"),
+    unstaged: s("M"),
+    untracked: s("?"),
+    conflict: s("!"),
+    stash: s("$"),
+    in_progress: s("!!"),
+    gone: s("gone"),
+    no_upstream: s("-u"),
+    branches: s("b"),
+    error: s("ERR"),
+    sync: s("~"),
+    worktree: s("|"),
+    submodule: s("[]"),
 };
 
 /// Flag badges (favourite, new, hidden, sync), shown before the name.
@@ -155,15 +233,15 @@ pub fn flags(e: &Entry, i: &Icons) -> Vec<Badge> {
         text: text.to_string(),
     };
     if e.flags.favourite {
-        v.push(b(Role::Favourite, i.favourite));
+        v.push(b(Role::Favourite, &i.favourite));
     }
     if e.flags.new {
-        v.push(b(Role::New, i.new));
+        v.push(b(Role::New, &i.new));
     }
     if e.flags.excluded {
-        v.push(b(Role::Hidden, i.excluded));
+        v.push(b(Role::Hidden, &i.excluded));
     } else if e.flags.snoozed {
-        v.push(b(Role::Hidden, i.snoozed));
+        v.push(b(Role::Hidden, &i.snoozed));
     }
     v
 }
@@ -268,14 +346,14 @@ mod tests {
         // every icon in both sets is non-empty except the optional branch glyph
         for set in [UNICODE, ASCII] {
             for s in [
-                set.favourite,
-                set.new,
-                set.ahead,
-                set.behind,
-                set.staged,
-                set.unstaged,
-                set.untracked,
-                set.stash,
+                &set.favourite,
+                &set.new,
+                &set.ahead,
+                &set.behind,
+                &set.staged,
+                &set.unstaged,
+                &set.untracked,
+                &set.stash,
             ] {
                 assert!(!s.is_empty());
             }

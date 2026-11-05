@@ -121,6 +121,8 @@ consume the same events.
   font is drawn from a fallback font and can overlap its neighbour. The
   `nerd` set uses Nerd Font glyphs for every icon, each followed by a
   space, since non-Mono Nerd Fonts draw them up to two cells wide.
+  `[ui.icon_overrides]` replaces single icons on top of either set, for
+  fonts with better glyphs (e.g. ★); unknown names warn.
 * **Detached on a tag** shows the tag (annotated first, then highest
   version by numeric comparison, `+N` for the rest). Tags on HEAD are
   found from packed refs' peeled ids, so this costs no object reads

@@ -170,6 +170,10 @@ fn default_host() -> String {
 fn yes() -> bool {
     true
 }
+fn example_icon_overrides() -> BTreeMap<&'static str, &'static str> {
+    BTreeMap::from([("favourite", "★")])
+}
+
 fn example_colors() -> BTreeMap<&'static str, &'static str> {
     BTreeMap::from([("favourite", "yellow"), ("branch", "bold magenta")])
 }
@@ -216,8 +220,21 @@ pub struct UiConfig {
     pub colors: BTreeMap<String, String>,
     /// Icon set: `unicode` (default), `nerd` (Nerd Font glyphs) or `ascii`.
     pub icons: String,
+    /// Per-icon overrides on top of the set, by name: favourite, new,
+    /// excluded, snoozed, branch, detached, ahead, behind, staged, unstaged,
+    /// untracked, conflict, stash, in_progress, gone, no_upstream, branches,
+    /// error, sync, worktree, submodule.
+    #[schemars(example = example_icon_overrides())]
+    pub icon_overrides: BTreeMap<String, String>,
     /// Show only repos needing attention at startup (`a` toggles).
     pub attention_only: bool,
+}
+
+impl UiConfig {
+    /// The icon set with overrides applied, plus warnings for unknown names.
+    pub fn icons(&self) -> (crate::badges::Icons, Vec<String>) {
+        crate::badges::by_name(&self.icons).with_overrides(&self.icon_overrides)
+    }
 }
 
 impl Default for UiConfig {
@@ -226,6 +243,7 @@ impl Default for UiConfig {
             theme: "terminal".into(),
             colors: BTreeMap::new(),
             icons: "unicode".into(),
+            icon_overrides: BTreeMap::new(),
             attention_only: true,
         }
     }

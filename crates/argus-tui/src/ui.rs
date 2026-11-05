@@ -425,44 +425,44 @@ pub fn help_lines() -> Vec<(String, String)> {
 }
 
 /// Every icon in `i` with its meaning and colour role, for the help legend.
-pub fn legend(i: &Icons) -> Vec<(&'static str, Role, &'static str)> {
+pub fn legend(i: &Icons) -> Vec<(&str, Role, &'static str)> {
     vec![
-        (i.favourite, Role::Favourite, "favourite"),
+        (&i.favourite, Role::Favourite, "favourite"),
         (
-            i.new,
+            &i.new,
             Role::New,
             "new (cloned or found, not yet acknowledged)",
         ),
-        (i.excluded, Role::Hidden, "excluded"),
-        (i.snoozed, Role::Hidden, "snoozed"),
+        (&i.excluded, Role::Hidden, "excluded"),
+        (&i.snoozed, Role::Hidden, "snoozed"),
         (
-            i.branch,
+            &i.branch,
             Role::DefaultBranch,
             "default branch (others in the branch colour)",
         ),
-        (i.detached, Role::Detached, "detached HEAD (tag or commit)"),
-        (i.ahead, Role::Ahead, "commits to push"),
+        (&i.detached, Role::Detached, "detached HEAD (tag or commit)"),
+        (&i.ahead, Role::Ahead, "commits to push"),
         (
-            i.behind,
+            &i.behind,
             Role::Behind,
             "commits to pull (as of the last fetch)",
         ),
-        (i.staged, Role::Staged, "staged changes"),
-        (i.unstaged, Role::Unstaged, "unstaged changes"),
-        (i.untracked, Role::Untracked, "untracked files"),
-        (i.conflict, Role::Conflict, "conflicts"),
-        (i.in_progress, Role::Conflict, "merge/rebase/… in progress"),
-        (i.stash, Role::Stash, "stashes"),
-        (i.gone, Role::Warning, "upstream branch deleted"),
-        (i.no_upstream, Role::Warning, "branch has no upstream"),
+        (&i.staged, Role::Staged, "staged changes"),
+        (&i.unstaged, Role::Unstaged, "unstaged changes"),
+        (&i.untracked, Role::Untracked, "untracked files"),
+        (&i.conflict, Role::Conflict, "conflicts"),
+        (&i.in_progress, Role::Conflict, "merge/rebase/… in progress"),
+        (&i.stash, Role::Stash, "stashes"),
+        (&i.gone, Role::Warning, "upstream branch deleted"),
+        (&i.no_upstream, Role::Warning, "branch has no upstream"),
         (
-            i.branches,
+            &i.branches,
             Role::Warning,
             "other branches with unpushed work",
         ),
-        (i.error, Role::Error, "error reading the repo"),
-        (i.worktree, Role::Dim, "linked worktree"),
-        (i.submodule, Role::Dim, "submodule"),
+        (&i.error, Role::Error, "error reading the repo"),
+        (&i.worktree, Role::Dim, "linked worktree"),
+        (&i.submodule, Role::Dim, "submodule"),
     ]
 }
 

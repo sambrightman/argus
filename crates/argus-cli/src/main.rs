@@ -464,7 +464,11 @@ fn pad(s: &str, width: usize) -> String {
 }
 
 fn icons(ws: &Workspace) -> Icons {
-    badges::by_name(&ws.config.ui.icons)
+    let (icons, warnings) = ws.config.ui.icons();
+    for w in warnings {
+        eprintln!("argus: config: {w}");
+    }
+    icons
 }
 
 fn status(ws: &Workspace, filter: ViewFilter, json: bool) -> Result<()> {

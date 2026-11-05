@@ -48,9 +48,11 @@ pub fn run(ws: Workspace, opts: Options) -> Result<(), Error> {
     check_terminal()?;
     let (mut theme, warnings) = theme::Theme::build(&ws.config.ui.theme, &ws.config.ui.colors);
     let mut theme_name = ws.config.ui.theme.clone();
+    let (mut icons, icon_warnings) = ws.config.ui.icons();
+    let mut icons_name = ws.config.ui.icons.clone();
     let mut app = App::new(ws);
     app.notices = opts.notices.clone();
-    if let Some(w) = warnings.first() {
+    if let Some(w) = warnings.iter().chain(&icon_warnings).next() {
         app.on_msg(Msg::Suspended(Err(format!("config: {w}"))));
     }
     let (tx, rx) = unbounded::<Msg>();
@@ -73,9 +75,13 @@ pub fn run(ws: Workspace, opts: Options) -> Result<(), Error> {
                 theme_name = app.ws.config.ui.theme.clone();
                 theme = theme::Theme::build(&theme_name, &app.ws.config.ui.colors).0;
             }
+            if app.ws.config.ui.icons != icons_name {
+                icons_name = app.ws.config.ui.icons.clone();
+                icons = app.ws.config.ui.icons().0;
+            }
             let view = ui::View {
                 theme: &theme,
-                icons: argus_core::badges::by_name(&app.ws.config.ui.icons),
+                icons: icons.clone(),
                 tick,
             };
             terminal.draw(|f| ui::draw(f, &mut app, &view))?;

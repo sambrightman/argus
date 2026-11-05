@@ -4,29 +4,29 @@ use argus_core::badges::{self, ASCII, Icons, NERD, UNICODE};
 use argus_core::testkit::{Sandbox, commit, git};
 use argus_core::{Config, State, Workspace};
 
-fn icons(set: &Icons) -> Vec<(&'static str, &'static str)> {
+fn icons(set: &Icons) -> Vec<(&'static str, &str)> {
     vec![
-        ("favourite", set.favourite),
-        ("new", set.new),
-        ("excluded", set.excluded),
-        ("snoozed", set.snoozed),
-        ("branch", set.branch),
-        ("detached", set.detached),
-        ("ahead", set.ahead),
-        ("behind", set.behind),
-        ("staged", set.staged),
-        ("unstaged", set.unstaged),
-        ("untracked", set.untracked),
-        ("conflict", set.conflict),
-        ("stash", set.stash),
-        ("in_progress", set.in_progress),
-        ("gone", set.gone),
-        ("no_upstream", set.no_upstream),
-        ("branches", set.branches),
-        ("error", set.error),
-        ("sync", set.sync),
-        ("worktree", set.worktree),
-        ("submodule", set.submodule),
+        ("favourite", &*set.favourite),
+        ("new", &*set.new),
+        ("excluded", &*set.excluded),
+        ("snoozed", &*set.snoozed),
+        ("branch", &*set.branch),
+        ("detached", &*set.detached),
+        ("ahead", &*set.ahead),
+        ("behind", &*set.behind),
+        ("staged", &*set.staged),
+        ("unstaged", &*set.unstaged),
+        ("untracked", &*set.untracked),
+        ("conflict", &*set.conflict),
+        ("stash", &*set.stash),
+        ("in_progress", &*set.in_progress),
+        ("gone", &*set.gone),
+        ("no_upstream", &*set.no_upstream),
+        ("branches", &*set.branches),
+        ("error", &*set.error),
+        ("sync", &*set.sync),
+        ("worktree", &*set.worktree),
+        ("submodule", &*set.submodule),
     ]
 }
 
@@ -98,4 +98,35 @@ fn detached_head_shows_its_tag_or_commit() {
     git(&r, &["switch", "-q", "--detach", "HEAD~1"]);
     let id = git(&r, &["rev-parse", "--short", "HEAD"]);
     assert_eq!(entry_badge(&r), format!("@{}", id.trim()));
+}
+
+#[test]
+fn icon_overrides_replace_single_icons_on_any_set() {
+    let c = Config::parse(
+        "[ui]\nicons = 'nerd'\n[ui.icon_overrides]\nfavourite = '★'\nuntracked = '…'\nbogus = 'x'",
+    )
+    .unwrap();
+    let (i, warnings) = c.ui.icons();
+    assert_eq!(i.favourite, "★");
+    assert_eq!(i.untracked, "…");
+    assert_eq!(i.ahead, NERD.ahead, "the rest come from the chosen set");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("bogus") && warnings[0].contains("favourite"),
+        "{warnings:?}"
+    );
+    // inverse: no overrides, the set as is
+    let (i, warnings) = Config::default().ui.icons();
+    assert_eq!(i, UNICODE);
+    assert!(warnings.is_empty());
+    // every icon can be overridden, by the names the legend uses
+    for name in badges::ICON_NAMES {
+        let c = Config::parse(&format!("[ui.icon_overrides]\n{name} = 'X'")).unwrap();
+        let (i, w) = c.ui.icons();
+        assert!(w.is_empty(), "{name}: {w:?}");
+        assert!(
+            icons(&i).iter().any(|(n, v)| n == name && *v == "X"),
+            "{name}"
+        );
+    }
 }

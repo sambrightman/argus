@@ -693,3 +693,26 @@ fn tui_without_a_terminal_explains_instead_of_panicking() {
             .stderr(predicate::str::contains("panicked").not());
     }
 }
+
+#[test]
+fn icon_overrides_show_in_status_and_unknown_names_warn() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(
+        &cfg,
+        "[ui.icon_overrides]\nunstaged = 'M'\nfavourit = '★'\n",
+    )
+    .unwrap();
+    argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("M1"))
+        .stdout(predicate::str::contains("±1").not())
+        .stderr(predicate::str::contains(
+            "unknown icon in [ui.icon_overrides]: favourit",
+        ));
+}

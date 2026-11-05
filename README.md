@@ -71,6 +71,8 @@ git_ui = "lazygit"               # or "emacsclient -t -e '(magit-status)'"
 [ui]
 theme = "terminal"               # terminal | dark | light | mono
 icons = "unicode"                # unicode | nerd (Nerd Font) | ascii
+[ui.icon_overrides]              # any icon, by its legend name
+favourite = "★"
 [ui.colors]                      # any role: name, #rrggbb, 0-255, "bold red on black"
 favourite = "yellow"
 ```
@@ -80,7 +82,8 @@ favourite = "yellow"
 submodules, errors…), deleted when you quit. In the TUI, `v t` and `v i`
 cycle themes and icon sets for the session, and `?` ends with a legend of
 every icon. The `unicode` icons only use characters common monospace fonts
-have; with a Nerd Font, `icons = "nerd"` uses its glyphs.
+have; with a Nerd Font, `icons = "nerd"` uses its glyphs. Override single
+icons in `[ui.icon_overrides]` if your font has something you prefer.
 
 A detached HEAD shows its tag if the commit has one (`@v1.2 +1` when there
 are more: annotated tags first, then the highest version), otherwise the
