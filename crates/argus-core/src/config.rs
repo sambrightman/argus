@@ -18,6 +18,11 @@ pub struct Config {
     pub roots: Vec<PathBuf>,
     /// Directory names never descended into.
     pub skip_dirs: Vec<String>,
+    /// Directories never descended into, as globs on the full path (`~`
+    /// allowed), e.g. `~/dev/archive`, `~/src/*/third_party`. Unlike a rule
+    /// with `exclude = true`, repos there aren't scanned at all.
+    #[schemars(example = vec!["~/dev/archive"])]
+    pub skip_paths: Vec<String>,
     /// Maximum directory depth below a root; deeper directories are skipped
     /// (with a warning). 0: no limit.
     pub max_depth: usize,
@@ -72,6 +77,7 @@ impl Default for Config {
             .into_iter()
             .map(String::from)
             .collect(),
+            skip_paths: vec![],
             max_depth: 6,
             skip_hidden: true,
             follow_symlinks: false,
@@ -262,11 +268,26 @@ pub enum ConfigError {
         path: PathBuf,
         source: toml::de::Error,
     },
-    #[error("invalid rule pattern {pattern:?}: {source}")]
+    #[error("invalid pattern {pattern:?}: {source}")]
     Pattern {
         pattern: String,
         source: globset::Error,
     },
+}
+
+/// `pattern` with `~` expanded and its leading directories before any glob
+/// character canonicalized (escaped, as they're now literal).
+fn resolve_prefix(pattern: &str) -> String {
+    let pattern = expand_tilde(Path::new(pattern)).display().to_string();
+    let glob_at = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
+    let split = pattern[..glob_at].rfind('/').unwrap_or(0);
+    let (prefix, rest) = pattern.split_at(split);
+    match std::fs::canonicalize(prefix) {
+        Ok(real) if !prefix.is_empty() => {
+            format!("{}{rest}", globset::escape(&real.display().to_string()))
+        }
+        _ => pattern,
+    }
 }
 
 impl Config {
@@ -300,6 +321,28 @@ impl Config {
                 *p = expand_tilde(p);
             }
         }
+    }
+
+    /// `skip_paths` as one matcher. Each pattern's literal leading
+    /// directories are resolved (symlinks, `~`), to match the paths scans
+    /// walk.
+    pub fn skip_path_set(&self) -> Result<globset::GlobSet, ConfigError> {
+        let mut set = globset::GlobSetBuilder::new();
+        for pattern in &self.skip_paths {
+            let glob = globset::GlobBuilder::new(&resolve_prefix(pattern))
+                .literal_separator(true)
+                .case_insensitive(true)
+                .build()
+                .map_err(|source| ConfigError::Pattern {
+                    pattern: pattern.clone(),
+                    source,
+                })?;
+            set.add(glob);
+        }
+        set.build().map_err(|source| ConfigError::Pattern {
+            pattern: self.skip_paths.join(", "),
+            source,
+        })
     }
 
     /// How many network operations to run at once: see `concurrency`.

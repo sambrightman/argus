@@ -247,6 +247,10 @@ rendering is snapshot-tested via `TestBackend`.
 * **Hidden directories are skipped** (`skip_hidden = true`): in a home
   directory they're mostly caches, so this avoids a long exclude list.
   Roots are always scanned, so a dot directory can be added as a root.
+* **`skip_paths`**: globs on full paths, checked on each subdirectory from
+  the listing (no extra syscalls) and on roots. A pattern's literal
+  leading directories are canonicalized once, as scans walk canonical
+  roots; symlinks in the pattern would otherwise never match.
 * **Symlinks** are not followed unless asked (`-L`, `follow_symlinks`).
   When followed, cycles are cut by remembering the real directory at each
   link taken on the way down; a link whose target contains one of them

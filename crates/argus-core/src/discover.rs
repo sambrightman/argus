@@ -37,6 +37,8 @@ pub struct Found {
 #[derive(Debug, Clone)]
 pub struct DiscoverOptions {
     pub skip_dirs: Vec<String>,
+    /// Directories (full paths, roots included) not descended into.
+    pub skip_paths: globset::GlobSet,
     /// 0: no limit.
     pub max_depth: usize,
     /// Keep descending into a repository's work tree looking for nested repos.
@@ -54,6 +56,7 @@ impl Default for DiscoverOptions {
     fn default() -> Self {
         Self {
             skip_dirs: vec![],
+            skip_paths: globset::GlobSet::empty(),
             max_depth: 6,
             scan_inside_repos: false,
             skip_hidden: true,
@@ -83,6 +86,9 @@ pub fn discover_all(roots: &[PathBuf], opts: &DiscoverOptions) -> Discovery {
             let Ok(root) = fs::canonicalize(root) else {
                 continue;
             };
+            if opts.skip_paths.is_match(&root) {
+                continue;
+            }
             let sink = &sink;
             s.spawn(move |s| visit(s, root, 0, opts, sink, Arc::default()));
         }
@@ -186,6 +192,7 @@ fn subdirs(
             name != ".git"
                 && !(opts.skip_hidden && name.starts_with('.'))
                 && !opts.skip_dirs.iter().any(|s| s == name.as_ref())
+                && !opts.skip_paths.is_match(&e.path)
         })
         .filter_map(|e| {
             if e.ty.is_dir() {

@@ -119,6 +119,7 @@ pub struct Workspace {
     pub config: Config,
     pub state: State,
     rules: RuleSet,
+    skip_paths: globset::GlobSet,
     pub entries: Vec<Entry>,
     /// Directories the last scan didn't enter because of `max_depth`.
     pub truncated: Vec<PathBuf>,
@@ -130,10 +131,12 @@ pub struct Workspace {
 impl Workspace {
     pub fn new(config: Config, state: State) -> Result<Self, ConfigError> {
         let rules = RuleSet::new(&config.rules)?;
+        let skip_paths = config.skip_path_set()?;
         Ok(Self {
             config,
             state,
             rules,
+            skip_paths,
             entries: vec![],
             truncated: vec![],
             partial: false,
@@ -147,6 +150,7 @@ impl Workspace {
     pub fn discover_options(&self) -> DiscoverOptions {
         DiscoverOptions {
             skip_dirs: self.config.skip_dirs.clone(),
+            skip_paths: self.skip_paths.clone(),
             max_depth: self.config.max_depth,
             scan_inside_repos: false,
             skip_hidden: self.config.skip_hidden,

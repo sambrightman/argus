@@ -646,3 +646,42 @@ fn scans_record_when_repos_with_state_were_seen() {
     assert_eq!(w.forget_missing(much_later), ["elsewhere"]);
     assert!(w.state.marks.contains_key(&key), "present repos keep theirs");
 }
+
+#[test]
+fn skip_paths_are_not_scanned() {
+    let sb = Sandbox::new();
+    for r in ["keep", "archive/old", "archive2/x", "a/vendored/v", "b/vendored/w"] {
+        sb.init(&format!("dev/{r}"));
+    }
+    let found = |w: &Workspace| -> Vec<String> {
+        let dev = std::fs::canonicalize(sb.path("dev")).unwrap();
+        w.entries
+            .iter()
+            .map(|e| e.path.strip_prefix(&dev).unwrap().display().to_string())
+            .collect()
+    };
+    let dev = sb.path("dev").display().to_string();
+    let w = ws(&sb, &format!("skip_paths = ['{dev}/archive', '{dev}/*/vendored']"));
+    assert_eq!(found(&w), ["archive2/x", "keep"]);
+    // patterns through a symlink match the real paths scans walk
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(sb.path("dev"), sb.path("link")).unwrap();
+        let link = sb.path("link").display().to_string();
+        let w = ws(&sb, &format!("skip_paths = ['{link}/archive', '{link}/*/vendored']"));
+        assert_eq!(found(&w), ["archive2/x", "keep"]);
+    }
+    // inverse: without them, everything
+    assert_eq!(found(&ws(&sb, "")).len(), 5);
+    // a root that matches is skipped too
+    let cfg = format!("roots = ['{dev}/archive']\nskip_paths = ['{dev}/archive']");
+    let mut w = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    w.scan();
+    assert!(w.entries.is_empty(), "{:?}", found(&w));
+    // bad patterns are config errors
+    let cfg = "skip_paths = ['~/dev/[oops']";
+    let Err(err) = Workspace::new(Config::parse(cfg).unwrap(), State::default()) else {
+        panic!("bad pattern accepted");
+    };
+    assert!(err.to_string().contains("[oops"), "{err}");
+}

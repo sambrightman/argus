@@ -156,7 +156,10 @@ to scan other directories just this once; `--max-depth N` overrides
 directories (or set `follow_symlinks = true`).
 
 Directories whose name starts with `.` are skipped (`skip_hidden`); add
-one as a root to scan it, e.g. `argus root add ~/.emacs.d`.
+one as a root to scan it, e.g. `argus root add ~/.emacs.d`. `skip_dirs`
+skips directories by name (`node_modules`, `target`…), and `skip_paths`
+by path, with globs: `skip_paths = ["~/dev/archive", "~/src/*/third_party"]`.
+To keep scanning repos but hide them, use a rule with `exclude = true`.
 
 A daily crontab entry:
 
