@@ -274,17 +274,16 @@ fn marks_select_targets_and_space_advances() {
 }
 
 #[test]
-fn toggle_favourite_persists_in_state_and_resorts() {
+fn toggle_favourite_edits_the_config_list_and_resorts() {
     let (_sb, mut app) = setup("");
     assert_eq!(names(&app), ["acme/dirty", "acme/feature", "acme/clean"]);
     app.on_key(key('j')); // feature
     app.on_key(key('m'));
+    let before = app.ws.config.clone();
     let fx = app.on_key(key('f'));
-    assert!(fx.contains(&Effect::SaveState));
-    assert_eq!(
-        app.ws.state.marks["github.com/acme/feature"].favourite,
-        Some(true)
-    );
+    // saved as a change from the config before
+    assert_eq!(fx, vec![Effect::SaveMarks(Box::new(before))]);
+    assert_eq!(app.ws.config.favourite, ["github.com/acme/feature"]);
     assert_eq!(names(&app), ["acme/feature", "acme/dirty", "acme/clean"]);
     assert_eq!(current(&app), "acme/feature", "cursor follows the repo");
     // inverse: a clean favourite stays below unclean repos
@@ -295,8 +294,9 @@ fn toggle_favourite_persists_in_state_and_resorts() {
     app.on_key(key('m'));
     app.on_key(key('f'));
     assert_eq!(
-        app.ws.state.marks["github.com/acme/clean"].favourite,
-        Some(false)
+        app.ws.config.favourite,
+        ["github.com/acme/feature"],
+        "off again: removed"
     );
 }
 
@@ -816,17 +816,11 @@ fn demo_renders_in_every_theme_and_icon_set() {
 
 #[test]
 fn clearing_marks_of_several_repos_asks_first() {
+    use argus_core::rules::Mark;
     let (_sb, mut app) = setup("");
-    let keys: Vec<String> = app.ws.entries.iter().map(|e| e.key.clone()).collect();
-    for k in &keys {
-        app.ws.state.mark(k, |m| m.favourite = Some(true));
-    }
-    app.ws.resolve_flags();
-    let favourites = |app: &App| {
-        keys.iter()
-            .filter(|k| app.ws.state.marks.contains_key(*k))
-            .count()
-    };
+    let all: Vec<usize> = (0..app.ws.entries.len()).collect();
+    app.ws.set_mark(&all, Mark::Favourite, true).unwrap();
+    let favourites = |app: &App| app.ws.config.favourite.len();
     for e in &app.ws.entries {
         app.marked.insert(e.path.clone());
     }
@@ -842,18 +836,20 @@ fn clearing_marks_of_several_repos_asks_first() {
     app.act(Action::ClearMarks);
     app.on_key(code(KeyCode::Esc));
     assert_eq!(favourites(&app), 3);
-    // y clears them
+    // y clears them, saving config and state
+    let before = app.ws.config.clone();
     app.act(Action::ClearMarks);
     let fx = app.on_key(key('y'));
-    assert!(fx.contains(&Effect::SaveState));
+    assert!(fx.contains(&Effect::SaveMarks(Box::new(before))) && fx.contains(&Effect::SaveState));
     assert_eq!(favourites(&app), 0);
-    // one repo losing marks: no question
-    app.ws.state.mark(&keys[0], |m| m.exclude = Some(true));
+    // one repo losing marks: no question (a snooze doesn't count)
+    app.ws.set_mark(&[0], Mark::Exclude, true).unwrap();
+    let k1 = app.ws.entries[1].key.clone();
     app.ws.state.snoozed.insert(
-        keys[1].clone(),
+        k1,
         jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
     );
     let fx = app.act(Action::ClearMarks);
     assert!(fx.contains(&Effect::SaveState) && matches!(app.mode, Mode::Normal));
-    assert!(app.ws.state.marks.is_empty() && app.ws.state.snoozed.is_empty());
+    assert!(app.ws.config.exclude.is_empty() && app.ws.state.snoozed.is_empty());
 }

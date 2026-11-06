@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use argus_core::fix::{self, Applied, FixKind};
 use argus_core::ops::{Op, OpOutcome};
+use argus_core::rules::Mark;
 use argus_core::status::RepoStatus;
 use argus_core::sync::{self, Job, SyncPlan};
 use argus_core::{Entry, ViewFilter, Workspace, paths};
@@ -97,6 +98,8 @@ pub enum Effect {
     },
     Open(String),
     SaveState,
+    /// Write the mark lists' changes since this config to the config file.
+    SaveMarks(Box<argus_core::Config>),
     Quit,
 }
 
@@ -676,12 +679,12 @@ impl App {
                 self.info("listing forges…");
                 return vec![Effect::PlanSync];
             }
-            ToggleFavourite => return self.toggle_mark(|m, f| m.favourite = Some(!f.favourite)),
-            ToggleSync => return self.toggle_mark(|m, f| m.sync = Some(!f.sync)),
-            ToggleExclude => return self.toggle_mark(|m, f| m.exclude = Some(!f.excluded)),
+            ToggleFavourite => return self.toggle_mark(Mark::Favourite),
+            ToggleSync => return self.toggle_mark(Mark::Sync),
+            ToggleExclude => return self.toggle_mark(Mark::Exclude),
             ClearMarks => {
                 let keys = self.selected_keys();
-                let n = self.ws.state.marked_count(&keys);
+                let n = self.ws.marked_count(&self.selected());
                 if n > 1 {
                     self.mode = Mode::Confirm {
                         question: format!("Clear marks of {n} repos?"),
@@ -778,32 +781,41 @@ impl App {
             .collect()
     }
 
-    fn toggle_mark(
-        &mut self,
-        f: impl Fn(&mut argus_core::state::Marks, &argus_core::rules::Flags),
-    ) -> Vec<Effect> {
+    fn toggle_mark(&mut self, m: Mark) -> Vec<Effect> {
         // Toggle relative to the first selected repo so a mixed selection converges.
         let sel = self.selected();
         let Some(&first) = sel.first() else {
             return vec![];
         };
-        let flags = self.ws.entries[first].flags.clone();
-        for i in sel {
-            let key = self.ws.entries[i].key.clone();
-            self.ws.state.mark(&key, |m| f(m, &flags));
+        let on = !m.of(&self.ws.entries[first].flags);
+        let before = self.ws.config.clone();
+        if let Err(e) = self.ws.set_mark(&sel, m, on) {
+            self.error(e.to_string());
+            return vec![];
         }
-        self.flags_changed()
+        self.rebuild();
+        vec![Effect::SaveMarks(Box::new(before))]
     }
 
     /// Carry out a confirmed (or harmless enough) destructive action.
     fn confirmed(&mut self, c: Confirmed) -> Vec<Effect> {
         match c {
             Confirmed::ClearMarks(keys) => {
-                for k in keys {
-                    self.ws.state.marks.remove(&k);
-                    self.ws.state.snoozed.remove(&k);
+                // by key: a scan may have arrived while asking
+                let indices: Vec<usize> = (0..self.ws.entries.len())
+                    .filter(|&i| keys.contains(&self.ws.entries[i].key))
+                    .collect();
+                let before = self.ws.config.clone();
+                if let Err(e) = self.ws.clear_marks(&indices) {
+                    self.error(e.to_string());
+                    return vec![];
                 }
-                self.flags_changed()
+                for k in &keys {
+                    self.ws.state.snoozed.remove(k);
+                }
+                let mut fx = vec![Effect::SaveMarks(Box::new(before))];
+                fx.extend(self.flags_changed());
+                fx
             }
         }
     }
@@ -924,7 +936,6 @@ impl App {
                 self.scanning = false;
                 self.ws.entries = entries;
                 self.ws.truncated = truncated;
-                self.ws.forget_missing(jiff::Timestamp::now());
                 self.ws.resolve_flags();
                 let mut parts = vec![format!("{} repos", self.ws.entries.len())];
                 parts.extend(self.notices.iter().cloned());

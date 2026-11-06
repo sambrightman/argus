@@ -15,6 +15,7 @@ use serde_json::{Map, Value as Json};
 
 use crate::config::Config;
 use crate::paths::{contract_tilde, expand_tilde};
+use crate::rules::Mark;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EditError {
@@ -30,6 +31,8 @@ pub enum EditError {
     },
     #[error("{path}: `roots` must be an array of strings")]
     RootsNotArray { path: PathBuf },
+    #[error("{path}: `{key}` must be a list")]
+    NotAList { path: PathBuf, key: &'static str },
     #[error("{0}: no such directory")]
     NoSuchDir(PathBuf),
     #[error("not configured as a root: {0}")]
@@ -434,6 +437,42 @@ pub fn remove_roots(path: &Path, dirs: &[PathBuf]) -> Result<Vec<String>, EditEr
     Ok(removed)
 }
 
+/// Write the `favourite`, `sync` and `exclude` changes from `before` to
+/// `after` into the config at `path` (created from the example if
+/// needed): entries gone from a list are removed, new ones appended, and
+/// the rest of the file is left as written. No changes, no write.
+pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result<(), EditError> {
+    let changes: Vec<(Mark, Vec<&String>, Vec<&String>)> = Mark::ALL
+        .into_iter()
+        .map(|m| {
+            let (old, new) = (m.list(before), m.list(after));
+            let removed: Vec<&String> = old.iter().filter(|e| !new.contains(e)).collect();
+            let added: Vec<&String> = new.iter().filter(|e| !old.contains(e)).collect();
+            (m, removed, added)
+        })
+        .filter(|(_, removed, added)| !removed.is_empty() || !added.is_empty())
+        .collect();
+    if changes.is_empty() {
+        return Ok(());
+    }
+    ensure_exists(path)?;
+    let (_, mut doc) = load(path)?;
+    for (m, removed, added) in changes {
+        let item = doc
+            .entry(m.name())
+            .or_insert_with(|| toml_edit::value(toml_edit::Array::new()));
+        let arr = item.as_array_mut().ok_or_else(|| EditError::NotAList {
+            path: path.into(),
+            key: m.name(),
+        })?;
+        arr.retain(|v| v.as_str().is_none_or(|s| !removed.iter().any(|r| *r == s)));
+        for a in added {
+            arr.push(a.as_str());
+        }
+    }
+    save(path, &doc.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,7 +501,7 @@ mod tests {
         assert_eq!(c.fix, d.fix);
         assert_eq!(c.ui.theme, d.ui.theme);
         assert!(c.roots.is_empty(), "roots are never guessed");
-        assert_eq!(c.rules.len(), 1);
+        assert!(c.favourite.is_empty() && c.sync.is_empty() && c.exclude.is_empty());
         assert_eq!(c.tracks.len(), 1);
         assert_eq!(
             c.tracks[0].host, "github.com",
@@ -492,9 +531,10 @@ mod tests {
                 "fix",
                 "tools",
                 "ui",
-                "rule",
+                "favourite",
+                "sync",
+                "exclude",
                 "track",
-                "match",
                 "owner",
                 "team",
                 "into",
@@ -665,5 +705,51 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn mark_lists_are_edited_in_place() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        let text = "# my config\nroots = [\"~/dev\"]\nfavourite = [\"a/x\", \"b/*\"] # keep\n\n[ui]\ntheme = \"dark\"\n";
+        std::fs::write(&p, text).unwrap();
+        let before = Config::parse(text).unwrap();
+        // nothing changed: the file isn't touched
+        update_mark_lists(&p, &before, &before).unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), text);
+        let mut after = before.clone();
+        after.favourite = vec!["b/*".into(), "c/y".into()];
+        after.exclude = vec!["!d/z".into()];
+        update_mark_lists(&p, &before, &after).unwrap();
+        let out = std::fs::read_to_string(&p).unwrap();
+        let c = Config::parse(&out).unwrap();
+        assert_eq!(c.favourite, ["b/*", "c/y"]);
+        assert_eq!(c.exclude, ["!d/z"], "created when missing");
+        assert!(c.sync.is_empty());
+        // the rest of the file is as written
+        assert!(
+            out.starts_with("# my config\nroots = [\"~/dev\"]\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("# keep") && out.contains("theme = \"dark\""),
+            "{out}"
+        );
+        assert_eq!(c.ui.theme, "dark");
+    }
+
+    #[test]
+    fn mark_lists_create_the_config_if_needed() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("new/config.toml");
+        let before = Config::default();
+        let after = Config {
+            sync: vec!["acme/*".into()],
+            ..Config::default()
+        };
+        update_mark_lists(&p, &before, &after).unwrap();
+        let c = Config::parse(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert_eq!(c.sync, ["acme/*"]);
+        assert_eq!(c.max_depth, Config::default().max_depth);
     }
 }

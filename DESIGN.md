@@ -84,16 +84,25 @@ consume the same events.
   supported, and so are repos nested inside repos (non-submodule). Skips
   `node_modules`, `target`, `.git` internals and configurable globs.
 * **Identity.** `host/owner/name` parsed from the `origin` remote URL (or the
-  first remote). Rules match against identity or path with globs.
-* **Rules.** `[[rule]] match = "github.com/acme/*"` sets `favourite`, `sync`
-  or `exclude`. Later rules override earlier ones.
+  first remote).
+* **Marks: `favourite`, `sync`, `exclude`** are lists in config, one per
+  kind. An entry is a repo or a glob, matched against identity, `owner/name`
+  or path; the last matching entry wins and `!` turns the mark off, as in
+  gitignore. Tracked owners' repos sync unless `sync` says `!`. Marking
+  from the TUI or CLI drops the repo's own (glob-free) entries, then adds
+  its name, or `!name`, only if the patterns left don't already give the
+  wanted value; clearing drops its own entries. Changes are written as
+  removals and appends with toml_edit, so the rest of the file stays as
+  written. They used to live in state, so config stayed hand-edited, but
+  argus already edits config for roots, and in config they can be
+  versioned and shared; nothing about them is temporary.
 * **Snooze.** Temporary exclusion until a date. Kept in the *state* file, not
   config, so config stays hand-edited.
-* **Forgetting.** State for a repo (marks, snooze, new flag) is dropped
-  after 30 days missing from scans. A clock per repo with state (`seen`)
-  rather than dropping on the first miss, so a moved or briefly missing
-  repo keeps its marks; scans with a missing root or overridden roots or
-  depth forget nothing.
+* **No forgetting.** Nothing about a repo is dropped because scans no
+  longer find it (an earlier version dropped marks after 30 days; that
+  broke the rule that permanent loss needs confirmation). Expired snoozes
+  are removed, as they end by design. Marks an older version kept in state
+  are left there and shown as config lines to copy.
 * **Tracked owners.** `[[track]] forge="github" owner="acme" [team="platform"] into="~/dev/acme" clone="auto"|"notify"`.
   Sync lists the forge, diffs it against local clones, and clones missing repos
   (`auto`) or flags them as *new on forge* (`notify`). Newly cloned repos are
@@ -176,8 +185,8 @@ rendering is snapshot-tested via `TestBackend`.
   proceeds; otherwise the command refuses before changing anything. Each
   such operation is tested declined, refused and confirmed. Recoverable
   operations (stash, commit, switch, fast-forward, pull, push) don't ask.
-  Clearing marks asks when more than one repo has favourite/sync/exclude
-  to lose; snoozes and "new" flags don't count. `root remove` doesn't ask.
+  Clearing marks asks when more than one repo has entries of its own in
+  the favourite/sync/exclude lists; snoozes and "new" flags don't count. `root remove` doesn't ask.
 
 * **"Unpushed" means "on no remote-tracking ref"**, not "ahead of upstream".
   On real data, a fork branch that tracked `upstream/master` but was pushed

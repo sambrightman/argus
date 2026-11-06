@@ -41,12 +41,24 @@ pub struct Config {
     /// Protocol for new clones; unset asks the forge (`gh config get git_protocol`).
     #[schemars(example = crate::forge::Protocol::Ssh)]
     pub clone_protocol: Option<crate::forge::Protocol>,
-    /// Pattern rules, applied in order; later rules win. Marks set from the
-    /// TUI or `argus mark` override them.
-    #[serde(rename = "rule")]
-    pub rules: Vec<Rule>,
+    /// Repos sorted above others in their group. Each entry is a repo or a
+    /// pattern, matched against its identity (`github.com/acme/app`),
+    /// `owner/name` or path (`~/dev/x`); `*` stays within one level, `**`
+    /// crosses them. Later entries win, and `!` turns it off again:
+    /// `["acme/*", "!acme/legacy"]`. Marking from the TUI or `argus mark`
+    /// edits these lists.
+    #[schemars(example = vec!["acme/app", "~/dev/mine/*"])]
+    pub favourite: Vec<String>,
+    /// Repos pulled on sync; entries as for `favourite`. Tracked owners'
+    /// repos are synced unless an entry here turns them off (`!`).
+    #[schemars(example = vec!["acme/*", "!acme/huge-monorepo"])]
+    pub sync: Vec<String>,
+    /// Repos hidden and skipped by bulk operations; entries as for
+    /// `favourite`.
+    #[schemars(example = vec!["~/dev/archive/**"])]
+    pub exclude: Vec<String>,
     /// Forge owners (orgs/users/teams) whose repos should all be cloned and
-    /// synced. Their repos are syncable unless a rule says otherwise.
+    /// synced. Their repos are syncable unless `sync` turns them off.
     #[serde(rename = "track")]
     pub tracks: Vec<Track>,
     /// Auto-fix behaviour.
@@ -85,34 +97,15 @@ impl Default for Config {
             follow_symlinks: false,
             concurrency: 0,
             clone_protocol: None,
-            rules: vec![],
+            favourite: vec![],
+            sync: vec![],
+            exclude: vec![],
             tracks: vec![],
             fix: FixConfig::default(),
             tools: Tools::default(),
             ui: UiConfig::default(),
         }
     }
-}
-
-/// A rule matches repositories by glob against any of:
-/// identity (`github.com/acme/widget`), slug (`acme/widget`) or absolute path.
-/// `*` does not cross `/`; use `**` for that.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Rule {
-    /// Glob, e.g. `my-org/*`, `github.com/someone/dotfiles`, `~/dev/scratch/**`.
-    #[serde(rename = "match")]
-    #[schemars(example = &"my-org/important-*")]
-    pub pattern: String,
-    /// Sort above everything else (unset: leave as is).
-    #[schemars(example = true)]
-    pub favourite: Option<bool>,
-    /// Pull on sync (unset: leave as is).
-    #[schemars(example = true)]
-    pub sync: Option<bool>,
-    /// Hide and skip in bulk operations (unset: leave as is).
-    #[schemars(example = true)]
-    pub exclude: Option<bool>,
 }
 
 #[derive(

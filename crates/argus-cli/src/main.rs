@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use argus_core::badges::{self, Badge, Role};
 use argus_core::fix::{self, FixKind};
 use argus_core::icons::{self, Icons};
+use argus_core::rules::Mark;
 use argus_core::runner::{self, Event};
 use argus_core::sync;
 use argus_core::{Config, State, ViewFilter, Workspace, configfile, paths};
@@ -86,7 +87,8 @@ enum Cmd {
         /// Repos to fix (glob on name/key/path); default all visible.
         patterns: Vec<String>,
     },
-    /// Set favourite / sync / exclude marks, or snooze repos.
+    /// Set favourite / sync / exclude (edits those lists in config), or
+    /// snooze repos.
     Mark(MarkArgs),
     /// Acknowledge "new" repos (all, or matching patterns).
     Ack {
@@ -154,19 +156,19 @@ struct MarkArgs {
     /// Sort above other repos in the same group.
     #[arg(long, overrides_with = "no_favourite")]
     favourite: bool,
-    /// Not a favourite, whatever the config rules say.
+    /// Not a favourite, whatever patterns in config say.
     #[arg(long)]
     no_favourite: bool,
     /// Pull on sync.
     #[arg(long, overrides_with = "no_sync")]
     sync: bool,
-    /// Don't pull on sync, whatever the config rules say.
+    /// Don't pull on sync, whatever patterns in config say.
     #[arg(long)]
     no_sync: bool,
     /// Hide and skip in bulk operations.
     #[arg(long, overrides_with = "include")]
     exclude: bool,
-    /// Not excluded, whatever the config rules say.
+    /// Not excluded, whatever patterns in config say.
     #[arg(long)]
     include: bool,
     /// Hide temporarily, e.g. `3d`, `12h`, `2w`.
@@ -175,7 +177,8 @@ struct MarkArgs {
     /// End a snooze early.
     #[arg(long)]
     unsnooze: bool,
-    /// Remove all marks (fall back to config rules).
+    /// Remove the repos' own entries from the favourite, sync and exclude
+    /// lists (patterns decide again) and end any snooze.
     #[arg(long)]
     clear: bool,
 }
@@ -312,6 +315,7 @@ fn run() -> Result<()> {
         Cmd::Tui => {
             let opts = argus_tui::Options {
                 state_path: ctx.state_path.clone(),
+                config_path: ctx.config_path.clone(),
                 forge_factory: forge_factory(),
                 notices,
             };
@@ -348,7 +352,7 @@ fn run() -> Result<()> {
         }
         Cmd::Mark(m) => {
             scan(&mut ws);
-            mark(&mut ws, &m, json, cli.yes)?;
+            mark(&mut ws, &ctx, &m, json, cli.yes)?;
             save_state(&ws, &ctx)?;
         }
         Cmd::Ack { patterns } => {
@@ -393,7 +397,6 @@ fn load(
 ) -> Result<(Workspace, Vec<String>)> {
     let mut config = Config::load(&ctx.config_path)?;
     let mut notices = vec![];
-    let partial = max_depth.is_some_and(|d| d != config.max_depth) || !roots.is_empty();
     if let Some(d) = max_depth {
         config.max_depth = d;
     }
@@ -410,9 +413,15 @@ fn load(
     }
     let mut state = State::load(&ctx.state_path)?;
     state.expire_snoozes(jiff::Timestamp::now());
-    let mut ws = Workspace::new(config, state)?;
-    ws.partial = partial;
-    Ok((ws, notices))
+    if let Some(lines) = state.old_marks_as_config() {
+        notices.push(format!(
+            "{} has marks from an older argus, no longer used: they're set in config now. \
+             Copy what you want into {}, then delete the [marks] tables from the state file:\n{lines}",
+            paths::contract_tilde(&ctx.state_path),
+            paths::contract_tilde(&ctx.config_path),
+        ));
+    }
+    Ok((Workspace::new(config, state)?, notices))
 }
 
 /// Scan, warning about directories skipped because of `max_depth`.
@@ -849,6 +858,7 @@ fn demo(ctx: &Ctx, theme: Option<String>, icons: Option<String>) -> Result<()> {
     ws.state.save(&state_path)?;
     let opts = argus_tui::Options {
         state_path,
+        config_path: d.sandbox.path("config.toml"),
         forge_factory: forge_factory(),
         notices: vec![format!(
             "demo repos in {} (deleted on quit) · v t: theme · v i: icons · ?: legend",
@@ -1087,7 +1097,7 @@ fn fix_cmd(
 
 // ---------- mark ----------
 
-fn mark(ws: &mut Workspace, m: &MarkArgs, json: bool, yes: bool) -> Result<()> {
+fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> Result<()> {
     let sel = ws.select(
         &m.patterns,
         ViewFilter {
@@ -1107,38 +1117,28 @@ fn mark(ws: &mut Workspace, m: &MarkArgs, json: bool, yes: bool) -> Result<()> {
         None => None,
     };
     if m.clear {
-        let keys: Vec<String> = sel.iter().map(|&i| ws.entries[i].key.clone()).collect();
-        let n = ws.state.marked_count(&keys);
+        let n = ws.marked_count(&sel);
         if n > 1 {
             confirm(&format!("clear marks of {n} repos"), yes)?;
         }
     }
-    let tri = |yes: bool, no: bool| {
-        if yes {
-            Some(Some(true))
-        } else if no {
-            Some(Some(false))
-        } else {
-            None
+    let before = ws.config.clone();
+    if m.clear {
+        ws.clear_marks(&sel)?;
+    }
+    for (mark, on, off) in [
+        (Mark::Favourite, m.favourite, m.no_favourite),
+        (Mark::Sync, m.sync, m.no_sync),
+        (Mark::Exclude, m.exclude, m.include),
+    ] {
+        if on || off {
+            ws.set_mark(&sel, mark, on)?;
         }
-    };
+    }
+    configfile::update_mark_lists(&ctx.config_path, &before, &ws.config)?;
     let mut records = vec![];
     for i in sel {
         let key = ws.entries[i].key.clone();
-        ws.state.mark(&key, |mk| {
-            if m.clear {
-                *mk = Default::default();
-            }
-            if let Some(v) = tri(m.favourite, m.no_favourite) {
-                mk.favourite = v;
-            }
-            if let Some(v) = tri(m.sync, m.no_sync) {
-                mk.sync = v;
-            }
-            if let Some(v) = tri(m.exclude, m.include) {
-                mk.exclude = v;
-            }
-        });
         if let Some(t) = snooze_until {
             ws.state.snoozed.insert(key.clone(), t);
         }
@@ -1146,10 +1146,15 @@ fn mark(ws: &mut Workspace, m: &MarkArgs, json: bool, yes: bool) -> Result<()> {
             ws.state.snoozed.remove(&key);
         }
         if json {
+            let f = &ws.entries[i].flags;
             records.push(serde_json::json!({
                 "repo": ws.entries[i].display_name(),
                 "key": key,
-                "marks": ws.state.marks.get(&key).copied().unwrap_or_default(),
+                "marks": {
+                    "favourite": f.favourite,
+                    "sync": f.sync,
+                    "exclude": f.excluded,
+                },
                 "snoozed_until": ws.state.snoozed.get(&key),
             }));
         } else {

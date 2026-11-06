@@ -1,4 +1,5 @@
-//! Resolution of per-repo flags from config rules, tracked owners and state.
+//! Resolution of per-repo flags from tracked owners, the `favourite`, `sync`
+//! and `exclude` lists in config, and state (snoozes, "new").
 
 use std::path::Path;
 
@@ -6,7 +7,7 @@ use globset::GlobMatcher;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Config, ConfigError, Rule, Track};
+use crate::config::{Config, ConfigError, Track};
 use crate::identity::RepoId;
 use crate::paths::expand_tilde;
 use crate::state::State;
@@ -30,57 +31,178 @@ impl Flags {
     }
 }
 
-#[derive(Clone)]
-struct CompiledRule {
-    matcher: GlobMatcher,
-    rule: Rule,
+/// The per-repo settings kept as lists in config: `favourite`, `sync`,
+/// `exclude`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Mark {
+    Favourite,
+    Sync,
+    Exclude,
 }
 
-#[derive(Clone)]
-pub struct RuleSet {
-    rules: Vec<CompiledRule>,
-}
+impl Mark {
+    pub const ALL: [Mark; 3] = [Mark::Favourite, Mark::Sync, Mark::Exclude];
 
-impl RuleSet {
-    pub fn new(rules: &[Rule]) -> Result<Self, ConfigError> {
-        let rules = rules
-            .iter()
-            .map(|r| {
-                let pattern = expand_tilde(Path::new(&r.pattern)).display().to_string();
-                let glob = globset::GlobBuilder::new(&pattern)
-                    .literal_separator(true)
-                    .case_insensitive(true)
-                    .build()
-                    .map_err(|source| ConfigError::Pattern {
-                        pattern: r.pattern.clone(),
-                        source,
-                    })?;
-                Ok(CompiledRule {
-                    matcher: glob.compile_matcher(),
-                    rule: r.clone(),
-                })
-            })
-            .collect::<Result<_, ConfigError>>()?;
-        Ok(Self { rules })
+    /// The config key.
+    pub fn name(self) -> &'static str {
+        match self {
+            Mark::Favourite => "favourite",
+            Mark::Sync => "sync",
+            Mark::Exclude => "exclude",
+        }
     }
 
-    fn matching<'a>(&'a self, id: Option<&RepoId>, path: &Path) -> impl Iterator<Item = &'a Rule> {
-        let full = id.map(|i| i.to_string());
-        let slug = id.map(|i| i.slug());
-        let path = path.to_path_buf();
-        self.rules.iter().filter_map(move |c| {
-            let hit = full.as_deref().is_some_and(|s| c.matcher.is_match(s))
-                || slug.as_deref().is_some_and(|s| c.matcher.is_match(s))
-                || c.matcher.is_match(&path);
-            hit.then_some(&c.rule)
+    pub fn list(self, c: &Config) -> &Vec<String> {
+        match self {
+            Mark::Favourite => &c.favourite,
+            Mark::Sync => &c.sync,
+            Mark::Exclude => &c.exclude,
+        }
+    }
+
+    pub fn list_mut(self, c: &mut Config) -> &mut Vec<String> {
+        match self {
+            Mark::Favourite => &mut c.favourite,
+            Mark::Sync => &mut c.sync,
+            Mark::Exclude => &mut c.exclude,
+        }
+    }
+
+    pub fn of(self, f: &Flags) -> bool {
+        match self {
+            Mark::Favourite => f.favourite,
+            Mark::Sync => f.sync,
+            Mark::Exclude => f.excluded,
+        }
+    }
+}
+
+/// One list entry: a repo or a pattern, `!` to turn the mark off.
+#[derive(Clone)]
+struct Entry {
+    text: String,
+    negate: bool,
+    /// No glob characters: names one repo (identity, `owner/name` or path).
+    literal: bool,
+    matcher: GlobMatcher,
+}
+
+impl Entry {
+    fn new(text: &str) -> Result<Self, ConfigError> {
+        let (negate, pattern) = match text.strip_prefix('!') {
+            Some(p) => (true, p),
+            None => (false, text),
+        };
+        let pattern = expand_tilde(Path::new(pattern)).display().to_string();
+        let matcher = globset::GlobBuilder::new(&pattern)
+            .literal_separator(true)
+            .case_insensitive(true)
+            .build()
+            .map_err(|source| ConfigError::Pattern {
+                pattern: text.to_string(),
+                source,
+            })?
+            .compile_matcher();
+        Ok(Self {
+            text: text.to_string(),
+            negate,
+            literal: !pattern.contains(['*', '?', '[', '{']),
+            matcher,
         })
     }
 
-    /// Whether a (possibly not yet cloned) repo is excluded by rules alone.
-    pub fn excludes(&self, id: &RepoId, path: &Path) -> bool {
-        self.matching(Some(id), path)
-            .fold(false, |acc, r| r.exclude.unwrap_or(acc))
+    /// Matches the repo's identity (`github.com/acme/app`), `owner/name`, or
+    /// path.
+    fn matches(&self, id: Option<&RepoId>, path: &Path) -> bool {
+        id.is_some_and(|i| self.matcher.is_match(i.to_string()) || self.matcher.is_match(i.slug()))
+            || self.matcher.is_match(path)
     }
+}
+
+/// The `favourite`, `sync` and `exclude` lists, compiled.
+#[derive(Clone)]
+pub struct RuleSet {
+    lists: [Vec<Entry>; 3],
+}
+
+impl RuleSet {
+    pub fn new(config: &Config) -> Result<Self, ConfigError> {
+        let compile = |m: Mark| -> Result<Vec<Entry>, ConfigError> {
+            m.list(config).iter().map(|t| Entry::new(t)).collect()
+        };
+        Ok(Self {
+            lists: [
+                compile(Mark::Favourite)?,
+                compile(Mark::Sync)?,
+                compile(Mark::Exclude)?,
+            ],
+        })
+    }
+
+    fn entries(&self, m: Mark) -> &[Entry] {
+        &self.lists[m as usize]
+    }
+
+    /// What `m`'s list says about the repo: its last matching entry, if any.
+    pub fn decide(&self, m: Mark, id: Option<&RepoId>, path: &Path) -> Option<bool> {
+        self.entries(m)
+            .iter()
+            .rev()
+            .find(|e| e.matches(id, path))
+            .map(|e| !e.negate)
+    }
+
+    /// Whether a (possibly not yet cloned) repo is excluded.
+    pub fn excludes(&self, id: &RepoId, path: &Path) -> bool {
+        self.decide(Mark::Exclude, Some(id), path).unwrap_or(false)
+    }
+
+    /// Entries of `m`'s list naming this repo itself (not patterns), as
+    /// written, `!` included.
+    pub fn own_entries(&self, m: Mark, id: Option<&RepoId>, path: &Path) -> Vec<String> {
+        self.entries(m)
+            .iter()
+            .filter(|e| e.literal && e.matches(id, path))
+            .map(|e| e.text.clone())
+            .collect()
+    }
+}
+
+/// Edit `m`'s list in `config` so the repo ends up `on`: drop the entries
+/// naming it, then add `name` (or `!name`) only if what's left (patterns,
+/// or `base` when nothing matches) doesn't already give `on`.
+pub fn set_mark(
+    config: &mut Config,
+    m: Mark,
+    id: Option<&RepoId>,
+    path: &Path,
+    name: &str,
+    base: bool,
+    on: bool,
+) -> Result<(), ConfigError> {
+    clear_mark(config, m, id, path)?;
+    let now = RuleSet::new(config)?.decide(m, id, path).unwrap_or(base);
+    if now != on {
+        let entry = if on {
+            name.to_string()
+        } else {
+            format!("!{name}")
+        };
+        m.list_mut(config).push(entry);
+    }
+    Ok(())
+}
+
+/// Drop the entries of `m`'s list naming the repo, so patterns decide.
+pub fn clear_mark(
+    config: &mut Config,
+    m: Mark,
+    id: Option<&RepoId>,
+    path: &Path,
+) -> Result<(), ConfigError> {
+    let own = RuleSet::new(config)?.own_entries(m, id, path);
+    m.list_mut(config).retain(|e| !own.contains(e));
+    Ok(())
 }
 
 /// The tracked owner a repo belongs to (first match), using the last forge
@@ -101,8 +223,8 @@ pub fn track_for<'a>(config: &'a Config, state: &State, id: &RepoId) -> Option<&
     })
 }
 
-/// Precedence (lowest to highest): track membership, config rules in order,
-/// interactive marks from state. Snoozes and "new" come from state only.
+/// Precedence (lowest to highest): track membership (sync), then each list's
+/// last matching entry. Snoozes and "new" come from state.
 pub fn resolve(
     config: &Config,
     rules: &RuleSet,
@@ -117,26 +239,13 @@ pub fn resolve(
         f.sync = t.sync;
         f.tracked = Some(t.key());
     }
-    for r in rules.matching(id, path) {
-        if let Some(v) = r.favourite {
-            f.favourite = v;
-        }
-        if let Some(v) = r.sync {
-            f.sync = v;
-        }
-        if let Some(v) = r.exclude {
-            f.excluded = v;
-        }
-    }
-    if let Some(m) = state.marks.get(key) {
-        if let Some(v) = m.favourite {
-            f.favourite = v;
-        }
-        if let Some(v) = m.sync {
-            f.sync = v;
-        }
-        if let Some(v) = m.exclude {
-            f.excluded = v;
+    for m in Mark::ALL {
+        if let Some(v) = rules.decide(m, id, path) {
+            match m {
+                Mark::Favourite => f.favourite = v,
+                Mark::Sync => f.sync = v,
+                Mark::Exclude => f.excluded = v,
+            }
         }
     }
     f.snoozed = state.is_snoozed(key, now);
@@ -153,15 +262,19 @@ mod tests {
         "2026-01-01T00:00:00Z".parse().unwrap()
     }
 
-    fn flags(cfg: &str, state: &State, id: &str, path: &str) -> Flags {
+    fn flags(cfg: &str, state: &State, url: &str, path: &str) -> Flags {
         let c = Config::parse(cfg).unwrap();
-        let rs = RuleSet::new(&c.rules).unwrap();
-        let id = RepoId::from_url(id);
+        let rs = RuleSet::new(&c).unwrap();
+        let id = RepoId::from_url(url);
         let key = id
             .as_ref()
             .map(|i| i.to_string())
             .unwrap_or(path.to_string());
         resolve(&c, &rs, state, id.as_ref(), &key, Path::new(path), now())
+    }
+
+    fn fav(cfg: &str, url: &str, path: &str) -> bool {
+        flags(cfg, &State::default(), url, path).favourite
     }
 
     const URL: &str = "git@github.com:acme/widget.git";
@@ -175,75 +288,40 @@ mod tests {
     }
 
     #[test]
-    fn rules_match_identity_slug_and_path() {
-        let s = State::default();
-        assert!(
-            flags(
-                "[[rule]]\nmatch='github.com/acme/*'\nfavourite=true",
-                &s,
-                URL,
-                "/x"
-            )
-            .favourite
-        );
-        assert!(
-            flags(
-                "[[rule]]\nmatch='acme/widget'\nfavourite=true",
-                &s,
-                URL,
-                "/x"
-            )
-            .favourite
-        );
-        assert!(
-            flags(
-                "[[rule]]\nmatch='/r/**'\nfavourite=true",
-                &s,
-                URL,
-                "/r/a/widget"
-            )
-            .favourite
-        );
-        assert!(
-            flags("[[rule]]\nmatch='ACME/*'\nfavourite=true", &s, URL, "/x").favourite,
-            "case-insensitive"
-        );
+    fn entries_match_identity_slug_and_path() {
+        assert!(fav("favourite = ['github.com/acme/*']", URL, "/x"));
+        assert!(fav("favourite = ['acme/widget']", URL, "/x"));
+        assert!(fav("favourite = ['/r/**']", URL, "/r/a/widget"));
+        assert!(fav("favourite = ['ACME/*']", URL, "/x"), "case-insensitive");
         // inverse: other owners, and `*` must not cross `/`
-        assert!(
-            !flags(
-                "[[rule]]\nmatch='github.com/other/*'\nfavourite=true",
-                &s,
-                URL,
-                "/x"
-            )
-            .favourite
-        );
-        assert!(
-            !flags(
-                "[[rule]]\nmatch='github.com/*'\nfavourite=true",
-                &s,
-                URL,
-                "/x"
-            )
-            .favourite
-        );
-        assert!(
-            !flags(
-                "[[rule]]\nmatch='/r/*'\nfavourite=true",
-                &s,
-                URL,
-                "/r/a/widget"
-            )
-            .favourite
-        );
+        assert!(!fav("favourite = ['github.com/other/*']", URL, "/x"));
+        assert!(!fav("favourite = ['github.com/*']", URL, "/x"));
+        assert!(!fav("favourite = ['/r/*']", URL, "/r/a/widget"));
     }
 
     #[test]
-    fn later_rules_override_earlier() {
-        let s = State::default();
-        let cfg = "[[rule]]\nmatch='acme/*'\nsync=true\n[[rule]]\nmatch='acme/widget'\nsync=false";
-        assert!(!flags(cfg, &s, URL, "/x").sync);
-        assert!(flags(cfg, &s, "git@github.com:acme/other.git", "/x").sync);
+    fn later_entries_win_and_bang_turns_off() {
+        let cfg = "sync = ['acme/*', '!acme/widget']";
+        assert!(!flags(cfg, &State::default(), URL, "/x").sync);
+        assert!(
+            flags(
+                cfg,
+                &State::default(),
+                "git@github.com:acme/other.git",
+                "/x"
+            )
+            .sync
+        );
+        // order matters: a later pattern turns it back on
+        assert!(fav("favourite = ['!acme/widget', 'acme/*']", URL, "/x"));
+        // the lists are independent
+        let f = flags(
+            "favourite = ['acme/*']\nexclude = ['!acme/*']",
+            &State::default(),
+            URL,
+            "/x",
+        );
+        assert!(f.favourite && !f.excluded && !f.sync);
     }
 
     #[test]
@@ -255,7 +333,7 @@ mod tests {
         assert!(!flags("[[track]]\nowner='acme'\nsync=false", &s, URL, "/x").sync);
         assert!(
             !flags(
-                "[[track]]\nowner='acme'\n[[rule]]\nmatch='acme/widget'\nsync=false",
+                "sync = ['!acme/widget']\n[[track]]\nowner='acme'",
                 &s,
                 URL,
                 "/x"
@@ -293,15 +371,6 @@ mod tests {
     }
 
     #[test]
-    fn state_marks_win_over_rules() {
-        let mut s = State::default();
-        s.mark("github.com/acme/widget", |m| m.exclude = Some(false));
-        assert!(!flags("[[rule]]\nmatch='acme/*'\nexclude=true", &s, URL, "/x").excluded);
-        s.mark("github.com/acme/widget", |m| m.exclude = Some(true));
-        assert!(flags("", &s, URL, "/x").excluded);
-    }
-
-    #[test]
     fn snooze_and_new_from_state() {
         let mut s = State::default();
         s.snoozed.insert(
@@ -321,7 +390,7 @@ mod tests {
     #[test]
     fn repos_without_identity_match_by_path_only() {
         let f = flags(
-            "[[rule]]\nmatch='/local/**'\nexclude=true",
+            "exclude = ['/local/**']",
             &State::default(),
             "",
             "/local/thing",
@@ -330,8 +399,100 @@ mod tests {
     }
 
     #[test]
-    fn bad_pattern_is_an_error() {
-        let c = Config::parse("[[rule]]\nmatch='a[b'\nfavourite=true").unwrap();
-        assert!(RuleSet::new(&c.rules).is_err());
+    fn bad_patterns_are_config_errors() {
+        let c = Config::parse("favourite = ['acme/[oops']").unwrap();
+        let Err(e) = RuleSet::new(&c) else {
+            panic!("accepted")
+        };
+        assert!(e.to_string().contains("[oops"), "{e}");
+    }
+
+    /// `set_mark` on the widget, returning the favourite list after.
+    fn set(list: &[&str], on: bool) -> Vec<String> {
+        let mut c = Config {
+            favourite: list.iter().map(|s| s.to_string()).collect(),
+            ..Config::default()
+        };
+        let id = RepoId::from_url(URL).unwrap();
+        set_mark(
+            &mut c,
+            Mark::Favourite,
+            Some(&id),
+            Path::new("/r/widget"),
+            "github.com/acme/widget",
+            false,
+            on,
+        )
+        .unwrap();
+        c.favourite
+    }
+
+    #[test]
+    fn marking_adds_or_removes_the_repo_itself_only() {
+        // on: added once; already on: unchanged
+        assert_eq!(set(&[], true), ["github.com/acme/widget"]);
+        assert_eq!(
+            set(&["acme/widget"], true),
+            ["github.com/acme/widget"],
+            "one spelling"
+        );
+        assert_eq!(
+            set(&["acme/*"], true),
+            ["acme/*"],
+            "a pattern already says so"
+        );
+        // off: its own entries go; a pattern still matching gets a `!`
+        assert_eq!(set(&["acme/widget", "other/x"], false), ["other/x"]);
+        assert_eq!(
+            set(&["acme/*"], false),
+            ["acme/*", "!github.com/acme/widget"]
+        );
+        assert_eq!(set(&["acme/*", "!acme/widget"], true), ["acme/*"]);
+        // spellings by identity, owner/name and path all count as its own
+        assert_eq!(
+            set(
+                &["/r/widget", "ACME/Widget", "github.com/acme/widget"],
+                false
+            ),
+            Vec::<String>::new()
+        );
+        // inverse: patterns and other repos are never touched
+        assert_eq!(
+            set(&["acme/wid*", "acme/widget2"], false),
+            ["acme/wid*", "acme/widget2", "!github.com/acme/widget"]
+        );
+    }
+
+    #[test]
+    fn marking_off_a_tracked_repo_needs_a_bang() {
+        let mut c = Config::parse("[[track]]\nowner='acme'").unwrap();
+        let id = RepoId::from_url(URL).unwrap();
+        let p = Path::new("/r/widget");
+        set_mark(
+            &mut c,
+            Mark::Sync,
+            Some(&id),
+            p,
+            "github.com/acme/widget",
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(c.sync, ["!github.com/acme/widget"]);
+        set_mark(
+            &mut c,
+            Mark::Sync,
+            Some(&id),
+            p,
+            "github.com/acme/widget",
+            true,
+            true,
+        )
+        .unwrap();
+        assert!(c.sync.is_empty());
+        // clearing drops its own entries only
+        c.sync = vec!["acme/*".into(), "!acme/widget".into()];
+        clear_mark(&mut c, Mark::Sync, Some(&id), p).unwrap();
+        assert_eq!(c.sync, ["acme/*"]);
     }
 }

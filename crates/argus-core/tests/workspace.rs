@@ -102,7 +102,7 @@ fn ordering_attention_then_favourites_then_severity_then_changes_then_name() {
         .args(["merge", "o"])
         .output();
 
-    let w = ws(&sb, "[[rule]]\nmatch='acme/fav*'\nfavourite=true");
+    let w = ws(&sb, "favourite = ['acme/fav*']");
     assert_eq!(
         names(&w, DEFAULT),
         vec![
@@ -134,7 +134,7 @@ fn excluded_and_snoozed_hidden_by_default() {
         sb.remote("acme", n);
         sb.clone_as_github("acme", n, &format!("dev/{n}"));
     }
-    let mut w = ws(&sb, "[[rule]]\nmatch='acme/gone'\nexclude=true");
+    let mut w = ws(&sb, "exclude = ['acme/gone']");
     w.state.snoozed.insert(
         "github.com/acme/nap".into(),
         "2999-01-01T00:00:00Z".parse().unwrap(),
@@ -241,8 +241,7 @@ fn sync_pulls_only_syncable_visible_repos() {
     sb.init("dev/local");
     let w = ws(
         &sb,
-        "[[rule]]\nmatch='acme/*'\nsync=true\n[[rule]]\nmatch='acme/nosync'\nsync=false\n\
-         [[rule]]\nmatch='acme/excl'\nexclude=true\n[[rule]]\nmatch='**/local'\nsync=true",
+        "sync = ['acme/*', '!acme/nosync', '**/local']\nexclude = ['acme/excl']",
     );
     let jobs = plan_updates(&w);
     let mut labels: Vec<_> = jobs.iter().map(|j| j.label.clone()).collect();
@@ -281,7 +280,7 @@ fn sync_uses_fetch_when_pull_is_impossible() {
     sb.remote("acme", "d");
     let r = sb.clone_as_github("acme", "d", "dev/d");
     git(&r, &["checkout", "-q", "--detach"]);
-    let w = ws(&sb, "[[rule]]\nmatch='acme/*'\nsync=true");
+    let w = ws(&sb, "sync = ['acme/*']");
     assert_eq!(plan_updates(&w)[0].op, Op::Fetch);
 }
 
@@ -345,7 +344,7 @@ fn track_clones_missing_and_reports_orphans() {
     let w = ws(
         &sb,
         &format!(
-            "[[track]]\nowner='acme'\ninclude_forks=false\ninto='{}'\n[[rule]]\nmatch='acme/secret'\nexclude=true",
+            "exclude = ['acme/secret']\n[[track]]\nowner='acme'\ninclude_forks=false\ninto='{}'",
             sb.path("dev/acme").display()
         ),
     );
@@ -568,7 +567,7 @@ fn sync_fetches_instead_of_pulling_when_a_pull_would_not_be_clean() {
         .envs(argus_core::testkit::subprocess_env(&sb.root()))
         .output()
         .unwrap();
-    let w = ws(&sb, "[[rule]]\nmatch='acme/*'\nsync=true");
+    let w = ws(&sb, "sync = ['acme/*']");
     let mut labels: Vec<_> = plan_updates(&w).into_iter().map(|j| j.label).collect();
     labels.sort();
     assert_eq!(
@@ -578,79 +577,76 @@ fn sync_fetches_instead_of_pulling_when_a_pull_would_not_be_clean() {
 }
 
 #[test]
-fn state_of_missing_repos_is_forgotten_after_a_grace_period() {
-    use argus_core::state::FORGET_AFTER;
-    use jiff::SignedDuration;
-    let t0: jiff::Timestamp = "2026-01-01T00:00:00Z".parse().unwrap();
-    let day = SignedDuration::from_hours(24);
-    let mut s = State::default();
-    for k in ["here", "gone"] {
-        s.mark(k, |m| m.favourite = Some(true));
+fn marking_edits_the_config_lists() {
+    use argus_core::rules::Mark;
+    let sb = Sandbox::new();
+    for n in ["app", "lib", "big"] {
+        sb.remote("acme", n);
+        sb.clone_as_github("acme", n, &format!("dev/{n}"));
     }
-    s.snoozed.insert("gone".into(), t0 + day * 400);
-    s.new.insert("gone".into());
-    let present: std::collections::HashSet<&str> = ["here"].into();
-    // first missed: the clock starts, nothing is lost
-    assert!(s.forget_missing(&present, true, t0).is_empty());
-    assert_eq!(s.seen["gone"], t0);
-    // within the grace period: kept; present repos stay current
-    let later = t0 + FORGET_AFTER - day;
-    assert!(s.forget_missing(&present, true, later).is_empty());
-    assert_eq!(s.seen["here"], later);
-    assert_eq!(s.seen["gone"], t0);
-    // inverse: an incomplete scan (a root missing) forgets nothing
-    let after = t0 + FORGET_AFTER + day;
-    assert!(s.forget_missing(&present, false, after).is_empty());
-    assert!(s.marks.contains_key("gone"));
-    // past it: marks, snooze, new flag and the clock go
-    assert_eq!(s.forget_missing(&present, true, after), ["gone"]);
-    assert!(!s.marks.contains_key("gone") && !s.snoozed.contains_key("gone"));
-    assert!(!s.new.contains("gone") && !s.seen.contains_key("gone"));
-    assert!(s.marks.contains_key("here"));
-    // a repo that comes back in time resets its clock
-    s.mark("back", |m| m.exclude = Some(true));
-    s.forget_missing(&present, true, after);
-    let back: std::collections::HashSet<&str> = ["here", "back"].into();
-    s.forget_missing(&back, true, after + FORGET_AFTER - day);
-    assert!(
-        s.forget_missing(&present, true, after + FORGET_AFTER + day)
-            .is_empty()
+    sb.init("dev/local");
+    let mut w = ws(&sb, "sync = ['acme/*']");
+    let at = |w: &Workspace, name: &str| {
+        w.entries
+            .iter()
+            .position(|e| e.display_name().ends_with(name))
+            .unwrap()
+    };
+    let (app, lib, big, local) = (at(&w, "app"), at(&w, "lib"), at(&w, "big"), at(&w, "local"));
+    // on: the repo's identity is added, and flags follow
+    w.set_mark(&[app, lib], Mark::Favourite, true).unwrap();
+    assert_eq!(
+        w.config.favourite,
+        ["github.com/acme/app", "github.com/acme/lib"]
     );
-    assert!(s.marks.contains_key("back"));
-    // clocks are kept only for repos with state
-    s.mark("here", |m| m.favourite = None);
-    s.forget_missing(&present, true, after);
-    assert!(!s.seen.contains_key("here"), "{:?}", s.seen);
+    assert!(w.entries[app].flags.favourite && !w.entries[big].flags.favourite);
+    // a repo without an identity is named by its path
+    w.set_mark(&[local], Mark::Exclude, true).unwrap();
+    assert_eq!(
+        w.config.exclude,
+        [argus_core::paths::contract_tilde(&w.entries[local].path)]
+    );
+    assert!(w.entries[local].flags.excluded);
+    // off against a pattern: a `!` entry
+    w.set_mark(&[big], Mark::Sync, false).unwrap();
+    assert_eq!(w.config.sync, ["acme/*", "!github.com/acme/big"]);
+    assert!(!w.entries[big].flags.sync && w.entries[app].flags.sync);
+    // marked: repos with entries of their own (patterns don't count)
+    assert_eq!(w.marked_count(&[app, lib, big, local]), 4);
+    assert_eq!(w.marked_count(&[app]), 1);
+    // clearing: own entries go, patterns decide again
+    w.clear_marks(&[app, big]).unwrap();
+    assert_eq!(w.config.favourite, ["github.com/acme/lib"]);
+    assert_eq!(w.config.sync, ["acme/*"]);
+    assert!(w.entries[big].flags.sync && !w.entries[app].flags.favourite);
+    assert_eq!(w.marked_count(&[app, big]), 0);
 }
 
 #[test]
-fn scans_record_when_repos_with_state_were_seen() {
+fn unmarking_a_tracked_repo_for_sync_writes_a_bang() {
+    use argus_core::rules::Mark;
+    let sb = Sandbox::new();
+    sb.remote("acme", "app");
+    sb.clone_as_github("acme", "app", "dev/app");
+    let mut w = ws(&sb, "[[track]]\nowner='acme'");
+    assert!(w.entries[0].flags.sync, "tracked: synced by default");
+    w.set_mark(&[0], Mark::Sync, false).unwrap();
+    assert_eq!(w.config.sync, ["!github.com/acme/app"]);
+    assert!(!w.entries[0].flags.sync);
+    w.set_mark(&[0], Mark::Sync, true).unwrap();
+    assert!(w.config.sync.is_empty() && w.entries[0].flags.sync);
+}
+
+#[test]
+fn marks_of_missing_repos_stay_in_config() {
     let sb = Sandbox::new();
     sb.init("dev/app");
-    let mut w = ws(&sb, "");
-    let key = w.entries[0].key.clone();
-    w.state.mark(&key, |m| m.favourite = Some(true));
-    w.state.mark("elsewhere", |m| m.favourite = Some(true));
+    let mut w = ws(&sb, "favourite = ['/elsewhere/gone', 'acme/*']");
     w.scan();
-    assert!(w.state.seen.contains_key(&key), "{:?}", w.state.seen);
-    // a repo missing from this scan keeps its marks (for now)
-    assert!(w.state.marks.contains_key("elsewhere"));
-    assert!(w.state.seen.contains_key("elsewhere"));
-    let much_later = jiff::Timestamp::now() + argus_core::state::FORGET_AFTER * 2;
-    // a partial scan (--root, --max-depth) forgets nothing
-    w.partial = true;
-    assert!(w.forget_missing(much_later).is_empty());
-    // nor does one with a root missing
-    w.partial = false;
-    w.config.roots.push(sb.path("unmounted"));
-    assert!(w.forget_missing(much_later).is_empty());
-    // inverse: a complete scan does
-    w.config.roots.pop();
-    assert_eq!(w.forget_missing(much_later), ["elsewhere"]);
-    assert!(
-        w.state.marks.contains_key(&key),
-        "present repos keep theirs"
-    );
+    std::fs::remove_dir_all(sb.path("dev/app")).unwrap();
+    w.scan();
+    assert!(w.entries.is_empty());
+    assert_eq!(w.config.favourite, ["/elsewhere/gone", "acme/*"]);
 }
 
 #[test]

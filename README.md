@@ -42,6 +42,12 @@ roots = ["~/dev", "~/work"]
 concurrency = 0                  # parallel fetch/pull/push/clone; 0: auto
 max_depth = 6                    # levels below each root; 0: no limit
 
+# repos or globs on github.com/org/repo, org/repo or path; later entries
+# win, ! turns off; marking in the TUI or `argus mark` edits these lists
+favourite = ["my-org/core-*"]
+sync = ["someone/dotfiles", "my-org/*", "!my-org/huge-monorepo"]
+exclude = ["~/dev/scratch/**"]
+
 [[track]]                        # keep a whole org cloned and pulled
 owner = "my-org"
 into = "~/work/my-org"
@@ -49,18 +55,6 @@ clone = "auto"                   # or "notify": only report new repos
 # team = "platform"              # only this team's repos
 # include_archived = false
 # include_forks = true
-
-[[rule]]                         # glob on github.com/org/repo, org/repo or path
-match = "my-org/core-*"
-favourite = true
-
-[[rule]]
-match = "someone/dotfiles"
-sync = true
-
-[[rule]]
-match = "~/dev/scratch/**"
-exclude = true
 
 [fix]
 auto = ["push", "switch-default"]  # kinds `x x` / `argus fix` apply without asking
@@ -96,11 +90,13 @@ A detached HEAD shows its tag if the commit has one (`@v1.2 +1` when there
 are more: annotated tags first, then the highest version), otherwise the
 commit id. Details list the commit and all its tags.
 
-Marks you set in the TUI (favourite, sync, exclude, snooze, "new") live in
-`~/.local/state/argus/state.toml`, never in your hand-written config. They
-override config rules. A repo's marks are dropped once scans haven't found
-it for 30 days; never while a root is missing (an unmounted disk) or when
-scanning with `--root` or `--max-depth`.
+Favourite, sync and exclude live in config: marking a repo in the TUI or
+with `argus mark` adds its name to the list (or `!name` to turn off what a
+pattern says) and saves the change, keeping the rest of the file as
+written; clearing removes the repo's own entries, so patterns decide
+again. Nothing is dropped for repos that have gone. Snoozes and "new"
+flags are kept in `~/.local/state/argus/state.toml`. Marks an older argus
+kept there are shown as config lines to copy, and left in place.
 
 Credentials and git behaviour are yours: argus runs `git pull`/`push`/`clone`
 itself, so `pull.rebase`, `rebase.autoStash`, hooks, signing, credential
@@ -179,7 +175,7 @@ directory name at any depth (`node_modules`, `*.egg-info`); starting with
 `/` or `~` it's a full path (`~/dev/archive`, `~/src/*/third_party`); any
 other with a `/` is below each root (`go/pkg`, in the defaults: the Go
 module cache under a root). Roots are always scanned.
-To keep scanning repos but hide them, use a rule with `exclude = true`.
+To keep scanning repos but hide them, list them in `exclude`.
 
 A daily crontab entry:
 

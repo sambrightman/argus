@@ -13,7 +13,7 @@ use crate::config::{Config, ConfigError};
 use crate::discover::{self, DiscoverOptions, RepoKind, Skip};
 use crate::identity::RepoId;
 use crate::paths::contract_tilde;
-use crate::rules::{self, Flags, RuleSet};
+use crate::rules::{self, Flags, Mark, RuleSet};
 use crate::state::State;
 use crate::status::{self, RepoStatus, StatusOptions};
 
@@ -122,14 +122,11 @@ pub struct Workspace {
     pub entries: Vec<Entry>,
     /// Directories the last scan didn't enter because of `max_depth`.
     pub truncated: Vec<PathBuf>,
-    /// Roots or depth differ from the config (`--root`, `--max-depth`), so
-    /// scans may miss repos: they forget no state.
-    pub partial: bool,
 }
 
 impl Workspace {
     pub fn new(config: Config, state: State) -> Result<Self, ConfigError> {
-        let rules = RuleSet::new(&config.rules)?;
+        let rules = RuleSet::new(&config)?;
         Skip::new(&config.skip, &config.roots)
             .map_err(|(pattern, source)| ConfigError::Pattern { pattern, source })?;
         Ok(Self {
@@ -138,7 +135,6 @@ impl Workspace {
             rules,
             entries: vec![],
             truncated: vec![],
-            partial: false,
         })
     }
 
@@ -177,17 +173,63 @@ impl Workspace {
             })
             .collect();
         self.refresh_all();
-        self.forget_missing(Timestamp::now());
     }
 
-    /// After a scan: drop state of repos long missing (see
-    /// [`State::forget_missing`]). Nothing is dropped after a partial scan
-    /// or while a root is missing, e.g. an unmounted disk.
-    pub fn forget_missing(&mut self, now: Timestamp) -> Vec<String> {
-        let present: std::collections::HashSet<&str> =
-            self.entries.iter().map(|e| e.key.as_str()).collect();
-        let complete = !self.partial && self.config.roots.iter().all(|r| r.is_dir());
-        self.state.forget_missing(&present, complete, now)
+    /// The entry naming a repo in the mark lists: its identity, or its path
+    /// (`~/…`) without one.
+    fn mark_name(e: &Entry) -> String {
+        match &e.id {
+            Some(id) => id.to_string(),
+            None => contract_tilde(&e.path),
+        }
+    }
+
+    /// Mark (or unmark) the repos at `indices` in `config` (see
+    /// [`rules::set_mark`]); flags follow. Saving config is the caller's.
+    pub fn set_mark(&mut self, indices: &[usize], m: Mark, on: bool) -> Result<(), ConfigError> {
+        for &i in indices {
+            let e = &self.entries[i];
+            let base = m == Mark::Sync
+                && e.id
+                    .as_ref()
+                    .and_then(|id| rules::track_for(&self.config, &self.state, id))
+                    .is_some_and(|t| t.sync);
+            let (id, path, name) = (e.id.clone(), e.path.clone(), Self::mark_name(e));
+            rules::set_mark(&mut self.config, m, id.as_ref(), &path, &name, base, on)?;
+        }
+        self.marks_changed()
+    }
+
+    /// Drop the entries naming the repos at `indices` from every mark list,
+    /// so patterns decide again.
+    pub fn clear_marks(&mut self, indices: &[usize]) -> Result<(), ConfigError> {
+        for &i in indices {
+            let (id, path) = (self.entries[i].id.clone(), self.entries[i].path.clone());
+            for m in Mark::ALL {
+                rules::clear_mark(&mut self.config, m, id.as_ref(), &path)?;
+            }
+        }
+        self.marks_changed()
+    }
+
+    /// How many of the repos at `indices` have entries of their own in the
+    /// mark lists: clearing those of more than one needs confirmation.
+    pub fn marked_count(&self, indices: &[usize]) -> usize {
+        indices
+            .iter()
+            .filter(|&&i| {
+                let e = &self.entries[i];
+                Mark::ALL
+                    .iter()
+                    .any(|&m| !self.rules.own_entries(m, e.id.as_ref(), &e.path).is_empty())
+            })
+            .count()
+    }
+
+    fn marks_changed(&mut self) -> Result<(), ConfigError> {
+        self.rules = RuleSet::new(&self.config)?;
+        self.resolve_flags();
+        Ok(())
     }
 
     pub fn refresh_all(&mut self) {

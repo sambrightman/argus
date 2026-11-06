@@ -15,10 +15,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use argus_core::Workspace;
-use argus_core::fix;
 use argus_core::runner::{self, Event as RunEvent};
 use argus_core::status::{self, StatusOptions};
 use argus_core::sync::{self, ForgeFactory};
+use argus_core::{configfile, fix};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use crossterm::event::{self, Event, KeyEventKind};
 
@@ -26,6 +26,8 @@ use app::{App, Effect, Msg};
 
 pub struct Options {
     pub state_path: PathBuf,
+    /// Where marks (favourite, sync, exclude) are saved.
+    pub config_path: PathBuf,
     pub forge_factory: ForgeFactory<'static>,
     /// Startup notices (e.g. the current-directory fallback), shown after scans.
     pub notices: Vec<String>,
@@ -124,6 +126,12 @@ impl Runtime {
         let tx = self.tx.clone();
         match e {
             Effect::Quit => app.quit = true,
+            Effect::SaveMarks(before) => {
+                let path = &self.opts.config_path;
+                if let Err(err) = configfile::update_mark_lists(path, &before, &app.ws.config) {
+                    app.on_msg(Msg::Suspended(Err(err.to_string())));
+                }
+            }
             Effect::SaveState => {
                 if let Err(err) = app.ws.state.save(&self.opts.state_path) {
                     app.on_msg(Msg::Suspended(Err(err.to_string())));

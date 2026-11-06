@@ -413,7 +413,7 @@ fn sync_pulls_syncable_and_reports_failures_with_exit_code() {
     three(&sb);
     sb.advance_remote("acme", "clean", "upstream-file");
     let cfg = sb.path("cfg.toml");
-    std::fs::write(&cfg, "[[rule]]\nmatch = 'acme/clean'\nsync = true\n").unwrap();
+    std::fs::write(&cfg, "sync = ['acme/clean']\n").unwrap();
     argus(&sb)
         .arg("--config")
         .arg(&cfg)
@@ -985,4 +985,77 @@ fn clearing_marks_of_several_repos_needs_confirmation() {
         .args(["mark", "acme/*", "--clear"])
         .assert()
         .success();
+}
+
+#[test]
+fn marks_are_written_to_the_config_lists() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "# mine\nsync = ['acme/*']\n").unwrap();
+    let mark = |args: &[&str]| {
+        argus(&sb)
+            .arg("--config")
+            .arg(&cfg)
+            .arg("mark")
+            .args(args)
+            .assert()
+            .success();
+    };
+    mark(&["acme/clean", "--favourite"]);
+    mark(&["acme/dirty", "--no-sync"]);
+    mark(&["acme/feature", "--exclude"]);
+    let text = std::fs::read_to_string(&cfg).unwrap();
+    let c = argus_core::Config::parse(&text).unwrap();
+    assert_eq!(c.favourite, ["github.com/acme/clean"]);
+    assert_eq!(c.sync, ["acme/*", "!github.com/acme/dirty"]);
+    assert_eq!(c.exclude, ["github.com/acme/feature"]);
+    assert!(text.starts_with("# mine\n"), "{text}");
+    // --clear: the repo's own entries go, patterns decide again
+    mark(&["acme/dirty", "--clear"]);
+    let c = argus_core::Config::parse(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+    assert_eq!(c.sync, ["acme/*"]);
+}
+
+#[test]
+fn old_marks_in_state_are_shown_as_config_and_kept() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let state = sb.path("state.toml");
+    let old = "[marks.\"github.com/acme/clean\"]\nfavourite = true\n";
+    std::fs::write(&state, old).unwrap();
+    let run = |args: &[&str]| {
+        argus(&sb)
+            .arg("--state")
+            .arg(&state)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let out = run(&["status"]);
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        err.contains("favourite = [\"github.com/acme/clean\"]"),
+        "{err}"
+    );
+    assert!(err.contains("config"), "{err}");
+    // no longer used: clean isn't a favourite
+    let v = json(
+        &sb,
+        &["--state", state.to_str().unwrap(), "status", "--all"],
+    );
+    let clean = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["key"] == "github.com/acme/clean")
+        .unwrap();
+    assert_eq!(clean["flags"]["favourite"], false);
+    // a command that saves state keeps them
+    assert!(run(&["ack"]).status.success());
+    let text = std::fs::read_to_string(&state).unwrap();
+    assert!(
+        text.contains("[marks.\"github.com/acme/clean\"]") && text.contains("favourite = true"),
+        "{text}"
+    );
 }

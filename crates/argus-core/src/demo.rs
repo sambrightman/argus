@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use crate::rules::Mark;
 use crate::testkit::{Sandbox, commit, git, git_may_fail, write};
 use crate::workspace::Workspace;
 
@@ -151,26 +152,26 @@ fn conflicting_branch(r: &std::path::Path) {
 }
 
 impl Demo {
-    /// Set the marks the sample repos are named after (favourite, new,
-    /// excluded, snoozed) in `ws.state`. Call after a scan, so repo keys
-    /// are known.
+    /// Set the marks the sample repos are named after: favourite and
+    /// excluded in `ws.config`, new and snoozed in `ws.state`. Call after a
+    /// scan, so repo keys are known.
     pub fn apply_marks(&self, ws: &mut Workspace) {
-        let key = |ws: &Workspace, name: &str| {
+        let index = |ws: &Workspace, name: &str| {
             ws.entries
                 .iter()
-                .find(|e| e.display_name() == format!("demo/{name}"))
-                .map(|e| e.key.clone())
+                .position(|e| e.display_name() == format!("demo/{name}"))
         };
-        for name in ["favourite", "clean"] {
-            if let Some(k) = key(ws, name) {
-                ws.state.mark(&k, |m| m.favourite = Some(true));
-            }
+        let key = |ws: &Workspace, name: &str| index(ws, name).map(|i| ws.entries[i].key.clone());
+        let favourites: Vec<usize> = ["favourite", "clean"]
+            .iter()
+            .filter_map(|n| index(ws, n))
+            .collect();
+        ws.set_mark(&favourites, Mark::Favourite, true).unwrap();
+        if let Some(i) = index(ws, "excluded") {
+            ws.set_mark(&[i], Mark::Exclude, true).unwrap();
         }
         if let Some(k) = key(ws, "new") {
             ws.state.new.insert(k);
-        }
-        if let Some(k) = key(ws, "excluded") {
-            ws.state.mark(&k, |m| m.exclude = Some(true));
         }
         if let Some(k) = key(ws, "snoozed") {
             let until = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(24);

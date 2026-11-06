@@ -1,14 +1,15 @@
 //! Machine-written state: marks made from the UI, snoozes, forge listings and
 //! "new" flags. Saved atomically (write temp + rename).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use jiff::{SignedDuration, Timestamp};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-/// Marks set interactively. Keys are repo keys (identity string, or path for
-/// repos without a forge identity). They override config rules.
+/// Marks as older versions of argus kept them, per repo key. They now live
+/// in config (`favourite`, `sync`, `exclude`); see
+/// [`State::old_marks_as_config`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Marks {
@@ -18,12 +19,6 @@ pub struct Marks {
     pub sync: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude: Option<bool>,
-}
-
-impl Marks {
-    pub fn is_empty(&self) -> bool {
-        *self == Marks::default()
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -37,6 +32,9 @@ pub struct TrackState {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
+    /// Marks from older versions, kept unchanged so nothing is lost (they're
+    /// no longer used); remove them by hand once copied to config.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub marks: BTreeMap<String, Marks>,
     /// Temporarily excluded until the timestamp.
     pub snoozed: BTreeMap<String, Timestamp>,
@@ -44,14 +42,7 @@ pub struct State {
     pub new: BTreeSet<String>,
     pub tracks: BTreeMap<String, TrackState>,
     pub last_sync: Option<Timestamp>,
-    /// When a scan last found each repo that has marks, a snooze or a new
-    /// flag; see [`State::forget_missing`].
-    pub seen: BTreeMap<String, Timestamp>,
 }
-
-/// How long a repo can be missing from scans before its state is dropped:
-/// long enough for an unmounted disk or a temporary `--root`.
-pub const FORGET_AFTER: SignedDuration = SignedDuration::from_hours(30 * 24);
 
 #[derive(Debug, thiserror::Error)]
 pub enum StateError {
@@ -109,56 +100,32 @@ impl State {
         before != self.snoozed.len()
     }
 
-    /// After a scan that found `present`: note when repos with state were
-    /// seen, and drop the state of those missing for [`FORGET_AFTER`]. An
-    /// incomplete scan (`complete` false, e.g. a root is missing) only
-    /// starts clocks. Returns the forgotten keys.
-    pub fn forget_missing(
-        &mut self,
-        present: &HashSet<&str>,
-        complete: bool,
-        now: Timestamp,
-    ) -> Vec<String> {
-        let keys: BTreeSet<String> = self
-            .marks
-            .keys()
-            .chain(self.snoozed.keys())
-            .chain(&self.new)
-            .cloned()
-            .collect();
-        self.seen.retain(|k, _| keys.contains(k));
-        let mut forgotten = vec![];
-        for k in keys {
-            if present.contains(k.as_str()) {
-                self.seen.insert(k, now);
-                continue;
-            }
-            let since = *self.seen.entry(k.clone()).or_insert(now);
-            if complete && now.duration_since(since) > FORGET_AFTER {
-                self.marks.remove(&k);
-                self.snoozed.remove(&k);
-                self.new.remove(&k);
-                self.seen.remove(&k);
-                forgotten.push(k);
-            }
+    /// Marks from an older version (see `marks`) as config lines to copy,
+    /// if there are any.
+    pub fn old_marks_as_config(&self) -> Option<String> {
+        if self.marks.is_empty() {
+            return None;
         }
-        forgotten
-    }
-
-    /// How many of `keys` have marks (favourite, sync, exclude) to lose:
-    /// clearing those of more than one repo needs confirmation.
-    pub fn marked_count<'a>(&self, keys: impl IntoIterator<Item = &'a String>) -> usize {
-        keys.into_iter()
-            .filter(|k| self.marks.get(*k).is_some_and(|m| !m.is_empty()))
-            .count()
-    }
-
-    pub fn mark(&mut self, key: &str, f: impl FnOnce(&mut Marks)) {
-        let m = self.marks.entry(key.to_string()).or_default();
-        f(m);
-        if m.is_empty() {
-            self.marks.remove(key);
-        }
+        let list = |get: fn(&Marks) -> Option<bool>| {
+            let entries: Vec<String> = self
+                .marks
+                .iter()
+                .filter_map(|(k, m)| {
+                    get(m).map(|on| format!("{:?}", if on { k.clone() } else { format!("!{k}") }))
+                })
+                .collect();
+            format!("[{}]", entries.join(", "))
+        };
+        let lines = [
+            ("favourite", list(|m| m.favourite)),
+            ("sync", list(|m| m.sync)),
+            ("exclude", list(|m| m.exclude)),
+        ]
+        .into_iter()
+        .filter(|(_, l)| l != "[]")
+        .map(|(k, l)| format!("{k} = {l}"))
+        .collect::<Vec<_>>();
+        Some(lines.join("\n"))
     }
 }
 
@@ -172,7 +139,6 @@ mod tests {
         let p = d.path().join("sub/state.toml");
         assert_eq!(State::load(&p).unwrap(), State::default());
         let mut s = State::default();
-        s.mark("github.com/a/b", |m| m.favourite = Some(true));
         s.snoozed
             .insert("x".into(), "2030-01-01T00:00:00Z".parse().unwrap());
         s.new.insert("/p".into());
@@ -201,12 +167,32 @@ mod tests {
     }
 
     #[test]
-    fn clearing_marks_removes_entry() {
-        let mut s = State::default();
-        s.mark("k", |m| m.sync = Some(true));
-        assert!(s.marks.contains_key("k"));
-        s.mark("k", |m| m.sync = None);
-        assert!(!s.marks.contains_key("k"));
+    fn old_marks_are_kept_and_shown_as_config() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("state.toml");
+        std::fs::write(
+            &p,
+            "[marks.\"github.com/a/b\"]\nfavourite = true\nsync = false\n\
+             [marks.\"/home/me/x\"]\nexclude = true\n\
+             [seen]\n\"github.com/a/b\" = 2026-01-01T00:00:00Z\n",
+        )
+        .unwrap();
+        let s = State::load(&p).unwrap();
+        assert_eq!(
+            s.old_marks_as_config().unwrap(),
+            "favourite = [\"github.com/a/b\"]\nsync = [\"!github.com/a/b\"]\nexclude = [\"/home/me/x\"]"
+        );
+        // saving keeps them (never lost without asking); the old clocks go
+        s.save(&p).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            text.contains("github.com/a/b") && text.contains("/home/me/x"),
+            "{text}"
+        );
+        assert!(!text.contains("seen"), "{text}");
+        assert_eq!(State::load(&p).unwrap().marks, s.marks);
+        // inverse: nothing to show
+        assert_eq!(State::default().old_marks_as_config(), None);
     }
 }
 
