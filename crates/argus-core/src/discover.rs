@@ -49,6 +49,33 @@ pub struct DiscoverOptions {
     /// by several paths is reported once: by its real path if that was
     /// walked, else by the first path in sort order.
     pub follow_symlinks: bool,
+    #[doc(hidden)]
+    pub tuning: Tuning,
+}
+
+/// Optimizations of the `-L` walk, switchable to compare against the plain
+/// walk (tests, the `discover` example). Both on by default.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub struct Tuning {
+    /// Take found repos' real paths from the links followed (no syscalls)
+    /// rather than canonicalizing each. Same results.
+    pub real_from_links: bool,
+    /// Don't follow a link whose target the plain walk reaches anyway, at
+    /// the same depth or shallower, deciding everything below it the same
+    /// way. Same repos; a repo reachable only through further links below
+    /// such a target may be spelled by another of its paths, and
+    /// truncation reports through the link's path are dropped.
+    pub prune_covered_links: bool,
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Self {
+            real_from_links: true,
+            prune_covered_links: true,
+        }
+    }
 }
 
 impl Default for DiscoverOptions {
@@ -59,6 +86,7 @@ impl Default for DiscoverOptions {
             scan_inside_repos: false,
             skip_hidden: true,
             follow_symlinks: false,
+            tuning: Tuning::default(),
         }
     }
 }
@@ -69,6 +97,9 @@ impl Default for DiscoverOptions {
 pub struct Skip {
     names: globset::GlobSet,
     paths: globset::GlobSet,
+    /// Each path pattern's literal leading directory, as matchers for the
+    /// directory itself and for anything below it.
+    path_prefixes: Vec<(PathBuf, globset::GlobMatcher, globset::GlobMatcher)>,
 }
 
 impl Skip {
@@ -84,6 +115,7 @@ impl Skip {
         };
         let mut names = globset::GlobSetBuilder::new();
         let mut paths = globset::GlobSetBuilder::new();
+        let mut path_prefixes = vec![];
         for original in patterns {
             let p = original.trim_end_matches('/');
             if !p.contains('/') && !p.starts_with('~') {
@@ -105,7 +137,18 @@ impl Skip {
                 // resolved, so the pattern as written can't match otherwise.
                 for f in full {
                     let f = crate::paths::expand_tilde(Path::new(&f));
-                    paths.add(glob(&resolve_literal(&f.display().to_string()), original)?);
+                    let resolved = resolve_literal(&f.display().to_string());
+                    paths.add(glob(&resolved, original)?);
+                    let prefix = match literal_dir(&resolved) {
+                        "" => "/",
+                        d => d,
+                    };
+                    let escaped = globset::escape(prefix.trim_end_matches('/'));
+                    path_prefixes.push((
+                        PathBuf::from(prefix),
+                        glob(&escaped, original)?.compile_matcher(),
+                        glob(&format!("{escaped}/**"), original)?.compile_matcher(),
+                    ));
                 }
             }
         }
@@ -113,11 +156,46 @@ impl Skip {
         Ok(Self {
             names: build(names)?,
             paths: build(paths)?,
+            path_prefixes,
         })
     }
 
     pub fn matches(&self, name: &str, path: &Path) -> bool {
         self.names.is_match(name) || self.paths.is_match(path)
+    }
+
+    /// Whether some path pattern might match `dir` or a path below it:
+    /// its literal leading directory is at, above or below `dir`, compared
+    /// as the patterns match (case-insensitively). May say yes when the
+    /// answer is no, never the reverse.
+    fn may_match_below(&self, dir: &Path) -> bool {
+        if self.path_prefixes.is_empty() {
+            return false;
+        }
+        let below_dir = globset::GlobBuilder::new(&format!(
+            "{}/**",
+            globset::escape(&dir.display().to_string())
+        ))
+        .literal_separator(true)
+        .case_insensitive(true)
+        .build();
+        let Ok(below_dir) = below_dir.map(|g| g.compile_matcher()) else {
+            return true;
+        };
+        // the prefix at or above `dir` (its own matchers), or below it
+        self.path_prefixes.iter().any(|(prefix, at, below)| {
+            at.is_match(dir) || below.is_match(dir) || below_dir.is_match(prefix)
+        })
+    }
+}
+
+/// The literal leading directory of glob `pattern`: all of it without glob
+/// characters, else up to the `/` before the first one (escapes, which
+/// use `[`, count as glob characters: the result only gets shorter).
+fn literal_dir(pattern: &str) -> &str {
+    match pattern.find(['*', '?', '[', '{']) {
+        Some(at) => &pattern[..pattern[..at].rfind('/').unwrap_or(0)],
+        None => pattern,
     }
 }
 
@@ -166,11 +244,14 @@ pub fn discover(roots: &[PathBuf], opts: &DiscoverOptions) -> Vec<Found> {
 
 /// Like [`discover`], also reporting where `max_depth` cut the walk short.
 pub fn discover_all(roots: &[PathBuf], opts: &DiscoverOptions) -> Discovery {
-    let sink = Sink::default();
     let real_roots: Vec<PathBuf> = roots
         .iter()
         .filter_map(|r| fs::canonicalize(r).ok())
         .collect();
+    let sink = Sink {
+        roots: real_roots.clone(),
+        ..Sink::default()
+    };
     rayon::scope(|s| {
         for root in &real_roots {
             let sink = &sink;
@@ -178,12 +259,14 @@ pub fn discover_all(roots: &[PathBuf], opts: &DiscoverOptions) -> Discovery {
         }
     });
     let mut found = sink.found.into_inner().unwrap();
-    found.sort_by(|a, b| a.path.cmp(&b.path));
-    found.dedup_by(|a, b| a.path == b.path);
-    if opts.follow_symlinks {
+    found.sort_by(|a, b| a.0.path.cmp(&b.0.path));
+    found.dedup_by(|a, b| a.0.path == b.0.path);
+    let found = if opts.follow_symlinks {
         let skipped: HashSet<PathBuf> = sink.skipped.into_inner().unwrap().into_iter().collect();
-        found = dedup_real(found, &skipped, &real_roots);
-    }
+        dedup_real(found, &skipped, &real_roots)
+    } else {
+        found.into_iter().map(|(f, _)| f).collect()
+    };
     let mut truncated = sink.truncated.into_inner().unwrap();
     truncated.sort();
     truncated.dedup();
@@ -192,7 +275,11 @@ pub fn discover_all(roots: &[PathBuf], opts: &DiscoverOptions) -> Discovery {
 
 #[derive(Default)]
 struct Sink {
-    found: Mutex<Vec<Found>>,
+    /// The canonical roots.
+    roots: Vec<PathBuf>,
+    /// With each repo, its real path when known without a syscall (`-L`
+    /// with `real_from_links`).
+    found: Mutex<Vec<(Found, Option<PathBuf>)>>,
     truncated: Mutex<Vec<PathBuf>>,
     /// Real paths of skipped directories (with `-L` only): a directory
     /// skipped on one route is skipped on every route.
@@ -221,10 +308,31 @@ fn spellings(path: &Path, links: &[Hop]) -> Vec<PathBuf> {
     let mut v = vec![path.to_path_buf()];
     for hop in links {
         if let Ok(rest) = path.strip_prefix(&hop.link) {
-            v.push(hop.target.join(rest));
+            v.push(join(&hop.target, rest));
         }
     }
     v
+}
+
+/// The real path of the walked `path` below `links`: its last spelling.
+/// Exact, as roots and link targets are canonical and the walk enters
+/// nothing else that could be a link.
+fn real_path(path: &Path, links: &[Hop]) -> PathBuf {
+    match links.last().map(|h| (h, path.strip_prefix(&h.link))) {
+        None => path.to_path_buf(),
+        Some((h, Ok(rest))) => join(&h.target, rest),
+        Some((_, Err(_))) => fs::canonicalize(path).unwrap_or_else(|_| path.into()),
+    }
+}
+
+/// `base` joined with `rest`, without the trailing separator that joining
+/// an empty path adds.
+fn join(base: &Path, rest: &Path) -> PathBuf {
+    if rest.as_os_str().is_empty() {
+        base.to_path_buf()
+    } else {
+        base.join(rest)
+    }
 }
 
 fn visit<'s>(
@@ -235,11 +343,17 @@ fn visit<'s>(
     sink: &'s Sink,
     links: Links,
 ) {
+    let real =
+        || (opts.follow_symlinks && opts.tuning.real_from_links).then(|| real_path(&dir, &links));
     let mut kind = classify_dotgit(&dir);
     if let Some(kind) = kind
         && !opts.scan_inside_repos
     {
-        sink.found.lock().unwrap().push(Found { path: dir, kind });
+        let real = real();
+        sink.found
+            .lock()
+            .unwrap()
+            .push((Found { path: dir, kind }, real));
         return;
     }
     let entries = list(&dir);
@@ -247,15 +361,17 @@ fn visit<'s>(
         kind = Some(RepoKind::Bare);
     }
     if let Some(kind) = kind {
-        sink.found.lock().unwrap().push(Found {
+        let found = Found {
             path: dir.clone(),
             kind,
-        });
+        };
+        let real = real();
+        sink.found.lock().unwrap().push((found, real));
         if kind == RepoKind::Bare {
             return;
         }
     }
-    let subdirs = subdirs(&dir, entries, opts, &links, sink);
+    let subdirs = subdirs(&dir, depth, entries, opts, &links, sink);
     if opts.max_depth != 0 && depth >= opts.max_depth {
         if !subdirs.is_empty() {
             sink.truncated.lock().unwrap().push(dir);
@@ -293,6 +409,7 @@ fn list(dir: &Path) -> Vec<DirEntry> {
 /// target's) matches.
 fn subdirs(
     dir: &Path,
+    depth: usize,
     entries: Vec<DirEntry>,
     opts: &DiscoverOptions,
     links: &Links,
@@ -351,6 +468,11 @@ fn subdirs(
             if walks_in_a_circle(&here, &target, links) {
                 return None;
             }
+            if opts.tuning.prune_covered_links
+                && plain_walk_covers(&target, &e.path, depth, links, opts, &sink.roots)
+            {
+                return None;
+            }
             let mut taken: Vec<Hop> = links
                 .iter()
                 .map(|h| Hop {
@@ -377,14 +499,86 @@ fn walks_in_a_circle(here: &Path, target: &Path, links: &[Hop]) -> bool {
     here.starts_with(target) || links.iter().any(|h| h.from.starts_with(target))
 }
 
+/// Whether the walk without links reaches `target` (canonical), and
+/// decides everything below it as the walk through `link` would, so that
+/// following `link` (found in a directory at `depth`) would find no repo
+/// the walk doesn't find anyway:
+///
+/// * `link` is above `max_depth`: at the limit its directory isn't entered
+///   anyway, and dropping it would change what's reported as truncated.
+/// * No path pattern can match below any spelling of `link` (names are
+///   the same on both routes below `target`, and real spellings too).
+/// * `target` is under a root, at the same depth as through the link or
+///   shallower (or there's no depth limit), and each directory on the way
+///   is listed by its parent, not hidden, `.git` or skipped, and doesn't
+///   stop the walk by being a repo.
+///
+/// Below `target` that walk has followed no links, so its cycle checks cut
+/// no more than the link's route would.
+fn plain_walk_covers(
+    target: &Path,
+    link: &Path,
+    depth: usize,
+    links: &[Hop],
+    opts: &DiscoverOptions,
+    roots: &[PathBuf],
+) -> bool {
+    if opts.max_depth != 0 && depth >= opts.max_depth {
+        return false;
+    }
+    if spellings(link, links)
+        .iter()
+        .any(|s| opts.skip.may_match_below(s))
+    {
+        return false;
+    }
+    let depth_via_link = depth + 1;
+    roots.iter().any(|root| {
+        let Ok(rel) = target.strip_prefix(root) else {
+            return false;
+        };
+        let names: Vec<_> = rel.components().map(|c| c.as_os_str().to_owned()).collect();
+        if opts.max_depth != 0 && names.len() > depth_via_link {
+            return false;
+        }
+        let mut dir = root.clone();
+        for name in &names {
+            // as `visit` decides, from one listing
+            let entries = list(&dir);
+            let stops = match classify_dotgit(&dir) {
+                Some(_) => !opts.scan_inside_repos,
+                None => is_bare_listing(&entries),
+            };
+            let listed = entries.iter().any(|e| &e.name == name && e.ty.is_dir());
+            let child = dir.join(name);
+            let n = name.to_string_lossy();
+            if stops
+                || !listed
+                || n == ".git"
+                || (opts.skip_hidden && n.starts_with('.'))
+                || opts.skip.matches(&n, &child)
+            {
+                return false;
+            }
+            dir = child;
+        }
+        true
+    })
+}
+
 /// With symlinks followed, keep one path per real repo: the real path if it
 /// was found, else the first in sort order (`found` is sorted). Repos inside
 /// a directory skipped on some route are dropped, unless a root is at or
 /// inside that directory (roots are always scanned).
-fn dedup_real(found: Vec<Found>, skipped: &HashSet<PathBuf>, roots: &[PathBuf]) -> Vec<Found> {
+fn dedup_real(
+    found: Vec<(Found, Option<PathBuf>)>,
+    skipped: &HashSet<PathBuf>,
+    roots: &[PathBuf],
+) -> Vec<Found> {
     let mut by_real: BTreeMap<PathBuf, Found> = BTreeMap::new();
-    for f in found {
-        let real = fs::canonicalize(&f.path).unwrap_or_else(|_| f.path.clone());
+    for (f, real) in found {
+        let real =
+            real.unwrap_or_else(|| fs::canonicalize(&f.path).unwrap_or_else(|_| f.path.clone()));
         let inside_skipped = real.ancestors().find(|a| skipped.contains(*a));
         if let Some(dir) = inside_skipped
             && !roots
@@ -890,5 +1084,341 @@ mod tests {
         );
         // inverse: not following links, r isn't found
         assert!(found(t.path(), &DiscoverOptions::default()).is_empty());
+    }
+
+    #[cfg(unix)]
+    fn with(
+        opts: &DiscoverOptions,
+        real_from_links: bool,
+        prune_covered_links: bool,
+    ) -> DiscoverOptions {
+        DiscoverOptions {
+            tuning: Tuning {
+                real_from_links,
+                prune_covered_links,
+            },
+            ..opts.clone()
+        }
+    }
+
+    #[cfg(unix)]
+    fn rel(base: &Path, paths: impl IntoIterator<Item = PathBuf>) -> Vec<String> {
+        paths
+            .into_iter()
+            .map(|p| p.strip_prefix(base).unwrap_or(&p).display().to_string())
+            .collect()
+    }
+
+    /// Each optimization against the plain `-L` walk, on random trees with
+    /// loops, link chains, links into repos and hidden directories,
+    /// overlapping roots, and every kind of skip pattern.
+    #[cfg(unix)]
+    #[test]
+    fn link_optimizations_agree_with_the_plain_walk_on_random_trees() {
+        use std::os::unix::fs::symlink;
+        let mut rng = 0x9e3779b97f4a7c15u64;
+        let mut next = |n: usize| {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng % n as u64) as usize
+        };
+        let names = ["a", "b", "c", "go", "pkg", "vendor", ".h", "x"];
+        let mut pruned_somewhere = false;
+        for seed in 0..400 {
+            let t = tempfile::tempdir().unwrap();
+            let base = fs::canonicalize(t.path()).unwrap();
+            let mut dirs = vec![base.clone()];
+            for _ in 0..20 + next(25) {
+                let parent = dirs[next(dirs.len())].clone();
+                if parent.components().count() - base.components().count() >= 5 {
+                    continue;
+                }
+                let d = parent.join(names[next(names.len())]);
+                fs::create_dir_all(&d).unwrap();
+                if !dirs.contains(&d) {
+                    dirs.push(d);
+                }
+            }
+            for d in &dirs[1..] {
+                match next(20) {
+                    0..=4 => fs::create_dir_all(d.join(".git")).unwrap(),
+                    5 => {
+                        fs::write(d.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+                        fs::create_dir_all(d.join("objects")).unwrap();
+                        fs::create_dir_all(d.join("refs")).unwrap();
+                    }
+                    _ => {}
+                }
+            }
+            let mut links = vec![];
+            for i in 0..2 + next(7) {
+                let at = dirs[next(dirs.len())].join(format!("l{i}"));
+                let pool: Vec<&PathBuf> = dirs.iter().chain(&links).collect();
+                let target = pool[next(pool.len())].clone();
+                if symlink(&target, &at).is_ok() {
+                    links.push(at);
+                }
+            }
+            let any = |next: &mut dyn FnMut(usize) -> usize| -> PathBuf {
+                let pool: Vec<&PathBuf> = dirs.iter().chain(&links).collect();
+                pool[next(pool.len())].clone()
+            };
+            let roots: Vec<PathBuf> = (0..1 + next(3)).map(|_| any(&mut next)).collect();
+            let mut skip = vec![];
+            for _ in 0..next(4) {
+                let p = any(&mut next).display().to_string();
+                skip.push(match next(8) {
+                    0 => names[next(names.len())].to_string(),
+                    1 => "l1".to_string(),
+                    2 => p,
+                    3 => format!("{p}/a"),
+                    4 => format!("{}/*/{}", base.display(), names[next(names.len())]),
+                    5 => format!("{}/**/{}", base.display(), names[next(names.len())]),
+                    6 => "go/pkg".to_string(),
+                    _ => "*/c".to_string(),
+                });
+            }
+            let opts = DiscoverOptions {
+                skip: Skip::new(&skip, &roots).unwrap(),
+                max_depth: [0, 1, 2, 3, 4, 6][next(6)],
+                scan_inside_repos: next(5) == 0,
+                skip_hidden: next(4) != 0,
+                follow_symlinks: true,
+                tuning: Tuning::default(),
+            };
+            let ctx = format!(
+                "seed {seed}: roots {:?} skip {skip:?} max_depth {} inside {} hidden {}\nlinks {:?}",
+                rel(&base, roots.clone()),
+                opts.max_depth,
+                opts.scan_inside_repos,
+                opts.skip_hidden,
+                links
+                    .iter()
+                    .map(|l| format!(
+                        "{} -> {}",
+                        l.strip_prefix(&base).unwrap().display(),
+                        fs::read_link(l)
+                            .unwrap()
+                            .strip_prefix(&base)
+                            .unwrap_or(Path::new("?"))
+                            .display()
+                    ))
+                    .collect::<Vec<_>>()
+            );
+            let run = |o: &DiscoverOptions| discover_all(&roots, o);
+            let plain = run(&with(&opts, false, false));
+            // real paths from links: identical
+            assert_eq!(run(&with(&opts, true, false)), plain, "{ctx}");
+            let pruned = run(&with(&opts, false, true));
+            assert_eq!(run(&with(&opts, true, true)), pruned, "{ctx}");
+            pruned_somewhere |= pruned != plain;
+            // pruning: the same repos, by real path and kind ...
+            let real = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.into());
+            let set = |d: &Discovery| -> std::collections::BTreeSet<(PathBuf, RepoKind)> {
+                d.found.iter().map(|f| (real(&f.path), f.kind)).collect()
+            };
+            assert_eq!(set(&pruned), set(&plain), "{ctx}");
+            // ... spelled by the real path wherever the plain walk did ...
+            for f in plain.found.iter().filter(|f| real(&f.path) == f.path) {
+                assert!(pruned.found.contains(f), "{ctx}\n{f:?}");
+            }
+            // ... and truncation reports lose only spellings through links
+            for t in &pruned.truncated {
+                assert!(plain.truncated.contains(t), "{ctx}\nnew truncated {t:?}");
+            }
+            for t in plain
+                .truncated
+                .iter()
+                .filter(|t| !pruned.truncated.contains(t))
+            {
+                assert_ne!(&real(t), t, "{ctx}\ndropped a real truncated {t:?}");
+            }
+            // without -L, the switches change nothing
+            let opts = DiscoverOptions {
+                follow_symlinks: false,
+                ..opts
+            };
+            let plain = run(&with(&opts, false, false));
+            assert_eq!(run(&with(&opts, true, true)), plain, "{ctx}");
+        }
+        assert!(pruned_somewhere, "no tree exercised pruning");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn covered_links_are_pruned() {
+        let t = tempfile::tempdir().unwrap();
+        let b = fs::canonicalize(t.path()).unwrap();
+        mk(&b, "real/a/b/c");
+        std::os::unix::fs::symlink(b.join("real"), b.join("alias")).unwrap();
+        let opts = DiscoverOptions {
+            max_depth: 2,
+            follow_symlinks: true,
+            ..Default::default()
+        };
+        let roots = [b.clone()];
+        // the plain walk reports real/a, and alias/a through the link
+        let plain = discover_all(&roots, &with(&opts, false, false));
+        assert_eq!(rel(&b, plain.truncated), ["alias/a", "real/a"]);
+        // pruned: the link isn't walked, as real/ is
+        let pruned = discover_all(&roots, &opts);
+        assert_eq!(rel(&b, pruned.truncated), ["real/a"]);
+        // still when the root is a repo the walk continues into
+        fs::create_dir_all(b.join(".git")).unwrap();
+        let inside = DiscoverOptions {
+            scan_inside_repos: true,
+            ..opts
+        };
+        assert_eq!(rel(&b, discover_all(&roots, &inside).truncated), ["real/a"]);
+    }
+
+    /// Each case trips one condition of `plain_walk_covers`; links sit deep
+    /// enough that the depth comparison holds, unless that's the case.
+    #[cfg(unix)]
+    #[test]
+    fn links_are_followed_where_the_plain_walk_falls_short() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let t = tempfile::tempdir().unwrap();
+        let b = fs::canonicalize(t.path()).unwrap();
+        let link = |target: &str, at: &str| {
+            mk(&b, Path::new(at).parent().unwrap().to_str().unwrap());
+            symlink(b.join(target), b.join(at)).unwrap();
+        };
+        let found = |opts: &DiscoverOptions, roots: &[&str]| {
+            let roots: Vec<PathBuf> = roots.iter().map(|r| b.join(r)).collect();
+            let mut v = rel(&b, discover(&roots, opts).into_iter().map(|f| f.path));
+            v.sort();
+            v
+        };
+        let both = |opts: &DiscoverOptions, roots: &[&str], want: &str| {
+            for o in [opts.clone(), with(opts, false, false)] {
+                let v = found(&o, roots);
+                assert!(v.contains(&want.to_string()), "{want}: {v:?}");
+            }
+        };
+        let no_limit = DiscoverOptions {
+            max_depth: 0,
+            follow_symlinks: true,
+            ..Default::default()
+        };
+        // into a repo, which stops the plain walk
+        fake_repo(&b, "r/sub/inner");
+        fs::create_dir_all(b.join("r/.git")).unwrap();
+        link("r/sub", "z/z/into-repo");
+        both(&no_limit, &["."], "z/z/into-repo/inner");
+        // past a directory skipped by name: skipped on one route, so on
+        // every route (pruning or not)
+        fake_repo(&b, "vendor/p/v");
+        link("vendor/p", "z/z/past-skip");
+        let skip_vendor = DiscoverOptions {
+            skip: Skip::new(&["vendor".into()], &[]).unwrap(),
+            ..no_limit.clone()
+        };
+        for o in [skip_vendor.clone(), with(&skip_vendor, false, false)] {
+            let v = found(&o, &["."]);
+            assert!(!v.iter().any(|p| p.ends_with("/v")), "{v:?}");
+        }
+        // into .git, which the walk never enters, even inside repos and
+        // with hidden directories scanned
+        fs::create_dir_all(b.join("g/.git/modules/m/objects")).unwrap();
+        fs::create_dir_all(b.join("g/.git/modules/m/refs")).unwrap();
+        fs::write(b.join("g/.git/modules/m/HEAD"), "ref: refs/heads/main\n").unwrap();
+        link("g/.git/modules", "z/z/into-git");
+        let inside = DiscoverOptions {
+            scan_inside_repos: true,
+            skip_hidden: false,
+            ..no_limit.clone()
+        };
+        both(&inside, &["."], "z/z/into-git/m");
+        // deeper than max_depth for the plain walk, not through the link
+        fake_repo(&b, "deep/a/b/c/far");
+        link("deep/a/b", "shortcut");
+        let limit = DiscoverOptions {
+            max_depth: 3,
+            ..no_limit.clone()
+        };
+        both(&limit, &["."], "shortcut/c/far");
+        // past a directory that can't be listed (unless running as root)
+        fake_repo(&b, "locked/p/q");
+        link("locked/p", "z/z/past-lock");
+        fs::set_permissions(b.join("locked"), fs::Permissions::from_mode(0o311)).unwrap();
+        if fs::read_dir(b.join("locked")).is_err() {
+            both(&no_limit, &["."], "z/z/past-lock/q");
+        }
+        fs::set_permissions(b.join("locked"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// A path pattern matching only a partly resolved spelling (x/b/c,
+    /// through `dev/a -> x` then `x/b -> y`) skips c on that route, so the
+    /// second link can't be pruned though y is a root: the repo in y/c goes.
+    #[cfg(unix)]
+    #[test]
+    fn links_with_a_spelling_a_path_pattern_may_match_are_followed() {
+        use std::os::unix::fs::symlink;
+        let t = tempfile::tempdir().unwrap();
+        let b = fs::canonicalize(t.path()).unwrap();
+        fake_repo(&b, "y/c/r");
+        mk(&b, "dev");
+        mk(&b, "x");
+        symlink(b.join("y"), b.join("x/b")).unwrap();
+        symlink(b.join("x"), b.join("dev/a")).unwrap();
+        let roots = [b.join("dev"), b.join("y")];
+        let opts = DiscoverOptions {
+            skip: Skip::new(&[format!("{}/x/*/c", b.display())], &roots).unwrap(),
+            follow_symlinks: true,
+            ..Default::default()
+        };
+        for o in [opts.clone(), with(&opts, false, false)] {
+            assert!(discover(&roots, &o).is_empty());
+        }
+    }
+
+    /// A pattern compiled before its link existed keeps the link's path, so
+    /// its literal part is at or below the link: following the link must
+    /// not be pruned.
+    #[cfg(unix)]
+    #[test]
+    fn links_at_or_above_an_unresolved_path_pattern_are_followed() {
+        for pattern in ["dev/alias/vendor", "dev/alias/*"] {
+            let t = tempfile::tempdir().unwrap();
+            let b = fs::canonicalize(t.path()).unwrap();
+            fake_repo(&b, "data/proj/vendor/lib");
+            mk(&b, "dev");
+            let roots = [b.join("dev"), b.join("data")];
+            let opts = DiscoverOptions {
+                skip: Skip::new(&[format!("{}/{pattern}", b.display())], &roots).unwrap(),
+                follow_symlinks: true,
+                ..Default::default()
+            };
+            std::os::unix::fs::symlink(b.join("data/proj"), b.join("dev/alias")).unwrap();
+            for o in [opts.clone(), with(&opts, false, false)] {
+                let v = discover(&roots, &o);
+                assert!(v.is_empty(), "{pattern}: {v:?}");
+            }
+        }
+    }
+
+    /// At max_depth a directory isn't entered: a covered link there still
+    /// counts towards reporting it as truncated.
+    #[cfg(unix)]
+    #[test]
+    fn links_at_max_depth_still_count_for_truncation() {
+        let t = tempfile::tempdir().unwrap();
+        let b = fs::canonicalize(t.path()).unwrap();
+        mk(&b, "real");
+        mk(&b, "d");
+        std::os::unix::fs::symlink(b.join("real"), b.join("d/only-a-link")).unwrap();
+        let opts = DiscoverOptions {
+            max_depth: 1,
+            follow_symlinks: true,
+            ..Default::default()
+        };
+        for o in [opts.clone(), with(&opts, false, false)] {
+            assert_eq!(
+                rel(&b, discover_all(std::slice::from_ref(&b), &o).truncated),
+                ["d"]
+            );
+        }
     }
 }

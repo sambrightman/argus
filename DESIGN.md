@@ -265,6 +265,25 @@ rendering is snapshot-tested via `TestBackend`.
   dropped after the walk, unless a root is at or inside that directory.
   Not covered: symlinks the walk doesn't follow (without `-L` those
   directories aren't scanned anyway).
+* **`-L` performance.** Two optimizations, each switchable (`Tuning`) and
+  checked against the plain walk on random trees:
+  * Found repos' real paths come from the link chain, not a
+    `canonicalize` each. Exact: roots and link targets are canonical, and
+    the walk enters nothing else that could be a link.
+  * A link isn't followed when the walk without links reaches its target
+    anyway and decides everything below it the same way: the target is
+    under a root, at the same depth or shallower; every directory on the
+    way is listed by its parent and isn't hidden, `.git`, skipped or a
+    repo (which stops the walk); no path pattern could match below any
+    spelling of the link (its literal part is checked against them); and
+    the link is above `max_depth` (at the limit it still counts towards
+    truncation). Same repos; a repo reachable only through further links
+    below such a target may be spelled by another of its paths, and
+    truncation reports through the link are dropped.
+  On a synthetic tree (15,789 directories, 2,000 repos, 91 links: aliases,
+  chains, loops) with name skips, `-L` went from 161 ms to 40 ms, against
+  35 ms without `-L` (`cargo run --release -p argus-core --example
+  discover`).
 * **Symlinks** are not followed unless asked (`-L`, `follow_symlinks`).
   When followed, cycles are cut by remembering the real directory at each
   link taken on the way down; a link whose target contains one of them
