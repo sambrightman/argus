@@ -795,12 +795,137 @@ fn completions_for_each_shell() {
         if matches!(shell, "bash" | "zsh" | "fish") {
             let file = sb.path(&format!("completion.{shell}"));
             std::fs::write(&file, &script).unwrap();
-            let check = if shell == "fish" { "--no-execute" } else { "-n" };
-            if let Ok(st) = std::process::Command::new(shell).arg(check).arg(&file).status() {
+            let check = if shell == "fish" {
+                "--no-execute"
+            } else {
+                "-n"
+            };
+            if let Ok(st) = std::process::Command::new(shell)
+                .arg(check)
+                .arg(&file)
+                .status()
+            {
                 assert!(st.success(), "{shell} rejects its script");
             }
         }
     }
     // inverse: unknown shells are rejected
     argus(&sb).args(["completions", "tcsh"]).assert().failure();
+    // printing a script creates no config file
+    let cfg = sb.path("never.toml");
+    argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["completions", "zsh"])
+        .assert()
+        .success();
+    assert!(!cfg.exists());
+}
+
+/// Run with `--json`; stdout must be exactly one JSON document.
+fn json(sb: &Sandbox, args: &[&str]) -> serde_json::Value {
+    let out = argus(sb).arg("--json").args(args).output().unwrap();
+    assert!(out.status.success(), "{args:?}: {out:?}");
+    serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{args:?}: {e}\n{}", String::from_utf8_lossy(&out.stdout)))
+}
+
+#[test]
+fn every_command_prints_json() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let cfg = sb.path("cfg.toml");
+    let c = |args: &[&str]| -> Vec<String> {
+        let mut v = vec!["--config".to_string(), cfg.display().to_string()];
+        v.extend(args.iter().map(|s| s.to_string()));
+        v
+    };
+    let run = |args: &[&str]| {
+        let v = c(args);
+        json(&sb, &v.iter().map(String::as_str).collect::<Vec<_>>())
+    };
+    // the flag works before or after the command
+    let v = run(&["status"]);
+    assert!(v.as_array().unwrap().iter().any(|e| e["key"].is_string()));
+    let after = argus(&sb).args(c(&["status", "--json"])).output().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&after.stdout).unwrap(),
+        v
+    );
+
+    let v = run(&["paths"]);
+    assert_eq!(v["config"], cfg.display().to_string());
+    assert!(v["state"].is_string());
+
+    let dev = sb.path("dev").display().to_string();
+    let v = run(&["root", "add", &dev]);
+    assert_eq!(v["added"].as_array().unwrap().len(), 1, "{v}");
+    let v = run(&["root", "list"]);
+    assert_eq!(v[0]["exists"], true, "{v}");
+    assert!(v[0]["path"].is_string());
+
+    let v = run(&["mark", "--sync", "acme/clean"]);
+    assert_eq!(v[0]["repo"], "acme/clean", "{v}");
+    assert_eq!(v[0]["marks"]["sync"], true, "{v}");
+    assert!(v[0]["key"].is_string());
+
+    let v = run(&["sync", "--no-forge", "--dry-run"]);
+    assert_eq!(v["dry_run"], true);
+    let jobs = v["jobs"].as_array().unwrap();
+    assert!(jobs.iter().all(|j| j["outcome"] == "planned"), "{v}");
+    assert!(
+        jobs.iter()
+            .any(|j| j["label"].as_str().unwrap().contains("acme/clean")),
+        "{v}"
+    );
+    let v = run(&["sync", "--no-forge"]);
+    assert!(
+        v["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|j| j["outcome"] == "ok"),
+        "{v}"
+    );
+    assert_eq!(v["summary"]["failed"], 0, "{v}");
+
+    let v = run(&["fix", "--dry-run"]);
+    let feature = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["repo"] == "acme/feature")
+        .unwrap();
+    assert_eq!(feature["planned"]["kind"], "switch-default", "{v}");
+    assert!(feature["planned"]["reason"].is_string());
+    let v = run(&["fix", "acme/feature"]);
+    assert_eq!(v[0]["applied"]["kind"], "switch-default", "{v}");
+    assert_eq!(v[0]["ok"], true, "{v}");
+    // nothing to do: an empty list, not a message
+    assert_eq!(run(&["fix", "acme/feature"]), serde_json::json!([]));
+
+    let v = run(&["ack"]);
+    assert!(v["acknowledged"].is_array(), "{v}");
+
+    let v = run(&["root", "remove", &dev]);
+    assert_eq!(v["removed"].as_array().unwrap().len(), 1, "{v}");
+
+    let v = run(&["demo", "--glyphs"]);
+    assert_eq!(
+        v["sets"]["unicode"]["favourite"],
+        UNICODE.favourite.as_ref(),
+        "{v}"
+    );
+    assert_eq!(v["sets"]["ascii"]["ok"], "ok", "{v}");
+    assert!(v["punctuation"].is_string() && v["alternatives"].is_string());
+
+    // inverse: commands without JSON output say so
+    for args in [&["completions", "zsh"][..], &["tui"], &["demo"]] {
+        argus(&sb)
+            .arg("--json")
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--json"));
+    }
 }

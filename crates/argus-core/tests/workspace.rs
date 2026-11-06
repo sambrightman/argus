@@ -612,7 +612,10 @@ fn state_of_missing_repos_is_forgotten_after_a_grace_period() {
     s.forget_missing(&present, true, after);
     let back: std::collections::HashSet<&str> = ["here", "back"].into();
     s.forget_missing(&back, true, after + FORGET_AFTER - day);
-    assert!(s.forget_missing(&present, true, after + FORGET_AFTER + day).is_empty());
+    assert!(
+        s.forget_missing(&present, true, after + FORGET_AFTER + day)
+            .is_empty()
+    );
     assert!(s.marks.contains_key("back"));
     // clocks are kept only for repos with state
     s.mark("here", |m| m.favourite = None);
@@ -644,13 +647,22 @@ fn scans_record_when_repos_with_state_were_seen() {
     // inverse: a complete scan does
     w.config.roots.pop();
     assert_eq!(w.forget_missing(much_later), ["elsewhere"]);
-    assert!(w.state.marks.contains_key(&key), "present repos keep theirs");
+    assert!(
+        w.state.marks.contains_key(&key),
+        "present repos keep theirs"
+    );
 }
 
 #[test]
 fn skip_paths_are_not_scanned() {
     let sb = Sandbox::new();
-    for r in ["keep", "archive/old", "archive2/x", "a/vendored/v", "b/vendored/w"] {
+    for r in [
+        "keep",
+        "archive/old",
+        "archive2/x",
+        "a/vendored/v",
+        "b/vendored/w",
+    ] {
         sb.init(&format!("dev/{r}"));
     }
     let found = |w: &Workspace| -> Vec<String> {
@@ -661,14 +673,20 @@ fn skip_paths_are_not_scanned() {
             .collect()
     };
     let dev = sb.path("dev").display().to_string();
-    let w = ws(&sb, &format!("skip_paths = ['{dev}/archive', '{dev}/*/vendored']"));
+    let w = ws(
+        &sb,
+        &format!("skip_paths = ['{dev}/archive', '{dev}/*/vendored']"),
+    );
     assert_eq!(found(&w), ["archive2/x", "keep"]);
     // patterns through a symlink match the real paths scans walk
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(sb.path("dev"), sb.path("link")).unwrap();
         let link = sb.path("link").display().to_string();
-        let w = ws(&sb, &format!("skip_paths = ['{link}/archive', '{link}/*/vendored']"));
+        let w = ws(
+            &sb,
+            &format!("skip_paths = ['{link}/archive', '{link}/*/vendored']"),
+        );
         assert_eq!(found(&w), ["archive2/x", "keep"]);
     }
     // inverse: without them, everything

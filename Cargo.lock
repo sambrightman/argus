@@ -119,6 +119,7 @@ dependencies = [
  "clap_complete",
  "jiff",
  "predicates",
+ "serde",
  "serde_json",
  "unicode-width",
 ]

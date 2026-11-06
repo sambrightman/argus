@@ -38,6 +38,10 @@ struct Cli {
     /// several paths is listed once).
     #[arg(long, short = 'L', global = true)]
     follow_symlinks: bool,
+    /// Print one JSON document on stdout instead of text (messages and
+    /// progress still go to stderr). Not for the TUI or completions.
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -50,9 +54,6 @@ enum Cmd {
     Status {
         #[command(flatten)]
         view: View,
-        /// Print JSON instead of text (same filter).
-        #[arg(long)]
-        json: bool,
     },
     /// Pull syncable repos; list tracked owners and clone new repos.
     Sync {
@@ -204,9 +205,6 @@ enum ForgeCmd {
         /// Forge host (GitHub Enterprise: your host).
         #[arg(long, default_value = "github.com")]
         host: String,
-        /// Print JSON instead of text.
-        #[arg(long)]
-        json: bool,
     },
 }
 
@@ -251,26 +249,44 @@ fn run() -> Result<()> {
         config_path: cli.config.clone().unwrap_or_else(paths::config_file),
         state_path: cli.state.clone().unwrap_or_else(paths::state_file),
     };
-    if !matches!(cli.cmd, Some(Cmd::Paths)) && configfile::ensure_exists(&ctx.config_path)? {
+    let writes_nothing = matches!(cli.cmd, Some(Cmd::Paths | Cmd::Completions { .. }));
+    if !writes_nothing && configfile::ensure_exists(&ctx.config_path)? {
         eprintln!(
             "argus: created {} (every setting listed with its default, commented out)",
             paths::contract_tilde(&ctx.config_path)
         );
     }
+    let json = cli.json;
+    if json {
+        match &cli.cmd {
+            None | Some(Cmd::Tui) => bail!("--json isn't available for the TUI"),
+            Some(Cmd::Completions { .. }) => bail!("--json isn't available for completions"),
+            Some(Cmd::Demo { glyphs: false, .. }) => {
+                bail!("--json isn't available for the demo TUI (try demo --glyphs)")
+            }
+            _ => {}
+        }
+    }
     match cli.cmd {
-        Some(Cmd::Root { cmd }) => return root_cmd(&ctx, cmd),
+        Some(Cmd::Root { cmd }) => return root_cmd(&ctx, cmd, json),
         Some(Cmd::Paths) => {
+            if json {
+                return print_json(&serde_json::json!({
+                    "config": ctx.config_path,
+                    "state": ctx.state_path,
+                }));
+            }
             println!("config: {}", ctx.config_path.display());
             println!("state:  {}", ctx.state_path.display());
             return Ok(());
         }
-        Some(Cmd::Forge { cmd }) => return forge_cmd(cmd),
+        Some(Cmd::Forge { cmd }) => return forge_cmd(cmd, json),
         Some(Cmd::Completions { shell }) => {
             let mut cmd = <Cli as clap::CommandFactory>::command();
             clap_complete::generate(shell, &mut cmd, "argus", &mut std::io::stdout());
             return Ok(());
         }
-        Some(Cmd::Demo { glyphs: true, .. }) => return demo_glyphs(&ctx),
+        Some(Cmd::Demo { glyphs: true, .. }) => return demo_glyphs(&ctx, json),
         Some(Cmd::Demo { theme, icons, .. }) => {
             argus_tui::check_terminal().map_err(|e| anyhow::anyhow!(e))?;
             return demo(&ctx, theme, icons);
@@ -297,7 +313,7 @@ fn run() -> Result<()> {
             };
             argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))?;
         }
-        Cmd::Status { view, json } => {
+        Cmd::Status { view } => {
             scan(&mut ws);
             status(&ws, view.into(), json)?;
         }
@@ -307,7 +323,7 @@ fn run() -> Result<()> {
             patterns,
         } => {
             scan(&mut ws);
-            sync_cmd(&mut ws, &ctx, dry_run, no_forge, &patterns)?;
+            sync_cmd(&mut ws, &ctx, dry_run, no_forge, &patterns, json)?;
         }
         Cmd::Fix {
             kinds,
@@ -324,11 +340,11 @@ fn run() -> Result<()> {
             if fetch {
                 fetch_selected(&mut ws, &patterns);
             }
-            fix_cmd(&mut ws, &kinds, dry_run, &patterns)?;
+            fix_cmd(&mut ws, &kinds, dry_run, &patterns, json)?;
         }
         Cmd::Mark(m) => {
             scan(&mut ws);
-            mark(&mut ws, &m)?;
+            mark(&mut ws, &m, json)?;
             save_state(&ws, &ctx)?;
         }
         Cmd::Ack { patterns } => {
@@ -340,10 +356,19 @@ fn run() -> Result<()> {
                     ..Default::default()
                 },
             );
+            let acked: Vec<String> = sel
+                .iter()
+                .map(|&i| &ws.entries[i])
+                .filter(|e| ws.state.new.contains(&e.key))
+                .map(|e| e.display_name())
+                .collect();
             let keys: Vec<String> = sel.iter().map(|&i| ws.entries[i].key.clone()).collect();
-            let before = ws.state.new.len();
             ws.state.new.retain(|k| !keys.contains(k));
-            println!("acknowledged {}", before - ws.state.new.len());
+            if json {
+                print_json(&serde_json::json!({ "acknowledged": acked }))?;
+            } else {
+                println!("acknowledged {}", acked.len());
+            }
             save_state(&ws, &ctx)?;
         }
         Cmd::Root { .. }
@@ -398,7 +423,15 @@ fn save_state(ws: &Workspace, ctx: &Ctx) -> Result<()> {
     ws.state.save(&ctx.state_path).context("saving state")
 }
 
-fn root_cmd(ctx: &Ctx, cmd: RootCmd) -> Result<()> {
+/// `--json` output: one pretty-printed document on stdout.
+fn print_json(v: &impl serde::Serialize) -> Result<()> {
+    let mut out = std::io::stdout().lock();
+    serde_json::to_writer_pretty(&mut out, v)?;
+    writeln!(out)?;
+    Ok(())
+}
+
+fn root_cmd(ctx: &Ctx, cmd: RootCmd, json: bool) -> Result<()> {
     let path = &ctx.config_path;
     match cmd {
         RootCmd::Add { dirs } => {
@@ -408,6 +441,9 @@ fn root_cmd(ctx: &Ctx, cmd: RootCmd) -> Result<()> {
                 dirs
             };
             let added = configfile::add_roots(path, &dirs)?;
+            if json {
+                return print_json(&serde_json::json!({ "added": added }));
+            }
             if added.is_empty() {
                 println!("already configured");
             }
@@ -416,12 +452,24 @@ fn root_cmd(ctx: &Ctx, cmd: RootCmd) -> Result<()> {
             }
         }
         RootCmd::Remove { dirs } => {
-            for r in configfile::remove_roots(path, &dirs)? {
+            let removed = configfile::remove_roots(path, &dirs)?;
+            if json {
+                return print_json(&serde_json::json!({ "removed": removed }));
+            }
+            for r in removed {
                 println!("removed {r}");
             }
         }
         RootCmd::List => {
             let config = Config::load(path)?;
+            if json {
+                let roots: Vec<_> = config
+                    .roots
+                    .iter()
+                    .map(|r| serde_json::json!({ "path": paths::contract_tilde(r), "exists": r.is_dir() }))
+                    .collect();
+                return print_json(&roots);
+            }
             if config.roots.is_empty() {
                 println!("no roots configured (the current directory is scanned)");
             }
@@ -499,9 +547,7 @@ fn status(ws: &Workspace, filter: ViewFilter, json: bool) -> Result<()> {
     let order = ws.ordered(filter);
     if json {
         let v: Vec<_> = order.iter().map(|&i| &ws.entries[i]).collect();
-        serde_json::to_writer_pretty(std::io::stdout().lock(), &v)?;
-        println!();
-        return Ok(());
+        return print_json(&v);
     }
     let p = Paint::detect();
     let ic = icons(ws);
@@ -587,6 +633,7 @@ fn sync_cmd(
     dry_run: bool,
     no_forge: bool,
     patterns: &[String],
+    json: bool,
 ) -> Result<()> {
     let p = Paint::detect();
     let mut jobs = vec![];
@@ -610,14 +657,36 @@ fn sync_cmd(
     }
     jobs.extend(updates);
 
-    for r in &tracks.missing {
+    let new_on_forge: Vec<String> = tracks.missing.iter().map(|r| r.id.slug()).collect();
+    let orphans: Vec<String> = tracks
+        .orphans
+        .iter()
+        .map(|o| paths::contract_tilde(o))
+        .collect();
+    let job_json = |j: &sync::Job, outcome: &str, output: Option<&str>| {
+        serde_json::json!({
+            "label": j.label,
+            "path": j.path,
+            "outcome": outcome,
+            "output": output,
+        })
+    };
+    if json && dry_run {
+        return print_json(&serde_json::json!({
+            "dry_run": true,
+            "new_on_forge": new_on_forge,
+            "orphans": orphans,
+            "jobs": jobs.iter().map(|j| job_json(j, "planned", None)).collect::<Vec<_>>(),
+        }));
+    }
+    for r in tracks.missing.iter().filter(|_| !json) {
         println!(
             "{} {} (not cloned)",
             p.role(Role::New, "new on forge:"),
             r.id.slug()
         );
     }
-    for o in &tracks.orphans {
+    for o in tracks.orphans.iter().filter(|_| !json) {
         println!(
             "{} {} (no longer listed by the forge)",
             p.role(Role::Warning, "orphan:"),
@@ -657,7 +726,7 @@ fn sync_cmd(
         eprint!("\r\x1b[K");
     }
     let added = sync::record_clones(ws, &jobs, &results);
-    for a in &added {
+    for a in added.iter().filter(|_| !json) {
         println!(
             "{} {}",
             p.role(Role::New, "cloned:"),
@@ -669,10 +738,35 @@ fn sync_cmd(
         .filter(|r| r.as_ref().is_some_and(|o| !o.success))
         .count();
     let skipped = results.iter().filter(|r| r.is_none()).count();
-    println!(
-        "{total} jobs: {} ok, {failed} failed, {skipped} skipped",
-        total - failed - skipped
-    );
+    if json {
+        let done: Vec<_> = jobs
+            .iter()
+            .zip(&results)
+            .map(|(j, r)| match r {
+                Some(o) if o.success => job_json(j, "ok", Some(&o.output)),
+                Some(o) => job_json(j, "failed", Some(&o.output)),
+                None => job_json(j, "skipped", None),
+            })
+            .collect();
+        print_json(&serde_json::json!({
+            "dry_run": false,
+            "new_on_forge": new_on_forge,
+            "orphans": orphans,
+            "jobs": done,
+            "cloned": added,
+            "summary": {
+                "total": total,
+                "ok": total - failed - skipped,
+                "failed": failed,
+                "skipped": skipped,
+            },
+        }))?;
+    } else {
+        println!(
+            "{total} jobs: {} ok, {failed} failed, {skipped} skipped",
+            total - failed - skipped
+        );
+    }
     ws.state.last_sync = Some(jiff::Timestamp::now());
     save_state(ws, ctx)?;
     if failed > 0 {
@@ -730,13 +824,31 @@ fn glyph_cell(g: &str) -> String {
     format!("|{g}|M{g}M{}", if wide { "*" } else { " " })
 }
 
-fn demo_glyphs(ctx: &Ctx) -> Result<()> {
+fn demo_glyphs(ctx: &Ctx, json: bool) -> Result<()> {
     let ui = Config::load(&ctx.config_path)
         .map(|c| c.ui)
         .unwrap_or_default();
     let (yours, warnings) = ui.icons();
     for w in warnings {
         eprintln!("argus: config: {w}");
+    }
+    if json {
+        let set = |i: &Icons| -> serde_json::Map<String, serde_json::Value> {
+            icons::ICON_NAMES
+                .iter()
+                .map(|n| (n.to_string(), i.get(n).unwrap().into()))
+                .collect()
+        };
+        let mut sets: serde_json::Map<String, serde_json::Value> = icons::SETS
+            .iter()
+            .map(|n| (n.to_string(), set(&icons::by_name(n)).into()))
+            .collect();
+        sets.insert("yours".into(), set(&yours).into());
+        return print_json(&serde_json::json!({
+            "sets": sets,
+            "punctuation": icons::PUNCTUATION,
+            "alternatives": icons::ALTERNATIVES,
+        }));
     }
     println!("Each glyph is shown between bars and between letters. One drawn from a");
     println!("fallback font (missing from yours) may run into its neighbours.");
@@ -835,11 +947,21 @@ fn fix_cmd(
     kinds: &[FixKind],
     dry_run: bool,
     patterns: &[String],
+    json: bool,
 ) -> Result<()> {
     let p = Paint::detect();
     let ic = icons(ws);
     let sel = ws.select(patterns, ViewFilter::default());
     let mut any = false;
+    let mut records = vec![];
+    let fix_json = |f: &fix::Fix| {
+        serde_json::json!({
+            "kind": f.kind.name(),
+            "op": f.op.label(),
+            "reason": f.reason,
+            "blocked": f.blocked,
+        })
+    };
     for i in sel {
         let e = &ws.entries[i];
         let Some(s) = e.status() else { continue };
@@ -856,6 +978,20 @@ fn fix_cmd(
                 continue;
             }
             any = true;
+            if json {
+                records.push(serde_json::json!({
+                    "repo": name,
+                    "path": path,
+                    "planned": chain.first().map(fix_json),
+                    "then": chain.iter().skip(1).map(fix_json).collect::<Vec<_>>(),
+                    "alternatives": alternatives.iter().map(|f| {
+                        let mut v = fix_json(f);
+                        v["needs_kind"] = (!kinds.contains(&f.kind)).into();
+                        v
+                    }).collect::<Vec<_>>(),
+                }));
+                continue;
+            }
             match chain.first() {
                 Some(f) => println!("{name}: would {} ({})", f.op.label(), f.reason),
                 None => println!("{name}: nothing automatic"),
@@ -877,7 +1013,15 @@ fn fix_cmd(
         }
         if let Some(a) = fix::apply_fix(&path, kinds)? {
             any = true;
-            if a.outcome.success {
+            if json {
+                records.push(serde_json::json!({
+                    "repo": name,
+                    "path": path,
+                    "applied": fix_json(&a.fix),
+                    "ok": a.outcome.success,
+                    "output": a.outcome.output,
+                }));
+            } else if a.outcome.success {
                 println!(
                     "{name}: {} {}",
                     p.role(Role::Ahead, ic.ok.trim_end()),
@@ -893,7 +1037,9 @@ fn fix_cmd(
             }
         }
     }
-    if !any {
+    if json {
+        print_json(&records)?;
+    } else if !any {
         println!("nothing to fix");
     }
     Ok(())
@@ -901,7 +1047,7 @@ fn fix_cmd(
 
 // ---------- mark ----------
 
-fn mark(ws: &mut Workspace, m: &MarkArgs) -> Result<()> {
+fn mark(ws: &mut Workspace, m: &MarkArgs, json: bool) -> Result<()> {
     let sel = ws.select(
         &m.patterns,
         ViewFilter {
@@ -929,6 +1075,7 @@ fn mark(ws: &mut Workspace, m: &MarkArgs) -> Result<()> {
             None
         }
     };
+    let mut records = vec![];
     for i in sel {
         let key = ws.entries[i].key.clone();
         ws.state.mark(&key, |mk| {
@@ -951,26 +1098,32 @@ fn mark(ws: &mut Workspace, m: &MarkArgs) -> Result<()> {
         if m.unsnooze || m.clear {
             ws.state.snoozed.remove(&key);
         }
-        println!("{}", ws.entries[i].display_name());
+        if json {
+            records.push(serde_json::json!({
+                "repo": ws.entries[i].display_name(),
+                "key": key,
+                "marks": ws.state.marks.get(&key).copied().unwrap_or_default(),
+                "snoozed_until": ws.state.snoozed.get(&key),
+            }));
+        } else {
+            println!("{}", ws.entries[i].display_name());
+        }
+    }
+    if json {
+        print_json(&records)?;
     }
     Ok(())
 }
 
 // ---------- forge ----------
 
-fn forge_cmd(cmd: ForgeCmd) -> Result<()> {
+fn forge_cmd(cmd: ForgeCmd, json: bool) -> Result<()> {
     match cmd {
-        ForgeCmd::List {
-            owner,
-            team,
-            host,
-            json,
-        } => {
+        ForgeCmd::List { owner, team, host } => {
             let f = argus_forge::for_track("github", &host)?;
             let repos = f.list(&owner, team.as_deref())?;
             if json {
-                serde_json::to_writer_pretty(std::io::stdout().lock(), &repos)?;
-                println!();
+                print_json(&repos)?;
             } else {
                 for r in repos {
                     let tags = [(r.archived, " [archived]"), (r.fork, " [fork]")]

@@ -274,11 +274,12 @@ rendering is snapshot-tested via `TestBackend`.
 * GitLab/Gitea forges (implement `argus_core::forge::Forge`); jj backend.
 * `argus-server` (axum, JSON over the same `Workspace`).
 * Filesystem watching for live refresh. Today: `g`, and after each operation.
-* Machine-readable output for scripts. Today `status --json` and
-  `forge list --json` serialise internal structs, which isn't a stable
-  contract. Consider a versioned JSON schema and/or a line-oriented
-  `--porcelain` format (like `git status --porcelain=v2`) for `status`,
-  `sync`, `fix` and `root list`.
+* Stable machine-readable output. `--json` works for every command; sync,
+  fix, mark, ack, root and paths build their documents explicitly in the
+  CLI, but `status` and `forge list` still serialise internal structs
+  (`Entry`, `RemoteRepo`), which isn't a stable contract. Consider a
+  versioned schema and/or a line-oriented `--porcelain` format (like
+  `git status --porcelain=v2`).
 * Stash options: let the user choose whether untracked files are included
   (git has no config for this). Today: staged + unstaged + untracked.
 * Path subsets for operations (stash/commit/discard selected files), e.g.

@@ -139,16 +139,22 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 ## CLI
 
 ```sh
-argus status [-a|--all] [--hidden] [--json]  # repos needing attention; -a: clean too
+argus status [-a|--all] [--hidden]     # repos needing attention; -a: clean too
 argus sync [-n] [--no-forge] [PATTERNS…]
 argus fix [-n] [-F] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine; -F fetches first
 argus mark PATTERNS… [--favourite|--no-favourite] [--sync|--no-sync] [--exclude|--include] [--snooze 3d|--unsnooze] [--clear]
 argus ack [PATTERNS…]
-argus forge list ORG [--team T] [--json]
+argus forge list ORG [--team T]
 argus root add [DIRS…] | remove DIRS… | list
 argus paths                            # config and state file locations
 argus completions bash|zsh|fish|elvish|powershell
 ```
+
+Every command except the TUI and completions takes `--json`: one JSON
+document on stdout (messages and progress stay on stderr). For example
+`argus --json fix -n` lists each repo with its `planned` fix, `then`, and
+`alternatives`; `argus --json sync` lists each job's `outcome` (`ok`,
+`failed`, `skipped`) and a `summary`.
 
 Completions: `argus completions zsh > ~/.zfunc/_argus` (with `~/.zfunc`
 on `fpath`), `argus completions fish > ~/.config/fish/completions/argus.fish`,
