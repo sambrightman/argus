@@ -877,6 +877,7 @@ impl App {
                 self.scanning = false;
                 self.ws.entries = entries;
                 self.ws.truncated = truncated;
+                self.ws.forget_missing(jiff::Timestamp::now());
                 self.ws.resolve_flags();
                 let mut parts = vec![format!("{} repos", self.ws.entries.len())];
                 parts.extend(self.notices.iter().cloned());

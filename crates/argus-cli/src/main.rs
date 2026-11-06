@@ -349,6 +349,7 @@ fn load(
 ) -> Result<(Workspace, Vec<String>)> {
     let mut config = Config::load(&ctx.config_path)?;
     let mut notices = vec![];
+    let partial = max_depth.is_some_and(|d| d != config.max_depth) || !roots.is_empty();
     if let Some(d) = max_depth {
         config.max_depth = d;
     }
@@ -365,7 +366,9 @@ fn load(
     }
     let mut state = State::load(&ctx.state_path)?;
     state.expire_snoozes(jiff::Timestamp::now());
-    Ok((Workspace::new(config, state)?, notices))
+    let mut ws = Workspace::new(config, state)?;
+    ws.partial = partial;
+    Ok((ws, notices))
 }
 
 /// Scan, warning about directories skipped because of `max_depth`.

@@ -1,10 +1,10 @@
 //! Machine-written state: marks made from the UI, snoozes, forge listings and
 //! "new" flags. Saved atomically (write temp + rename).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 /// Marks set interactively. Keys are repo keys (identity string, or path for
@@ -44,7 +44,14 @@ pub struct State {
     pub new: BTreeSet<String>,
     pub tracks: BTreeMap<String, TrackState>,
     pub last_sync: Option<Timestamp>,
+    /// When a scan last found each repo that has marks, a snooze or a new
+    /// flag; see [`State::forget_missing`].
+    pub seen: BTreeMap<String, Timestamp>,
 }
+
+/// How long a repo can be missing from scans before its state is dropped:
+/// long enough for an unmounted disk or a temporary `--root`.
+pub const FORGET_AFTER: SignedDuration = SignedDuration::from_hours(30 * 24);
 
 #[derive(Debug, thiserror::Error)]
 pub enum StateError {
@@ -100,6 +107,42 @@ impl State {
         let before = self.snoozed.len();
         self.snoozed.retain(|_, until| *until > now);
         before != self.snoozed.len()
+    }
+
+    /// After a scan that found `present`: note when repos with state were
+    /// seen, and drop the state of those missing for [`FORGET_AFTER`]. An
+    /// incomplete scan (`complete` false, e.g. a root is missing) only
+    /// starts clocks. Returns the forgotten keys.
+    pub fn forget_missing(
+        &mut self,
+        present: &HashSet<&str>,
+        complete: bool,
+        now: Timestamp,
+    ) -> Vec<String> {
+        let keys: BTreeSet<String> = self
+            .marks
+            .keys()
+            .chain(self.snoozed.keys())
+            .chain(&self.new)
+            .cloned()
+            .collect();
+        self.seen.retain(|k, _| keys.contains(k));
+        let mut forgotten = vec![];
+        for k in keys {
+            if present.contains(k.as_str()) {
+                self.seen.insert(k, now);
+                continue;
+            }
+            let since = *self.seen.entry(k.clone()).or_insert(now);
+            if complete && now.duration_since(since) > FORGET_AFTER {
+                self.marks.remove(&k);
+                self.snoozed.remove(&k);
+                self.new.remove(&k);
+                self.seen.remove(&k);
+                forgotten.push(k);
+            }
+        }
+        forgotten
     }
 
     pub fn mark(&mut self, key: &str, f: impl FnOnce(&mut Marks)) {

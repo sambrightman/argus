@@ -98,7 +98,9 @@ commit id. Details list the commit and all its tags.
 
 Marks you set in the TUI (favourite, sync, exclude, snooze, "new") live in
 `~/.local/state/argus/state.toml`, never in your hand-written config. They
-override config rules.
+override config rules. A repo's marks are dropped once scans haven't found
+it for 30 days; never while a root is missing (an unmounted disk) or when
+scanning with `--root` or `--max-depth`.
 
 Credentials and git behaviour are yours: argus runs `git pull`/`push`/`clone`
 itself, so `pull.rebase`, `rebase.autoStash`, hooks, signing, credential

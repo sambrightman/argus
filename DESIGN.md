@@ -89,6 +89,11 @@ consume the same events.
   or `exclude`. Later rules override earlier ones.
 * **Snooze.** Temporary exclusion until a date. Kept in the *state* file, not
   config, so config stays hand-edited.
+* **Forgetting.** State for a repo (marks, snooze, new flag) is dropped
+  after 30 days missing from scans. A clock per repo with state (`seen`)
+  rather than dropping on the first miss, so a moved or briefly missing
+  repo keeps its marks; scans with a missing root or overridden roots or
+  depth forget nothing.
 * **Tracked owners.** `[[track]] forge="github" owner="acme" [team="platform"] into="~/dev/acme" clone="auto"|"notify"`.
   Sync lists the forge, diffs it against local clones, and clones missing repos
   (`auto`) or flags them as *new on forge* (`notify`). Newly cloned repos are

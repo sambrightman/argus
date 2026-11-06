@@ -122,6 +122,9 @@ pub struct Workspace {
     pub entries: Vec<Entry>,
     /// Directories the last scan didn't enter because of `max_depth`.
     pub truncated: Vec<PathBuf>,
+    /// Roots or depth differ from the config (`--root`, `--max-depth`), so
+    /// scans may miss repos: they forget no state.
+    pub partial: bool,
 }
 
 impl Workspace {
@@ -133,6 +136,7 @@ impl Workspace {
             rules,
             entries: vec![],
             truncated: vec![],
+            partial: false,
         })
     }
 
@@ -169,6 +173,17 @@ impl Workspace {
             })
             .collect();
         self.refresh_all();
+        self.forget_missing(Timestamp::now());
+    }
+
+    /// After a scan: drop state of repos long missing (see
+    /// [`State::forget_missing`]). Nothing is dropped after a partial scan
+    /// or while a root is missing, e.g. an unmounted disk.
+    pub fn forget_missing(&mut self, now: Timestamp) -> Vec<String> {
+        let present: std::collections::HashSet<&str> =
+            self.entries.iter().map(|e| e.key.as_str()).collect();
+        let complete = !self.partial && self.config.roots.iter().all(|r| r.is_dir());
+        self.state.forget_missing(&present, complete, now)
     }
 
     pub fn refresh_all(&mut self) {
