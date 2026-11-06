@@ -14,8 +14,6 @@ use crate::app::{App, Mode, Prompt, Row};
 use crate::menu::MenuId;
 use crate::theme::{Theme, Ui};
 
-const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
 pub struct View<'a> {
     pub theme: &'a Theme,
     pub icons: Icons,
@@ -82,7 +80,7 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
             s.push_str(&format!(" · {} marked", app.marked.len()));
         }
         if app.scanning {
-            s.push_str(&format!(" · scanning {}", SPINNER[v.tick % SPINNER.len()]));
+            s.push_str(&format!(" · scanning {}", v.icons.spin(v.tick)));
         }
         s
     };
@@ -105,11 +103,15 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
 
     if app.rows.is_empty() {
         let msg = if app.scanning {
-            "scanning…"
+            "scanning…".to_string()
         } else if app.view.attention_only && !app.ws.entries.is_empty() {
-            "nothing needs attention 🎉  (a: show all)"
+            let party = match v.icons.celebrate.trim_end() {
+                "" => String::new(),
+                c => format!(" {c}"),
+            };
+            format!("nothing needs attention{party}  (a: show all)")
         } else {
-            "no repositories (check roots in config; R rescans)"
+            "no repositories (check roots in config; R rescans)".to_string()
         };
         f.render_widget(Paragraph::new(Span::styled(msg, t.ui(Ui::Dim))), body);
         return;
@@ -177,9 +179,9 @@ fn repo_line<'a>(app: &App, v: &View, i: usize, name_w: usize, branch_w: usize) 
     let mut spans: Vec<Span> = vec![];
     let marked = app.marked.contains(&e.path);
     spans.push(if app.running.contains_key(&e.path) {
-        Span::styled(SPINNER[v.tick % SPINNER.len()], t.ui(Ui::Running))
+        Span::styled(v.icons.spin(v.tick).to_string(), t.ui(Ui::Running))
     } else if marked {
-        Span::styled("▌", t.ui(Ui::Marked))
+        Span::styled(v.icons.marked.to_string(), t.ui(Ui::Marked))
     } else {
         Span::raw(" ")
     });
@@ -260,9 +262,9 @@ fn draw_log(f: &mut Frame, app: &App, v: &View, area: Rect) {
     let mut lines: Vec<Line> = vec![];
     for e in &app.log {
         let mark = if e.ok {
-            Span::styled("✓ ", t.ui(Ui::Ok))
+            Span::styled(format!("{} ", v.icons.ok.trim_end()), t.ui(Ui::Ok))
         } else {
-            Span::styled("✗ ", t.ui(Ui::Failed))
+            Span::styled(format!("{} ", v.icons.failed.trim_end()), t.ui(Ui::Failed))
         };
         let time = e.at.strftime("%H:%M:%S").to_string();
         lines.push(Line::from(vec![
@@ -463,6 +465,10 @@ pub fn legend(i: &Icons) -> Vec<(&str, Role, &'static str)> {
         (&i.error, Role::Error, "error reading the repo"),
         (&i.worktree, Role::Dim, "linked worktree"),
         (&i.submodule, Role::Dim, "submodule"),
+        (i.spin(0), Role::Dim, "job running"),
+        (&i.marked, Role::Dim, "marked for a batch action"),
+        (&i.ok, Role::Ahead, "job or fix succeeded"),
+        (&i.failed, Role::Error, "job or fix failed"),
     ]
 }
 

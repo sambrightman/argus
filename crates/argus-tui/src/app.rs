@@ -220,6 +220,7 @@ impl App {
     pub fn rebuild(&mut self) {
         let keep = self.current_path();
         let needle = self.filter.to_lowercase();
+        let (icons, _) = self.ws.config.ui.icons();
         let mut rows = vec![];
         for i in self.ws.ordered(self.view) {
             let e = &self.ws.entries[i];
@@ -232,7 +233,7 @@ impl App {
             rows.push(Row::Repo(i));
             if self.expanded.contains(&e.path) {
                 rows.extend(
-                    details(e, &self.ws.config.fix.auto)
+                    details(e, &self.ws.config.fix.auto, &icons)
                         .into_iter()
                         .map(|line| Row::Detail { repo: i, line }),
                 );
@@ -555,6 +556,7 @@ impl App {
                 let ui = &mut self.ws.config.ui;
                 ui.icons = next(argus_core::badges::SETS, &ui.icons).to_string();
                 let msg = format!("icons {} (this session; set [ui] icons to keep)", ui.icons);
+                self.rebuild();
                 self.info(msg);
             }
             ToggleHidden => {

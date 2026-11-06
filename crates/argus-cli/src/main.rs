@@ -7,7 +7,6 @@ use std::sync::atomic::AtomicBool;
 use anyhow::{Context, Result, bail};
 use argus_core::badges::{self, Badge, Icons, Role};
 use argus_core::fix::{self, FixKind};
-use argus_core::glyphs;
 use argus_core::runner::{self, Event};
 use argus_core::sync;
 use argus_core::{Config, State, ViewFilter, Workspace, configfile, paths};
@@ -761,12 +760,12 @@ fn demo_glyphs(ctx: &Ctx) -> Result<()> {
         let line = format!("{c}  U+{:04X}  {}{what}", c as u32, pad(&cell, 10));
         println!("{}", line.trim_end());
     };
-    println!("\nother glyphs the interface uses");
-    for &(c, what) in glyphs::UI_GLYPHS {
-        row(c, what);
+    println!("\npunctuation (not icons)");
+    for c in badges::PUNCTUATION.chars() {
+        row(c, "used as text");
     }
     println!("\nalternatives ([ui.icon_overrides])");
-    for c in glyphs::ALTERNATIVES.chars() {
+    for c in badges::ALTERNATIVES.chars() {
         row(c, "");
     }
     Ok(())
@@ -818,6 +817,7 @@ fn fix_cmd(
     patterns: &[String],
 ) -> Result<()> {
     let p = Paint::detect();
+    let ic = icons(ws);
     let sel = ws.select(patterns, ViewFilter::default());
     let mut any = false;
     for i in sel {
@@ -858,11 +858,15 @@ fn fix_cmd(
         if let Some(a) = fix::apply_fix(&path, kinds)? {
             any = true;
             if a.outcome.success {
-                println!("{name}: {} {}", p.role(Role::Ahead, "✓"), a.fix.op.label());
+                println!(
+                    "{name}: {} {}",
+                    p.role(Role::Ahead, ic.ok.trim_end()),
+                    a.fix.op.label()
+                );
             } else {
                 println!(
                     "{name}: {} {}\n{}",
-                    p.role(Role::Error, "✗"),
+                    p.role(Role::Error, ic.failed.trim_end()),
                     a.fix.op.label(),
                     indent(&a.outcome.output)
                 );

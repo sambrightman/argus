@@ -115,9 +115,18 @@ consume the same events.
   Grouping by owner, with folding.
 * Enter / Tab unfolds detail: commit and tags, files, branches, stashes,
   worktrees, submodules.
-* **Icons:** the `unicode` set only uses characters present in common
-  monospace fonts (Menlo, SF Mono, Inconsolata, DejaVu, Fira Code, Hack,
-  Source Code Pro; a test enforces the list). A glyph missing from the
+* **Icons:** one struct (`badges::Icons`) holds every symbol the
+  interface prints: repo badges, plus the spinner, marked rows, job
+  results and the all-clear. A badge is an icon with a count and a colour
+  role for one repo; the other icons are used directly. Plain
+  punctuation (`badges::PUNCTUATION`: … · — ↑↓) stays as text. A test
+  scans string literals in all crates (outside tests) and fails on any
+  other symbol, so new ones become icons. The `unicode` set uses
+  characters present in common monospace fonts (Menlo, SF Mono,
+  Inconsolata, DejaVu, Fira Code, Hack, Source Code Pro), with known gaps
+  listed in a test (◆ not in SF Mono, ✓ not in Hack, ✗ not in Fira Code,
+  Hack or Source Code Pro) and fallbacks known to fit the cell (braille
+  spinner, emoji). A glyph missing from the
   font is drawn from a fallback font and can overlap its neighbour. The
   `nerd` set uses Nerd Font glyphs for every icon, each followed by a
   space, since non-Mono Nerd Fonts draw them up to two cells wide.
@@ -133,10 +142,7 @@ consume the same events.
   theme and icons. `v t` / `v i` cycle theme and icons for the session.
   `--glyphs` prints a test strip instead (no terminal needed): whether a
   fallback glyph overlaps depends on the terminal and OS, so it has to be
-  seen, not computed from font tables. Besides the icons it shows every
-  other non-ASCII glyph the interface prints, from `glyphs::UI_GLYPHS`;
-  a test scans the string literals in all crates' sources (outside
-  tests) and fails on any glyph not listed, or listed but unused.
+  seen, not computed from font tables.
 * Two input styles at once:
   * arrows/Enter plus menus you can navigate with the cursor;
   * transient-style prefix keys: `f` fix, `s` sync, `m` mark, `o` open, `?` help.

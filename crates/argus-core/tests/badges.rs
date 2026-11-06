@@ -27,26 +27,72 @@ fn icons(set: &Icons) -> Vec<(&'static str, &str)> {
         ("sync", &*set.sync),
         ("worktree", &*set.worktree),
         ("submodule", &*set.submodule),
+        ("spinner", &*set.spinner),
+        ("marked", &*set.marked),
+        ("ok", &*set.ok),
+        ("failed", &*set.failed),
+        ("celebrate", &*set.celebrate),
     ]
 }
 
-/// Characters every common monospace font has (checked against Menlo,
-/// Inconsolata, DejaVu Sans Mono, Fira Code, Hack and Source Code Pro).
-/// Anything else is drawn from a fallback font and may overlap its
-/// neighbour.
-const SAFE: &str = "↑↓●◆×±≠…├└│»§•∞";
+/// Symbols in all of Menlo, SF Mono, Inconsolata, DejaVu Sans Mono, Fira
+/// Code, Hack and Source Code Pro (checked with fontTools).
+const IN_ALL_FONTS: &str = "↑↓●×±≠…·—├└│»§•∞◊○▌";
+
+/// Known gaps, each to be judged with `argus demo --glyphs`.
+const GAPS: &[(char, &str)] = &[
+    ('◆', "missing in SF Mono (macOS Terminal's default)"),
+    ('✓', "missing in Hack"),
+    ('✗', "missing in Fira Code, Hack, Source Code Pro"),
+];
+
+/// Missing from most fonts, but the fallbacks fit the cell: braille
+/// (Apple Braille, DejaVu Sans) and emoji (always the emoji font, two
+/// cells, which width calculations count).
+fn falls_back_cleanly(c: char) -> bool {
+    ('\u{2800}'..='\u{28ff}').contains(&c) || c == '🎉'
+}
 
 #[test]
-fn unicode_icons_are_in_common_fonts() {
+fn unicode_icons_are_in_common_fonts_or_known_gaps() {
     for (name, icon) in icons(&UNICODE) {
         for c in icon.chars() {
             assert!(
-                c.is_ascii() || SAFE.contains(c),
+                c.is_ascii()
+                    || IN_ALL_FONTS.contains(c)
+                    || GAPS.iter().any(|g| g.0 == c)
+                    || falls_back_cleanly(c),
                 "{name}: {c} (U+{:04X}) isn't in common fonts",
                 c as u32
             );
         }
     }
+    // inverse: the policy rejects a glyph most fonts lack
+    assert!(!IN_ALL_FONTS.contains('★') && !falls_back_cleanly('★'));
+    // and every listed gap is still in use
+    let all: String = icons(&UNICODE).iter().map(|(_, i)| *i).collect();
+    for (c, why) in GAPS {
+        assert!(all.contains(*c), "{c} ({why}) is no longer used");
+    }
+}
+
+#[test]
+fn punctuation_is_in_all_fonts() {
+    for c in badges::PUNCTUATION.chars() {
+        assert!(IN_ALL_FONTS.contains(c), "{c}");
+    }
+}
+
+#[test]
+fn spinner_frames_cycle_one_character_at_a_time() {
+    let ascii = ASCII;
+    let frames: Vec<&str> = (0..5).map(|t| ascii.spin(t)).collect();
+    assert_eq!(frames, ["|", "/", "-", "\\", "|"]);
+    assert_eq!(UNICODE.spin(1), "⠙");
+    assert_eq!(UNICODE.spin(10), UNICODE.spin(0));
+    // inverse: no frames (an empty override) is a blank, not a panic
+    let (i, _) = ASCII.with_overrides(&[("spinner".to_string(), String::new())].into());
+    assert_eq!(i.spin(3), " ");
 }
 
 #[test]
@@ -61,7 +107,10 @@ fn nerd_icons_cover_everything_and_leave_room() {
             );
         } else {
             assert!(
-                name == "worktree" || nerd != uni || uni.is_ascii(),
+                // these need no Nerd glyph: the Unicode one fits
+                ["worktree", "spinner", "marked", "celebrate"].contains(&name)
+                    || nerd != uni
+                    || uni.is_ascii(),
                 "{name}: not a Nerd glyph ({nerd:?})"
             );
         }
@@ -144,4 +193,22 @@ fn icons_can_be_looked_up_by_name() {
     // inverse: unknown names
     assert_eq!(UNICODE.get("favourit"), None);
     assert_eq!(UNICODE.get(""), None);
+}
+
+#[test]
+fn the_config_example_names_every_icon() {
+    let example = argus_core::configfile::example();
+    let doc: String = example
+        .lines()
+        .skip_while(|l| !l.contains("Per-icon overrides"))
+        .take_while(|l| l.starts_with('#'))
+        .collect::<Vec<_>>()
+        .join(" ");
+    for name in badges::ICON_NAMES {
+        assert!(
+            doc.split(|c: char| !c.is_alphanumeric() && c != '_')
+                .any(|w| w == *name),
+            "{name} missing from: {doc}"
+        );
+    }
 }

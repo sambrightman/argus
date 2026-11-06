@@ -223,7 +223,8 @@ pub struct UiConfig {
     /// Per-icon overrides on top of the set, by name: favourite, new,
     /// excluded, snoozed, branch, detached, ahead, behind, staged, unstaged,
     /// untracked, conflict, stash, in_progress, gone, no_upstream, branches,
-    /// error, sync, worktree, submodule.
+    /// error, sync, worktree, submodule; and in the interface: spinner (one
+    /// frame per character), marked, ok, failed, celebrate.
     #[schemars(example = example_icon_overrides())]
     pub icon_overrides: BTreeMap<String, String>,
     /// Show only repos needing attention at startup (`a` toggles).

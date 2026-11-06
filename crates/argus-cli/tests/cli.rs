@@ -280,11 +280,17 @@ fn fix_with_explicit_kind_and_pattern() {
         .assert()
         .success()
         .stdout(predicate::str::contains("nothing to fix"));
+    // the result mark is an icon: the ascii set's here
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "[ui]\nicons = 'ascii'\n").unwrap();
     argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
         .args(["fix", "-k", "stash", "acme/dirty"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("✓ stash"));
+        .stdout(predicate::str::contains("acme/dirty: ok stash"))
+        .stdout(predicate::str::contains("✓").not());
     assert_eq!(
         git(&sb.path("dev/dirty"), &["stash", "list"])
             .lines()
@@ -757,13 +763,13 @@ fn demo_glyphs_prints_every_icon_between_markers_without_a_terminal() {
     assert!(line("◊").contains("U+25CA"));
     assert!(!line("◊").ends_with('*'), "◊ isn't ambiguous width");
     assert!(line("★").ends_with('*'), "★ is ambiguous width");
-    // every other glyph the interface prints, and where
-    for (c, what) in argus_core::glyphs::UI_GLYPHS {
+    // punctuation used as text
+    for c in argus_core::badges::PUNCTUATION.chars() {
         assert!(
             stdout
                 .lines()
-                .any(|l| l.contains(&format!("|{c}|M{c}M")) && l.contains(what)),
-            "{c} {what}:\n{stdout}"
+                .any(|l| l.contains(&format!("|{c}|M{c}M")) && l.contains("text")),
+            "{c}:\n{stdout}"
         );
     }
 }

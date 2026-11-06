@@ -81,12 +81,14 @@ favourite = "yellow"
 (dirty, ahead, behind, diverged, mid-merge, detached on a tag, worktrees,
 submodules, errors…), deleted when you quit. In the TUI, `v t` and `v i`
 cycle themes and icon sets for the session, and `?` ends with a legend of
-every icon. The `unicode` icons only use characters common monospace fonts
-have; with a Nerd Font, `icons = "nerd"` uses its glyphs. Override single
-icons in `[ui.icon_overrides]` if your font has something you prefer.
-`argus demo --glyphs` prints every icon, every other glyph argus uses,
-and alternatives, between bars
-and letters (`|◆|M◆M`): a glyph your font lacks is drawn from a fallback
+every icon. Icons cover every symbol argus prints, badges and interface
+alike (spinner, marked rows, job results), so `icons = "ascii"` is ASCII
+throughout. The `unicode` icons use characters common monospace fonts
+have, with a few known gaps; with a Nerd Font, `icons = "nerd"` uses its
+glyphs. Override single icons in `[ui.icon_overrides]` if your font has
+something you prefer. `argus demo --glyphs` prints every icon, the
+punctuation argus uses as text, and alternatives, between bars and
+letters (`|◆|M◆M`): a glyph your font lacks is drawn from a fallback
 font and may run into its neighbours. `*` marks glyphs that take two
 cells in CJK (ambiguous-width) mode.
 

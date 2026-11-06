@@ -74,11 +74,15 @@ fn current(app: &App) -> String {
 }
 
 fn render(app: &mut App, w: u16, h: u16) -> String {
+    render_with(app, w, h, argus_core::badges::UNICODE)
+}
+
+fn render_with(app: &mut App, w: u16, h: u16, icons: argus_core::badges::Icons) -> String {
     let (theme, _) = Theme::build("mono", &Default::default());
     let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
     let view = ui::View {
         theme: &theme,
-        icons: argus_core::badges::UNICODE,
+        icons,
         tick: 0,
     };
     t.draw(|f| ui::draw(f, app, &view)).unwrap();
@@ -629,7 +633,14 @@ fn no_repositories_is_not_reported_as_nothing_needing_attention() {
     sb.clone_as_github("acme", "clean", "dev/clean");
     app.ws.scan();
     app.act(Action::ToggleAttention);
-    assert!(render(&mut app, 80, 5).contains("nothing needs attention"));
+    let out = render(&mut app, 80, 5);
+    assert!(out.contains("nothing needs attention 🎉"), "{out}");
+    // the celebration is an icon: none in the ascii set
+    let out = render_with(&mut app, 80, 5, argus_core::badges::ASCII);
+    assert!(
+        out.contains("nothing needs attention  (a: show all)"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -684,6 +695,19 @@ fn view_menu_cycles_themes_and_icon_sets_for_this_session() {
         sets.push(app.ws.config.ui.icons.clone());
     }
     assert_eq!(sets, ["ascii", "unicode", "nerd"]);
+    // open details switch too
+    let (_sb, mut app) = setup_with("", |sb| commit(&sb.path("dev/clean"), "local"));
+    app.act(Action::ExpandAll);
+    let ahead = |app: &App| detail_texts(app).iter().any(|t| t.ends_with(" ↑1"));
+    assert!(ahead(&app), "{:?}", detail_texts(&app));
+    app.act(Action::NextIcons); // nerd
+    app.act(Action::NextIcons); // ascii
+    assert!(!ahead(&app), "{:?}", detail_texts(&app));
+    assert!(
+        detail_texts(&app).iter().any(|t| t.ends_with(" ^1")),
+        "{:?}",
+        detail_texts(&app)
+    );
     // an unknown configured name starts the cycle from the beginning
     let (_sb, mut app) = setup("[ui]\ntheme = 'nope'");
     app.act(Action::NextTheme);
@@ -702,12 +726,56 @@ fn help_has_a_legend_of_every_icon() {
         ("@", "detached HEAD (tag or commit)"),
         ("$", "stashes"),
         ("≠", "conflicts"),
+        ("⠋", "job running"),
+        ("▌", "marked for a batch action"),
+        ("✓", "job or fix succeeded"),
+        ("✗", "job or fix failed"),
     ] {
         assert!(
             out.lines().any(|l| l.contains(icon) && l.contains(meaning)),
             "{icon} {meaning}\n{out}"
         );
     }
+}
+
+#[test]
+fn ascii_icons_render_without_other_symbols() {
+    let d = argus_core::demo::build();
+    let cfg = format!(
+        "roots = ['{}']\n[ui]\nattention_only = false\nicons = 'ascii'",
+        d.root.display()
+    );
+    let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    ws.scan();
+    d.apply_marks(&mut ws);
+    let mut app = App::new(ws);
+    app.act(Action::ToggleMark);
+    app.act(Action::ExpandAll);
+    let ascii = argus_core::badges::ASCII;
+    let main = render_with(&mut app, 120, 300, ascii.clone());
+    app.on_key(key('?'));
+    let help = render_with(&mut app, 120, 120, ascii.clone());
+    let allowed = |c: char| {
+        c.is_ascii()
+            || argus_core::badges::PUNCTUATION.contains(c)
+            || ('\u{2500}'..='\u{257f}').contains(&c) // borders
+    };
+    for out in [&main, &help] {
+        let other: String = out.chars().filter(|&c| !allowed(c)).collect();
+        assert!(other.is_empty(), "{other}\n{out}");
+    }
+    assert!(main.contains(">"), "marked row: {main}");
+    assert!(
+        main.contains("^"),
+        "ahead, in badges and branch details: {main}"
+    );
+    assert!(help.contains("FAILED"), "legend: {help}");
+    // inverse: the unicode set does use its symbols
+    app.on_key(code(KeyCode::Esc));
+    app.ws.config.ui.icons = "unicode".into();
+    app.rebuild();
+    let main = render(&mut app, 120, 300);
+    assert!(main.contains('▌') && main.contains('↑'), "{main}");
 }
 
 #[test]

@@ -37,8 +37,9 @@ pub struct Badge {
     pub text: String,
 }
 
-/// One glyph per thing argus marks. Built-in sets are constants; config
-/// can override single icons (`[ui.icon_overrides]`).
+/// One glyph per thing argus marks: repo badges, then interface marks.
+/// Built-in sets are constants; config can override single icons
+/// (`[ui.icon_overrides]`). `argus demo --glyphs` shows them all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Icons {
     pub favourite: Cow<'static, str>,
@@ -62,6 +63,16 @@ pub struct Icons {
     pub sync: Cow<'static, str>,
     pub worktree: Cow<'static, str>,
     pub submodule: Cow<'static, str>,
+    /// Spinner frames, one character each, for scans and running jobs.
+    pub spinner: Cow<'static, str>,
+    /// A row marked for a batch action (one cell).
+    pub marked: Cow<'static, str>,
+    /// A job or fix that succeeded.
+    pub ok: Cow<'static, str>,
+    /// A job or fix that failed.
+    pub failed: Cow<'static, str>,
+    /// Nothing needs attention.
+    pub celebrate: Cow<'static, str>,
 }
 
 /// `ICON_NAMES` and lookup by name, from one list of `Icons` fields.
@@ -111,9 +122,23 @@ icon_names!(
     sync,
     worktree,
     submodule,
+    spinner,
+    marked,
+    ok,
+    failed,
+    celebrate,
 );
 
 impl Icons {
+    /// The spinner frame for `tick` (a space if there are no frames).
+    pub fn spin(&self, tick: usize) -> &str {
+        let n = self.spinner.chars().count();
+        match self.spinner.char_indices().nth(tick % n.max(1)) {
+            Some((at, c)) => &self.spinner[at..at + c.len_utf8()],
+            None => " ",
+        }
+    }
+
     /// Replace single icons; returns warnings for unknown names.
     pub fn with_overrides(mut self, overrides: &BTreeMap<String, String>) -> (Self, Vec<String>) {
         let mut warnings = vec![];
@@ -159,6 +184,11 @@ pub const UNICODE: Icons = Icons {
     sync: s("~"),
     worktree: s("├"),
     submodule: s("§"),
+    spinner: s("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+    marked: s("▌"),
+    ok: s("✓"),
+    failed: s("✗"),
+    celebrate: s("🎉"),
 };
 
 /// Nerd Font glyphs (codicons, Powerline). Each is followed by a space:
@@ -185,6 +215,11 @@ pub const NERD: Icons = Icons {
     sync: s("\u{ea77} "),        // cod-sync
     worktree: s("├"),
     submodule: s("\u{eaec} "), // cod-file_submodule
+    spinner: s("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+    marked: s("▌"),
+    ok: s("\u{eab2} "),     // cod-check
+    failed: s("\u{ea76} "), // cod-close
+    celebrate: s("🎉"),
 };
 
 /// Names accepted by [`by_name`] (`[ui] icons`).
@@ -220,7 +255,20 @@ pub const ASCII: Icons = Icons {
     sync: s("~"),
     worktree: s("|"),
     submodule: s("[]"),
+    spinner: s("|/-\\"),
+    marked: s(">"),
+    ok: s("ok"),
+    failed: s("FAILED"),
+    celebrate: s(""),
 };
+
+/// Punctuation the interface uses as plain text, not as icons: in every
+/// common monospace font.
+pub const PUNCTUATION: &str = "…·—↑↓";
+
+/// Glyphs worth trying in `[ui.icon_overrides]`, from best to least
+/// supported by common monospace fonts.
+pub const ALTERNATIVES: &str = "◊○●•∙…‹›«»§¶±≠×÷∞◆✓■□▲▼▶◀◇◉⌂⌘⏎♦✗‼⋯↯⇅⇡⇣✔✘⚡★☆✦✧✱⚑⚠⎇";
 
 /// Flag badges (favourite, new, hidden, sync), shown before the name.
 pub fn flags(e: &Entry, i: &Icons) -> Vec<Badge> {

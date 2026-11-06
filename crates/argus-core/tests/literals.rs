@@ -1,13 +1,12 @@
-//! Every non-ASCII character the interface prints is listed, so `argus
-//! demo --glyphs` can show it: icons in the icon sets, the rest in
-//! `glyphs::UI_GLYPHS`. Checked against the string and char literals in
-//! every crate's sources, outside tests.
+//! Glyphs come from `badges::Icons`, so every set (and `[ui.icon_overrides]`)
+//! can replace them and `argus demo --glyphs` shows them. This guards
+//! against symbols typed straight into the interface: string and char
+//! literals in every crate's sources, outside tests, may only use ASCII
+//! and `badges::PUNCTUATION`.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use argus_core::badges::{self, ICON_NAMES};
-use argus_core::glyphs::{ALTERNATIVES, UI_GLYPHS};
+use argus_core::badges::{ALTERNATIVES, PUNCTUATION};
 
 /// `src` with `#[cfg(test)]` items (the brace block that follows) removed.
 fn without_tests(src: &str) -> String {
@@ -105,71 +104,35 @@ fn sources() -> Vec<PathBuf> {
     files
 }
 
-/// Non-ASCII characters in literals, and the files using each; the lists
-/// themselves (glyphs.rs) are left out.
-fn used() -> BTreeMap<char, BTreeSet<String>> {
-    let mut used: BTreeMap<char, BTreeSet<String>> = BTreeMap::new();
+/// Files that may use more, and what: the icon sets themselves, and the
+/// `[ui.icon_overrides]` example in the config schema.
+fn extra_allowed(file: &str, c: char) -> bool {
+    match file {
+        "badges.rs" => true,
+        "config.rs" => ALTERNATIVES.contains(c),
+        _ => false,
+    }
+}
+
+#[test]
+fn symbols_come_from_icons() {
+    let mut found = vec![];
     for f in sources() {
         let name = f.file_name().unwrap().to_string_lossy().to_string();
-        if name == "glyphs.rs" {
-            continue;
-        }
         let src = std::fs::read_to_string(&f).unwrap();
         for lit in literals(&without_tests(&src)) {
-            for c in lit.chars().filter(|c| !c.is_ascii()) {
-                used.entry(c).or_default().insert(name.clone());
+            for c in lit.chars() {
+                if !c.is_ascii() && !PUNCTUATION.contains(c) && !extra_allowed(&name, c) {
+                    found.push(format!("{c} U+{:04X} in {name}: {lit:?}", c as u32));
+                }
             }
         }
     }
-    used
-}
-
-fn icon_chars() -> BTreeSet<char> {
-    badges::SETS
-        .iter()
-        .flat_map(|&s| {
-            let set = badges::by_name(s);
-            ICON_NAMES
-                .iter()
-                .flat_map(|n| set.get(n).unwrap().chars().collect::<Vec<_>>())
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
-#[test]
-fn every_glyph_the_interface_prints_is_listed() {
-    let listed: BTreeSet<char> = UI_GLYPHS
-        .iter()
-        .map(|(c, _)| *c)
-        .chain(icon_chars())
-        .chain(ALTERNATIVES.chars())
-        .collect();
-    let unlisted: Vec<String> = used()
-        .into_iter()
-        .filter(|(c, _)| !listed.contains(c))
-        .map(|(c, files)| format!("{c} U+{:04X} in {files:?}", c as u32))
-        .collect();
     assert!(
-        unlisted.is_empty(),
-        "add to glyphs::UI_GLYPHS: {unlisted:#?}"
+        found.is_empty(),
+        "use an icon (badges::Icons) for these, or add plain punctuation \
+         to badges::PUNCTUATION: {found:#?}"
     );
-}
-
-#[test]
-fn listed_glyphs_are_used_and_unique() {
-    let used = used();
-    let icons = icon_chars();
-    let mut seen = BTreeSet::new();
-    for (c, what) in UI_GLYPHS {
-        assert!(seen.insert(c), "{c} listed twice");
-        assert!(!what.is_empty(), "{c}: say where it's used");
-        assert!(
-            used.contains_key(c) || icons.contains(c),
-            "{c} U+{:04X} ({what}) isn't used: remove it",
-            *c as u32
-        );
-    }
 }
 
 #[test]

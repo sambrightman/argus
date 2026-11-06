@@ -2,7 +2,7 @@
 
 use argus_core::Entry;
 use argus_core::attention::Issue;
-use argus_core::badges::Role;
+use argus_core::badges::{Icons, Role};
 use argus_core::fix::{self, FixKind};
 use argus_core::paths::contract_tilde;
 
@@ -36,9 +36,9 @@ fn ago(t: jiff::Timestamp) -> String {
     }
 }
 
-/// Detail lines for `e`. Fixes: the auto-fix (by `priority`, i.e. `[fix]
+/// Detail lines for `e`, with `icons` for ahead/behind. Fixes: the auto-fix (by `priority`, i.e. `[fix]
 /// auto`), what later auto-fixes would apply, then the other fixes.
-pub fn details(e: &Entry, priority: &[FixKind]) -> Vec<DetailLine> {
+pub fn details(e: &Entry, priority: &[FixKind], icons: &Icons) -> Vec<DetailLine> {
     let mut v = vec![line(vec![
         styled(Role::Dim, "path      "),
         plain(contract_tilde(&e.path)),
@@ -149,10 +149,13 @@ pub fn details(e: &Entry, priority: &[FixKind]) -> Vec<DetailLine> {
                 Some(t) => {
                     parts.push(styled(Role::Dim, format!("  {}", t.name)));
                     if t.ahead > 0 {
-                        parts.push(styled(Role::Ahead, format!(" ↑{}", t.ahead)));
+                        parts.push(styled(Role::Ahead, format!(" {}{}", icons.ahead, t.ahead)));
                     }
                     if t.behind > 0 {
-                        parts.push(styled(Role::Behind, format!(" ↓{}", t.behind)));
+                        parts.push(styled(
+                            Role::Behind,
+                            format!(" {}{}", icons.behind, t.behind),
+                        ));
                     }
                 }
                 None => parts.push(styled(Role::Dim, "  (no upstream)")),
