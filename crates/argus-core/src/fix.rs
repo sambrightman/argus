@@ -424,7 +424,13 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
                 .and_then(|b| b.upstream.clone());
             s.head = Head::Branch(branch.clone());
         }
-        Op::Fetch | Op::Clone { .. } => {}
+        // never fixes
+        Op::Fetch
+        | Op::Clone { .. }
+        | Op::Add { .. }
+        | Op::Restore { .. }
+        | Op::Remove { .. }
+        | Op::Clean { .. } => {}
     }
     s
 }

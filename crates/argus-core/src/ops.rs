@@ -47,6 +47,27 @@ pub enum Op {
         url: String,
         dest: PathBuf,
     },
+    /// `git add`: stage files (deletions too).
+    Add {
+        paths: Vec<String>,
+    },
+    /// `git restore`: from the index, or HEAD with `from_head`.
+    Restore {
+        staged: bool,
+        worktree: bool,
+        from_head: bool,
+        paths: Vec<String>,
+    },
+    /// `git rm`: from the index only with `cached`, else from the work tree
+    /// too (forced).
+    Remove {
+        cached: bool,
+        paths: Vec<String>,
+    },
+    /// `git clean -f`: delete untracked files.
+    Clean {
+        paths: Vec<String>,
+    },
 }
 
 impl Op {
@@ -114,6 +135,30 @@ impl Op {
                     dest.display().to_string(),
                 ]
             }
+            Op::Add { paths } => with_paths(v(&["add"]), paths),
+            Op::Restore {
+                staged,
+                worktree,
+                from_head,
+                paths,
+            } => {
+                let mut a = v(&["restore"]);
+                if *from_head {
+                    a.push("--source=HEAD".into());
+                }
+                if *staged {
+                    a.push("--staged".into());
+                }
+                if *worktree {
+                    a.push("--worktree".into());
+                }
+                with_paths(a, paths)
+            }
+            Op::Remove { cached, paths } => {
+                let how = if *cached { "--cached" } else { "-f" };
+                with_paths(v(&["rm", "-q", how]), paths)
+            }
+            Op::Clean { paths } => with_paths(v(&["clean", "-f", "-q"]), paths),
         }
     }
 
@@ -161,6 +206,20 @@ impl Op {
             Op::CommitAll { .. } => "commit".into(),
             Op::FastForward { branch, .. } => format!("fast-forward {branch}"),
             Op::Clone { .. } => "clone".into(),
+            Op::Add { paths } => format!("stage {}", files(paths)),
+            Op::Restore {
+                worktree: false,
+                paths,
+                ..
+            }
+            | Op::Remove {
+                cached: true,
+                paths,
+            } => format!("unstage {}", files(paths)),
+            Op::Restore { paths, .. } | Op::Remove { paths, .. } => {
+                format!("discard {}", files(paths))
+            }
+            Op::Clean { paths } => format!("delete untracked {}", files(paths)),
         }
     }
 }
@@ -187,6 +246,108 @@ mod duration_ms {
 }
 
 /// Run `op` in `dir` (for clone: the parent of `dest` is created and used).
+/// `args` then `--` and the paths, so none can be taken as an option.
+fn with_paths(mut args: Vec<String>, paths: &[String]) -> Vec<String> {
+    args.push("--".into());
+    args.extend(paths.iter().cloned());
+    args
+}
+
+/// `a`, or `3 files`, for labels.
+fn files(paths: &[String]) -> String {
+    match paths {
+        [one] => one.clone(),
+        _ => format!("{} files", paths.len()),
+    }
+}
+
+/// The index code of each of `files` (`?` untracked, `A` added, ` `
+/// unstaged only…), skipping files with no changes.
+fn codes<'a>(
+    s: &'a crate::status::RepoStatus,
+    files: &'a [String],
+) -> impl Iterator<Item = (&'a String, char)> {
+    files.iter().filter_map(|f| {
+        s.changes
+            .files
+            .iter()
+            .find(|c| c.path == *f)
+            .map(|c| (f, c.index))
+    })
+}
+
+/// Stage `files` (changes, new files and deletions).
+pub fn stage_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
+    let paths: Vec<String> = codes(s, files).map(|(f, _)| f.clone()).collect();
+    if paths.is_empty() {
+        return vec![];
+    }
+    vec![Op::Add { paths }]
+}
+
+/// Unstage `files`, keeping the work tree: `git restore --staged` for files
+/// in HEAD, `git rm --cached` for newly added ones (which also works before
+/// the first commit). Files with nothing staged are left alone.
+pub fn unstage_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
+    let (mut restore, mut added) = (vec![], vec![]);
+    for (f, index) in codes(s, files) {
+        match index {
+            ' ' | '?' => {}
+            'A' => added.push(f.clone()),
+            _ => restore.push(f.clone()),
+        }
+    }
+    let mut ops = vec![];
+    if !restore.is_empty() {
+        ops.push(Op::Restore {
+            staged: true,
+            worktree: false,
+            from_head: false,
+            paths: restore,
+        });
+    }
+    if !added.is_empty() {
+        ops.push(Op::Remove {
+            cached: true,
+            paths: added,
+        });
+    }
+    ops
+}
+
+/// Discard every change to `files`, back to HEAD: restore files in HEAD
+/// (index and work tree), remove newly added ones, delete untracked ones.
+/// Permanently destructive: callers confirm first.
+pub fn discard_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
+    let (mut restore, mut added, mut untracked) = (vec![], vec![], vec![]);
+    for (f, index) in codes(s, files) {
+        match index {
+            '?' => untracked.push(f.clone()),
+            'A' => added.push(f.clone()),
+            _ => restore.push(f.clone()),
+        }
+    }
+    let mut ops = vec![];
+    if !restore.is_empty() {
+        ops.push(Op::Restore {
+            staged: true,
+            worktree: true,
+            from_head: true,
+            paths: restore,
+        });
+    }
+    if !added.is_empty() {
+        ops.push(Op::Remove {
+            cached: false,
+            paths: added,
+        });
+    }
+    if !untracked.is_empty() {
+        ops.push(Op::Clean { paths: untracked });
+    }
+    ops
+}
+
 /// [`stash_problem`]'s answer for a repo with nothing to stash: a reason to
 /// skip it, not an error.
 pub const NOTHING_TO_STASH: &str = "nothing to stash";

@@ -1,0 +1,352 @@
+//! File diffs (read with gix) and the file operations: stage, unstage,
+//! discard, run for real.
+
+use std::path::Path;
+
+use argus_core::diff::{FileDiff, LineKind, Side, file_diff};
+use argus_core::ops;
+use argus_core::status::{RepoStatus, StatusOptions, status};
+use argus_core::testkit::{Sandbox, commit, git, write};
+
+fn st(r: &Path) -> RepoStatus {
+    status(r, StatusOptions::default()).unwrap()
+}
+
+/// The diff as `git diff` would print its body: hunk headers, then lines
+/// prefixed with ` `, `-` or `+`.
+fn text(d: &FileDiff) -> Vec<String> {
+    let FileDiff::Text(hunks) = d else {
+        panic!("not text: {d:?}")
+    };
+    let mut v = vec![];
+    for h in hunks {
+        v.push(h.header());
+        for l in &h.lines {
+            let c = match l.kind {
+                LineKind::Context => ' ',
+                LineKind::Add => '+',
+                LineKind::Remove => '-',
+            };
+            v.push(format!("{c}{}", l.text));
+        }
+    }
+    v
+}
+
+fn lines(n: usize) -> String {
+    (1..=n).map(|i| format!("line {i}\n")).collect()
+}
+
+#[test]
+fn unstaged_and_staged_sides() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "f", &lines(10));
+    commit(&r, "f");
+    // staged: line 2 changed; unstaged on top: line 9 changed
+    write(&r, "f", &lines(10).replace("line 2\n", "line two\n"));
+    git(&r, &["add", "f"]);
+    write(
+        &r,
+        "f",
+        &lines(10)
+            .replace("line 2\n", "line two\n")
+            .replace("line 9\n", "line nine\n"),
+    );
+    let staged = text(&file_diff(&r, "f", Side::Staged).unwrap());
+    assert_eq!(
+        staged,
+        [
+            "@@ -1,5 +1,5 @@",
+            " line 1",
+            "-line 2",
+            "+line two",
+            " line 3",
+            " line 4",
+            " line 5"
+        ]
+    );
+    let unstaged = text(&file_diff(&r, "f", Side::Unstaged).unwrap());
+    assert_eq!(
+        unstaged,
+        [
+            "@@ -6,5 +6,5 @@",
+            " line 6",
+            " line 7",
+            " line 8",
+            "-line 9",
+            "+line nine",
+            " line 10"
+        ]
+    );
+    // inverse: a file with no changes on a side has no hunks
+    git(&r, &["add", "f"]);
+    assert_eq!(
+        file_diff(&r, "f", Side::Unstaged).unwrap(),
+        FileDiff::Text(vec![])
+    );
+}
+
+#[test]
+fn added_deleted_and_untracked_files() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "new", "a\nb\n");
+    assert_eq!(
+        text(&file_diff(&r, "new", Side::Unstaged).unwrap()),
+        ["@@ -0,0 +1,2 @@", "+a", "+b"]
+    );
+    git(&r, &["add", "new"]);
+    assert_eq!(
+        text(&file_diff(&r, "new", Side::Staged).unwrap()),
+        ["@@ -0,0 +1,2 @@", "+a", "+b"]
+    );
+    std::fs::remove_file(r.join("README")).unwrap();
+    assert_eq!(
+        text(&file_diff(&r, "README", Side::Unstaged).unwrap()),
+        ["@@ -1 +0,0 @@", "-hello"]
+    );
+}
+
+#[test]
+fn binary_files_and_filters() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    std::fs::write(r.join("bin"), [0u8, 1, 2, 0, 255]).unwrap();
+    git(&r, &["add", "bin"]);
+    assert_eq!(
+        file_diff(&r, "bin", Side::Staged).unwrap(),
+        FileDiff::Binary
+    );
+    // with core.autocrlf, CRLF in the work tree is LF in git: no change
+    git(&r, &["config", "core.autocrlf", "true"]);
+    write(&r, "README", "hello\r\n");
+    assert_eq!(
+        file_diff(&r, "README", Side::Unstaged).unwrap(),
+        FileDiff::Text(vec![])
+    );
+    // with autocrlf=input, CRLF is cleaned to LF on the way into git, and
+    // never added back: still no change, as `git diff` says
+    git(&r, &["config", "core.autocrlf", "input"]);
+    assert_eq!(
+        file_diff(&r, "README", Side::Unstaged).unwrap(),
+        FileDiff::Text(vec![])
+    );
+    assert!(git_body(&r, &["--", "README"]).is_empty());
+    // inverse: a real change still shows
+    write(&r, "README", "bye\r\n");
+    assert_eq!(
+        text(&file_diff(&r, "README", Side::Unstaged).unwrap()),
+        ["@@ -1 +1 @@", "-hello", "+bye"]
+    );
+}
+
+/// A repo with: `README` modified, `staged` modified and staged, `added`
+/// newly staged, `gone` deleted, `new` untracked.
+fn messy(sb: &Sandbox) -> std::path::PathBuf {
+    let r = sb.init("m");
+    write(&r, "staged", "s\n");
+    write(&r, "gone", "g\n");
+    git(&r, &["add", "."]);
+    commit(&r, "files");
+    write(&r, "README", "changed\n");
+    write(&r, "staged", "s2\n");
+    write(&r, "added", "a\n");
+    git(&r, &["add", "staged", "added"]);
+    std::fs::remove_file(r.join("gone")).unwrap();
+    write(&r, "new", "n\n");
+    r
+}
+
+fn codes(r: &Path) -> Vec<String> {
+    let mut v: Vec<String> = st(r)
+        .changes
+        .files
+        .iter()
+        .map(|f| format!("{}{} {}", f.index, f.worktree, f.path))
+        .collect();
+    v.sort();
+    v
+}
+
+fn run_all(r: &Path, ops: Vec<ops::Op>) {
+    assert!(!ops.is_empty());
+    for op in ops {
+        let out = ops::run(r, &op);
+        assert!(out.success, "{op:?}: {}", out.output);
+    }
+}
+
+fn all(r: &Path) -> Vec<String> {
+    st(r).changes.files.iter().map(|f| f.path.clone()).collect()
+}
+
+#[test]
+fn stage_and_unstage_files() {
+    let sb = Sandbox::new();
+    let r = messy(&sb);
+    assert_eq!(
+        codes(&r),
+        [" D gone", " M README", "?? new", "A  added", "M  staged"]
+    );
+    run_all(&r, ops::stage_ops(&st(&r), &all(&r)));
+    assert_eq!(
+        codes(&r),
+        ["A  added", "A  new", "D  gone", "M  README", "M  staged"]
+    );
+    // unstage keeps the work tree, for new files too
+    run_all(&r, ops::unstage_ops(&st(&r), &all(&r)));
+    assert_eq!(
+        codes(&r),
+        [" D gone", " M README", "?? added", "?? new", " M staged"]
+            .map(String::from)
+            .to_vec()
+            .tap_sort()
+    );
+    // only the files given
+    run_all(&r, ops::stage_ops(&st(&r), &["README".into()]));
+    assert!(codes(&r).contains(&"M  README".into()), "{:?}", codes(&r));
+    assert!(codes(&r).contains(&" M staged".into()), "{:?}", codes(&r));
+}
+
+#[test]
+fn unstaging_works_before_the_first_commit() {
+    let sb = Sandbox::new();
+    let r = sb.path("empty");
+    std::fs::create_dir_all(&r).unwrap();
+    git(&r, &["init", "-q"]);
+    write(&r, "a", "1\n");
+    git(&r, &["add", "a"]);
+    run_all(&r, ops::unstage_ops(&st(&r), &["a".into()]));
+    assert_eq!(codes(&r), ["?? a"]);
+}
+
+#[test]
+fn discard_returns_files_to_head() {
+    let sb = Sandbox::new();
+    let r = messy(&sb);
+    run_all(&r, ops::discard_ops(&st(&r), &all(&r)));
+    assert!(codes(&r).is_empty(), "{:?}", codes(&r));
+    assert_eq!(
+        std::fs::read_to_string(r.join("README")).unwrap(),
+        "hello\n"
+    );
+    assert_eq!(std::fs::read_to_string(r.join("gone")).unwrap(), "g\n");
+    assert!(!r.join("new").exists() && !r.join("added").exists());
+    // inverse: other files are untouched
+    let sb = Sandbox::new();
+    let r = messy(&sb);
+    run_all(
+        &r,
+        ops::discard_ops(&st(&r), &["README".into(), "new".into()]),
+    );
+    assert_eq!(codes(&r), [" D gone", "A  added", "M  staged"]);
+}
+
+#[test]
+fn file_op_args_keep_paths_after_double_dash() {
+    for op in [
+        ops::Op::Add {
+            paths: vec!["-f".into()],
+        },
+        ops::Op::Restore {
+            staged: true,
+            worktree: true,
+            from_head: true,
+            paths: vec!["-f".into()],
+        },
+        ops::Op::Remove {
+            cached: true,
+            paths: vec!["-f".into()],
+        },
+        ops::Op::Clean {
+            paths: vec!["-f".into()],
+        },
+    ] {
+        let a = op.args();
+        let dd = a.iter().position(|s| s == "--").expect("--");
+        assert_eq!(a.last().unwrap(), "-f");
+        assert!(dd < a.len() - 1, "{a:?}");
+    }
+}
+
+trait TapSort {
+    fn tap_sort(self) -> Self;
+}
+
+impl TapSort for Vec<String> {
+    fn tap_sort(mut self) -> Self {
+        self.sort();
+        self
+    }
+}
+
+/// Hunks as `git diff` prints them, without the file headers and "\ No
+/// newline" markers.
+fn git_body(r: &Path, args: &[&str]) -> Vec<String> {
+    let mut a = vec!["diff", "--no-color", "--no-ext-diff", "-U3"];
+    a.extend(args);
+    git(r, &a)
+        .lines()
+        .skip_while(|l| !l.starts_with("@@"))
+        .filter(|l| !l.starts_with('\\'))
+        .map(|l| match l.find(" @@") {
+            // drop the function context git appends to headers
+            Some(i) if l.starts_with("@@") => l[..i + 3].to_string(),
+            _ => l.to_string(),
+        })
+        .collect()
+}
+
+#[test]
+fn hunks_match_git_diff() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "f", &lines(40));
+    commit(&r, "f");
+    let cases: Vec<(&str, String)> = vec![
+        (
+            "two hunks",
+            lines(40)
+                .replace("line 3\n", "x\n")
+                .replace("line 30\n", "y\n"),
+        ),
+        ("insert at start", format!("new\n{}", lines(40))),
+        ("append at end", format!("{}more\nlines\n", lines(40))),
+        (
+            "delete a run",
+            lines(40).replace("line 10\nline 11\nline 12\n", ""),
+        ),
+        ("no newline at end", lines(40).trim_end().to_string()),
+        ("replace all", "other\n".to_string()),
+    ];
+    for (name, content) in cases {
+        write(&r, "f", &content);
+        assert_eq!(
+            text(&file_diff(&r, "f", Side::Unstaged).unwrap()),
+            git_body(&r, &["--", "f"]),
+            "{name} (unstaged)"
+        );
+        git(&r, &["add", "f"]);
+        assert_eq!(
+            text(&file_diff(&r, "f", Side::Staged).unwrap()),
+            git_body(&r, &["--cached", "--", "f"]),
+            "{name} (staged)"
+        );
+        git(&r, &["reset", "-q", "--hard"]);
+    }
+    // the missing newline is reported on the line that lacks it
+    write(&r, "f", lines(40).trim_end());
+    let FileDiff::Text(h) = file_diff(&r, "f", Side::Unstaged).unwrap() else {
+        panic!()
+    };
+    let flagged: Vec<(&str, bool)> = h[0]
+        .lines
+        .iter()
+        .map(|l| (l.text.as_str(), l.no_newline))
+        .collect();
+    assert_eq!(
+        &flagged[flagged.len() - 2..],
+        [("line 40", false), ("line 40", true)]
+    );
+}

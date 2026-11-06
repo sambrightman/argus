@@ -7,6 +7,7 @@ pub mod attention;
 pub mod badges;
 pub mod config;
 pub mod configfile;
+pub mod diff;
 pub mod discover;
 pub mod fix;
 pub mod forge;
