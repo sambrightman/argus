@@ -100,6 +100,12 @@ enum Cmd {
     },
     /// Print config and state file locations.
     Paths,
+    /// Print a shell completion script, e.g. `argus completions zsh >
+    /// ~/.zfunc/_argus` or `argus completions fish | source`.
+    Completions {
+        /// bash, zsh, fish, elvish or powershell.
+        shell: clap_complete::Shell,
+    },
     /// Open the TUI on sample repos in every state (deleted on quit), to see
     /// the whole UI and try themes and icons (`v t`, `v i`; `?` legend).
     Demo {
@@ -259,6 +265,11 @@ fn run() -> Result<()> {
             return Ok(());
         }
         Some(Cmd::Forge { cmd }) => return forge_cmd(cmd),
+        Some(Cmd::Completions { shell }) => {
+            let mut cmd = <Cli as clap::CommandFactory>::command();
+            clap_complete::generate(shell, &mut cmd, "argus", &mut std::io::stdout());
+            return Ok(());
+        }
         Some(Cmd::Demo { glyphs: true, .. }) => return demo_glyphs(&ctx),
         Some(Cmd::Demo { theme, icons, .. }) => {
             argus_tui::check_terminal().map_err(|e| anyhow::anyhow!(e))?;
@@ -335,7 +346,11 @@ fn run() -> Result<()> {
             println!("acknowledged {}", before - ws.state.new.len());
             save_state(&ws, &ctx)?;
         }
-        Cmd::Root { .. } | Cmd::Paths | Cmd::Forge { .. } | Cmd::Demo { .. } => unreachable!(),
+        Cmd::Root { .. }
+        | Cmd::Paths
+        | Cmd::Forge { .. }
+        | Cmd::Demo { .. }
+        | Cmd::Completions { .. } => unreachable!(),
     }
     Ok(())
 }

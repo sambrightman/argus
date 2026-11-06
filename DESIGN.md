@@ -283,7 +283,7 @@ rendering is snapshot-tested via `TestBackend`.
   (git has no config for this). Today: staged + unstaged + untracked.
 * Path subsets for operations (stash/commit/discard selected files), e.g.
   from the details view.
-* Shell completions for bash/zsh/fish (`clap_complete`, e.g.
-  `argus completions <shell>`), ideally completing repo patterns too.
+* Completing repo patterns (names, keys) in shell completions; today
+  `argus completions <shell>` covers commands and options only.
 * Python bindings to `argus-core` (pyo3/maturin), for scripting over the
   same workspace, status and fix planning.

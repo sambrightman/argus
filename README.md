@@ -147,7 +147,12 @@ argus ack [PATTERNS…]
 argus forge list ORG [--team T] [--json]
 argus root add [DIRS…] | remove DIRS… | list
 argus paths                            # config and state file locations
+argus completions bash|zsh|fish|elvish|powershell
 ```
+
+Completions: `argus completions zsh > ~/.zfunc/_argus` (with `~/.zfunc`
+on `fpath`), `argus completions fish > ~/.config/fish/completions/argus.fish`,
+or `source <(argus completions bash)` in `~/.bashrc`.
 
 Every command takes `--config FILE` / `--state FILE`, or the environment
 variables `ARGUS_CONFIG` / `ARGUS_STATE`, and `--root DIR` (repeatable)

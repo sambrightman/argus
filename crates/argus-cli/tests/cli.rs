@@ -773,3 +773,34 @@ fn demo_glyphs_prints_every_icon_between_markers_without_a_terminal() {
         );
     }
 }
+
+#[test]
+fn completions_for_each_shell() {
+    let sb = Sandbox::new();
+    for (shell, marker) in [
+        ("bash", "complete -F"),
+        ("zsh", "#compdef argus"),
+        ("fish", "complete -c argus"),
+        ("elvish", "edit:completion:arg-completer[argus]"),
+        ("powershell", "Register-ArgumentCompleter"),
+    ] {
+        let out = argus(&sb).args(["completions", shell]).output().unwrap();
+        assert!(out.status.success(), "{shell}: {out:?}");
+        let script = String::from_utf8(out.stdout).unwrap();
+        assert!(script.contains(marker), "{shell}:\n{script}");
+        for word in ["status", "sync", "max-depth", "follow-symlinks"] {
+            assert!(script.contains(word), "{shell} lacks {word}");
+        }
+        // where the shell is installed, the script must parse
+        if matches!(shell, "bash" | "zsh" | "fish") {
+            let file = sb.path(&format!("completion.{shell}"));
+            std::fs::write(&file, &script).unwrap();
+            let check = if shell == "fish" { "--no-execute" } else { "-n" };
+            if let Ok(st) = std::process::Command::new(shell).arg(check).arg(&file).status() {
+                assert!(st.success(), "{shell} rejects its script");
+            }
+        }
+    }
+    // inverse: unknown shells are rejected
+    argus(&sb).args(["completions", "tcsh"]).assert().failure();
+}
