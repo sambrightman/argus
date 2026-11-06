@@ -84,7 +84,8 @@ cycle themes and icon sets for the session, and `?` ends with a legend of
 every icon. The `unicode` icons only use characters common monospace fonts
 have; with a Nerd Font, `icons = "nerd"` uses its glyphs. Override single
 icons in `[ui.icon_overrides]` if your font has something you prefer.
-`argus demo --glyphs` prints every icon, and alternatives, between bars
+`argus demo --glyphs` prints every icon, every other glyph argus uses,
+and alternatives, between bars
 and letters (`|◆|M◆M`): a glyph your font lacks is drawn from a fallback
 font and may run into its neighbours. `*` marks glyphs that take two
 cells in CJK (ambiguous-width) mode.

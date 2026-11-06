@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use anyhow::{Context, Result, bail};
 use argus_core::badges::{self, Badge, Icons, Role};
 use argus_core::fix::{self, FixKind};
+use argus_core::glyphs;
 use argus_core::runner::{self, Event};
 use argus_core::sync;
 use argus_core::{Config, State, ViewFilter, Workspace, configfile, paths};
@@ -705,10 +706,6 @@ fn demo(ctx: &Ctx, theme: Option<String>, icons: Option<String>) -> Result<()> {
     argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))
 }
 
-/// Glyphs worth trying in `[ui.icon_overrides]`, from best to least
-/// supported by common monospace fonts.
-const CANDIDATES: &str = "◊○●•∙…‹›«»§¶±≠×÷∞◆✓■□▲▼▶◀◇◉⌂⌘⏎♦✗‼⋯↯⇅⇡⇣✔✘⚡★☆✦✧✱⚑⚠⎇";
-
 /// One glyph as `|g|MgM`, with `*` if it takes two cells in CJK mode.
 fn glyph_cell(g: &str) -> String {
     let wide = UnicodeWidthStr::width_cjk(g) > UnicodeWidthStr::width(g);
@@ -759,10 +756,18 @@ fn demo_glyphs(ctx: &Ctx) -> Result<()> {
         let line: String = row.iter().zip(&widths).map(|(c, &w)| pad(c, w)).collect();
         println!("{}{}", pad(name, 13), line.trim_end());
     }
+    let row = |c: char, what: &str| {
+        let cell = glyph_cell(&c.to_string());
+        let line = format!("{c}  U+{:04X}  {}{what}", c as u32, pad(&cell, 10));
+        println!("{}", line.trim_end());
+    };
+    println!("\nother glyphs the interface uses");
+    for &(c, what) in glyphs::UI_GLYPHS {
+        row(c, what);
+    }
     println!("\nalternatives ([ui.icon_overrides])");
-    for c in CANDIDATES.chars() {
-        let g = c.to_string();
-        println!("{c}  U+{:04X}  {}", c as u32, glyph_cell(&g).trim_end());
+    for c in glyphs::ALTERNATIVES.chars() {
+        row(c, "");
     }
     Ok(())
 }

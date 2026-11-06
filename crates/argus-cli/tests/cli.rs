@@ -757,4 +757,13 @@ fn demo_glyphs_prints_every_icon_between_markers_without_a_terminal() {
     assert!(line("◊").contains("U+25CA"));
     assert!(!line("◊").ends_with('*'), "◊ isn't ambiguous width");
     assert!(line("★").ends_with('*'), "★ is ambiguous width");
+    // every other glyph the interface prints, and where
+    for (c, what) in argus_core::glyphs::UI_GLYPHS {
+        assert!(
+            stdout
+                .lines()
+                .any(|l| l.contains(&format!("|{c}|M{c}M")) && l.contains(what)),
+            "{c} {what}:\n{stdout}"
+        );
+    }
 }

@@ -128,7 +128,7 @@ impl InProgress {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoStatus {
     pub head: Head,
-    /// Short id of the commit HEAD points at (none when unborn).
+    /// Id of the commit HEAD points at (none when unborn).
     pub head_commit: Option<String>,
     /// Tags on that commit: annotated first, then newest version first.
     pub tags: Vec<String>,
@@ -266,7 +266,7 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
 
     Ok(RepoStatus {
         head,
-        head_commit: repo.head_id().ok().map(|id| id.shorten_or_id().to_string()),
+        head_commit: repo.head_id().ok().map(|id| id.to_string()),
         tags: head_tags(repo),
         default_branch,
         remote,

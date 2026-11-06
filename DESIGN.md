@@ -133,7 +133,10 @@ consume the same events.
   theme and icons. `v t` / `v i` cycle theme and icons for the session.
   `--glyphs` prints a test strip instead (no terminal needed): whether a
   fallback glyph overlaps depends on the terminal and OS, so it has to be
-  seen, not computed from font tables.
+  seen, not computed from font tables. Besides the icons it shows every
+  other non-ASCII glyph the interface prints, from `glyphs::UI_GLYPHS`;
+  a test scans the string literals in all crates' sources (outside
+  tests) and fails on any glyph not listed, or listed but unused.
 * Two input styles at once:
   * arrows/Enter plus menus you can navigate with the cursor;
   * transient-style prefix keys: `f` fix, `s` sync, `m` mark, `o` open, `?` help.

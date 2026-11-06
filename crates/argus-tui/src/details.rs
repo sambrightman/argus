@@ -57,12 +57,16 @@ pub fn details(e: &Entry, priority: &[FixKind]) -> Vec<DetailLine> {
         ]));
     }
     if let Some(id) = &s.head_commit {
-        let mut parts = vec![styled(Role::Dim, "commit    "), plain(id.clone())];
-        if !s.tags.is_empty() {
-            parts.push(styled(Role::Dim, "  tags "));
-            parts.push(styled(Role::Detached, s.tags.join(", ")));
-        }
-        v.push(line(parts));
+        v.push(line(vec![
+            styled(Role::Dim, "commit    "),
+            plain(id.clone()),
+        ]));
+    }
+    if !s.tags.is_empty() {
+        v.push(line(vec![
+            styled(Role::Dim, "tags      "),
+            styled(Role::Detached, s.tags.join(", ")),
+        ]));
     }
     let mut times = vec![];
     if let Some(t) = s.last_commit {

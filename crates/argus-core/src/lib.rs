@@ -10,6 +10,7 @@ pub mod configfile;
 pub mod discover;
 pub mod fix;
 pub mod forge;
+pub mod glyphs;
 pub mod identity;
 pub mod isolation;
 pub mod ops;

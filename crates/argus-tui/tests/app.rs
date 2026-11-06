@@ -642,18 +642,24 @@ fn details_show_the_commit_and_its_tags() {
     let (sb, mut app) = setup_with("", tag);
     app.act(Action::Bottom); // clean
     app.on_key(code(KeyCode::Tab));
-    let id = git(&sb.path("dev/clean"), &["rev-parse", "--short", "HEAD"]);
+    let id = git(&sb.path("dev/clean"), &["rev-parse", "HEAD"]);
     let texts = detail_texts(&app);
-    assert!(
-        texts.contains(&format!("commit    {}  tags release, v1.0", id.trim())),
-        "{texts:?}"
-    );
+    let at = texts
+        .iter()
+        .position(|t| *t == format!("commit    {}", id.trim()))
+        .unwrap_or_else(|| panic!("full commit id on its own: {texts:?}"));
+    assert_eq!(texts[at + 1], "tags      release, v1.0", "{texts:?}");
     // inverse: no tags, just the commit
     let (sb, mut app) = setup("");
     app.act(Action::Bottom);
     app.on_key(code(KeyCode::Tab));
-    let id = git(&sb.path("dev/clean"), &["rev-parse", "--short", "HEAD"]);
-    assert!(detail_texts(&app).contains(&format!("commit    {}", id.trim())));
+    let id = git(&sb.path("dev/clean"), &["rev-parse", "HEAD"]);
+    let texts = detail_texts(&app);
+    assert!(
+        texts.contains(&format!("commit    {}", id.trim())),
+        "{texts:?}"
+    );
+    assert!(!texts.iter().any(|t| t.starts_with("tags")), "{texts:?}");
 }
 
 #[test]
@@ -724,7 +730,7 @@ fn demo_renders_in_every_theme_and_icon_set() {
         out.contains("demo/tagged") && out.contains("@release-1.0 +1"),
         "{out}"
     );
-    assert!(out.contains("tags release-1.0, v1.0"), "{out}");
+    assert!(out.contains("tags      release-1.0, v1.0"), "{out}");
     for theme in argus_tui::theme::BUILTIN {
         for icons in argus_core::badges::SETS {
             let (t, warnings) = Theme::build(theme, &Default::default());

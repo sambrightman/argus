@@ -606,8 +606,8 @@ fn tags_on_head_annotated_first_then_newest_version() {
             ["release-2", "release-1", "v1.10", "v1.9"],
             "{what}"
         );
-        let id = git(&r, &["rev-parse", "--short", "HEAD"]);
-        assert_eq!(s.head_commit.as_deref(), Some(id.trim()), "{what}");
+        let id = git(&r, &["rev-parse", "HEAD"]);
+        assert_eq!(s.head_commit.as_deref(), Some(id.trim()), "{what}: full id");
     };
     check("loose refs, on a branch");
     git(&r, &["pack-refs", "--all"]);
