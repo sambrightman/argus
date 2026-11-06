@@ -733,3 +733,23 @@ fn skip_matches_names_anywhere_and_paths_with_a_slash() {
     };
     assert!(err.to_string().contains("[oops"), "{err}");
 }
+
+#[test]
+fn default_skip_includes_the_go_module_cache_below_each_root() {
+    let sb = Sandbox::new();
+    sb.init("dev/go/pkg/mod/github.com/x/y");
+    sb.init("dev/go/src/mine");
+    sb.init("dev/other/go/pkg/r");
+    let config = Config {
+        roots: vec![sb.path("dev")],
+        ..Config::default()
+    };
+    let mut w = Workspace::new(config, State::default()).unwrap();
+    w.scan();
+    let mut v: Vec<String> = w.entries.iter().map(|e| e.display_name()).collect();
+    v.sort();
+    assert!(!v.iter().any(|n| n.contains("go/pkg/mod")), "{v:?}");
+    assert!(v.iter().any(|n| n.ends_with("go/src/mine")), "{v:?}");
+    // only directly below a root, as relative patterns are
+    assert!(v.iter().any(|n| n.ends_with("other/go/pkg/r")), "{v:?}");
+}

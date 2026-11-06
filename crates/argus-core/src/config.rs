@@ -75,6 +75,7 @@ impl Default for Config {
                 ".direnv",
                 ".terraform",
                 "Library",
+                "go/pkg",
             ]
             .into_iter()
             .map(String::from)

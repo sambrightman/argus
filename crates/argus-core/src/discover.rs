@@ -348,8 +348,8 @@ fn subdirs(
             let here = real_dir
                 .get_or_insert_with(|| fs::canonicalize(dir).unwrap_or_else(|_| dir.into()))
                 .clone();
-            if here.starts_with(&target) || links.iter().any(|h| h.from.starts_with(&target)) {
-                return None; // would walk in a circle
+            if walks_in_a_circle(&here, &target, links) {
+                return None;
             }
             let mut taken: Vec<Hop> = links
                 .iter()
@@ -367,6 +367,14 @@ fn subdirs(
             Some((e.path, Arc::new(taken)))
         })
         .collect()
+}
+
+/// Whether following a link in the real directory `here` to the real
+/// `target` would walk in a circle: `target` contains `here` or any
+/// directory where an earlier link was taken. A target inside `here` is
+/// fine (it's a shortcut into the subtree, not a loop).
+fn walks_in_a_circle(here: &Path, target: &Path, links: &[Hop]) -> bool {
+    here.starts_with(target) || links.iter().any(|h| h.from.starts_with(target))
 }
 
 /// With symlinks followed, keep one path per real repo: the real path if it
@@ -842,5 +850,45 @@ mod tests {
         assert_eq!(v, ["data/proj/keep"]);
         // inverse: links aren't followed, so nothing is found through them
         assert!(found_skipping(b, &["dev"], &[], false).is_empty());
+    }
+
+    #[test]
+    fn a_link_loops_only_if_its_target_contains_where_the_walk_has_been() {
+        let p = Path::new;
+        let hop = |from: &str| Hop {
+            from: p(from).into(),
+            link: p("/unused").into(),
+            target: p("/unused").into(),
+        };
+        // the target contains here: a loop
+        assert!(walks_in_a_circle(p("/t/a/b"), p("/t/a"), &[]));
+        assert!(walks_in_a_circle(p("/t/a"), p("/t/a"), &[]));
+        assert!(walks_in_a_circle(p("/t/a"), p("/"), &[]));
+        // inverse: a shortcut into here's own subtree, or elsewhere
+        assert!(!walks_in_a_circle(p("/t/a"), p("/t/a/b"), &[]));
+        assert!(!walks_in_a_circle(p("/t/a"), p("/t/ab"), &[]));
+        assert!(!walks_in_a_circle(p("/t/a"), p("/u"), &[]));
+        // the target contains where an earlier link was taken
+        assert!(walks_in_a_circle(p("/u/x"), p("/t"), &[hop("/t/a")]));
+        assert!(!walks_in_a_circle(p("/u/x"), p("/v"), &[hop("/t/a")]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_into_a_skipped_part_of_its_own_subtree_is_followed() {
+        let t = tempfile::tempdir().unwrap();
+        fake_repo(t.path(), "a/.stash/r");
+        std::os::unix::fs::symlink(t.path().join("a/.stash"), t.path().join("a/visible")).unwrap();
+        let opts = DiscoverOptions {
+            follow_symlinks: true,
+            ..Default::default()
+        };
+        // .stash is hidden, so the link is the only way to r
+        assert_eq!(
+            found(t.path(), &opts),
+            vec![("a/visible/r".into(), RepoKind::Main)]
+        );
+        // inverse: not following links, r isn't found
+        assert!(found(t.path(), &DiscoverOptions::default()).is_empty());
     }
 }

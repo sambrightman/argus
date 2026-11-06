@@ -171,7 +171,8 @@ one as a root to scan it, e.g. `argus root add ~/.emacs.d`. `skip` lists
 directories never scanned, like gitignore: without a `/` a pattern is a
 directory name at any depth (`node_modules`, `*.egg-info`); starting with
 `/` or `~` it's a full path (`~/dev/archive`, `~/src/*/third_party`); any
-other with a `/` is below each root (`go/pkg`). Roots are always scanned.
+other with a `/` is below each root (`go/pkg`, in the defaults: the Go
+module cache under a root). Roots are always scanned.
 To keep scanning repos but hide them, use a rule with `exclude = true`.
 
 A daily crontab entry:
