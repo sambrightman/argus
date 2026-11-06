@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::attention::{self, Issue};
 use crate::config::{Config, ConfigError};
-use crate::discover::{self, DiscoverOptions, RepoKind};
+use crate::discover::{self, DiscoverOptions, RepoKind, Skip};
 use crate::identity::RepoId;
 use crate::paths::contract_tilde;
 use crate::rules::{self, Flags, RuleSet};
@@ -119,7 +119,6 @@ pub struct Workspace {
     pub config: Config,
     pub state: State,
     rules: RuleSet,
-    skip_paths: globset::GlobSet,
     pub entries: Vec<Entry>,
     /// Directories the last scan didn't enter because of `max_depth`.
     pub truncated: Vec<PathBuf>,
@@ -131,12 +130,12 @@ pub struct Workspace {
 impl Workspace {
     pub fn new(config: Config, state: State) -> Result<Self, ConfigError> {
         let rules = RuleSet::new(&config.rules)?;
-        let skip_paths = config.skip_path_set()?;
+        Skip::new(&config.skip, &config.roots)
+            .map_err(|(pattern, source)| ConfigError::Pattern { pattern, source })?;
         Ok(Self {
             config,
             state,
             rules,
-            skip_paths,
             entries: vec![],
             truncated: vec![],
             partial: false,
@@ -149,8 +148,8 @@ impl Workspace {
 
     pub fn discover_options(&self) -> DiscoverOptions {
         DiscoverOptions {
-            skip_dirs: self.config.skip_dirs.clone(),
-            skip_paths: self.skip_paths.clone(),
+            // validated in `new`; compiled per scan, as roots can change
+            skip: Skip::new(&self.config.skip, &self.config.roots).unwrap_or_default(),
             max_depth: self.config.max_depth,
             scan_inside_repos: false,
             skip_hidden: self.config.skip_hidden,

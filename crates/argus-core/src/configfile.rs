@@ -456,7 +456,7 @@ mod tests {
     fn uncommenting_everything_is_valid_and_keeps_defaults() {
         let c = Config::parse(&uncomment(&example())).expect("uncommented example must parse");
         let d = Config::default();
-        assert_eq!(c.skip_dirs, d.skip_dirs);
+        assert_eq!(c.skip, d.skip);
         assert_eq!(c.max_depth, d.max_depth);
         assert_eq!(c.concurrency, d.concurrency);
         assert_eq!(c.fix, d.fix);
@@ -540,10 +540,7 @@ mod tests {
         for l in ex.lines() {
             assert!(l.chars().count() <= WIDTH, "too long: {l}");
         }
-        assert!(
-            ex.contains("# skip_dirs = [\n#   \"node_modules\",\n"),
-            "{ex}"
-        );
+        assert!(ex.contains("# skip = [\n#   \"node_modules\",\n"), "{ex}");
     }
 
     fn tmp() -> (tempfile::TempDir, PathBuf) {

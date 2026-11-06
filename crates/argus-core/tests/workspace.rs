@@ -654,50 +654,80 @@ fn scans_record_when_repos_with_state_were_seen() {
 }
 
 #[test]
-fn skip_paths_are_not_scanned() {
+fn skip_matches_names_anywhere_and_paths_with_a_slash() {
     let sb = Sandbox::new();
     for r in [
         "keep",
         "archive/old",
         "archive2/x",
         "a/vendored/v",
-        "b/vendored/w",
+        "deep/er/vendored/w",
+        "py/lib.egg-info/r",
+        "sub/rel/r",
+        "sub/relx/r",
     ] {
         sb.init(&format!("dev/{r}"));
     }
-    let found = |w: &Workspace| -> Vec<String> {
-        let dev = std::fs::canonicalize(sb.path("dev")).unwrap();
-        w.entries
-            .iter()
-            .map(|e| e.path.strip_prefix(&dev).unwrap().display().to_string())
-            .collect()
-    };
     let dev = sb.path("dev").display().to_string();
-    let w = ws(
-        &sb,
-        &format!("skip_paths = ['{dev}/archive', '{dev}/*/vendored']"),
+    let found = |extra: &str| -> Vec<String> {
+        let w = ws(&sb, extra);
+        let real = std::fs::canonicalize(sb.path("dev")).unwrap();
+        let mut v: Vec<String> = w
+            .entries
+            .iter()
+            .map(|e| e.path.strip_prefix(&real).unwrap().display().to_string())
+            .collect();
+        v.sort();
+        v
+    };
+    let all = found("skip = []");
+    assert_eq!(all.len(), 8, "{all:?}");
+    // no slash: a directory name (globs allowed) at any depth
+    let v = found("skip = ['vendored', '*.egg-info']");
+    assert!(
+        !v.iter()
+            .any(|p| p.contains("vendored") || p.contains("egg-info")),
+        "{v:?}"
     );
-    assert_eq!(found(&w), ["archive2/x", "keep"]);
+    assert_eq!(v.len(), 5, "{v:?}");
+    // a trailing slash still means a name
+    assert_eq!(found("skip = ['vendored/']").len(), 6);
+    // absolute (or ~) paths, globs allowed; siblings sharing a prefix stay
+    let v = found(&format!("skip = ['{dev}/archive', '{dev}/*/vendored']"));
+    assert!(
+        v.contains(&"archive2/x".into()) && !v.contains(&"archive/old".into()),
+        "{v:?}"
+    );
+    assert!(!v.contains(&"a/vendored/v".into()), "{v:?}");
+    assert!(
+        v.contains(&"deep/er/vendored/w".into()),
+        "* is one level: {v:?}"
+    );
+    // relative with a slash: below each root
+    let v = found("skip = ['sub/rel']");
+    assert!(
+        !v.contains(&"sub/rel/r".into()) && v.contains(&"sub/relx/r".into()),
+        "{v:?}"
+    );
+    // the old name still works
+    assert_eq!(found("skip_dirs = ['vendored']").len(), 6);
     // patterns through a symlink match the real paths scans walk
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(sb.path("dev"), sb.path("link")).unwrap();
         let link = sb.path("link").display().to_string();
-        let w = ws(
-            &sb,
-            &format!("skip_paths = ['{link}/archive', '{link}/*/vendored']"),
-        );
-        assert_eq!(found(&w), ["archive2/x", "keep"]);
+        let v = found(&format!("skip = ['{link}/archive']"));
+        assert!(!v.contains(&"archive/old".into()), "{v:?}");
     }
-    // inverse: without them, everything
-    assert_eq!(found(&ws(&sb, "")).len(), 5);
-    // a root that matches is skipped too
-    let cfg = format!("roots = ['{dev}/archive']\nskip_paths = ['{dev}/archive']");
-    let mut w = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
-    w.scan();
-    assert!(w.entries.is_empty(), "{:?}", found(&w));
+    // roots are always scanned, as with hidden directories
+    for skip in [format!("'{dev}/archive'"), "'archive'".into()] {
+        let cfg = format!("roots = ['{dev}/archive']\nskip = [{skip}]");
+        let mut w = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+        w.scan();
+        assert_eq!(w.entries.len(), 1, "{skip}");
+    }
     // bad patterns are config errors
-    let cfg = "skip_paths = ['~/dev/[oops']";
+    let cfg = "skip = ['~/dev/[oops']";
     let Err(err) = Workspace::new(Config::parse(cfg).unwrap(), State::default()) else {
         panic!("bad pattern accepted");
     };

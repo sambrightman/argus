@@ -16,13 +16,15 @@ pub struct Config {
     /// current directory is scanned. Manage with `argus root add|remove|list`.
     #[schemars(example = vec!["~/dev"])]
     pub roots: Vec<PathBuf>,
-    /// Directory names never descended into.
-    pub skip_dirs: Vec<String>,
-    /// Directories never descended into, as globs on the full path (`~`
-    /// allowed), e.g. `~/dev/archive`, `~/src/*/third_party`. Unlike a rule
-    /// with `exclude = true`, repos there aren't scanned at all.
-    #[schemars(example = vec!["~/dev/archive"])]
-    pub skip_paths: Vec<String>,
+    /// Directories never descended into (roots are always scanned). Like
+    /// gitignore: a pattern without `/` is a directory name at any depth
+    /// (`node_modules`, `*.egg-info`); one starting with `/` or `~` is a full
+    /// path (`~/dev/archive`, `~/src/*/third_party`); any other with `/` is
+    /// below each root (`go/pkg`). Globs: `*` (within one level), `**`, `?`,
+    /// `[ab]`, `{a,b}`. Unlike a rule with `exclude = true`, repos there
+    /// aren't scanned at all.
+    #[serde(alias = "skip_dirs")]
+    pub skip: Vec<String>,
     /// Maximum directory depth below a root; deeper directories are skipped
     /// (with a warning). 0: no limit.
     pub max_depth: usize,
@@ -59,7 +61,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             roots: vec![],
-            skip_dirs: [
+            skip: [
                 "node_modules",
                 "target",
                 ".venv",
@@ -77,7 +79,6 @@ impl Default for Config {
             .into_iter()
             .map(String::from)
             .collect(),
-            skip_paths: vec![],
             max_depth: 6,
             skip_hidden: true,
             follow_symlinks: false,
@@ -275,21 +276,6 @@ pub enum ConfigError {
     },
 }
 
-/// `pattern` with `~` expanded and its leading directories before any glob
-/// character canonicalized (escaped, as they're now literal).
-fn resolve_prefix(pattern: &str) -> String {
-    let pattern = expand_tilde(Path::new(pattern)).display().to_string();
-    let glob_at = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
-    let split = pattern[..glob_at].rfind('/').unwrap_or(0);
-    let (prefix, rest) = pattern.split_at(split);
-    match std::fs::canonicalize(prefix) {
-        Ok(real) if !prefix.is_empty() => {
-            format!("{}{rest}", globset::escape(&real.display().to_string()))
-        }
-        _ => pattern,
-    }
-}
-
 impl Config {
     /// Load from `path`; a missing file yields the default config.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
@@ -321,28 +307,6 @@ impl Config {
                 *p = expand_tilde(p);
             }
         }
-    }
-
-    /// `skip_paths` as one matcher. Each pattern's literal leading
-    /// directories are resolved (symlinks, `~`), to match the paths scans
-    /// walk.
-    pub fn skip_path_set(&self) -> Result<globset::GlobSet, ConfigError> {
-        let mut set = globset::GlobSetBuilder::new();
-        for pattern in &self.skip_paths {
-            let glob = globset::GlobBuilder::new(&resolve_prefix(pattern))
-                .literal_separator(true)
-                .case_insensitive(true)
-                .build()
-                .map_err(|source| ConfigError::Pattern {
-                    pattern: pattern.clone(),
-                    source,
-                })?;
-            set.add(glob);
-        }
-        set.build().map_err(|source| ConfigError::Pattern {
-            pattern: self.skip_paths.join(", "),
-            source,
-        })
     }
 
     /// How many network operations to run at once: see `concurrency`.

@@ -36,9 +36,8 @@ pub struct Found {
 
 #[derive(Debug, Clone)]
 pub struct DiscoverOptions {
-    pub skip_dirs: Vec<String>,
-    /// Directories (full paths, roots included) not descended into.
-    pub skip_paths: globset::GlobSet,
+    /// Directories not descended into (roots are always scanned).
+    pub skip: Skip,
     /// 0: no limit.
     pub max_depth: usize,
     /// Keep descending into a repository's work tree looking for nested repos.
@@ -55,13 +54,77 @@ pub struct DiscoverOptions {
 impl Default for DiscoverOptions {
     fn default() -> Self {
         Self {
-            skip_dirs: vec![],
-            skip_paths: globset::GlobSet::empty(),
+            skip: Skip::default(),
             max_depth: 6,
             scan_inside_repos: false,
             skip_hidden: true,
             follow_symlinks: false,
         }
+    }
+}
+
+/// Directories to skip: names (patterns without `/`) and paths (with one;
+/// relative ones below each root). See `skip` in the config.
+#[derive(Debug, Clone, Default)]
+pub struct Skip {
+    names: globset::GlobSet,
+    paths: globset::GlobSet,
+}
+
+impl Skip {
+    /// Compile `patterns`; relative paths are joined to each of `roots`.
+    /// On error, returns the offending pattern.
+    pub fn new(patterns: &[String], roots: &[PathBuf]) -> Result<Self, (String, globset::Error)> {
+        let glob = |p: &str, original: &str| {
+            globset::GlobBuilder::new(p)
+                .literal_separator(true)
+                .case_insensitive(true)
+                .build()
+                .map_err(|e| (original.to_string(), e))
+        };
+        let mut names = globset::GlobSetBuilder::new();
+        let mut paths = globset::GlobSetBuilder::new();
+        for original in patterns {
+            let p = original.trim_end_matches('/');
+            if !p.contains('/') && !p.starts_with('~') {
+                names.add(glob(p, original)?);
+            } else if p.starts_with('/') || p.starts_with('~') {
+                paths.add(glob(&resolve_prefix(p), original)?);
+            } else {
+                for root in roots {
+                    let root = fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+                    let full = format!("{}/{p}", globset::escape(&root.display().to_string()));
+                    paths.add(glob(&resolve_prefix(&full), original)?);
+                }
+            }
+        }
+        let build = |b: globset::GlobSetBuilder| b.build().map_err(|e| (patterns.join(", "), e));
+        Ok(Self {
+            names: build(names)?,
+            paths: build(paths)?,
+        })
+    }
+
+    pub fn matches(&self, name: &str, path: &Path) -> bool {
+        self.names.is_match(name) || self.paths.is_match(path)
+    }
+}
+
+/// `pattern` with `~` expanded and its leading directories before any glob
+/// character canonicalized (escaped, as they're now literal), to match the
+/// canonical paths scans walk.
+fn resolve_prefix(pattern: &str) -> String {
+    let pattern = crate::paths::expand_tilde(Path::new(pattern))
+        .display()
+        .to_string();
+    let glob_at = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
+    let split = pattern[..glob_at].rfind('/').unwrap_or(0);
+    let (prefix, rest) = pattern.split_at(split);
+    match fs::canonicalize(prefix) {
+        Ok(real) if !prefix.is_empty() => {
+            format!("{}{rest}", globset::escape(&real.display().to_string()))
+        }
+        _ => pattern,
     }
 }
 
@@ -86,9 +149,6 @@ pub fn discover_all(roots: &[PathBuf], opts: &DiscoverOptions) -> Discovery {
             let Ok(root) = fs::canonicalize(root) else {
                 continue;
             };
-            if opts.skip_paths.is_match(&root) {
-                continue;
-            }
             let sink = &sink;
             s.spawn(move |s| visit(s, root, 0, opts, sink, Arc::default()));
         }
@@ -191,8 +251,7 @@ fn subdirs(
             let name = e.name.to_string_lossy();
             name != ".git"
                 && !(opts.skip_hidden && name.starts_with('.'))
-                && !opts.skip_dirs.iter().any(|s| s == name.as_ref())
-                && !opts.skip_paths.is_match(&e.path)
+                && !opts.skip.matches(&name, &e.path)
         })
         .filter_map(|e| {
             if e.ty.is_dir() {
@@ -324,7 +383,7 @@ mod tests {
         fake_repo(t.path(), "proj/node_modules/dep");
         mk(t.path(), "empty/dir");
         let opts = DiscoverOptions {
-            skip_dirs: vec!["node_modules".into()],
+            skip: Skip::new(&["node_modules".into()], &[]).unwrap(),
             ..Default::default()
         };
         assert_eq!(
@@ -347,7 +406,7 @@ mod tests {
         fake_repo(&root, "a/repo-at-limit");
         let opts = DiscoverOptions {
             max_depth: 2,
-            skip_dirs: vec!["node_modules".into()],
+            skip: Skip::new(&["node_modules".into()], &[]).unwrap(),
             ..Default::default()
         };
         let d = discover_all(std::slice::from_ref(&root), &opts);
