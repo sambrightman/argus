@@ -250,10 +250,21 @@ rendering is snapshot-tested via `TestBackend`.
 * **`skip`**: one list, gitignore-style: no `/` means a directory name at
   any depth, a leading `/` or `~` a full path, any other `/` a path below
   each root. Checked on each subdirectory from the listing (no extra
-  syscalls); roots are always scanned, like hidden directories. A path
-  pattern's literal leading directories are canonicalized once, as scans
-  walk canonical roots. Symlinks with `-L` aren't fully handled yet: a
-  directory reached through a link is checked only by that link path.
+  syscalls); roots are always scanned, like hidden directories.
+* **`skip` and symlinks.** Rule: a directory is skipped if any spelling of
+  it matches, wherever it's reached. A path pattern's literal part (all
+  of it, or up to the directory before the first glob) is resolved once,
+  following every link. Walks start from real roots, so without `-L`
+  every walked path is real and that's the whole story. With `-L`, a
+  directory below k followed links has k + 1 spellings (as walked, then
+  with each link resolved in turn; the last is real), built from the
+  chain of links the walk already keeps for cycle detection, so no extra
+  syscalls; a link also matches by its target's path and name. A
+  wildcard spanning a link can match only one route's spelling, so the
+  real paths of skipped directories are recorded and repos inside them
+  dropped after the walk, unless a root is at or inside that directory.
+  Not covered: symlinks the walk doesn't follow (without `-L` those
+  directories aren't scanned anyway).
 * **Symlinks** are not followed unless asked (`-L`, `follow_symlinks`).
   When followed, cycles are cut by remembering the real directory at each
   link taken on the way down; a link whose target contains one of them

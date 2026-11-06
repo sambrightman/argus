@@ -5,8 +5,8 @@
 //! unless that settles it, one listing (which also detects bare repos).
 //! Symlinks are only followed when asked, with cycle detection.
 
-use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
 use std::fs::{self, FileType};
 use std::path::{Path, PathBuf};
@@ -88,13 +88,24 @@ impl Skip {
             let p = original.trim_end_matches('/');
             if !p.contains('/') && !p.starts_with('~') {
                 names.add(glob(p, original)?);
-            } else if p.starts_with('/') || p.starts_with('~') {
-                paths.add(glob(&resolve_prefix(p), original)?);
             } else {
-                for root in roots {
-                    let root = fs::canonicalize(root).unwrap_or_else(|_| root.clone());
-                    let full = format!("{}/{p}", globset::escape(&root.display().to_string()));
-                    paths.add(glob(&resolve_prefix(&full), original)?);
+                let full: Vec<String> = if p.starts_with('/') || p.starts_with('~') {
+                    vec![p.to_string()]
+                } else {
+                    roots
+                        .iter()
+                        .map(|r| {
+                            let r = fs::canonicalize(r).unwrap_or_else(|_| r.clone());
+                            format!("{}/{p}", globset::escape(&r.display().to_string()))
+                        })
+                        .collect()
+                };
+                // Resolved only: walks start from real roots, and a
+                // directory's spellings include the one with these links
+                // resolved, so the pattern as written can't match otherwise.
+                for f in full {
+                    let f = crate::paths::expand_tilde(Path::new(&f));
+                    paths.add(glob(&resolve_literal(&f.display().to_string()), original)?);
                 }
             }
         }
@@ -110,22 +121,34 @@ impl Skip {
     }
 }
 
-/// `pattern` with `~` expanded and its leading directories before any glob
-/// character canonicalized (escaped, as they're now literal), to match the
-/// canonical paths scans walk.
-fn resolve_prefix(pattern: &str) -> String {
-    let pattern = crate::paths::expand_tilde(Path::new(pattern))
-        .display()
-        .to_string();
-    let glob_at = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
-    let split = pattern[..glob_at].rfind('/').unwrap_or(0);
-    let (prefix, rest) = pattern.split_at(split);
-    match fs::canonicalize(prefix) {
-        Ok(real) if !prefix.is_empty() => {
-            format!("{}{rest}", globset::escape(&real.display().to_string()))
+/// `pattern` with its literal part (all of it, or up to the directory
+/// before the first glob character) resolved to a real path, following
+/// every symlink: the longest existing part is canonicalized and the rest
+/// kept. Resolved parts are escaped, as they're now literal.
+fn resolve_literal(pattern: &str) -> String {
+    let literal_end = match pattern.find(['*', '?', '[', '{']) {
+        Some(at) => pattern[..at].rfind('/').unwrap_or(0),
+        None => pattern.len(),
+    };
+    let (literal, rest) = pattern.split_at(literal_end);
+    let mut existing = Path::new(literal);
+    let mut tail: Vec<String> = vec![];
+    while !existing.as_os_str().is_empty() {
+        if let Ok(real) = fs::canonicalize(existing) {
+            let mut out = globset::escape(&real.display().to_string());
+            for t in tail.iter().rev() {
+                out.push('/');
+                out.push_str(&globset::escape(t));
+            }
+            return out + rest;
         }
-        _ => pattern,
+        let Some(name) = existing.file_name() else {
+            break;
+        };
+        tail.push(name.to_string_lossy().into_owned());
+        existing = existing.parent().unwrap_or(Path::new(""));
     }
+    pattern.to_string()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -144,20 +167,22 @@ pub fn discover(roots: &[PathBuf], opts: &DiscoverOptions) -> Vec<Found> {
 /// Like [`discover`], also reporting where `max_depth` cut the walk short.
 pub fn discover_all(roots: &[PathBuf], opts: &DiscoverOptions) -> Discovery {
     let sink = Sink::default();
+    let real_roots: Vec<PathBuf> = roots
+        .iter()
+        .filter_map(|r| fs::canonicalize(r).ok())
+        .collect();
     rayon::scope(|s| {
-        for root in roots {
-            let Ok(root) = fs::canonicalize(root) else {
-                continue;
-            };
+        for root in &real_roots {
             let sink = &sink;
-            s.spawn(move |s| visit(s, root, 0, opts, sink, Arc::default()));
+            s.spawn(move |s| visit(s, root.clone(), 0, opts, sink, Arc::default()));
         }
     });
     let mut found = sink.found.into_inner().unwrap();
     found.sort_by(|a, b| a.path.cmp(&b.path));
     found.dedup_by(|a, b| a.path == b.path);
     if opts.follow_symlinks {
-        found = dedup_real(found);
+        let skipped: HashSet<PathBuf> = sink.skipped.into_inner().unwrap().into_iter().collect();
+        found = dedup_real(found, &skipped, &real_roots);
     }
     let mut truncated = sink.truncated.into_inner().unwrap();
     truncated.sort();
@@ -169,12 +194,38 @@ pub fn discover_all(roots: &[PathBuf], opts: &DiscoverOptions) -> Discovery {
 struct Sink {
     found: Mutex<Vec<Found>>,
     truncated: Mutex<Vec<PathBuf>>,
+    /// Real paths of skipped directories (with `-L` only): a directory
+    /// skipped on one route is skipped on every route.
+    skipped: Mutex<Vec<PathBuf>>,
 }
 
-/// Real directories at which the walk to here followed a symlink: entering
-/// a link whose target contains any of them (or the current directory)
-/// would walk in a circle.
-type Links = Arc<Vec<PathBuf>>;
+/// A symlink the walk followed to get here.
+#[derive(Debug)]
+struct Hop {
+    /// The real directory holding the link: entering a link whose target
+    /// contains any hop's `from` (or the current directory) would walk in
+    /// a circle.
+    from: PathBuf,
+    /// The link's path as walked.
+    link: PathBuf,
+    /// Its target's real path.
+    target: PathBuf,
+}
+
+/// The symlinks followed on the way down, outermost first.
+type Links = Arc<Vec<Hop>>;
+
+/// Every spelling of the walked `path` below `links`: as walked, then
+/// with each link resolved in turn (the last is the real path).
+fn spellings(path: &Path, links: &[Hop]) -> Vec<PathBuf> {
+    let mut v = vec![path.to_path_buf()];
+    for hop in links {
+        if let Ok(rest) = path.strip_prefix(&hop.link) {
+            v.push(hop.target.join(rest));
+        }
+    }
+    v
+}
 
 fn visit<'s>(
     s: &rayon::Scope<'s>,
@@ -204,7 +255,7 @@ fn visit<'s>(
             return;
         }
     }
-    let subdirs = subdirs(&dir, entries, opts, &links);
+    let subdirs = subdirs(&dir, entries, opts, &links, sink);
     if opts.max_depth != 0 && depth >= opts.max_depth {
         if !subdirs.is_empty() {
             sink.truncated.lock().unwrap().push(dir);
@@ -237,24 +288,45 @@ fn list(dir: &Path) -> Vec<DirEntry> {
         .collect()
 }
 
-/// Directories worth descending into, each with the links taken to reach it.
+/// Directories worth descending into, each with the links taken to reach
+/// it. A directory is skipped if any of its spellings (or, for a link, its
+/// target's) matches.
 fn subdirs(
     dir: &Path,
     entries: Vec<DirEntry>,
     opts: &DiscoverOptions,
     links: &Links,
+    sink: &Sink,
 ) -> Vec<(PathBuf, Links)> {
     let mut real_dir = None;
+    let skipped = |real: PathBuf| {
+        if opts.follow_symlinks {
+            sink.skipped.lock().unwrap().push(real);
+        }
+    };
     entries
         .into_iter()
-        .filter(|e| {
-            let name = e.name.to_string_lossy();
-            name != ".git"
-                && !(opts.skip_hidden && name.starts_with('.'))
-                && !opts.skip.matches(&name, &e.path)
-        })
         .filter_map(|e| {
+            let name = e.name.to_string_lossy();
+            if name == ".git" || (opts.skip_hidden && name.starts_with('.')) {
+                return None;
+            }
+            // Below no link (always without -L) the walked path is the
+            // only spelling: no allocation on this hot path.
+            let skip_spelling = || {
+                if links.is_empty() {
+                    opts.skip.matches(&name, &e.path).then(|| e.path.clone())
+                } else {
+                    let all = spellings(&e.path, links);
+                    let hit = all.iter().any(|p| opts.skip.matches(&name, p));
+                    hit.then(|| all.last().unwrap().clone())
+                }
+            };
             if e.ty.is_dir() {
+                if let Some(real) = skip_spelling() {
+                    skipped(real);
+                    return None;
+                }
                 return Some((e.path, links.clone()));
             }
             if !(opts.follow_symlinks && e.ty.is_symlink()) {
@@ -264,25 +336,55 @@ fn subdirs(
             if !target.is_dir() {
                 return None;
             }
+            let target_name = target.file_name().map(|n| n.to_string_lossy());
+            if skip_spelling().is_some()
+                || opts
+                    .skip
+                    .matches(target_name.as_deref().unwrap_or(""), &target)
+            {
+                skipped(target);
+                return None;
+            }
             let here = real_dir
                 .get_or_insert_with(|| fs::canonicalize(dir).unwrap_or_else(|_| dir.into()))
                 .clone();
-            let mut taken = links.as_ref().clone();
-            taken.push(here);
-            if taken.iter().any(|l| l.starts_with(&target)) {
+            if here.starts_with(&target) || links.iter().any(|h| h.from.starts_with(&target)) {
                 return None; // would walk in a circle
             }
+            let mut taken: Vec<Hop> = links
+                .iter()
+                .map(|h| Hop {
+                    from: h.from.clone(),
+                    link: h.link.clone(),
+                    target: h.target.clone(),
+                })
+                .collect();
+            taken.push(Hop {
+                from: here,
+                link: e.path.clone(),
+                target,
+            });
             Some((e.path, Arc::new(taken)))
         })
         .collect()
 }
 
 /// With symlinks followed, keep one path per real repo: the real path if it
-/// was found, else the first in sort order (`found` is sorted).
-fn dedup_real(found: Vec<Found>) -> Vec<Found> {
+/// was found, else the first in sort order (`found` is sorted). Repos inside
+/// a directory skipped on some route are dropped, unless a root is at or
+/// inside that directory (roots are always scanned).
+fn dedup_real(found: Vec<Found>, skipped: &HashSet<PathBuf>, roots: &[PathBuf]) -> Vec<Found> {
     let mut by_real: BTreeMap<PathBuf, Found> = BTreeMap::new();
     for f in found {
         let real = fs::canonicalize(&f.path).unwrap_or_else(|_| f.path.clone());
+        let inside_skipped = real.ancestors().find(|a| skipped.contains(*a));
+        if let Some(dir) = inside_skipped
+            && !roots
+                .iter()
+                .any(|r| r.starts_with(dir) && real.starts_with(r))
+        {
+            continue;
+        }
         match by_real.entry(real) {
             Entry::Vacant(v) => {
                 v.insert(f);
@@ -622,5 +724,123 @@ mod tests {
             t.path().join("missing"),
         ];
         assert_eq!(discover(&roots, &DiscoverOptions::default()).len(), 1);
+    }
+
+    /// Repos found from `roots` (relative to `base`), skipping `skip`
+    /// patterns written relative to `base` (made absolute), with `-L`.
+    #[cfg(unix)]
+    fn found_skipping(base: &Path, roots: &[&str], skip: &[&str], follow: bool) -> Vec<String> {
+        let roots: Vec<PathBuf> = roots.iter().map(|r| base.join(r)).collect();
+        let skip: Vec<String> = skip
+            .iter()
+            .map(|p| {
+                if p.contains('/') {
+                    format!("{}/{p}", base.display())
+                } else {
+                    p.to_string()
+                }
+            })
+            .collect();
+        let opts = DiscoverOptions {
+            skip: Skip::new(&skip, &roots).unwrap(),
+            follow_symlinks: follow,
+            ..Default::default()
+        };
+        let base = fs::canonicalize(base).unwrap();
+        let mut v: Vec<String> = discover(&roots, &opts)
+            .into_iter()
+            .map(|f| {
+                f.path
+                    .strip_prefix(&base)
+                    .unwrap_or(&f.path)
+                    .display()
+                    .to_string()
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// `dev/alias -> data/proj`, holding repos `vendor/lib` and `keep`;
+    /// `dev/a -> x`, `x/b -> y`, holding repo `c/r`.
+    #[cfg(unix)]
+    fn linked_tree() -> tempfile::TempDir {
+        use std::os::unix::fs::symlink;
+        let t = tempfile::tempdir().unwrap();
+        let b = t.path();
+        fake_repo(b, "data/proj/vendor/lib");
+        fake_repo(b, "data/proj/keep");
+        mk(b, "dev");
+        symlink(b.join("data/proj"), b.join("dev/alias")).unwrap();
+        fake_repo(b, "y/c/r");
+        mk(b, "x");
+        symlink(b.join("y"), b.join("x/b")).unwrap();
+        symlink(b.join("x"), b.join("dev/a")).unwrap();
+        t
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skip_matches_every_spelling_through_symlinks() {
+        let t = linked_tree();
+        let b = t.path();
+        let lib = "dev/alias/vendor/lib".to_string();
+        let keep = "dev/alias/keep".to_string();
+        let all = found_skipping(b, &["dev"], &[], true);
+        assert!(
+            all.contains(&lib) && all.contains(&keep) && all.contains(&"dev/a/b/c/r".into()),
+            "{all:?}"
+        );
+        // written through the link, or by the real path: skipped via the link
+        for pattern in ["dev/alias/vendor", "data/proj/vendor", "dev/*/vendor"] {
+            let v = found_skipping(b, &["dev"], &[pattern], true);
+            assert!(!v.contains(&lib) && v.contains(&keep), "{pattern}: {v:?}");
+        }
+        // the link itself, by its path or its target's
+        for pattern in ["dev/alias", "data/proj"] {
+            let v = found_skipping(b, &["dev"], &[pattern], true);
+            assert!(!v.contains(&lib) && !v.contains(&keep), "{pattern}: {v:?}");
+        }
+        // names: the link's own, or its target's
+        for name in ["alias", "proj"] {
+            let v = found_skipping(b, &["dev"], &[name], true);
+            assert!(!v.contains(&keep), "{name}: {v:?}");
+        }
+        // two links in a row: the partly resolved spelling (x/b/c) counts
+        // too, as do the walked (dev/a/b/c) and real (y/c) ones
+        for pattern in ["x/*/c", "dev/a/*/c", "y/c", "x/b/c"] {
+            let v = found_skipping(b, &["dev"], &[pattern], true);
+            assert!(!v.iter().any(|p| p.ends_with("c/r")), "{pattern}: {v:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_skipped_on_one_route_is_skipped_on_every_route() {
+        let t = linked_tree();
+        let b = t.path();
+        // dev/*/vendor matches only through the link; from the data root
+        // the same directory is data/proj/vendor, which doesn't match
+        let v = found_skipping(b, &["dev", "data"], &["dev/*/vendor"], true);
+        assert!(!v.iter().any(|p| p.ends_with("vendor/lib")), "{v:?}");
+        assert!(v.iter().any(|p| p.ends_with("keep")), "{v:?}");
+        // inverse: a root inside the skipped directory is still scanned
+        let v = found_skipping(b, &["dev", "data/proj/vendor"], &["dev/*/vendor"], true);
+        assert!(v.iter().any(|p| p.ends_with("vendor/lib")), "{v:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn literal_patterns_resolve_links_without_following_them() {
+        let t = linked_tree();
+        let b = t.path();
+        // no -L: dev/alias isn't walked, but the pattern resolves to
+        // data/proj, which the data root reaches by its real path
+        let v = found_skipping(b, &["data"], &["dev/alias"], false);
+        assert!(v.is_empty(), "{v:?}");
+        let v = found_skipping(b, &["data"], &["dev/alias/vendor"], false);
+        assert_eq!(v, ["data/proj/keep"]);
+        // inverse: links aren't followed, so nothing is found through them
+        assert!(found_skipping(b, &["dev"], &[], false).is_empty());
     }
 }
