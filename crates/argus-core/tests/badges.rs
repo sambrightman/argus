@@ -130,3 +130,18 @@ fn icon_overrides_replace_single_icons_on_any_set() {
         );
     }
 }
+
+#[test]
+fn icons_can_be_looked_up_by_name() {
+    for set in [&UNICODE, &NERD, &ASCII] {
+        let listed: Vec<_> = icons(set);
+        let looked_up: Vec<_> = badges::ICON_NAMES
+            .iter()
+            .map(|&n| (n, set.get(n).unwrap()))
+            .collect();
+        assert_eq!(looked_up, listed);
+    }
+    // inverse: unknown names
+    assert_eq!(UNICODE.get("favourit"), None);
+    assert_eq!(UNICODE.get(""), None);
+}

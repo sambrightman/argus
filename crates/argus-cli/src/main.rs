@@ -108,6 +108,10 @@ enum Cmd {
         /// Icon set to start with: unicode, nerd or ascii [default: `[ui] icons`].
         #[arg(long, value_name = "SET")]
         icons: Option<String>,
+        /// Print every icon and some alternatives between markers, to see
+        /// which overlap their neighbours in this terminal and font.
+        #[arg(long)]
+        glyphs: bool,
     },
 }
 
@@ -254,7 +258,8 @@ fn run() -> Result<()> {
             return Ok(());
         }
         Some(Cmd::Forge { cmd }) => return forge_cmd(cmd),
-        Some(Cmd::Demo { theme, icons }) => {
+        Some(Cmd::Demo { glyphs: true, .. }) => return demo_glyphs(&ctx),
+        Some(Cmd::Demo { theme, icons, .. }) => {
             argus_tui::check_terminal().map_err(|e| anyhow::anyhow!(e))?;
             return demo(&ctx, theme, icons);
         }
@@ -698,6 +703,68 @@ fn demo(ctx: &Ctx, theme: Option<String>, icons: Option<String>) -> Result<()> {
         )],
     };
     argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))
+}
+
+/// Glyphs worth trying in `[ui.icon_overrides]`, from best to least
+/// supported by common monospace fonts.
+const CANDIDATES: &str = "◊○●•∙…‹›«»§¶±≠×÷∞◆✓■□▲▼▶◀◇◉⌂⌘⏎♦✗‼⋯↯⇅⇡⇣✔✘⚡★☆✦✧✱⚑⚠⎇";
+
+/// One glyph as `|g|MgM`, with `*` if it takes two cells in CJK mode.
+fn glyph_cell(g: &str) -> String {
+    let wide = UnicodeWidthStr::width_cjk(g) > UnicodeWidthStr::width(g);
+    format!("|{g}|M{g}M{}", if wide { "*" } else { " " })
+}
+
+fn demo_glyphs(ctx: &Ctx) -> Result<()> {
+    let ui = Config::load(&ctx.config_path)
+        .map(|c| c.ui)
+        .unwrap_or_default();
+    let (yours, warnings) = ui.icons();
+    for w in warnings {
+        eprintln!("argus: config: {w}");
+    }
+    println!("Each glyph is shown between bars and between letters. One drawn from a");
+    println!("fallback font (missing from yours) may run into its neighbours.");
+    println!("*: two cells wide where ambiguous-width characters are (CJK mode).\n");
+    let sets: Vec<(&str, Icons)> = badges::SETS
+        .iter()
+        .map(|&n| (n, badges::by_name(n)))
+        .chain([("yours", yours)])
+        .collect();
+    let cells: Vec<Vec<String>> = badges::ICON_NAMES
+        .iter()
+        .map(|n| {
+            sets.iter()
+                .map(|(_, i)| glyph_cell(i.get(n).unwrap()))
+                .collect()
+        })
+        .collect();
+    let width = |col: usize| {
+        cells
+            .iter()
+            .map(|r| UnicodeWidthStr::width(r[col].as_str()))
+            .chain([sets[col].0.len()])
+            .max()
+            .unwrap_or(0)
+            + 2
+    };
+    let widths: Vec<usize> = (0..sets.len()).map(width).collect();
+    let header: String = sets
+        .iter()
+        .zip(&widths)
+        .map(|((n, _), &w)| pad(n, w))
+        .collect();
+    println!("{}{}", pad("icon", 13), header.trim_end());
+    for (name, row) in badges::ICON_NAMES.iter().zip(&cells) {
+        let line: String = row.iter().zip(&widths).map(|(c, &w)| pad(c, w)).collect();
+        println!("{}{}", pad(name, 13), line.trim_end());
+    }
+    println!("\nalternatives ([ui.icon_overrides])");
+    for c in CANDIDATES.chars() {
+        let g = c.to_string();
+        println!("{c}  U+{:04X}  {}", c as u32, glyph_cell(&g).trim_end());
+    }
+    Ok(())
 }
 
 // ---------- fix ----------

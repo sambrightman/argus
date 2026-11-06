@@ -1,5 +1,6 @@
 //! End-to-end CLI tests: the real binary against sandbox repositories.
 
+use argus_core::badges::{ASCII, NERD, UNICODE};
 use argus_core::testkit::{Sandbox, commit, git, subprocess_env, write};
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -715,4 +716,45 @@ fn icon_overrides_show_in_status_and_unknown_names_warn() {
         .stderr(predicate::str::contains(
             "unknown icon in [ui.icon_overrides]: favourit",
         ));
+}
+
+#[test]
+fn demo_glyphs_prints_every_icon_between_markers_without_a_terminal() {
+    let sb = Sandbox::new();
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "[ui.icon_overrides]\nstash = 'S'\n").unwrap();
+    let out = argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["demo", "--glyphs"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(!stderr.contains("building"), "no repos built: {stderr}");
+    let line = |name: &str| {
+        stdout
+            .lines()
+            .find(|l| l.split_whitespace().next() == Some(name))
+            .unwrap_or_else(|| panic!("no line for {name}:\n{stdout}"))
+            .to_string()
+    };
+    // every icon, from every set, between bars and letters
+    for name in argus_core::badges::ICON_NAMES {
+        let l = line(name);
+        for set in [&UNICODE, &NERD, &ASCII] {
+            let g = set.get(name).unwrap();
+            assert!(l.contains(&format!("|{g}|")), "{name}: {g}: {l}");
+            assert!(l.contains(&format!("M{g}M")), "{name}: {g}: {l}");
+        }
+    }
+    // the config's own icons, overrides included
+    assert!(line("stash").contains("|S|"), "{}", line("stash"));
+    // inverse: icons without an override keep the set's glyph
+    assert!(line("ahead").ends_with(&format!("|{}|M{}M*", UNICODE.ahead, UNICODE.ahead)));
+    // candidates, flagged when two cells wide in CJK mode
+    assert!(line("◊").contains("U+25CA"));
+    assert!(!line("◊").ends_with('*'), "◊ isn't ambiguous width");
+    assert!(line("★").ends_with('*'), "★ is ambiguous width");
 }

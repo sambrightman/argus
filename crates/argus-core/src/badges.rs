@@ -64,59 +64,56 @@ pub struct Icons {
     pub submodule: Cow<'static, str>,
 }
 
-/// Icon names, as used in `[ui.icon_overrides]`.
-pub const ICON_NAMES: &[&str] = &[
-    "favourite",
-    "new",
-    "excluded",
-    "snoozed",
-    "branch",
-    "detached",
-    "ahead",
-    "behind",
-    "staged",
-    "unstaged",
-    "untracked",
-    "conflict",
-    "stash",
-    "in_progress",
-    "gone",
-    "no_upstream",
-    "branches",
-    "error",
-    "sync",
-    "worktree",
-    "submodule",
-];
+/// `ICON_NAMES` and lookup by name, from one list of `Icons` fields.
+macro_rules! icon_names {
+    ($($field:ident),* $(,)?) => {
+        /// Icon names, as used in `[ui.icon_overrides]`.
+        pub const ICON_NAMES: &[&str] = &[$(stringify!($field)),*];
+
+        impl Icons {
+            /// The glyph for an icon name (see [`ICON_NAMES`]).
+            pub fn get(&self, name: &str) -> Option<&str> {
+                match name {
+                    $(stringify!($field) => Some(&self.$field),)*
+                    _ => None,
+                }
+            }
+
+            fn get_mut(&mut self, name: &str) -> Option<&mut Cow<'static, str>> {
+                match name {
+                    $(stringify!($field) => Some(&mut self.$field),)*
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+icon_names!(
+    favourite,
+    new,
+    excluded,
+    snoozed,
+    branch,
+    detached,
+    ahead,
+    behind,
+    staged,
+    unstaged,
+    untracked,
+    conflict,
+    stash,
+    in_progress,
+    gone,
+    no_upstream,
+    branches,
+    error,
+    sync,
+    worktree,
+    submodule,
+);
 
 impl Icons {
-    fn get_mut(&mut self, name: &str) -> Option<&mut Cow<'static, str>> {
-        Some(match name {
-            "favourite" => &mut self.favourite,
-            "new" => &mut self.new,
-            "excluded" => &mut self.excluded,
-            "snoozed" => &mut self.snoozed,
-            "branch" => &mut self.branch,
-            "detached" => &mut self.detached,
-            "ahead" => &mut self.ahead,
-            "behind" => &mut self.behind,
-            "staged" => &mut self.staged,
-            "unstaged" => &mut self.unstaged,
-            "untracked" => &mut self.untracked,
-            "conflict" => &mut self.conflict,
-            "stash" => &mut self.stash,
-            "in_progress" => &mut self.in_progress,
-            "gone" => &mut self.gone,
-            "no_upstream" => &mut self.no_upstream,
-            "branches" => &mut self.branches,
-            "error" => &mut self.error,
-            "sync" => &mut self.sync,
-            "worktree" => &mut self.worktree,
-            "submodule" => &mut self.submodule,
-            _ => return None,
-        })
-    }
-
     /// Replace single icons; returns warnings for unknown names.
     pub fn with_overrides(mut self, overrides: &BTreeMap<String, String>) -> (Self, Vec<String>) {
         let mut warnings = vec![];
