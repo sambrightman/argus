@@ -1,0 +1,184 @@
+//! Config files: `include`, `extend_*`, and saving marks across included
+//! files.
+
+use std::path::Path;
+
+use argus_core::Config;
+use argus_core::configfile::update_mark_lists;
+use argus_core::fix::FixKind;
+
+fn write(dir: &Path, rel: &str, text: &str) -> std::path::PathBuf {
+    let p = dir.join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, text).unwrap();
+    p
+}
+
+fn err(r: Result<Config, argus_core::config::ConfigError>) -> String {
+    match r {
+        Ok(c) => panic!("accepted: {c:?}"),
+        Err(e) => e.to_string(),
+    }
+}
+
+#[test]
+fn extend_appends_to_any_list_setting() {
+    let d = Config::default();
+    let c = Config::parse("extend_skip = ['build-cache']").unwrap();
+    assert_eq!(c.skip.len(), d.skip.len() + 1);
+    assert_eq!(c.skip[..d.skip.len()], d.skip[..]);
+    assert_eq!(c.skip.last().unwrap(), "build-cache");
+    // in nested tables too
+    let c = Config::parse("[fix]\nextend_auto = ['pull']").unwrap();
+    assert_eq!(c.fix.auto.len(), d.fix.auto.len() + 1);
+    assert_eq!(c.fix.auto.last(), Some(&FixKind::Pull));
+    // in one file, the list is set first, then extended
+    let c = Config::parse("skip = ['a']\nextend_skip = ['b']").unwrap();
+    assert_eq!(c.skip, ["a", "b"]);
+    // inverse: replacing still replaces
+    assert_eq!(Config::parse("skip = ['a']").unwrap().skip, ["a"]);
+}
+
+#[test]
+fn extend_only_applies_to_lists() {
+    let e = err(Config::parse("extend_max_depth = [1]"));
+    assert!(e.contains("extend_max_depth") && e.contains("list"), "{e}");
+    let e = err(Config::parse("extend_nope = ['x']"));
+    assert!(
+        e.contains("extend_nope") && e.contains("no such setting"),
+        "{e}"
+    );
+    let e = err(Config::parse("extend_skip = 'x'"));
+    assert!(e.contains("extend_skip") && e.contains("list"), "{e}");
+}
+
+#[test]
+fn includes_are_read_first_and_overridden_by_the_including_file() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path();
+    write(
+        d,
+        "base.toml",
+        "max_depth = 3\nconcurrency = 2\nskip = ['from-base']\nfavourite = ['base/*']\n[[track]]\nowner = 'base-org'\n",
+    );
+    write(
+        d,
+        "conf.d/b.toml",
+        "concurrency = 5\n[[track]]\nowner = 'b-org'\n",
+    );
+    write(
+        d,
+        "conf.d/a.toml",
+        "concurrency = 4\nextend_favourite = ['a/*']\n[ui]\ntheme = 'dark'\n",
+    );
+    write(d, "conf.d/notes.txt", "not toml");
+    let main = write(
+        d,
+        "config.toml",
+        "include = ['base.toml', 'conf.d/*.toml', 'none.d/*.toml']\nmax_depth = 9\nextend_skip = ['from-main']\n[[track]]\nowner = 'main-org'\n",
+    );
+    let c = Config::load(&main).unwrap();
+    // later files win: base, then conf.d/a, conf.d/b (sorted), then main
+    assert_eq!(c.max_depth, 9);
+    assert_eq!(c.concurrency, 5);
+    assert_eq!(c.ui.theme, "dark");
+    assert_eq!(c.skip, ["from-base", "from-main"]);
+    assert_eq!(c.favourite, ["base/*", "a/*"]);
+    // lists of tables add up
+    let owners: Vec<&str> = c.tracks.iter().map(|t| t.owner.as_str()).collect();
+    assert_eq!(owners, ["base-org", "b-org", "main-org"]);
+    assert_eq!(c.include, ["base.toml", "conf.d/*.toml", "none.d/*.toml"]);
+}
+
+#[test]
+fn includes_nest_and_resolve_relative_to_their_file() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path();
+    write(d, "a/inner.toml", "concurrency = 7\n");
+    write(d, "a/outer.toml", "include = ['inner.toml']\n");
+    let main = write(d, "config.toml", "include = ['a/outer.toml']\n");
+    assert_eq!(Config::load(&main).unwrap().concurrency, 7);
+}
+
+#[test]
+fn include_errors_name_the_file() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path();
+    // a missing file (globs may match nothing)
+    let main = write(d, "m1.toml", "include = ['gone.toml']\n");
+    let e = err(Config::load(&main));
+    assert!(e.contains("gone.toml") && e.contains("no such file"), "{e}");
+    // a cycle
+    write(d, "x.toml", "include = ['y.toml']\n");
+    write(d, "y.toml", "include = ['x.toml']\n");
+    let main = write(d, "m2.toml", "include = ['x.toml']\n");
+    let e = err(Config::load(&main));
+    assert!(
+        e.contains("cycle") && e.contains("x.toml") && e.contains("y.toml"),
+        "{e}"
+    );
+    // bad TOML in an included file
+    write(d, "bad.toml", "max_depth = = 1\n");
+    let main = write(d, "m3.toml", "include = ['bad.toml']\n");
+    let e = err(Config::load(&main));
+    assert!(e.contains("bad.toml"), "{e}");
+    // a glob outside the file name
+    let main = write(d, "m4.toml", "include = ['*/x.toml']\n");
+    let e = err(Config::load(&main));
+    assert!(e.contains("*/x.toml"), "{e}");
+    // include must be a list of strings
+    let main = write(d, "m5.toml", "include = 'x.toml'\n");
+    let e = err(Config::load(&main));
+    assert!(e.contains("include"), "{e}");
+}
+
+#[test]
+fn marks_are_saved_to_the_file_holding_them() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path();
+    let inc = write(
+        d,
+        "marks.toml",
+        "# shared\nfavourite = ['acme/a', 'acme/b']\n",
+    );
+    let main = write(d, "config.toml", "include = ['marks.toml']\n# mine\n");
+    let before = Config::load(&main).unwrap();
+    let mut after = before.clone();
+    // drop an entry that lives in the included file, add a new one
+    after.favourite = vec!["acme/b".into(), "acme/c".into()];
+    update_mark_lists(&main, &before, &after).unwrap();
+    let inc_text = std::fs::read_to_string(&inc).unwrap();
+    let main_text = std::fs::read_to_string(&main).unwrap();
+    assert!(
+        inc_text.contains("# shared") && !inc_text.contains("acme/a"),
+        "{inc_text}"
+    );
+    assert!(inc_text.contains("acme/b"), "{inc_text}");
+    // added to the main file without replacing the included list
+    assert!(
+        main_text.contains("extend_favourite") && main_text.contains("acme/c"),
+        "{main_text}"
+    );
+    assert!(main_text.contains("# mine"), "{main_text}");
+    assert_eq!(Config::load(&main).unwrap().favourite, ["acme/b", "acme/c"]);
+}
+
+#[test]
+fn marks_are_added_to_the_main_files_own_list_when_it_has_one() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path();
+    write(d, "marks.toml", "sync = ['acme/*']\n");
+    let main = write(
+        d,
+        "config.toml",
+        "include = ['marks.toml']\nextend_sync = ['x/y']\n",
+    );
+    let before = Config::load(&main).unwrap();
+    let mut after = before.clone();
+    after.sync.push("!acme/big".into());
+    update_mark_lists(&main, &before, &after).unwrap();
+    let c = Config::load(&main).unwrap();
+    assert_eq!(c.sync, ["acme/*", "x/y", "!acme/big"]);
+    let text = std::fs::read_to_string(&main).unwrap();
+    assert!(!text.contains("\nsync ="), "{text}");
+}

@@ -1,7 +1,7 @@
 //! User configuration (hand-edited TOML). Machine-written data lives in
 //! [`crate::state`] so this file is never rewritten behind the user's back.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,13 @@ use crate::paths::expand_tilde;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    /// Other config files to read first, e.g. `["~/.config/argus/work.toml",
+    /// "conf.d/*.toml"]`: paths relative to this file, `~` allowed, `*` etc.
+    /// in the file name (matching nothing is fine). This file's settings
+    /// override theirs; lists of tables (`[[track]]`) add up. Any list
+    /// setting also takes `extend_<name>` to add to the list rather than
+    /// replace it, e.g. `extend_skip = ["build-cache"]`.
+    pub include: Vec<String>,
     /// Directories scanned (recursively) for repositories. When empty, the
     /// current directory is scanned. Manage with `argus root add|remove|list`.
     #[schemars(example = vec!["~/dev"])]
@@ -23,7 +30,6 @@ pub struct Config {
     /// below each root (`go/pkg`). Globs: `*` (within one level), `**`, `?`,
     /// `[ab]`, `{a,b}`. Unlike a rule with `exclude = true`, repos there
     /// aren't scanned at all.
-    #[serde(alias = "skip_dirs")]
     pub skip: Vec<String>,
     /// Maximum directory depth below a root; deeper directories are skipped
     /// (with a warning). 0: no limit.
@@ -72,6 +78,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            include: vec![],
             roots: vec![],
             skip: [
                 "node_modules",
@@ -251,6 +258,225 @@ impl Default for UiConfig {
     }
 }
 
+/// Config files merged as TOML, before becoming a [`Config`]: the defaults,
+/// then each file after its includes. Tables merge key by key; values and
+/// lists replace, lists of tables add up, and `extend_<list>` appends.
+pub(crate) struct Layers {
+    pub table: toml::Table,
+    /// For each list (dotted key), the file each element came from (`None`:
+    /// the defaults).
+    pub origins: HashMap<String, Vec<Option<PathBuf>>>,
+    /// The main file's own `include`.
+    pub main_includes: Vec<String>,
+}
+
+impl Layers {
+    fn defaults() -> Self {
+        let table = toml::Table::try_from(Config::default()).expect("defaults serialize");
+        let mut origins = HashMap::new();
+        record_lists(&table, "", &mut origins);
+        Self {
+            table,
+            origins,
+            main_includes: vec![],
+        }
+    }
+
+    /// The defaults, then `path` with its includes (read first).
+    pub fn load(path: &Path) -> Result<Self, ConfigError> {
+        let mut layers = Self::defaults();
+        layers.main_includes = layers.read(path, &mut vec![])?;
+        Ok(layers)
+    }
+
+    /// Merge `path`, after its includes; returns its own `include`.
+    fn read(&mut self, path: &Path, chain: &mut Vec<PathBuf>) -> Result<Vec<String>, ConfigError> {
+        let io = |source| ConfigError::Io {
+            path: path.into(),
+            source,
+        };
+        let real = std::fs::canonicalize(path).map_err(io)?;
+        if chain.contains(&real) {
+            let names: Vec<String> = chain
+                .iter()
+                .chain([&real])
+                .map(|p| p.display().to_string())
+                .collect();
+            return Err(ConfigError::Include {
+                path: path.into(),
+                what: format!("cycle: {}", names.join(" -> ")),
+            });
+        }
+        let text = std::fs::read_to_string(path).map_err(io)?;
+        let mut layer: toml::Table =
+            toml::from_str(&text).map_err(|source| ConfigError::Parse {
+                path: path.into(),
+                source,
+            })?;
+        let includes = take_include(&mut layer, path)?;
+        chain.push(real);
+        let dir = path.parent().unwrap_or(Path::new("."));
+        for inc in &includes {
+            for file in resolve_include(dir, inc, path)? {
+                self.read(&file, chain)?;
+            }
+        }
+        chain.pop();
+        self.merge(layer, Some(path))?;
+        Ok(includes)
+    }
+
+    fn merge(&mut self, layer: toml::Table, file: Option<&Path>) -> Result<(), ConfigError> {
+        merge_table(&mut self.table, layer, "", file, &mut self.origins)
+    }
+}
+
+/// Remove and return `include` from a file's table.
+fn take_include(layer: &mut toml::Table, path: &Path) -> Result<Vec<String>, ConfigError> {
+    let bad = || ConfigError::Include {
+        path: path.into(),
+        what: "must be a list of paths".into(),
+    };
+    match layer.remove("include") {
+        None => Ok(vec![]),
+        Some(toml::Value::Array(a)) => a
+            .into_iter()
+            .map(|v| v.as_str().map(String::from).ok_or_else(bad))
+            .collect(),
+        Some(_) => Err(bad()),
+    }
+}
+
+/// The files `inc` names, relative to `dir`: one path, or the files a glob
+/// in its last component matches (sorted; none is fine).
+fn resolve_include(dir: &Path, inc: &str, from: &Path) -> Result<Vec<PathBuf>, ConfigError> {
+    let err = |what: String| ConfigError::Include {
+        path: from.into(),
+        what,
+    };
+    let full = dir.join(expand_tilde(Path::new(inc)));
+    let name = full
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let parent = full.parent().unwrap_or(Path::new("."));
+    let glob_chars = ['*', '?', '[', '{'];
+    if parent.to_string_lossy().contains(glob_chars) {
+        return Err(err(format!("{inc:?}: wildcards only in the file name")));
+    }
+    if !name.contains(glob_chars) {
+        if !full.is_file() {
+            return Err(err(format!("{inc:?}: no such file ({})", full.display())));
+        }
+        return Ok(vec![full]);
+    }
+    let matcher = globset::Glob::new(&name)
+        .map_err(|e| err(format!("{inc:?}: {e}")))?
+        .compile_matcher();
+    let mut files: Vec<PathBuf> = std::fs::read_dir(parent)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| matcher.is_match(e.file_name()) && e.path().is_file())
+        .map(|e| e.path())
+        .collect();
+    files.sort();
+    Ok(files)
+}
+
+fn dotted(prefix: &str, key: &str) -> String {
+    if prefix.is_empty() {
+        key.to_string()
+    } else {
+        format!("{prefix}.{key}")
+    }
+}
+
+fn record_lists(
+    t: &toml::Table,
+    prefix: &str,
+    origins: &mut HashMap<String, Vec<Option<PathBuf>>>,
+) {
+    for (k, v) in t {
+        match v {
+            toml::Value::Array(a) => {
+                origins.insert(dotted(prefix, k), vec![None; a.len()]);
+            }
+            toml::Value::Table(sub) => record_lists(sub, &dotted(prefix, k), origins),
+            _ => {}
+        }
+    }
+}
+
+/// Top-level settings renamed since: (old, new).
+const OLD_NAMES: &[(&str, &str)] = &[("skip_dirs", "skip")];
+
+fn is_tables(a: &[toml::Value]) -> bool {
+    !a.is_empty() && a.iter().all(|v| v.is_table())
+}
+
+fn merge_table(
+    base: &mut toml::Table,
+    layer: toml::Table,
+    prefix: &str,
+    file: Option<&Path>,
+    origins: &mut HashMap<String, Vec<Option<PathBuf>>>,
+) -> Result<(), ConfigError> {
+    let from = |n: usize| vec![file.map(Path::to_path_buf); n];
+    let renamed = layer.into_iter().map(|(k, v)| {
+        let k = match (prefix, k.as_str()) {
+            ("", old) => OLD_NAMES
+                .iter()
+                .find(|(o, _)| *o == old || format!("extend_{o}") == old)
+                .map(|(o, new)| k.replace(o, new))
+                .unwrap_or(k),
+            _ => k,
+        };
+        (k, v)
+    });
+    let (extends, plain): (Vec<_>, Vec<_>) = renamed.partition(|(k, _)| k.starts_with("extend_"));
+    for (k, v) in plain {
+        let key = dotted(prefix, &k);
+        match (base.get_mut(&k), v) {
+            (Some(toml::Value::Table(b)), toml::Value::Table(l)) => {
+                merge_table(b, l, &key, file, origins)?
+            }
+            (Some(toml::Value::Array(b)), toml::Value::Array(l))
+                if is_tables(&l) || is_tables(b) =>
+            {
+                origins.entry(key).or_default().extend(from(l.len()));
+                b.extend(l);
+            }
+            (_, v) => {
+                if let toml::Value::Array(a) = &v {
+                    origins.insert(key, from(a.len()));
+                }
+                base.insert(k, v);
+            }
+        }
+    }
+    for (k, v) in extends {
+        let target = &k["extend_".len()..];
+        let err = |reason| ConfigError::Extend {
+            key: dotted(prefix, &k),
+            reason,
+        };
+        match (base.get_mut(target), v) {
+            (Some(toml::Value::Array(b)), toml::Value::Array(l)) => {
+                origins
+                    .entry(dotted(prefix, target))
+                    .or_default()
+                    .extend(from(l.len()));
+                b.extend(l);
+            }
+            (Some(toml::Value::Array(_)), _) => return Err(err("must be a list")),
+            (Some(_), _) => return Err(err("only a list setting can be extended")),
+            (None, _) => return Err(err("no such setting to extend")),
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("reading {path}: {source}")]
@@ -268,26 +494,48 @@ pub enum ConfigError {
         pattern: String,
         source: globset::Error,
     },
+    #[error("config: {0}")]
+    Toml(#[from] toml::de::Error),
+    #[error("{path} (with its includes): {source}")]
+    Invalid {
+        path: PathBuf,
+        source: toml::de::Error,
+    },
+    #[error("{key}: {reason}")]
+    Extend { key: String, reason: &'static str },
+    #[error("{path}: include {what}")]
+    Include { path: PathBuf, what: String },
 }
 
 impl Config {
-    /// Load from `path`; a missing file yields the default config.
+    /// Load from `path`, with its includes; a missing file yields the
+    /// default config.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        match std::fs::read_to_string(path) {
-            Ok(s) => Self::parse(&s).map_err(|source| ConfigError::Parse {
-                path: path.into(),
-                source,
-            }),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(source) => Err(ConfigError::Io {
-                path: path.into(),
-                source,
-            }),
+        if !path.exists() {
+            return Ok(Self::default());
         }
+        let layers = Layers::load(path)?;
+        let main_includes = layers.main_includes.clone();
+        let mut c: Config = toml::Value::Table(layers.table)
+            .try_into()
+            .map_err(|source| ConfigError::Invalid {
+                path: path.into(),
+                source,
+            })?;
+        c.include = main_includes;
+        c.normalize();
+        Ok(c)
     }
 
-    pub fn parse(s: &str) -> Result<Self, toml::de::Error> {
-        let mut c: Config = toml::from_str(s)?;
+    /// Parse one file's text over the defaults (`extend_*` applies; any
+    /// `include` is kept but not read).
+    pub fn parse(s: &str) -> Result<Self, ConfigError> {
+        let mut layer: toml::Table = toml::from_str(s)?;
+        let include = take_include(&mut layer, Path::new("config"))?;
+        let mut layers = Layers::defaults();
+        layers.merge(layer, None)?;
+        let mut c: Config = toml::Value::Table(layers.table).try_into()?;
+        c.include = include;
         c.normalize();
         Ok(c)
     }

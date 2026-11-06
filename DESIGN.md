@@ -98,6 +98,17 @@ consume the same events.
   versioned and shared; nothing about them is temporary.
 * **Snooze.** Temporary exclusion until a date. Kept in the *state* file, not
   config, so config stays hand-edited.
+* **Includes and `extend_*`.** Config files are merged as TOML before
+  becoming a `Config`: the defaults, then each file after its includes
+  (paths relative to the including file, globs in the file name only,
+  cycles and missing files are errors). Tables merge key by key, values
+  and lists replace, lists of tables (`[[track]]`) add up, and
+  `extend_<list>` appends at any level, for every list setting without
+  listing them; on a non-list or unknown key it's an error. The merge
+  records which file each list element came from, so saving marks can
+  remove an entry where it lives and add new ones to the main file
+  without overriding an included list. Renamed settings (`skip_dirs`)
+  are renamed during the merge.
 * **No forgetting.** Nothing about a repo is dropped because scans no
   longer find it (an earlier version dropped marks after 30 days; that
   broke the rule that permanent loss needs confirmation). Expired snoozes

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value as Json};
 
-use crate::config::Config;
+use crate::config::{Config, Layers};
 use crate::paths::{contract_tilde, expand_tilde};
 use crate::rules::Mark;
 
@@ -40,8 +40,16 @@ pub enum EditError {
     #[error("{path}: result would not be a valid config: {source}")]
     Invalid {
         path: PathBuf,
-        source: toml::de::Error,
+        source: Box<crate::config::ConfigError>,
     },
+    #[error(transparent)]
+    Config(Box<crate::config::ConfigError>),
+}
+
+impl From<crate::config::ConfigError> for EditError {
+    fn from(e: crate::config::ConfigError) -> Self {
+        EditError::Config(Box::new(e))
+    }
 }
 
 const WIDTH: usize = 78;
@@ -341,7 +349,7 @@ fn load(path: &Path) -> Result<(String, toml_edit::DocumentMut), EditError> {
 fn save(path: &Path, text: &str) -> Result<(), EditError> {
     Config::parse(text).map_err(|source| EditError::Invalid {
         path: path.into(),
-        source,
+        source: Box::new(source),
     })?;
     write(path, text)
 }
@@ -438,9 +446,12 @@ pub fn remove_roots(path: &Path, dirs: &[PathBuf]) -> Result<Vec<String>, EditEr
 }
 
 /// Write the `favourite`, `sync` and `exclude` changes from `before` to
-/// `after` into the config at `path` (created from the example if
-/// needed): entries gone from a list are removed, new ones appended, and
-/// the rest of the file is left as written. No changes, no write.
+/// `after` into the config at `path` (created from the example if needed)
+/// and its includes, leaving the rest of each file as written. An entry
+/// gone from a list is removed from whichever file holds it; new ones go
+/// into the main file: its own list if it has one, else `extend_<list>`
+/// when an included file sets the list (so its entries stay), else a new
+/// list. No changes, no write.
 pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result<(), EditError> {
     let changes: Vec<(Mark, Vec<&String>, Vec<&String>)> = Mark::ALL
         .into_iter()
@@ -456,21 +467,73 @@ pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result
         return Ok(());
     }
     ensure_exists(path)?;
-    let (_, mut doc) = load(path)?;
+    let layers = Layers::load(path)?;
+    // file -> its document, edited in turn
+    let mut docs: Vec<(PathBuf, toml_edit::DocumentMut)> = vec![];
+    let doc_of = |docs: &mut Vec<(PathBuf, toml_edit::DocumentMut)>, file: &Path| {
+        if let Some(i) = docs.iter().position(|(p, _)| p == file) {
+            return Ok::<usize, EditError>(i);
+        }
+        docs.push((file.to_path_buf(), load(file)?.1));
+        Ok(docs.len() - 1)
+    };
     for (m, removed, added) in changes {
+        let key = m.name();
+        let extend_key = format!("extend_{key}");
+        let effective: Vec<String> = layers
+            .table
+            .get(key)
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let origins = layers.origins.get(key).cloned().unwrap_or_default();
+        for r in removed {
+            let files: Vec<PathBuf> = effective
+                .iter()
+                .zip(&origins)
+                .filter(|(e, _)| *e == r)
+                .filter_map(|(_, o)| o.clone())
+                .collect();
+            for file in files {
+                let i = doc_of(&mut docs, &file)?;
+                for k in [key, extend_key.as_str()] {
+                    if let Some(arr) = docs[i].1.get_mut(k).and_then(|v| v.as_array_mut()) {
+                        arr.retain(|v| v.as_str() != Some(r.as_str()));
+                    }
+                }
+            }
+        }
+        if added.is_empty() {
+            continue;
+        }
+        let i = doc_of(&mut docs, path)?;
+        let doc = &mut docs[i].1;
+        let from_includes = origins.iter().flatten().any(|o| o.as_path() != path);
+        let target = if doc.contains_key(key) || (!doc.contains_key(&extend_key) && !from_includes)
+        {
+            key.to_string()
+        } else {
+            extend_key
+        };
         let item = doc
-            .entry(m.name())
+            .entry(&target)
             .or_insert_with(|| toml_edit::value(toml_edit::Array::new()));
         let arr = item.as_array_mut().ok_or_else(|| EditError::NotAList {
             path: path.into(),
-            key: m.name(),
+            key,
         })?;
-        arr.retain(|v| v.as_str().is_none_or(|s| !removed.iter().any(|r| *r == s)));
         for a in added {
             arr.push(a.as_str());
         }
     }
-    save(path, &doc.to_string())
+    for (file, doc) in docs {
+        save(&file, &doc.to_string())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
