@@ -813,3 +813,47 @@ fn demo_renders_in_every_theme_and_icon_set() {
         }
     }
 }
+
+#[test]
+fn clearing_marks_of_several_repos_asks_first() {
+    let (_sb, mut app) = setup("");
+    let keys: Vec<String> = app.ws.entries.iter().map(|e| e.key.clone()).collect();
+    for k in &keys {
+        app.ws.state.mark(k, |m| m.favourite = Some(true));
+    }
+    app.ws.resolve_flags();
+    let favourites = |app: &App| {
+        keys.iter()
+            .filter(|k| app.ws.state.marks.contains_key(*k))
+            .count()
+    };
+    for e in &app.ws.entries {
+        app.marked.insert(e.path.clone());
+    }
+    let fx = app.act(Action::ClearMarks);
+    assert!(fx.is_empty(), "nothing saved before an answer: {fx:?}");
+    assert!(matches!(app.mode, Mode::Confirm { .. }));
+    assert!(render(&mut app, 100, 8).contains("Clear marks of 3 repos? (y/n)"));
+    // anything but y cancels, changing nothing
+    let fx = app.on_key(key('n'));
+    assert!(fx.is_empty() && matches!(app.mode, Mode::Normal));
+    assert_eq!(favourites(&app), 3);
+    assert!(app.message.as_ref().unwrap().0.contains("cancelled"));
+    app.act(Action::ClearMarks);
+    app.on_key(code(KeyCode::Esc));
+    assert_eq!(favourites(&app), 3);
+    // y clears them
+    app.act(Action::ClearMarks);
+    let fx = app.on_key(key('y'));
+    assert!(fx.contains(&Effect::SaveState));
+    assert_eq!(favourites(&app), 0);
+    // one repo losing marks: no question
+    app.ws.state.mark(&keys[0], |m| m.exclude = Some(true));
+    app.ws.state.snoozed.insert(
+        keys[1].clone(),
+        jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
+    );
+    let fx = app.act(Action::ClearMarks);
+    assert!(fx.contains(&Effect::SaveState) && matches!(app.mode, Mode::Normal));
+    assert!(app.ws.state.marks.is_empty() && app.ws.state.snoozed.is_empty());
+}

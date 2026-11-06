@@ -306,6 +306,10 @@ fn draw_status(f: &mut Frame, app: &App, v: &View, area: Rect) {
                 Span::raw(editor.text()),
             ])
         }
+        Mode::Confirm { question, .. } => Line::from(vec![
+            Span::styled(format!(" {question}"), t.ui(Ui::Failed)),
+            Span::styled(" (y/n)", t.ui(Ui::Key)),
+        ]),
         _ => match &app.message {
             Some((m, true)) => Line::from(Span::styled(format!(" {m}"), t.ui(Ui::Failed))),
             Some((m, false)) => Line::from(Span::raw(format!(" {m}"))),

@@ -929,3 +929,60 @@ fn every_command_prints_json() {
             .stderr(predicate::str::contains("--json"));
     }
 }
+
+#[test]
+fn clearing_marks_of_several_repos_needs_confirmation() {
+    let sb = Sandbox::new();
+    three(&sb);
+    argus(&sb)
+        .args(["mark", "acme/*", "--favourite"])
+        .assert()
+        .success();
+    let favourites = |sb: &Sandbox| -> usize {
+        let v = json(sb, &["status", "--all"]);
+        v.as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["flags"]["favourite"] == true)
+            .count()
+    };
+    assert_eq!(favourites(&sb), 3);
+    // no terminal to ask on, and no --yes: refused, nothing changed
+    argus(&sb)
+        .args(["mark", "acme/*", "--clear"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("clear marks of 3 repos"))
+        .stderr(predicate::str::contains("--yes"));
+    assert_eq!(favourites(&sb), 3);
+    // one repo: no question
+    argus(&sb)
+        .args(["mark", "acme/clean", "--clear"])
+        .assert()
+        .success();
+    assert_eq!(favourites(&sb), 2);
+    // --yes / -y proceed
+    argus(&sb)
+        .args(["mark", "acme/*", "--clear", "--yes"])
+        .assert()
+        .success();
+    assert_eq!(favourites(&sb), 0);
+    argus(&sb)
+        .args(["mark", "acme/*", "--favourite"])
+        .assert()
+        .success();
+    argus(&sb)
+        .args(["-y", "mark", "acme/*", "--clear"])
+        .assert()
+        .success();
+    assert_eq!(favourites(&sb), 0);
+    // repos with nothing to lose don't count
+    argus(&sb)
+        .args(["mark", "acme/dirty", "--sync"])
+        .assert()
+        .success();
+    argus(&sb)
+        .args(["mark", "acme/*", "--clear"])
+        .assert()
+        .success();
+}

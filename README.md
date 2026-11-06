@@ -166,6 +166,12 @@ to scan other directories just this once; `--max-depth N` overrides
 `max_depth` for one run (0: no limit), and `-L` / `--follow-symlinks` follows symlinked
 directories (or set `follow_symlinks = true`).
 
+Anything that permanently loses data asks first: in the TUI a `y/n` in the
+status line, in the CLI a prompt on the terminal. `-y` / `--yes` proceeds
+without asking (scripts, cron); without a terminal and without `--yes`,
+the command refuses and changes nothing. Today that's clearing the marks
+of more than one repo.
+
 Directories whose name starts with `.` are skipped (`skip_hidden`); add
 one as a root to scan it, e.g. `argus root add ~/.emacs.d`. `skip` lists
 directories never scanned, like gitignore: without a `/` a pattern is a

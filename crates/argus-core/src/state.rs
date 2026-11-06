@@ -145,6 +145,14 @@ impl State {
         forgotten
     }
 
+    /// How many of `keys` have marks (favourite, sync, exclude) to lose:
+    /// clearing those of more than one repo needs confirmation.
+    pub fn marked_count<'a>(&self, keys: impl IntoIterator<Item = &'a String>) -> usize {
+        keys.into_iter()
+            .filter(|k| self.marks.get(*k).is_some_and(|m| !m.is_empty()))
+            .count()
+    }
+
     pub fn mark(&mut self, key: &str, f: impl FnOnce(&mut Marks)) {
         let m = self.marks.entry(key.to_string()).or_default();
         f(m);

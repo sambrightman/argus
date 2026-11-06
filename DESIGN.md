@@ -170,6 +170,15 @@ rendering is snapshot-tested via `TestBackend`.
 
 ## 8. Decisions made during the build
 
+* **Permanently destructive operations ask first** (project rule). TUI:
+  `Mode::Confirm`, a `y/n` in the status line; any key but `y` cancels.
+  CLI: a `[y/N]` prompt when stdin and stderr are terminals; `-y`/`--yes`
+  proceeds; otherwise the command refuses before changing anything. Each
+  such operation is tested declined, refused and confirmed. Recoverable
+  operations (stash, commit, switch, fast-forward, pull, push) don't ask.
+  Clearing marks asks when more than one repo has favourite/sync/exclude
+  to lose; snoozes and "new" flags don't count. `root remove` doesn't ask.
+
 * **"Unpushed" means "on no remote-tracking ref"**, not "ahead of upstream".
   On real data, a fork branch that tracked `upstream/master` but was pushed
   to `origin/<branch>` was flagged as unpushed. Worse, a `push` fix was

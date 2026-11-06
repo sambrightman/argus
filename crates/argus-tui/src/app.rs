@@ -140,9 +140,29 @@ pub enum Prompt {
 
 pub enum Mode {
     Normal,
-    Menu { menu: Menu, cursor: usize },
-    Input { prompt: Prompt, editor: LineEditor },
-    Help { scroll: u16 },
+    Menu {
+        menu: Menu,
+        cursor: usize,
+    },
+    Input {
+        prompt: Prompt,
+        editor: LineEditor,
+    },
+    Help {
+        scroll: u16,
+    },
+    /// A permanently destructive action waiting for `y`; any other key
+    /// cancels it.
+    Confirm {
+        question: String,
+        then: Confirmed,
+    },
+}
+
+/// Actions that need confirmation, with what they apply to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Confirmed {
+    ClearMarks(Vec<String>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -345,6 +365,15 @@ impl App {
                     }
                     _ => {}
                 }
+                vec![]
+            }
+            Mode::Confirm { then, .. } => {
+                let then = then.clone();
+                self.mode = Mode::Normal;
+                if k.code == KeyCode::Char('y') && k.modifiers.is_empty() {
+                    return self.confirmed(then);
+                }
+                self.info("cancelled");
                 vec![]
             }
             Mode::Input { prompt, editor } => {
@@ -651,11 +680,16 @@ impl App {
             ToggleSync => return self.toggle_mark(|m, f| m.sync = Some(!f.sync)),
             ToggleExclude => return self.toggle_mark(|m, f| m.exclude = Some(!f.excluded)),
             ClearMarks => {
-                for k in self.selected_keys() {
-                    self.ws.state.marks.remove(&k);
-                    self.ws.state.snoozed.remove(&k);
+                let keys = self.selected_keys();
+                let n = self.ws.state.marked_count(&keys);
+                if n > 1 {
+                    self.mode = Mode::Confirm {
+                        question: format!("Clear marks of {n} repos?"),
+                        then: Confirmed::ClearMarks(keys),
+                    };
+                    return vec![];
                 }
-                return self.flags_changed();
+                return self.confirmed(Confirmed::ClearMarks(keys));
             }
             Snooze => {
                 let keys = self.selected_keys();
@@ -759,6 +793,19 @@ impl App {
             self.ws.state.mark(&key, |m| f(m, &flags));
         }
         self.flags_changed()
+    }
+
+    /// Carry out a confirmed (or harmless enough) destructive action.
+    fn confirmed(&mut self, c: Confirmed) -> Vec<Effect> {
+        match c {
+            Confirmed::ClearMarks(keys) => {
+                for k in keys {
+                    self.ws.state.marks.remove(&k);
+                    self.ws.state.snoozed.remove(&k);
+                }
+                self.flags_changed()
+            }
+        }
     }
 
     fn flags_changed(&mut self) -> Vec<Effect> {

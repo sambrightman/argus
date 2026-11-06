@@ -42,6 +42,10 @@ struct Cli {
     /// progress still go to stderr). Not for the TUI or completions.
     #[arg(long, global = true)]
     json: bool,
+    /// Proceed with permanently destructive operations without asking
+    /// (otherwise they ask on the terminal, or refuse without one).
+    #[arg(long, short = 'y', global = true)]
+    yes: bool,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -344,7 +348,7 @@ fn run() -> Result<()> {
         }
         Cmd::Mark(m) => {
             scan(&mut ws);
-            mark(&mut ws, &m, json)?;
+            mark(&mut ws, &m, json, cli.yes)?;
             save_state(&ws, &ctx)?;
         }
         Cmd::Ack { patterns } => {
@@ -421,6 +425,42 @@ fn scan(ws: &mut Workspace) {
 
 fn save_state(ws: &Workspace, ctx: &Ctx) -> Result<()> {
     ws.state.save(&ctx.state_path).context("saving state")
+}
+
+/// Ask before a permanently destructive operation: proceed with `--yes`,
+/// else ask on the terminal; without one, refuse.
+fn confirm(what: &str, yes: bool) -> Result<()> {
+    let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    confirm_with(
+        what,
+        yes,
+        interactive,
+        &mut std::io::stdin().lock(),
+        &mut std::io::stderr(),
+    )
+}
+
+fn confirm_with(
+    what: &str,
+    yes: bool,
+    interactive: bool,
+    input: &mut dyn std::io::BufRead,
+    out: &mut dyn Write,
+) -> Result<()> {
+    if yes {
+        return Ok(());
+    }
+    if !interactive {
+        bail!("{what}: needs confirmation; pass --yes to proceed");
+    }
+    write!(out, "argus: {what}? [y/N] ")?;
+    out.flush()?;
+    let mut answer = String::new();
+    input.read_line(&mut answer)?;
+    match answer.trim().to_lowercase().as_str() {
+        "y" | "yes" => Ok(()),
+        _ => bail!("cancelled"),
+    }
 }
 
 /// `--json` output: one pretty-printed document on stdout.
@@ -1047,7 +1087,7 @@ fn fix_cmd(
 
 // ---------- mark ----------
 
-fn mark(ws: &mut Workspace, m: &MarkArgs, json: bool) -> Result<()> {
+fn mark(ws: &mut Workspace, m: &MarkArgs, json: bool, yes: bool) -> Result<()> {
     let sel = ws.select(
         &m.patterns,
         ViewFilter {
@@ -1066,6 +1106,13 @@ fn mark(ws: &mut Workspace, m: &MarkArgs, json: bool) -> Result<()> {
         }
         None => None,
     };
+    if m.clear {
+        let keys: Vec<String> = sel.iter().map(|&i| ws.entries[i].key.clone()).collect();
+        let n = ws.state.marked_count(&keys);
+        if n > 1 {
+            confirm(&format!("clear marks of {n} repos"), yes)?;
+        }
+    }
     let tri = |yes: bool, no: bool| {
         if yes {
             Some(Some(true))
@@ -1137,4 +1184,41 @@ fn forge_cmd(cmd: ForgeCmd, json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn confirmation_takes_yes_and_nothing_else() {
+        let ask = |yes: bool, interactive: bool, typed: &str| {
+            let mut out = vec![];
+            let r = confirm_with("drop it", yes, interactive, &mut typed.as_bytes(), &mut out);
+            (
+                r.map_err(|e| e.to_string()),
+                String::from_utf8(out).unwrap(),
+            )
+        };
+        for typed in ["y\n", "Y\n", "yes\n", " y \n"] {
+            let (r, out) = ask(false, true, typed);
+            assert!(r.is_ok(), "{typed:?}");
+            assert_eq!(out, "argus: drop it? [y/N] ");
+        }
+        // inverse: anything else, or nothing, cancels
+        for typed in ["n\n", "\n", "", "yeah\n", "no\n"] {
+            assert_eq!(
+                ask(false, true, typed).0,
+                Err("cancelled".into()),
+                "{typed:?}"
+            );
+        }
+        // --yes doesn't ask
+        assert_eq!(ask(true, true, ""), (Ok(()), String::new()));
+        assert_eq!(ask(true, false, ""), (Ok(()), String::new()));
+        // no terminal: refuse without asking
+        let (r, out) = ask(false, false, "y\n");
+        assert!(r.unwrap_err().contains("pass --yes"));
+        assert!(out.is_empty());
+    }
 }
