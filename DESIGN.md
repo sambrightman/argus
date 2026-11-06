@@ -134,7 +134,13 @@ consume the same events.
     so the predicted chain stays right. `ops::stash_problem` refuses what
     git can't do cleanly: nothing to stash, or a staged-only stash
     (`--staged`) of a file that also has unstaged changes, which git saves
-    but then fails to remove. No `argus stash` command: for one repo it
+    but then fails to remove. The TUI's `z` menu has magit-style switches
+    (untracked, keep index) that start from `[stash]` and last the session;
+    choosing a switch keeps the menu open. Its actions stash everything,
+    staged changes only, with a message, or the files marked in the details
+    view (Space on a file line; marks on files no longer changed are
+    dropped as rows are rebuilt). A refusal in any selected repo stashes
+    none. No `argus stash` command: for one repo it
     would only pass git's own options through, and `argus fix -k stash`
     stashes in bulk.
   * `commit`: needs a message (TUI prompt / `--message`) → `git add -A && git commit`.

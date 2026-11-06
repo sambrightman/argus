@@ -148,7 +148,19 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
             Row::Repo(i) => repo_line(app, v, *i, name_w, branch_w),
             Row::Detail { repo, line } => {
                 let indent = "  ".repeat(app.ws.depth(*repo)) + "      ";
-                let mut spans = vec![Span::raw(indent)];
+                let marked = line.file.as_ref().is_some_and(|f| {
+                    app.marked_files
+                        .get(&app.ws.entries[*repo].path)
+                        .is_some_and(|m| m.contains(f))
+                });
+                let mut spans = if marked {
+                    vec![
+                        Span::styled(v.icons.marked.to_string(), t.ui(Ui::Marked)),
+                        Span::raw(indent[1..].to_string()),
+                    ]
+                } else {
+                    vec![Span::raw(indent)]
+                };
                 spans.extend(line.parts.iter().map(|(role, s)| {
                     Span::styled(
                         s.clone(),
@@ -297,6 +309,7 @@ fn draw_status(f: &mut Frame, app: &App, v: &View, area: Rect) {
             let label = match prompt {
                 Prompt::Filter => "filter: ".to_string(),
                 Prompt::CommitMessage(p) => format!("commit message ({} repo(s)): ", p.len()),
+                Prompt::StashMessage(p) => format!("stash message ({} repo(s)): ", p.len()),
                 Prompt::SnoozeDuration(k) => format!("snooze {} repo(s) for: ", k.len()),
             };
             let x = area.x + (UnicodeWidthStr::width(label.as_str()) + editor.cursor()) as u16;
@@ -363,9 +376,17 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) {
     );
     let mut lines = vec![];
     for (n, it) in menu.items.iter().enumerate() {
+        let label = match it.switch {
+            Some(s) => format!(
+                "[{}] {}",
+                if app.switch_on(s) { "x" } else { " " },
+                it.label
+            ),
+            None => it.label.to_string(),
+        };
         let mut l = Line::from(vec![
             Span::styled(format!(" {} ", it.key), t.ui(Ui::Key)),
-            Span::raw(format!(" {}", it.label)),
+            Span::raw(format!(" {label}")),
         ]);
         if n == *cursor {
             l = l.patch_style(t.ui(Ui::Selection));
@@ -379,7 +400,7 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) {
     let w = menu
         .items
         .iter()
-        .map(|i| i.label.len() as u16 + 8)
+        .map(|i| i.label.len() as u16 + 12)
         .max()
         .unwrap_or(20)
         .max(title.len() as u16 + 4);

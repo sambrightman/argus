@@ -853,3 +853,180 @@ fn clearing_marks_of_several_repos_asks_first() {
     assert!(fx.contains(&Effect::SaveState) && matches!(app.mode, Mode::Normal));
     assert!(app.ws.config.exclude.is_empty() && app.ws.state.snoozed.is_empty());
 }
+
+/// The stash ops in `fx`'s jobs, by repo name.
+fn stash_jobs(app: &App, fx: &[Effect]) -> Vec<(String, Op)> {
+    fx.iter()
+        .flat_map(|e| match e {
+            Effect::Jobs(j) => j.clone(),
+            _ => vec![],
+        })
+        .map(|j| (app.ws.get(&j.path).unwrap().display_name(), j.op))
+        .collect()
+}
+
+fn stash_op(
+    untracked: bool,
+    keep_index: bool,
+    staged: bool,
+    paths: &[&str],
+) -> impl Fn(&Op) -> bool {
+    let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+    move |op| {
+        matches!(op, Op::Stash { untracked: u, keep_index: k, staged: s, paths: p, .. }
+            if *u == untracked && *k == keep_index && *s == staged && *p == paths)
+    }
+}
+
+#[test]
+fn stash_menu_switches_stay_open_and_last_the_session() {
+    let (_sb, mut app) = setup("[stash]\nkeep_index = true");
+    assert_eq!(current(&app), "acme/dirty");
+    app.on_key(key('z'));
+    let out = render(&mut app, 100, 30);
+    assert!(
+        out.contains("[x] include untracked") && out.contains("[x] keep index"),
+        "{out}"
+    );
+    app.on_key(key('u'));
+    app.on_key(key('k'));
+    assert!(
+        matches!(app.mode, Mode::Menu { .. }),
+        "switches keep the menu open"
+    );
+    let out = render(&mut app, 100, 30);
+    assert!(
+        out.contains("[ ] include untracked") && out.contains("[ ] keep index"),
+        "{out}"
+    );
+    app.on_key(code(KeyCode::Esc));
+    app.on_key(key('z'));
+    assert!(
+        render(&mut app, 100, 30).contains("[ ] include untracked"),
+        "this session"
+    );
+    assert!(app.ws.config.stash.untracked, "config unchanged");
+    let fx = app.on_key(key('z'));
+    assert!(matches!(app.mode, Mode::Normal));
+    let jobs = stash_jobs(&app, &fx);
+    assert_eq!(jobs.len(), 1, "{jobs:?}");
+    assert_eq!(jobs[0].0, "acme/dirty");
+    assert!(
+        stash_op(false, false, false, &[])(&jobs[0].1),
+        "{:?}",
+        jobs[0].1
+    );
+}
+
+#[test]
+fn stash_staged_only_and_refusals() {
+    let staged = |sb: &Sandbox| {
+        let d = sb.path("dev/dirty");
+        write(&d, "staged", "s\n");
+        git(&d, &["add", "staged"]);
+    };
+    let (sb, mut app) = setup_with("", staged);
+    // a clean repo: nothing to do, said so
+    app.act(Action::Bottom);
+    assert_eq!(current(&app), "acme/clean");
+    app.on_key(key('z'));
+    let fx = app.on_key(key('z'));
+    assert!(fx.is_empty());
+    assert!(
+        app.message.as_ref().unwrap().0.contains("nothing to stash"),
+        "{:?}",
+        app.message
+    );
+    // staged only
+    app.act(Action::Top);
+    app.on_key(key('z'));
+    let fx = app.on_key(key('i'));
+    let jobs = stash_jobs(&app, &fx);
+    assert!(
+        jobs.len() == 1 && stash_op(true, false, true, &[])(&jobs[0].1),
+        "{jobs:?}"
+    );
+    // a staged file with unstaged changes too: refused, nothing run
+    let (sb2, mut app) = setup_with("", staged);
+    let d = sb2.path("dev/dirty");
+    write(&d, "staged", "s2\n");
+    app.ws.refresh(&d);
+    app.rebuild();
+    app.on_key(key('z'));
+    let fx = app.on_key(key('i'));
+    assert!(fx.is_empty(), "{fx:?}");
+    let (msg, is_error) = app.message.clone().unwrap();
+    assert!(
+        is_error && msg.contains("unstaged") && msg.contains("acme/dirty"),
+        "{msg}"
+    );
+    drop(sb);
+}
+
+#[test]
+fn stash_with_a_message() {
+    let (_sb, mut app) = setup("");
+    app.on_key(key('z'));
+    app.on_key(key('m'));
+    assert!(matches!(app.mode, Mode::Input { .. }));
+    for c in "wip".chars() {
+        app.on_key(key(c));
+    }
+    let fx = app.on_key(code(KeyCode::Enter));
+    let jobs = stash_jobs(&app, &fx);
+    assert!(
+        matches!(&jobs[..], [(n, Op::Stash { message, .. })] if n == "acme/dirty" && message == "wip"),
+        "{jobs:?}"
+    );
+}
+
+#[test]
+fn files_marked_in_details_can_be_stashed() {
+    let (sb, mut app) = setup_with("", |sb| write(&sb.path("dev/dirty"), "other", "x\n"));
+    // nothing marked yet
+    app.on_key(key('z'));
+    let fx = app.on_key(key('f'));
+    assert!(fx.is_empty());
+    assert!(
+        app.message.as_ref().unwrap().0.contains("mark files"),
+        "{:?}",
+        app.message
+    );
+    // mark README in the details
+    app.on_key(code(KeyCode::Tab));
+    let at = app
+        .rows
+        .iter()
+        .position(
+            |r| matches!(r, Row::Detail { line, .. } if line.file.as_deref() == Some("README")),
+        )
+        .expect("README listed in the details");
+    app.cursor = at;
+    app.on_key(key(' '));
+    assert_eq!(app.cursor, at + 1, "moves on, like marking repos");
+    assert!(app.marked.is_empty(), "the repo itself isn't marked");
+    let out = render(&mut app, 100, 30);
+    assert!(
+        out.lines().any(|l| l.contains('▌') && l.contains("README")),
+        "{out}"
+    );
+    app.on_key(key('z'));
+    let fx = app.on_key(key('f'));
+    let jobs = stash_jobs(&app, &fx);
+    assert!(
+        jobs.len() == 1 && stash_op(true, false, false, &["README"])(&jobs[0].1),
+        "{jobs:?}"
+    );
+    // marks go on unmark-all, or when the file is no longer changed
+    assert!(!app.marked_files.is_empty());
+    app.on_key(code(KeyCode::Esc));
+    assert!(app.marked_files.is_empty());
+    app.cursor = at;
+    app.on_key(key(' '));
+    assert!(!app.marked_files.is_empty());
+    let d = sb.path("dev/dirty");
+    git(&d, &["checkout", "-q", "--", "README"]);
+    app.ws.refresh(&d);
+    app.rebuild();
+    assert!(app.marked_files.is_empty(), "{:?}", app.marked_files);
+}

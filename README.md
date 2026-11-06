@@ -120,7 +120,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `PgUp PgDn` `C-v M-v` `C-u C-d` | page |
 | `Home End` `M-< M->` `gg G` | top / bottom |
 | `Tab` `Enter` | unfold details: issues, available fixes, branches, files |
-| `Space` / `U` | mark / unmark (actions apply to marked repos, else current) |
+| `Space` / `U` | mark / unmark (actions apply to marked repos, else current); on a file in the details, marks the file |
 | `/` `C-s` | filter (readline editing) |
 | `a` / `H` | show all / attention only (the default, `[ui] attention_only`); show hidden |
 | `g` `C-l` / `R` | refresh statuses / rescan roots |
@@ -130,7 +130,8 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `F` | **Pull**: `p` selected, `a` all syncable, `s` sync (forges + clone new + pull) |
 | `f` | **Fetch**: `f` selected, `a` all visible |
 | `P` | **Push**: `p` push, `u` publish (set upstream) |
-| `z` `c` | **Stash** / **Commit** (prompts for message) |
+| `z` | **Stash**: switches `u` include untracked, `k` keep index (from `[stash]`, for the session); `z` all, `i` staged only, `m` with a message, `f` files marked in the details |
+| `c` | **Commit** (prompts for message) |
 | `b` | **Branch**: `d` switch to default, `f` fast-forward stale branches |
 | `x` | **Fix**: `x` auto-fix selected, `a` all visible |
 | `m` | **Mark**: `f` favourite, `s` sync, `x` exclude, `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
@@ -245,7 +246,7 @@ changes in the index after stashing them.
 ## Development
 
 ```sh
-cargo test --workspace      # ~190 tests, real git repos in temp dirs
+cargo test --workspace      # ~260 tests, real git repos in temp dirs
 cargo clippy --workspace --all-targets
 cargo run -p argus-tui --example snapshot -- ~/dev 'jj\t'   # render a frame as text
 ```

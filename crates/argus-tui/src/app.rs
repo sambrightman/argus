@@ -1,9 +1,10 @@
 //! TUI application state machine. Pure: keys and worker messages go in,
 //! [`Effect`]s come out. No terminal or threads here, so it's unit-testable.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 
+use argus_core::config::StashConfig;
 use argus_core::fix::{self, Applied, FixKind};
 use argus_core::ops::{Op, OpOutcome};
 use argus_core::rules::Mark;
@@ -49,7 +50,9 @@ pub enum Action {
     Pull(Scope),
     Push,
     Publish,
-    Stash,
+    Stash(StashKind),
+    /// Flip a menu switch for this session.
+    Toggle(Switch),
     Commit,
     SwitchDefault,
     FastForward,
@@ -74,6 +77,28 @@ pub enum Action {
     NextTheme,
     /// Next icon set, for this session only.
     NextIcons,
+}
+
+/// What a stash action takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StashKind {
+    /// Everything (untracked files as the switch says).
+    All,
+    /// Only staged changes.
+    Staged,
+    /// Everything, after asking for a message.
+    WithMessage,
+    /// The files marked in the details view.
+    MarkedFiles,
+}
+
+/// Menu switches, kept for the session (starting from config).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Switch {
+    /// Stash untracked files too.
+    Untracked,
+    /// Leave staged changes in the index after stashing.
+    KeepIndex,
 }
 
 /// Something for the runtime to do.
@@ -138,6 +163,7 @@ pub enum Msg {
 pub enum Prompt {
     Filter,
     CommitMessage(Vec<PathBuf>),
+    StashMessage(Vec<PathBuf>),
     SnoozeDuration(Vec<String>),
 }
 
@@ -195,6 +221,10 @@ pub struct App {
     pub view: ViewFilter,
     pub expanded: BTreeSet<PathBuf>,
     pub marked: BTreeSet<PathBuf>,
+    /// Files marked in the details view, by repo path.
+    pub marked_files: BTreeMap<PathBuf, BTreeSet<String>>,
+    /// The stash switches for this session.
+    pub stash: StashConfig,
     pub running: HashMap<PathBuf, String>,
     pub log: Vec<LogEntry>,
     pub show_log: bool,
@@ -213,6 +243,7 @@ impl App {
             attention_only: ws.config.ui.attention_only,
             show_hidden: false,
         };
+        let stash = ws.config.stash;
         let mut a = Self {
             ws,
             mode: Mode::Normal,
@@ -224,6 +255,8 @@ impl App {
             view,
             expanded: BTreeSet::new(),
             marked: BTreeSet::new(),
+            marked_files: BTreeMap::new(),
+            stash,
             running: HashMap::new(),
             log: vec![],
             show_log: false,
@@ -263,6 +296,16 @@ impl App {
             }
         }
         self.rows = rows;
+        // marks on files that are no longer changed go
+        let ws = &self.ws;
+        self.marked_files.retain(|repo, files| {
+            let changed = ws
+                .get(repo)
+                .and_then(|e| e.status())
+                .map(|s| &s.changes.files);
+            files.retain(|f| changed.is_some_and(|c| c.iter().any(|x| x.path == *f)));
+            !files.is_empty()
+        });
         self.cursor = keep
             .and_then(|p| {
                 self.rows
@@ -355,14 +398,20 @@ impl App {
                     KeyCode::Up | KeyCode::BackTab => *cursor = (*cursor + n - 1) % n,
                     KeyCode::Char('p') if ctrl => *cursor = (*cursor + n - 1) % n,
                     KeyCode::Enter => {
-                        let a = menu.items[*cursor].action;
-                        self.mode = Mode::Normal;
+                        let it = &menu.items[*cursor];
+                        let (a, stays) = (it.action, it.switch.is_some());
+                        if !stays {
+                            self.mode = Mode::Normal;
+                        }
                         return self.act(a);
                     }
                     KeyCode::Char(c) if !ctrl => {
                         if let Some(it) = menu.items.iter().find(|i| i.key == c) {
-                            let a = it.action;
-                            self.mode = Mode::Normal;
+                            // switches keep the menu open, as in magit
+                            let (a, stays) = (it.action, it.switch.is_some());
+                            if !stays {
+                                self.mode = Mode::Normal;
+                            }
                             return self.act(a);
                         }
                     }
@@ -539,14 +588,32 @@ impl App {
                 self.rebuild();
             }
             ToggleMark => {
-                if let Some(p) = self.current_path() {
+                if let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor)
+                    && let Some(f) = &line.file
+                {
+                    let repo = self.ws.entries[*repo].path.clone();
+                    let files = self.marked_files.entry(repo.clone()).or_default();
+                    if !files.remove(f) {
+                        files.insert(f.clone());
+                    }
+                    if files.is_empty() {
+                        self.marked_files.remove(&repo);
+                    }
+                    self.cursor = (self.cursor + 1).min(self.rows.len().saturating_sub(1));
+                } else if let Some(p) = self.current_path() {
                     if !self.marked.remove(&p) {
                         self.marked.insert(p);
                     }
                     self.act(NextRepo);
                 }
             }
-            UnmarkAll => self.marked.clear(),
+            UnmarkAll => {
+                self.marked.clear();
+                self.marked_files.clear();
+            }
+            Toggle(Switch::Untracked) => self.stash.untracked = !self.stash.untracked,
+            Toggle(Switch::KeepIndex) => self.stash.keep_index = !self.stash.keep_index,
+            Stash(kind) => return self.stash_action(kind),
             OpenMenu(m) => {
                 self.mode = Mode::Menu {
                     menu: m.menu(),
@@ -629,7 +696,6 @@ impl App {
             }
             Push => return self.fix_ops(FixKind::Push),
             Publish => return self.fix_ops(FixKind::Publish),
-            Stash => return self.fix_ops(FixKind::Stash),
             SwitchDefault => return self.fix_ops(FixKind::SwitchDefault),
             FastForward => return self.fix_ops(FixKind::FastForward),
             Commit => {
@@ -870,6 +936,104 @@ impl App {
         self.start_jobs(jobs)
     }
 
+    /// Whether a switch is on this session.
+    pub fn switch_on(&self, s: Switch) -> bool {
+        match s {
+            Switch::Untracked => self.stash.untracked,
+            Switch::KeepIndex => self.stash.keep_index,
+        }
+    }
+
+    fn stash_action(&mut self, kind: StashKind) -> Vec<Effect> {
+        match kind {
+            StashKind::All => {
+                let targets = self.selected().into_iter().map(|i| (i, vec![])).collect();
+                self.stash_jobs(targets, false, None)
+            }
+            StashKind::Staged => {
+                let targets = self.selected().into_iter().map(|i| (i, vec![])).collect();
+                self.stash_jobs(targets, true, None)
+            }
+            StashKind::WithMessage => {
+                let paths = self
+                    .selected()
+                    .into_iter()
+                    .map(|i| self.ws.entries[i].path.clone())
+                    .collect();
+                self.mode = Mode::Input {
+                    prompt: Prompt::StashMessage(paths),
+                    editor: LineEditor::new(""),
+                };
+                vec![]
+            }
+            StashKind::MarkedFiles => {
+                let targets: Vec<(usize, Vec<String>)> = self
+                    .marked_files
+                    .iter()
+                    .filter_map(|(repo, files)| {
+                        Some((self.ws.index_of(repo)?, files.iter().cloned().collect()))
+                    })
+                    .collect();
+                if targets.is_empty() {
+                    self.info("mark files in the details view first (Tab, then space on a file)");
+                    return vec![];
+                }
+                self.stash_jobs(targets, false, None)
+            }
+        }
+    }
+
+    /// Stash each target repo (with paths, if any) using this session's
+    /// switches. A repo git can't stash cleanly refuses the lot.
+    fn stash_jobs(
+        &mut self,
+        targets: Vec<(usize, Vec<String>)>,
+        staged: bool,
+        message: Option<String>,
+    ) -> Vec<Effect> {
+        let Op::Stash {
+            message: default_message,
+            ..
+        } = Op::stash(&self.stash)
+        else {
+            unreachable!()
+        };
+        let mut jobs = vec![];
+        let mut refused = vec![];
+        for (i, paths) in targets {
+            let e = &self.ws.entries[i];
+            let Some(s) = e.status() else { continue };
+            match argus_core::ops::stash_problem(s, self.stash.untracked, staged, &paths) {
+                Some(why) if why == argus_core::ops::NOTHING_TO_STASH => continue,
+                Some(why) => refused.push(format!("{}: {why}", e.display_name())),
+                None => {
+                    let op = Op::Stash {
+                        message: message.clone().unwrap_or_else(|| default_message.clone()),
+                        untracked: self.stash.untracked,
+                        keep_index: self.stash.keep_index,
+                        staged,
+                        paths,
+                    };
+                    jobs.push(Job {
+                        label: format!("{} {}", op.label(), e.display_name()),
+                        family: e.parent.clone().unwrap_or_else(|| e.path.clone()),
+                        path: e.path.clone(),
+                        op,
+                    });
+                }
+            }
+        }
+        if !refused.is_empty() {
+            self.error(format!("not stashing: {}", refused.join("; ")));
+            return vec![];
+        }
+        if jobs.is_empty() {
+            self.info("nothing to stash");
+            return vec![];
+        }
+        self.start_jobs(jobs)
+    }
+
     fn start_jobs(&mut self, mut jobs: Vec<Job>) -> Vec<Effect> {
         jobs.retain(|j| !self.running.contains_key(&j.path));
         if jobs.is_empty() {
@@ -911,6 +1075,15 @@ impl App {
                     })
                     .collect();
                 self.start_jobs(jobs)
+            }
+            Prompt::StashMessage(paths) => {
+                let targets = paths
+                    .iter()
+                    .filter_map(|p| self.ws.index_of(p))
+                    .map(|i| (i, vec![]))
+                    .collect();
+                let message = (!text.trim().is_empty()).then_some(text);
+                self.stash_jobs(targets, false, message)
             }
             Prompt::SnoozeDuration(keys) => match argus_core::state::parse_duration(&text) {
                 Some(secs) => {

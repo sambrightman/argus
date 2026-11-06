@@ -1,7 +1,7 @@
 //! Transient-style menus: a prefix key opens a menu, one more key runs an
 //! action. Items can also be chosen with arrows + Enter.
 
-use crate::app::{Action, Scope};
+use crate::app::{Action, Scope, StashKind, Switch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuId {
@@ -21,6 +21,8 @@ pub struct Item {
     pub key: char,
     pub label: &'static str,
     pub action: Action,
+    /// A switch, shown as `[x]`/`[ ]`; choosing it keeps the menu open.
+    pub switch: Option<Switch>,
 }
 
 pub struct Menu {
@@ -30,7 +32,21 @@ pub struct Menu {
 }
 
 fn item(key: char, label: &'static str, action: Action) -> Item {
-    Item { key, label, action }
+    Item {
+        key,
+        label,
+        action,
+        switch: None,
+    }
+}
+
+fn switch(key: char, label: &'static str, s: Switch) -> Item {
+    Item {
+        key,
+        label,
+        action: Action::Toggle(s),
+        switch: Some(s),
+    }
 }
 
 impl MenuId {
@@ -97,11 +113,26 @@ impl MenuId {
             ),
             MenuId::Stash => (
                 "Stash",
-                vec![item(
-                    'z',
-                    "stash all changes (incl. untracked)",
-                    Action::Stash,
-                )],
+                vec![
+                    switch('u', "include untracked", Switch::Untracked),
+                    switch('k', "keep index", Switch::KeepIndex),
+                    item('z', "stash all changes", Action::Stash(StashKind::All)),
+                    item(
+                        'i',
+                        "stash staged changes only",
+                        Action::Stash(StashKind::Staged),
+                    ),
+                    item(
+                        'm',
+                        "stash with a message…",
+                        Action::Stash(StashKind::WithMessage),
+                    ),
+                    item(
+                        'f',
+                        "stash files marked in details",
+                        Action::Stash(StashKind::MarkedFiles),
+                    ),
+                ],
             ),
             MenuId::Commit => (
                 "Commit",

@@ -12,12 +12,14 @@ use argus_core::paths::contract_tilde;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetailLine {
     pub parts: Vec<(Option<Role>, String)>,
+    /// The changed file this line shows (repo-relative), for marking.
+    pub file: Option<String>,
 }
 
 const MAX_FILES: usize = 25;
 
 fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
-    DetailLine { parts }
+    DetailLine { parts, file: None }
 }
 
 fn plain(s: impl Into<String>) -> (Option<Role>, String) {
@@ -185,11 +187,14 @@ pub fn details(
                 (x, _) if x != ' ' => Role::Staged,
                 _ => Role::Unstaged,
             };
-            v.push(line(vec![
-                plain("    "),
-                styled(role, format!("{}{}", f.index, f.worktree)),
-                plain(format!(" {}", f.path)),
-            ]));
+            v.push(DetailLine {
+                file: Some(f.path.clone()),
+                ..line(vec![
+                    plain("    "),
+                    styled(role, format!("{}{}", f.index, f.worktree)),
+                    plain(format!(" {}", f.path)),
+                ])
+            });
         }
         let more = s.changes.total().saturating_sub(MAX_FILES);
         if more > 0 {
