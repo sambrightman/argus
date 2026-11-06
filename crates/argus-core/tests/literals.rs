@@ -1,12 +1,12 @@
-//! Glyphs come from `badges::Icons`, so every set (and `[ui.icon_overrides]`)
+//! Glyphs come from `icons::Icons`, so every set (and `[ui.icon_overrides]`)
 //! can replace them and `argus demo --glyphs` shows them. This guards
 //! against symbols typed straight into the interface: string and char
 //! literals in every crate's sources, outside tests, may only use ASCII
-//! and `badges::PUNCTUATION`.
+//! and `icons::PUNCTUATION`.
 
 use std::path::{Path, PathBuf};
 
-use argus_core::badges::{ALTERNATIVES, PUNCTUATION};
+use argus_core::icons::{ALTERNATIVES, PUNCTUATION};
 
 /// `src` with `#[cfg(test)]` items (the brace block that follows) removed.
 fn without_tests(src: &str) -> String {
@@ -108,7 +108,7 @@ fn sources() -> Vec<PathBuf> {
 /// `[ui.icon_overrides]` example in the config schema.
 fn extra_allowed(file: &str, c: char) -> bool {
     match file {
-        "badges.rs" => true,
+        "icons.rs" => true,
         "config.rs" => ALTERNATIVES.contains(c),
         _ => false,
     }
@@ -130,8 +130,8 @@ fn symbols_come_from_icons() {
     }
     assert!(
         found.is_empty(),
-        "use an icon (badges::Icons) for these, or add plain punctuation \
-         to badges::PUNCTUATION: {found:#?}"
+        "use an icon (icons::Icons) for these, or add plain punctuation \
+         to icons::PUNCTUATION: {found:#?}"
     );
 }
 

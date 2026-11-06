@@ -5,8 +5,9 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context, Result, bail};
-use argus_core::badges::{self, Badge, Icons, Role};
+use argus_core::badges::{self, Badge, Role};
 use argus_core::fix::{self, FixKind};
+use argus_core::icons::{self, Icons};
 use argus_core::runner::{self, Event};
 use argus_core::sync;
 use argus_core::{Config, State, ViewFilter, Workspace, configfile, paths};
@@ -722,12 +723,12 @@ fn demo_glyphs(ctx: &Ctx) -> Result<()> {
     println!("Each glyph is shown between bars and between letters. One drawn from a");
     println!("fallback font (missing from yours) may run into its neighbours.");
     println!("*: two cells wide where ambiguous-width characters are (CJK mode).\n");
-    let sets: Vec<(&str, Icons)> = badges::SETS
+    let sets: Vec<(&str, Icons)> = icons::SETS
         .iter()
-        .map(|&n| (n, badges::by_name(n)))
+        .map(|&n| (n, icons::by_name(n)))
         .chain([("yours", yours)])
         .collect();
-    let cells: Vec<Vec<String>> = badges::ICON_NAMES
+    let cells: Vec<Vec<String>> = icons::ICON_NAMES
         .iter()
         .map(|n| {
             sets.iter()
@@ -751,7 +752,7 @@ fn demo_glyphs(ctx: &Ctx) -> Result<()> {
         .map(|((n, _), &w)| pad(n, w))
         .collect();
     println!("{}{}", pad("icon", 13), header.trim_end());
-    for (name, row) in badges::ICON_NAMES.iter().zip(&cells) {
+    for (name, row) in icons::ICON_NAMES.iter().zip(&cells) {
         let line: String = row.iter().zip(&widths).map(|(c, &w)| pad(c, w)).collect();
         println!("{}{}", pad(name, 13), line.trim_end());
     }
@@ -761,11 +762,11 @@ fn demo_glyphs(ctx: &Ctx) -> Result<()> {
         println!("{}", line.trim_end());
     };
     println!("\npunctuation (not icons)");
-    for c in badges::PUNCTUATION.chars() {
+    for c in icons::PUNCTUATION.chars() {
         row(c, "used as text");
     }
     println!("\nalternatives ([ui.icon_overrides])");
-    for c in badges::ALTERNATIVES.chars() {
+    for c in icons::ALTERNATIVES.chars() {
         row(c, "");
     }
     Ok(())

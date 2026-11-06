@@ -554,7 +554,7 @@ impl App {
             }
             NextIcons => {
                 let ui = &mut self.ws.config.ui;
-                ui.icons = next(argus_core::badges::SETS, &ui.icons).to_string();
+                ui.icons = next(argus_core::icons::SETS, &ui.icons).to_string();
                 let msg = format!("icons {} (this session; set [ui] icons to keep)", ui.icons);
                 self.rebuild();
                 self.info(msg);

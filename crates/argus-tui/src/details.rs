@@ -2,8 +2,9 @@
 
 use argus_core::Entry;
 use argus_core::attention::Issue;
-use argus_core::badges::{Icons, Role};
+use argus_core::badges::Role;
 use argus_core::fix::{self, FixKind};
+use argus_core::icons::Icons;
 use argus_core::paths::contract_tilde;
 
 /// A detail line: styled parts. `None` uses the plain detail style.

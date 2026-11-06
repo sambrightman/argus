@@ -1,6 +1,6 @@
 //! End-to-end CLI tests: the real binary against sandbox repositories.
 
-use argus_core::badges::{ASCII, NERD, UNICODE};
+use argus_core::icons::{ASCII, NERD, UNICODE};
 use argus_core::testkit::{Sandbox, commit, git, subprocess_env, write};
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -747,7 +747,7 @@ fn demo_glyphs_prints_every_icon_between_markers_without_a_terminal() {
             .to_string()
     };
     // every icon, from every set, between bars and letters
-    for name in argus_core::badges::ICON_NAMES {
+    for name in argus_core::icons::ICON_NAMES {
         let l = line(name);
         for set in [&UNICODE, &NERD, &ASCII] {
             let g = set.get(name).unwrap();
@@ -764,7 +764,7 @@ fn demo_glyphs_prints_every_icon_between_markers_without_a_terminal() {
     assert!(!line("◊").ends_with('*'), "◊ isn't ambiguous width");
     assert!(line("★").ends_with('*'), "★ is ambiguous width");
     // punctuation used as text
-    for c in argus_core::badges::PUNCTUATION.chars() {
+    for c in argus_core::icons::PUNCTUATION.chars() {
         assert!(
             stdout
                 .lines()

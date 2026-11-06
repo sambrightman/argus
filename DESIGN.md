@@ -115,11 +115,11 @@ consume the same events.
   Grouping by owner, with folding.
 * Enter / Tab unfolds detail: commit and tags, files, branches, stashes,
   worktrees, submodules.
-* **Icons:** one struct (`badges::Icons`) holds every symbol the
+* **Icons:** one struct (`icons::Icons`) holds every symbol the
   interface prints: repo badges, plus the spinner, marked rows, job
   results and the all-clear. A badge is an icon with a count and a colour
   role for one repo; the other icons are used directly. Plain
-  punctuation (`badges::PUNCTUATION`: … · — ↑↓) stays as text. A test
+  punctuation (`icons::PUNCTUATION`: … · — ↑↓) stays as text. A test
   scans string literals in all crates (outside tests) and fails on any
   other symbol, so new ones become icons. The `unicode` set uses
   characters present in common monospace fonts (Menlo, SF Mono,

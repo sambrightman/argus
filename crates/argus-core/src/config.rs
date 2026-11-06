@@ -233,8 +233,8 @@ pub struct UiConfig {
 
 impl UiConfig {
     /// The icon set with overrides applied, plus warnings for unknown names.
-    pub fn icons(&self) -> (crate::badges::Icons, Vec<String>) {
-        crate::badges::by_name(&self.icons).with_overrides(&self.icon_overrides)
+    pub fn icons(&self) -> (crate::icons::Icons, Vec<String>) {
+        crate::icons::by_name(&self.icons).with_overrides(&self.icon_overrides)
     }
 }
 

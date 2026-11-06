@@ -28,7 +28,7 @@ fn main() {
     let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
     let view = ui::View {
         theme: &theme,
-        icons: argus_core::badges::UNICODE,
+        icons: argus_core::icons::UNICODE,
         tick: 0,
     };
     t.draw(|f| ui::draw(f, &mut app, &view)).unwrap();

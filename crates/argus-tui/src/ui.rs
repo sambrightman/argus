@@ -1,8 +1,9 @@
 //! Rendering. Reads [`App`], never mutates anything but scroll bookkeeping.
 
 use argus_core::ViewFilter;
-use argus_core::badges::{self, Icons, Role};
+use argus_core::badges::{self, Role};
 use argus_core::discover::RepoKind;
+use argus_core::icons::Icons;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Modifier;
