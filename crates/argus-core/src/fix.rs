@@ -5,6 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::StashConfig;
 use crate::ops::{self, Op, OpOutcome};
 use crate::status::{self, BranchInfo, Head, Integration, RepoStatus, StatusOptions, Tracking};
 
@@ -84,7 +85,8 @@ pub struct Fix {
 ///
 /// Nothing is proposed while a merge/rebase is in progress or conflicts exist:
 /// that needs a human.
-pub fn plan(s: &RepoStatus) -> Vec<Fix> {
+/// `stash` gives the stash fix's options (the `[stash]` defaults).
+pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
     let mut v = vec![];
     if s.bare || s.in_progress.is_some() || s.changes.conflicted > 0 {
         return v;
@@ -191,18 +193,23 @@ pub fn plan(s: &RepoStatus) -> Vec<Fix> {
         }
     }
 
-    if any_dirty {
+    // what a stash would take: untracked files only when asked
+    let stashable = s.changes.staged
+        + s.changes.unstaged
+        + if stash.untracked {
+            s.changes.untracked
+        } else {
+            0
+        };
+    if stashable > 0 {
         v.push(Fix {
             blocked: None,
             kind: FixKind::Stash,
-            op: Op::Stash {
-                message: format!(
-                    "argus {}",
-                    jiff::Timestamp::now().strftime("%Y-%m-%d %H:%M")
-                ),
-            },
-            reason: format!("{} uncommitted path(s)", s.changes.total()),
+            op: Op::stash(stash),
+            reason: format!("{stashable} uncommitted path(s)"),
         });
+    }
+    if any_dirty {
         v.push(Fix {
             blocked: None,
             kind: FixKind::Commit,
@@ -232,8 +239,8 @@ pub struct Applied {
 
 /// Every applicable fix in priority order: kinds in `priority` in the order
 /// given, then the rest in [`FixKind::ALL`] order.
-pub fn ranked(s: &RepoStatus, priority: &[FixKind]) -> Vec<Fix> {
-    let mut v = plan(s);
+pub fn ranked(s: &RepoStatus, priority: &[FixKind], stash: &StashConfig) -> Vec<Fix> {
+    let mut v = plan(s, stash);
     v.sort_by_key(|f| {
         priority
             .iter()
@@ -245,18 +252,18 @@ pub fn ranked(s: &RepoStatus, priority: &[FixKind]) -> Vec<Fix> {
 
 /// The fix an auto-fix action applies: the highest-priority one in `allowed`
 /// that needs no input and isn't blocked.
-pub fn choose(s: &RepoStatus, allowed: &[FixKind]) -> Option<Fix> {
-    ranked(s, allowed)
+pub fn choose(s: &RepoStatus, allowed: &[FixKind], stash: &StashConfig) -> Option<Fix> {
+    ranked(s, allowed, stash)
         .into_iter()
         .find(|f| allowed.contains(&f.kind) && !f.kind.needs_input() && f.blocked.is_none())
 }
 
 /// The fixes successive auto-fix actions would apply, starting with
 /// [`choose`]: predicted with [`simulate`], assuming each one succeeds.
-pub fn chain(s: &RepoStatus, allowed: &[FixKind]) -> Vec<Fix> {
+pub fn chain(s: &RepoStatus, allowed: &[FixKind], stash: &StashConfig) -> Vec<Fix> {
     let mut out: Vec<Fix> = vec![];
     let mut cur = s.clone();
-    while let Some(f) = choose(&cur, allowed) {
+    while let Some(f) = choose(&cur, allowed, stash) {
         // a repeat would mean the simulation made no progress
         if out.iter().any(|g| g.kind == f.kind && g.op == f.op)
             || out.len() > 2 * FixKind::ALL.len()
@@ -280,15 +287,15 @@ pub struct Preview {
     pub alternatives: Vec<Fix>,
 }
 
-pub fn preview(s: &RepoStatus, allowed: &[FixKind]) -> Preview {
-    let chain = chain(s, allowed);
+pub fn preview(s: &RepoStatus, allowed: &[FixKind], stash: &StashConfig) -> Preview {
+    let chain = chain(s, allowed, stash);
     // compare by label: a stash's message carries a timestamp
     let in_chain = |f: &Fix| {
         chain
             .iter()
             .any(|c| c.kind == f.kind && c.op.label() == f.op.label())
     };
-    let alternatives = ranked(s, allowed)
+    let alternatives = ranked(s, allowed, stash)
         .into_iter()
         .filter(|f| !f.kind.needs_input() && !in_chain(f))
         .collect();
@@ -304,8 +311,36 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
     let mut s = s.clone();
     let head = s.head.branch().map(str::to_string);
     match &f.op {
-        Op::Stash { .. } => {
-            s.changes = Default::default();
+        Op::Stash {
+            untracked,
+            keep_index,
+            staged,
+            paths,
+            ..
+        } => {
+            // only the plain stash the fix makes is simulated in detail
+            if *staged || !paths.is_empty() {
+                s.stashes += 1;
+                return s;
+            }
+            let c = &mut s.changes;
+            c.unstaged = 0;
+            if *untracked {
+                c.untracked = 0;
+            }
+            if !*keep_index {
+                c.staged = 0;
+            }
+            c.files.retain_mut(|f| {
+                if f.index == '?' {
+                    return !*untracked;
+                }
+                if *keep_index && f.index != ' ' {
+                    f.worktree = ' ';
+                    return true;
+                }
+                false
+            });
             s.stashes += 1;
         }
         Op::CommitAll { .. } => {
@@ -404,9 +439,13 @@ fn head_info<'a>(s: &'a mut RepoStatus, head: Option<&str>) -> Option<&'a mut Br
 ///
 /// Deliberately one fix per call: each auto-fix is a separate user action
 /// (e.g. push, then a later action switches to the default branch).
-pub fn apply_fix(path: &Path, allowed: &[FixKind]) -> Result<Option<Applied>, status::StatusError> {
+pub fn apply_fix(
+    path: &Path,
+    allowed: &[FixKind],
+    stash: &StashConfig,
+) -> Result<Option<Applied>, status::StatusError> {
     let s = status::status(path, StatusOptions { submodules: false })?;
-    let Some(fix) = choose(&s, allowed) else {
+    let Some(fix) = choose(&s, allowed, stash) else {
         return Ok(None);
     };
     let outcome = ops::run(path, &fix.op);

@@ -25,8 +25,14 @@ pub enum Op {
     Switch {
         branch: String,
     },
+    /// `git stash push`. `staged` stashes only staged changes (untracked
+    /// files never, as git refuses the pair); `paths` limits it to those.
     Stash {
         message: String,
+        untracked: bool,
+        keep_index: bool,
+        staged: bool,
+        paths: Vec<String>,
     },
     /// Stage everything (including untracked) and commit.
     CommitAll {
@@ -44,6 +50,21 @@ pub enum Op {
 }
 
 impl Op {
+    /// A stash of everything (`staged` off, no paths) with these defaults
+    /// and an `argus <date> <time>` message.
+    pub fn stash(defaults: &crate::config::StashConfig) -> Op {
+        Op::Stash {
+            message: format!(
+                "argus {}",
+                jiff::Timestamp::now().strftime("%Y-%m-%d %H:%M")
+            ),
+            untracked: defaults.untracked,
+            keep_index: defaults.keep_index,
+            staged: false,
+            paths: vec![],
+        }
+    }
+
     /// Argument vector for `git`.
     pub fn args(&self) -> Vec<String> {
         let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -55,8 +76,29 @@ impl Op {
                 v(&["push", "--set-upstream", remote, branch])
             }
             Op::Switch { branch } => v(&["switch", branch]),
-            Op::Stash { message } => {
-                v(&["stash", "push", "--include-untracked", "--message", message])
+            Op::Stash {
+                message,
+                untracked,
+                keep_index,
+                staged,
+                paths,
+            } => {
+                let mut a = v(&["stash", "push"]);
+                if *untracked && !*staged {
+                    a.push("--include-untracked".into());
+                }
+                if *keep_index {
+                    a.push("--keep-index".into());
+                }
+                if *staged {
+                    a.push("--staged".into());
+                }
+                a.extend(v(&["--message", message]));
+                if !paths.is_empty() {
+                    a.push("--".into());
+                    a.extend(paths.iter().cloned());
+                }
+                a
             }
             Op::CommitAll { message } => v(&["commit", "--message", message]),
             Op::FastForward { branch, upstream } => {
@@ -90,7 +132,32 @@ impl Op {
             Op::Push => "push".into(),
             Op::PushSetUpstream { remote, branch } => format!("push -u {remote} {branch}"),
             Op::Switch { branch } => format!("switch {branch}"),
-            Op::Stash { .. } => "stash".into(),
+            Op::Stash {
+                untracked,
+                keep_index,
+                staged,
+                paths,
+                ..
+            } => {
+                let mut l = "stash".to_string();
+                if *staged {
+                    l.push_str(" staged");
+                }
+                if !paths.is_empty() {
+                    l.push_str(&format!(" {} path(s)", paths.len()));
+                }
+                let mut how = vec![];
+                if *keep_index {
+                    how.push("keeping index");
+                }
+                if !*untracked && !*staged {
+                    how.push("no untracked");
+                }
+                if !how.is_empty() {
+                    l.push_str(&format!(" ({})", how.join(", ")));
+                }
+                l
+            }
             Op::CommitAll { .. } => "commit".into(),
             Op::FastForward { branch, .. } => format!("fast-forward {branch}"),
             Op::Clone { .. } => "clone".into(),
@@ -120,6 +187,57 @@ mod duration_ms {
 }
 
 /// Run `op` in `dir` (for clone: the parent of `dest` is created and used).
+/// [`stash_problem`]'s answer for a repo with nothing to stash: a reason to
+/// skip it, not an error.
+pub const NOTHING_TO_STASH: &str = "nothing to stash";
+
+/// Why a stash with these options can't work in this state, if it can't:
+/// nothing to stash, or a staged-only stash (`--staged`) of a file that
+/// also has unstaged changes, which git saves but then fails to remove,
+/// leaving the changes and a stash. `paths` limits what's considered, and
+/// untracked files count only with `untracked`.
+pub fn stash_problem(
+    s: &crate::status::RepoStatus,
+    untracked: bool,
+    staged: bool,
+    paths: &[String],
+) -> Option<String> {
+    let files: Vec<&crate::status::FileChange> = s
+        .changes
+        .files
+        .iter()
+        .filter(|f| untracked || f.index != '?')
+        .filter(|f| {
+            paths.is_empty()
+                || paths.iter().any(|p| {
+                    f.path == *p || f.path.starts_with(&format!("{}/", p.trim_end_matches('/')))
+                })
+        })
+        .collect();
+    if files.is_empty() {
+        return Some(NOTHING_TO_STASH.into());
+    }
+    if !staged {
+        return None;
+    }
+    let is_staged = |f: &&&crate::status::FileChange| f.index != ' ' && f.index != '?';
+    if !files.iter().any(|f| is_staged(&f)) {
+        return Some("nothing staged to stash".into());
+    }
+    let mixed: Vec<&str> = files
+        .iter()
+        .filter(|f| is_staged(f) && f.worktree != ' ')
+        .map(|f| f.path.as_str())
+        .collect();
+    (!mixed.is_empty()).then(|| {
+        format!(
+            "git can't stash only staged changes of files that also have unstaged ones ({}): \
+             stash everything, or keep the index instead",
+            mixed.join(", ")
+        )
+    })
+}
+
 pub fn run(dir: &Path, op: &Op) -> OpOutcome {
     let started = Instant::now();
     let cwd = match op {
@@ -247,6 +365,10 @@ mod tests {
         // stash/commit messages are passed as option *values*
         let a = Op::Stash {
             message: "-rf".into(),
+            untracked: true,
+            keep_index: false,
+            staged: false,
+            paths: vec![],
         }
         .args();
         assert_eq!(

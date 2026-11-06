@@ -181,12 +181,14 @@ impl Runtime {
             }
             Effect::Fix { paths, kinds } => {
                 let n = app.ws.config.network_jobs();
+                let stash = app.ws.config.stash;
                 std::thread::spawn(move || {
                     let pool = rayon::ThreadPoolBuilder::new().num_threads(n).build();
                     let work = || {
                         use rayon::prelude::*;
                         paths.into_par_iter().for_each(|p| {
-                            let applied = fix::apply_fix(&p, &kinds).map_err(|e| e.to_string());
+                            let applied =
+                                fix::apply_fix(&p, &kinds, &stash).map_err(|e| e.to_string());
                             let _ = tx.send(Msg::FixDone { path: p, applied });
                         });
                     };

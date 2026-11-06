@@ -1059,3 +1059,45 @@ fn old_marks_in_state_are_shown_as_config_and_kept() {
         "{text}"
     );
 }
+
+/// `three` plus, in `dirty`, a staged file and an untracked one.
+fn three_messy(sb: &Sandbox) {
+    three(sb);
+    let d = sb.path("dev/dirty");
+    write(&d, "staged", "s\n");
+    git(&d, &["add", "staged"]);
+    write(&d, "untracked", "u\n");
+}
+
+fn short_status(r: &std::path::Path) -> Vec<String> {
+    let mut v: Vec<String> = git(r, &["status", "--short"])
+        .lines()
+        .map(String::from)
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn the_stash_fix_follows_the_stash_config() {
+    let sb = Sandbox::new();
+    three_messy(&sb);
+    let d = sb.path("dev/dirty");
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "[stash]\nuntracked = false\nkeep_index = true\n").unwrap();
+    argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["fix", "-k", "stash", "acme/dirty"])
+        .assert()
+        .success();
+    assert_eq!(short_status(&d), ["?? untracked", "A  staged"]);
+    // inverse: the defaults take everything
+    git(&d, &["reset", "-q", "--hard"]);
+    git(&d, &["stash", "pop", "-q", "--index"]);
+    argus(&sb)
+        .args(["fix", "-k", "stash", "acme/dirty"])
+        .assert()
+        .success();
+    assert!(short_status(&d).is_empty(), "{:?}", short_status(&d));
+}

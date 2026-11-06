@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use argus_core::config::StashConfig;
 use argus_core::fix::{Fix, FixKind, apply_fix, chain, choose, plan};
 use argus_core::ops::{self, Op};
 use argus_core::status::{InProgress, Integration, RepoStatus, StatusOptions, status};
@@ -13,7 +14,9 @@ fn st(r: &Path) -> RepoStatus {
 }
 
 fn pull_fix(r: &Path) -> Option<Fix> {
-    plan(&st(r)).into_iter().find(|f| f.kind == FixKind::Pull)
+    plan(&st(r), &StashConfig::default())
+        .into_iter()
+        .find(|f| f.kind == FixKind::Pull)
 }
 
 fn head(r: &Path) -> String {
@@ -55,10 +58,14 @@ fn predicts_conflicting_paths_and_never_auto_pulls_them() {
     );
     let f = pull_fix(&r).unwrap();
     assert_eq!(f.blocked.as_deref(), Some("would conflict in README"));
-    assert!(choose(&s, &[FixKind::Pull]).is_none());
-    assert!(chain(&s, &[FixKind::Pull]).is_empty());
+    assert!(choose(&s, &[FixKind::Pull], &StashConfig::default()).is_none());
+    assert!(chain(&s, &[FixKind::Pull], &StashConfig::default()).is_empty());
     let before = head(&r);
-    assert!(apply_fix(&r, &[FixKind::Pull]).unwrap().is_none());
+    assert!(
+        apply_fix(&r, &[FixKind::Pull], &StashConfig::default())
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(head(&r), before);
 }
 
@@ -103,14 +110,21 @@ fn dirty_tree_blocks_the_pull_fix() {
         pull_fix(&r).unwrap().blocked.as_deref(),
         Some("uncommitted changes")
     );
-    assert!(apply_fix(&r, &[FixKind::Pull]).unwrap().is_none());
+    assert!(
+        apply_fix(&r, &[FixKind::Pull], &StashConfig::default())
+            .unwrap()
+            .is_none()
+    );
 }
 
 fn assert_chain_matches_reality(r: &Path, allowed: &[FixKind], expect: &[FixKind]) {
-    let predicted: Vec<_> = chain(&st(r), allowed).into_iter().map(|f| f.kind).collect();
+    let predicted: Vec<_> = chain(&st(r), allowed, &StashConfig::default())
+        .into_iter()
+        .map(|f| f.kind)
+        .collect();
     assert_eq!(predicted, expect, "predicted chain");
     let mut actual = vec![];
-    while let Some(a) = apply_fix(r, allowed).unwrap() {
+    while let Some(a) = apply_fix(r, allowed, &StashConfig::default()).unwrap() {
         assert!(a.outcome.success, "{:?}: {}", a.fix.kind, a.outcome.output);
         actual.push(a.fix.kind);
         assert!(actual.len() <= 10, "runaway: {actual:?}");

@@ -127,10 +127,16 @@ consume the same events.
   * `switch-default`: on a non-default branch, worktree clean, branch fully
     pushed (or merged into default) → `git switch <default>`.
   * `push`: ahead of upstream, nothing behind → `git push`.
-  * `stash`: dirty → `git stash push -u -m "argus <timestamp>"`: staged,
-    unstaged and untracked changes (not ignored files). `git stash pop
-    --index` restores each as it was. git has no config for this, so it's
-    fixed for now.
+  * `stash`: something to stash → `git stash push -m "argus <timestamp>"`
+    with the `[stash]` defaults (git has no config for these): untracked
+    files (on by default, `-u`) and keep index (off). `git stash pop
+    --index` restores each change as it was. Previews simulate the options,
+    so the predicted chain stays right. `ops::stash_problem` refuses what
+    git can't do cleanly: nothing to stash, or a staged-only stash
+    (`--staged`) of a file that also has unstaged changes, which git saves
+    but then fails to remove. No `argus stash` command: for one repo it
+    would only pass git's own options through, and `argus fix -k stash`
+    stashes in bulk.
   * `commit`: needs a message (TUI prompt / `--message`) → `git add -A && git commit`.
   * `pull` / `fetch`: plain `git pull` / `git fetch`, so your config decides.
 

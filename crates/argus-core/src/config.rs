@@ -69,6 +69,8 @@ pub struct Config {
     pub tracks: Vec<Track>,
     /// Auto-fix behaviour.
     pub fix: FixConfig,
+    /// Defaults for stashing: the `z` menu, `argus stash`, the stash fix.
+    pub stash: StashConfig,
     /// External programs.
     pub tools: Tools,
     /// Appearance and startup view of the TUI.
@@ -109,6 +111,7 @@ impl Default for Config {
             exclude: vec![],
             tracks: vec![],
             fix: FixConfig::default(),
+            stash: StashConfig::default(),
             tools: Tools::default(),
             ui: UiConfig::default(),
         }
@@ -184,6 +187,24 @@ fn example_icon_overrides() -> BTreeMap<&'static str, &'static str> {
 
 fn example_colors() -> BTreeMap<&'static str, &'static str> {
     BTreeMap::from([("favourite", "yellow"), ("branch", "bold magenta")])
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct StashConfig {
+    /// Include untracked files.
+    pub untracked: bool,
+    /// Leave staged changes in the index after stashing them (`--keep-index`).
+    pub keep_index: bool,
+}
+
+impl Default for StashConfig {
+    fn default() -> Self {
+        Self {
+            untracked: true,
+            keep_index: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]

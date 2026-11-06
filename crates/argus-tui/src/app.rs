@@ -256,7 +256,7 @@ impl App {
             rows.push(Row::Repo(i));
             if self.expanded.contains(&e.path) {
                 rows.extend(
-                    details(e, &self.ws.config.fix.auto, &icons)
+                    details(e, &self.ws.config.fix.auto, &self.ws.config.stash, &icons)
                         .into_iter()
                         .map(|line| Row::Detail { repo: i, line }),
                 );
@@ -659,9 +659,9 @@ impl App {
                 let paths: Vec<PathBuf> = idx
                     .into_iter()
                     .filter(|&i| {
-                        self.ws.entries[i]
-                            .status()
-                            .is_some_and(|s| fix::choose(s, &kinds).is_some())
+                        self.ws.entries[i].status().is_some_and(|s| {
+                            fix::choose(s, &kinds, &self.ws.config.stash).is_some()
+                        })
                     })
                     .map(|i| self.ws.entries[i].path.clone())
                     .filter(|p| !self.running.contains_key(p))
@@ -828,10 +828,11 @@ impl App {
 
     /// Run the op of a specific fix kind on every selected repo where it applies.
     fn fix_ops(&mut self, kind: FixKind) -> Vec<Effect> {
+        let stash = self.ws.config.stash;
         self.jobs_for(
             Scope::Selected,
             |e| {
-                fix::plan(e.status()?)
+                fix::plan(e.status()?, &stash)
                     .into_iter()
                     .find(|f| f.kind == kind)
                     .map(|f| f.op)

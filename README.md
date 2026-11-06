@@ -238,7 +238,9 @@ conflicts is aborted, leaving the repo as it was, autostash included.
 `pull` isn't in the default `[fix] auto`.
 
 `stash` saves staged, unstaged and untracked changes (not ignored files);
-`git stash pop --index` puts them back as they were.
+`git stash pop --index` puts them back as they were. `[stash] untracked =
+false` leaves untracked files alone, and `keep_index = true` leaves staged
+changes in the index after stashing them.
 
 ## Development
 

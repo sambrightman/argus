@@ -1,16 +1,20 @@
 //! Fix planning and application. Each fix has tests for when it must *not*
 //! be offered, since an unsafe fix is far worse than a missing one.
 
+use argus_core::config::StashConfig;
 use argus_core::fix::{FixKind, apply_fix, chain, choose, plan, ranked};
 use argus_core::ops::Op;
 use argus_core::status::{Head, StatusOptions, status};
 use argus_core::testkit::{Sandbox, commit, git, write};
 
 fn kinds(p: &std::path::Path) -> Vec<FixKind> {
-    plan(&status(p, StatusOptions::default()).unwrap())
-        .into_iter()
-        .map(|f| f.kind)
-        .collect()
+    plan(
+        &status(p, StatusOptions::default()).unwrap(),
+        &StashConfig::default(),
+    )
+    .into_iter()
+    .map(|f| f.kind)
+    .collect()
 }
 
 fn head(p: &std::path::Path) -> Head {
@@ -85,7 +89,10 @@ fn unmerged_branch_without_upstream_gets_publish_not_switch() {
     let r = sb.clone_as_github("acme", "w", "w");
     git(&r, &["switch", "-q", "-c", "local-work"]);
     commit(&r, "work");
-    let p = plan(&status(&r, StatusOptions::default()).unwrap());
+    let p = plan(
+        &status(&r, StatusOptions::default()).unwrap(),
+        &StashConfig::default(),
+    );
     assert_eq!(p.len(), 1);
     assert_eq!(
         p[0].op,
@@ -135,7 +142,9 @@ fn fast_forward_offered_for_stale_non_head_branch() {
     let k = kinds(&r);
     assert!(k.contains(&FixKind::FastForward), "{k:?}");
     // inverse: once fast-forwarded it's no longer offered
-    apply_fix(&r, &[FixKind::FastForward]).unwrap().unwrap();
+    apply_fix(&r, &[FixKind::FastForward], &StashConfig::default())
+        .unwrap()
+        .unwrap();
     assert!(!kinds(&r).contains(&FixKind::FastForward));
     assert!(
         kinds(&r).contains(&FixKind::SwitchDefault),
@@ -147,18 +156,28 @@ fn fast_forward_offered_for_stale_non_head_branch() {
 fn apply_switch_default() {
     let sb = Sandbox::new();
     let r = pushed_feature(&sb);
-    let a = apply_fix(&r, &[FixKind::SwitchDefault]).unwrap().unwrap();
+    let a = apply_fix(&r, &[FixKind::SwitchDefault], &StashConfig::default())
+        .unwrap()
+        .unwrap();
     assert!(a.outcome.success, "{}", a.outcome.output);
     assert_eq!(head(&r), Head::Branch("main".into()));
     // idempotent
-    assert!(apply_fix(&r, &[FixKind::SwitchDefault]).unwrap().is_none());
+    assert!(
+        apply_fix(&r, &[FixKind::SwitchDefault], &StashConfig::default())
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
 fn apply_respects_allowed_kinds() {
     let sb = Sandbox::new();
     let r = pushed_feature(&sb);
-    assert!(apply_fix(&r, &[FixKind::Push]).unwrap().is_none());
+    assert!(
+        apply_fix(&r, &[FixKind::Push], &StashConfig::default())
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(head(&r), Head::Branch("feat".into()));
 }
 
@@ -170,7 +189,11 @@ fn one_fix_per_action_stash_then_switch() {
     write(&r, "README", "dirty");
     let allowed = [FixKind::Stash, FixKind::SwitchDefault];
     assert_eq!(
-        apply_fix(&r, &allowed).unwrap().unwrap().fix.kind,
+        apply_fix(&r, &allowed, &StashConfig::default())
+            .unwrap()
+            .unwrap()
+            .fix
+            .kind,
         FixKind::Stash
     );
     let s = status(&r, StatusOptions::default()).unwrap();
@@ -181,11 +204,19 @@ fn one_fix_per_action_stash_then_switch() {
     );
     assert_eq!(s.stashes, 1);
     assert_eq!(
-        apply_fix(&r, &allowed).unwrap().unwrap().fix.kind,
+        apply_fix(&r, &allowed, &StashConfig::default())
+            .unwrap()
+            .unwrap()
+            .fix
+            .kind,
         FixKind::SwitchDefault
     );
     assert_eq!(head(&r), Head::Branch("main".into()));
-    assert!(apply_fix(&r, &allowed).unwrap().is_none());
+    assert!(
+        apply_fix(&r, &allowed, &StashConfig::default())
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -193,7 +224,11 @@ fn commit_is_never_auto_applied() {
     let sb = Sandbox::new();
     let r = sb.init("r");
     write(&r, "README", "dirty");
-    assert!(apply_fix(&r, &[FixKind::Commit]).unwrap().is_none());
+    assert!(
+        apply_fix(&r, &[FixKind::Commit], &StashConfig::default())
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -244,9 +279,13 @@ fn failed_fix_stops_the_chain() {
             "/nonexistent/repo.git",
         ],
     );
-    let a = apply_fix(&r, &[FixKind::Push, FixKind::SwitchDefault])
-        .unwrap()
-        .unwrap();
+    let a = apply_fix(
+        &r,
+        &[FixKind::Push, FixKind::SwitchDefault],
+        &StashConfig::default(),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(a.fix.kind, FixKind::Push);
     assert!(!a.outcome.success);
     assert_eq!(head(&r), Head::Branch("feat".into()));
@@ -258,10 +297,14 @@ fn push_then_switch_takes_two_actions() {
     let r = pushed_feature(&sb);
     commit(&r, "unpushed");
     let allowed = [FixKind::Push, FixKind::SwitchDefault];
-    let a = apply_fix(&r, &allowed).unwrap().unwrap();
+    let a = apply_fix(&r, &allowed, &StashConfig::default())
+        .unwrap()
+        .unwrap();
     assert_eq!((a.fix.kind, a.outcome.success), (FixKind::Push, true));
     assert_eq!(head(&r), Head::Branch("feat".into()), "push alone");
-    let a = apply_fix(&r, &allowed).unwrap().unwrap();
+    let a = apply_fix(&r, &allowed, &StashConfig::default())
+        .unwrap()
+        .unwrap();
     assert_eq!(
         (a.fix.kind, a.outcome.success),
         (FixKind::SwitchDefault, true)
@@ -312,7 +355,9 @@ fn default_auto_fix_pushes_but_never_force() {
     let sb = Sandbox::new();
     let r = pushed_feature(&sb);
     commit(&r, "unpushed");
-    let a = apply_fix(&r, &auto).unwrap().unwrap();
+    let a = apply_fix(&r, &auto, &StashConfig::default())
+        .unwrap()
+        .unwrap();
     assert_eq!((a.fix.kind, a.outcome.success), (FixKind::Push, true));
     assert_eq!(head(&r), Head::Branch("feat".into()));
     // inverse: diverged from upstream -> no push, and so no switch either
@@ -334,7 +379,11 @@ fn default_auto_fix_pushes_but_never_force() {
     commit(&tmp, "remote");
     git(&tmp, &["push", "-q"]);
     git(&r, &["fetch", "-q"]);
-    assert!(apply_fix(&r, &auto).unwrap().is_none());
+    assert!(
+        apply_fix(&r, &auto, &StashConfig::default())
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(head(&r), Head::Branch("feat".into()));
 }
 
@@ -352,10 +401,14 @@ fn switch_or_stash(sb: &Sandbox) -> std::path::PathBuf {
 }
 
 fn ranked_kinds(p: &std::path::Path, priority: &[FixKind]) -> Vec<FixKind> {
-    ranked(&status(p, StatusOptions::default()).unwrap(), priority)
-        .into_iter()
-        .map(|f| f.kind)
-        .collect()
+    ranked(
+        &status(p, StatusOptions::default()).unwrap(),
+        priority,
+        &StashConfig::default(),
+    )
+    .into_iter()
+    .map(|f| f.kind)
+    .collect()
 }
 
 #[test]
@@ -365,13 +418,24 @@ fn the_order_given_is_the_priority() {
     let s = status(&r, StatusOptions::default()).unwrap();
     let stash_first = [FixKind::Stash, FixKind::SwitchDefault];
     let switch_first = [FixKind::SwitchDefault, FixKind::Stash];
-    assert_eq!(choose(&s, &stash_first).unwrap().kind, FixKind::Stash);
     assert_eq!(
-        choose(&s, &switch_first).unwrap().kind,
+        choose(&s, &stash_first, &StashConfig::default())
+            .unwrap()
+            .kind,
+        FixKind::Stash
+    );
+    assert_eq!(
+        choose(&s, &switch_first, &StashConfig::default())
+            .unwrap()
+            .kind,
         FixKind::SwitchDefault
     );
     assert_eq!(
-        apply_fix(&r, &stash_first).unwrap().unwrap().fix.kind,
+        apply_fix(&r, &stash_first, &StashConfig::default())
+            .unwrap()
+            .unwrap()
+            .fix
+            .kind,
         FixKind::Stash
     );
     assert_eq!(
@@ -396,8 +460,11 @@ fn unlisted_kinds_rank_after_listed_ones_in_default_order() {
         [FixKind::Stash, FixKind::Commit, FixKind::SwitchDefault]
     );
     let s = status(&r, StatusOptions::default()).unwrap();
-    assert!(choose(&s, &[]).is_none(), "nothing allowed, nothing chosen");
-    assert!(choose(&s, &[FixKind::Commit]).is_none());
+    assert!(
+        choose(&s, &[], &StashConfig::default()).is_none(),
+        "nothing allowed, nothing chosen"
+    );
+    assert!(choose(&s, &[FixKind::Commit], &StashConfig::default()).is_none());
 }
 
 #[test]
@@ -414,7 +481,9 @@ fn stash_keeps_index_work_tree_and_untracked_apart() {
     write(&r, "unstaged.txt", "unstaged\n");
     write(&r, "untracked.txt", "new\n");
     write(&r, "ignored.log", "noise\n");
-    let a = apply_fix(&r, &[FixKind::Stash]).unwrap().unwrap();
+    let a = apply_fix(&r, &[FixKind::Stash], &StashConfig::default())
+        .unwrap()
+        .unwrap();
     assert!(a.outcome.success, "{}", a.outcome.output);
     assert_eq!(
         git(&r, &["status", "--porcelain"]),
@@ -452,10 +521,13 @@ fn default_order_cleans_up_before_pushing() {
 /// The predicted chain must match what repeated auto-fix actions really do.
 fn assert_chain_matches_reality(r: &std::path::Path, allowed: &[FixKind], expect: &[FixKind]) {
     let s = status(r, StatusOptions::default()).unwrap();
-    let predicted: Vec<_> = chain(&s, allowed).into_iter().map(|f| f.kind).collect();
+    let predicted: Vec<_> = chain(&s, allowed, &StashConfig::default())
+        .into_iter()
+        .map(|f| f.kind)
+        .collect();
     assert_eq!(predicted, expect, "predicted chain");
     let mut actual = vec![];
-    while let Some(a) = apply_fix(r, allowed).unwrap() {
+    while let Some(a) = apply_fix(r, allowed, &StashConfig::default()).unwrap() {
         assert!(a.outcome.success, "{:?}: {}", a.fix.kind, a.outcome.output);
         actual.push(a.fix.kind);
         assert!(actual.len() <= 10, "runaway: {actual:?}");

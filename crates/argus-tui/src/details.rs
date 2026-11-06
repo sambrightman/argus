@@ -3,6 +3,7 @@
 use argus_core::Entry;
 use argus_core::attention::Issue;
 use argus_core::badges::Role;
+use argus_core::config::StashConfig;
 use argus_core::fix::{self, FixKind};
 use argus_core::icons::Icons;
 use argus_core::paths::contract_tilde;
@@ -39,7 +40,12 @@ fn ago(t: jiff::Timestamp) -> String {
 
 /// Detail lines for `e`, with `icons` for ahead/behind. Fixes: the auto-fix (by `priority`, i.e. `[fix]
 /// auto`), what later auto-fixes would apply, then the other fixes.
-pub fn details(e: &Entry, priority: &[FixKind], icons: &Icons) -> Vec<DetailLine> {
+pub fn details(
+    e: &Entry,
+    priority: &[FixKind],
+    stash: &StashConfig,
+    icons: &Icons,
+) -> Vec<DetailLine> {
     let mut v = vec![line(vec![
         styled(Role::Dim, "path      "),
         plain(contract_tilde(&e.path)),
@@ -112,7 +118,7 @@ pub fn details(e: &Entry, priority: &[FixKind], icons: &Icons) -> Vec<DetailLine
             styled(role, text),
         ]));
     }
-    let p = fix::preview(s, priority);
+    let p = fix::preview(s, priority, stash);
     let labelled = p
         .chain
         .iter()

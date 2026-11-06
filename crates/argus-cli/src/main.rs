@@ -1001,6 +1001,7 @@ fn fix_cmd(
 ) -> Result<()> {
     let p = Paint::detect();
     let ic = icons(ws);
+    let stash = ws.config.stash;
     let sel = ws.select(patterns, ViewFilter::default());
     let mut any = false;
     let mut records = vec![];
@@ -1023,7 +1024,7 @@ fn fix_cmd(
             let fix::Preview {
                 chain,
                 alternatives,
-            } = fix::preview(s, kinds);
+            } = fix::preview(s, kinds, &stash);
             if chain.is_empty() && alternatives.is_empty() {
                 continue;
             }
@@ -1061,7 +1062,7 @@ fn fix_cmd(
             }
             continue;
         }
-        if let Some(a) = fix::apply_fix(&path, kinds)? {
+        if let Some(a) = fix::apply_fix(&path, kinds, &stash)? {
             any = true;
             if json {
                 records.push(serde_json::json!({
