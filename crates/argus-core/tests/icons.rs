@@ -11,6 +11,7 @@ fn icons(set: &Icons) -> Vec<(&'static str, &str)> {
         ("snoozed", &*set.snoozed),
         ("branch", &*set.branch),
         ("detached", &*set.detached),
+        ("detached_commits", &*set.detached_commits),
         ("ahead", &*set.ahead),
         ("behind", &*set.behind),
         ("staged", &*set.staged),
@@ -36,7 +37,7 @@ fn icons(set: &Icons) -> Vec<(&'static str, &str)> {
 
 /// Symbols in all of Menlo, SF Mono, Inconsolata, DejaVu Sans Mono, Fira
 /// Code, Hack and Source Code Pro (checked with fontTools).
-const IN_ALL_FONTS: &str = "↑↓●×±≠…·—├└│»§•∞◊○▌";
+const IN_ALL_FONTS: &str = "↑↓●×±≠…·—├└│»§•∞◊○▌†";
 
 /// Known gaps, each to be judged with `argus demo --glyphs`.
 const GAPS: &[(char, &str)] = &[

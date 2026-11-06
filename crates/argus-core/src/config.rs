@@ -221,7 +221,7 @@ pub struct UiConfig {
     /// Icon set: `unicode` (default), `nerd` (Nerd Font glyphs) or `ascii`.
     pub icons: String,
     /// Per-icon overrides on top of the set, by name: favourite, new,
-    /// excluded, snoozed, branch, detached, ahead, behind, staged, unstaged,
+    /// excluded, snoozed, branch, detached, detached_commits, ahead, behind, staged, unstaged,
     /// untracked, conflict, stash, in_progress, gone, no_upstream, branches,
     /// error, sync, worktree, submodule; and in the interface: spinner (one
     /// frame per character), marked, ok, failed, celebrate.

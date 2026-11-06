@@ -142,7 +142,7 @@ pub fn state(e: &Entry, i: &Icons) -> Vec<Badge> {
     for issue in &e.issues {
         match issue {
             Issue::UnpushedBranches(n) => push(Role::Warning, format!("{}{n}", i.branches)),
-            Issue::DetachedCommits(n) => push(Role::Conflict, format!("{}{n}", i.detached)),
+            Issue::DetachedCommits(n) => push(Role::Conflict, format!("{}{n}", i.detached_commits)),
             _ => {}
         }
     }

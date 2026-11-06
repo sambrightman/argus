@@ -29,3 +29,26 @@ fn detached_head_shows_its_tag_or_commit() {
     let id = git(&r, &["rev-parse", "--short", "HEAD"]);
     assert_eq!(entry_badge(&r), format!("@{}", id.trim()));
 }
+
+#[test]
+fn commits_only_on_a_detached_head_have_their_own_icon() {
+    let sb = Sandbox::new();
+    let r = sb.init("dev/r");
+    git(&r, &["switch", "-q", "--detach"]);
+    commit(&r, "experiment");
+    let cfg = format!("roots = ['{}']", sb.path("dev").display());
+    let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    ws.scan();
+    let texts: Vec<String> = badges::state(&ws.entries[0], &UNICODE)
+        .into_iter()
+        .map(|b| b.text)
+        .collect();
+    let want = format!("{}1", UNICODE.detached_commits);
+    assert!(texts.contains(&want), "{texts:?}");
+    // inverse: not the detached icon, which already starts the branch badge
+    assert!(
+        !texts.contains(&format!("{}1", UNICODE.detached)),
+        "{texts:?}"
+    );
+    assert_ne!(UNICODE.detached_commits, UNICODE.detached);
+}

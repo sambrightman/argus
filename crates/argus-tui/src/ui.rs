@@ -444,6 +444,11 @@ pub fn legend(i: &Icons) -> Vec<(&str, Role, &'static str)> {
             "default branch (others in the branch colour)",
         ),
         (&i.detached, Role::Detached, "detached HEAD (tag or commit)"),
+        (
+            &i.detached_commits,
+            Role::Conflict,
+            "commits only on the detached HEAD",
+        ),
         (&i.ahead, Role::Ahead, "commits to push"),
         (
             &i.behind,

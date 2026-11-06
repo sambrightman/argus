@@ -217,9 +217,35 @@ impl Default for StatusOptions {
     }
 }
 
+/// Errors leave out `path`: front-ends show it next to the error already.
 pub fn status(path: &Path, opts: StatusOptions) -> Result<RepoStatus, StatusError> {
-    let repo = crate::isolation::open(path).map_err(err)?;
-    status_of(&repo, opts)
+    crate::isolation::open(path)
+        .map_err(err)
+        .and_then(|repo| status_of(&repo, opts))
+        .map_err(|e| StatusError(without_path(&e.0, path)))
+}
+
+/// `msg` without mentions of `path` (quoted or not, with a following
+/// `: `), unless nothing would be left.
+fn without_path(msg: &str, path: &Path) -> String {
+    let p = path.display().to_string();
+    let mut out = msg.to_string();
+    for form in [
+        format!("\"{p}\": "),
+        format!("\"{p}\" "),
+        format!("'{p}': "),
+        format!("'{p}' "),
+        format!("{p}: "),
+        format!("{p} "),
+    ] {
+        out = out.replace(&form, "");
+    }
+    let out = out.trim();
+    if out.is_empty() {
+        msg.to_string()
+    } else {
+        out.to_string()
+    }
 }
 
 pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStatus, StatusError> {
@@ -814,4 +840,29 @@ fn mtime(p: &Path) -> Option<Timestamp> {
     let t = std::fs::metadata(p).ok()?.modified().ok()?;
     let d = t.duration_since(SystemTime::UNIX_EPOCH).ok()?;
     Timestamp::from_second(d.as_secs() as i64).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn errors_drop_the_repo_path_only() {
+        let p = Path::new("/r/app");
+        for (msg, want) in [
+            (
+                "\"/r/app\" does not appear to be a git repository",
+                "does not appear to be a git repository",
+            ),
+            ("/r/app: permission denied", "permission denied"),
+            ("bad ref in '/r/app' HEAD", "bad ref in HEAD"),
+            // inverse: other paths, including longer ones, stay
+            ("/r/app2: missing", "/r/app2: missing"),
+            ("/r/other: missing", "/r/other: missing"),
+            // nothing left: keep the original
+            ("/r/app", "/r/app"),
+        ] {
+            assert_eq!(without_path(msg, p), want, "{msg}");
+        }
+    }
 }

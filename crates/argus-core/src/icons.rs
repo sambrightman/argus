@@ -17,6 +17,8 @@ pub struct Icons {
     pub snoozed: Cow<'static, str>,
     pub branch: Cow<'static, str>,
     pub detached: Cow<'static, str>,
+    /// Commits only on a detached HEAD: lost on switching away.
+    pub detached_commits: Cow<'static, str>,
     pub ahead: Cow<'static, str>,
     pub behind: Cow<'static, str>,
     pub staged: Cow<'static, str>,
@@ -76,6 +78,7 @@ icon_names!(
     snoozed,
     branch,
     detached,
+    detached_commits,
     ahead,
     behind,
     staged,
@@ -138,6 +141,7 @@ pub const UNICODE: Icons = Icons {
     snoozed: s("z"),
     branch: s(""),
     detached: s("@"),
+    detached_commits: s("†"),
     ahead: s("↑"),
     behind: s("↓"),
     staged: s("●"),
@@ -163,25 +167,26 @@ pub const UNICODE: Icons = Icons {
 /// Nerd Font glyphs (codicons, Powerline). Each is followed by a space:
 /// non-Mono Nerd Fonts draw them up to two cells wide.
 pub const NERD: Icons = Icons {
-    favourite: s("\u{eb59} "),   // cod-star_full
-    new: s("\u{ec21} "),         // cod-sparkle_filled
-    excluded: s("\u{eae7} "),    // cod-eye_closed
-    snoozed: s("\u{ec08} "),     // cod-bell_slash
-    branch: s("\u{e0a0} "),      // Powerline branch
-    detached: s("\u{eafc} "),    // cod-git_commit
-    ahead: s("\u{eaa0} "),       // cod-arrow_small_up
-    behind: s("\u{ea9d} "),      // cod-arrow_small_down
-    staged: s("\u{eadc} "),      // cod-diff_added
-    unstaged: s("\u{eade} "),    // cod-diff_modified
-    untracked: s("\u{eb32} "),   // cod-question
-    conflict: s("\u{ea76} "),    // cod-close
-    stash: s("\u{ea98} "),       // cod-archive
-    in_progress: s("\u{ea6c} "), // cod-warning
-    gone: s("\u{eac1} "),        // cod-close_all
-    no_upstream: s("\u{ead0} "), // cod-debug_disconnect
-    branches: s("\u{ea63} "),    // cod-repo_forked
-    error: s("\u{ea87} "),       // cod-error
-    sync: s("\u{ea77} "),        // cod-sync
+    favourite: s("\u{eb59} "),        // cod-star_full
+    new: s("\u{ec21} "),              // cod-sparkle_filled
+    excluded: s("\u{eae7} "),         // cod-eye_closed
+    snoozed: s("\u{ec08} "),          // cod-bell_slash
+    branch: s("\u{e0a0} "),           // Powerline branch
+    detached: s("\u{eafc} "),         // cod-git_commit
+    detached_commits: s("\u{ea82} "), // cod-history
+    ahead: s("\u{eaa0} "),            // cod-arrow_small_up
+    behind: s("\u{ea9d} "),           // cod-arrow_small_down
+    staged: s("\u{eadc} "),           // cod-diff_added
+    unstaged: s("\u{eade} "),         // cod-diff_modified
+    untracked: s("\u{eb32} "),        // cod-question
+    conflict: s("\u{ea76} "),         // cod-close
+    stash: s("\u{ea98} "),            // cod-archive
+    in_progress: s("\u{ea6c} "),      // cod-warning
+    gone: s("\u{eac1} "),             // cod-close_all
+    no_upstream: s("\u{ead0} "),      // cod-debug_disconnect
+    branches: s("\u{ea63} "),         // cod-repo_forked
+    error: s("\u{ea87} "),            // cod-error
+    sync: s("\u{ea77} "),             // cod-sync
     worktree: s("├"),
     submodule: s("\u{eaec} "), // cod-file_submodule
     spinner: s("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
@@ -209,6 +214,7 @@ pub const ASCII: Icons = Icons {
     snoozed: s("z"),
     branch: s(""),
     detached: s("@"),
+    detached_commits: s("c"),
     ahead: s("^"),
     behind: s("v"),
     staged: s("S"),

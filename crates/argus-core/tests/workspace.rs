@@ -223,6 +223,11 @@ fn errors_are_entries_not_failures() {
     assert!(b.error().is_some());
     assert!(b.needs_attention());
     assert_eq!(names(&w, ATTN)[0], b.display_name());
+    // the entry shows its path; the error doesn't repeat it
+    let e = b.error().unwrap();
+    assert!(!e.contains(&*broken.to_string_lossy()), "{e}");
+    assert!(e.contains("does not appear to be a git repository"), "{e}");
+    assert!(!e.starts_with([' ', '"', ':']), "{e:?}");
 }
 
 #[test]

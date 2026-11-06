@@ -751,10 +751,11 @@ fn demo_glyphs(ctx: &Ctx) -> Result<()> {
         .zip(&widths)
         .map(|((n, _), &w)| pad(n, w))
         .collect();
-    println!("{}{}", pad("icon", 13), header.trim_end());
+    let name_w = icons::ICON_NAMES.iter().map(|n| n.len()).max().unwrap_or(0) + 2;
+    println!("{}{}", pad("icon", name_w), header.trim_end());
     for (name, row) in icons::ICON_NAMES.iter().zip(&cells) {
         let line: String = row.iter().zip(&widths).map(|(c, &w)| pad(c, w)).collect();
-        println!("{}{}", pad(name, 13), line.trim_end());
+        println!("{}{}", pad(name, name_w), line.trim_end());
     }
     let row = |c: char, what: &str| {
         let cell = glyph_cell(&c.to_string());
