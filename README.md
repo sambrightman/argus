@@ -41,7 +41,6 @@ A taste (see the generated file for everything):
 include = ["~/.config/argus/work.toml"]  # read first; this file overrides them
 roots = ["~/dev", "~/work"]
 extend_skip = ["build-cache"]    # any list: extend_<name> adds instead of replacing
-concurrency = 0                  # parallel fetch/pull/push/clone; 0: auto
 max_depth = 6                    # levels below each root; 0: no limit
 
 # repos or globs on github.com/org/repo, org/repo or path; later entries
@@ -49,6 +48,10 @@ max_depth = 6                    # levels below each root; 0: no limit
 favourite = ["my-org/core-*"]
 sync = ["someone/dotfiles", "my-org/*", "!my-org/huge-monorepo"]
 exclude = ["~/dev/scratch/**"]
+
+[concurrency]                    # 0: automatic
+disk = 0                         # threads for discovery and status
+network = 0                      # fetches, pulls, pushes, clones at once
 
 [[track]]                        # keep a whole org cloned and pulled
 owner = "my-org"

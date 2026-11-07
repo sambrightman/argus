@@ -59,12 +59,12 @@ fn includes_are_read_first_and_overridden_by_the_including_file() {
     write(
         d,
         "base.toml",
-        "max_depth = 3\nconcurrency = 2\nskip = ['from-base']\nfavourite = ['base/*']\n[[track]]\nowner = 'base-org'\n",
+        "max_depth = 3\nconcurrency.disk = 1\nconcurrency.network = 2\nskip = ['from-base']\nfavourite = ['base/*']\n[[track]]\nowner = 'base-org'\n",
     );
     write(
         d,
         "conf.d/b.toml",
-        "concurrency = 5\n[[track]]\nowner = 'b-org'\n",
+        "concurrency.network = 5\n[[track]]\nowner = 'b-org'\n",
     );
     write(
         d,
@@ -80,7 +80,7 @@ fn includes_are_read_first_and_overridden_by_the_including_file() {
     let c = Config::load(&main).unwrap();
     // later files win: base, then conf.d/a, conf.d/b (sorted), then main
     assert_eq!(c.max_depth, 9);
-    assert_eq!(c.concurrency, 5);
+    assert_eq!((c.concurrency.network, c.concurrency.disk), (5, 1), "the old number merges with the section");
     assert_eq!(c.ui.theme, "dark");
     assert_eq!(c.skip, ["from-base", "from-main"]);
     assert_eq!(c.favourite, ["base/*", "a/*"]);
@@ -94,10 +94,10 @@ fn includes_are_read_first_and_overridden_by_the_including_file() {
 fn includes_nest_and_resolve_relative_to_their_file() {
     let t = tempfile::tempdir().unwrap();
     let d = t.path();
-    write(d, "a/inner.toml", "concurrency = 7\n");
+    write(d, "a/inner.toml", "concurrency.network = 7\n");
     write(d, "a/outer.toml", "include = ['inner.toml']\n");
     let main = write(d, "config.toml", "include = ['a/outer.toml']\n");
-    assert_eq!(Config::load(&main).unwrap().concurrency, 7);
+    assert_eq!(Config::load(&main).unwrap().concurrency.network, 7);
 }
 
 #[test]

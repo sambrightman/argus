@@ -34,3 +34,6 @@ demo = ["testkit"]
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+sysctl = "0.7.1"

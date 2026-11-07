@@ -247,7 +247,7 @@ impl Runtime {
                 });
             }
             Effect::Refresh(paths) => {
-                let n = app.ws.config.status_jobs();
+                let n = app.ws.config.disk_jobs();
                 self.spawn(move |tx| {
                     argus_core::workspace::in_pool(n, || {
                         use rayon::prelude::*;

@@ -76,7 +76,8 @@ the `git` backend module. Another backend (jj, hg) would produce the same
 model. Ops are an enum (`Op`) executed by a backend runner.
 
 **Concurrency.** Status uses rayon over discovered repos, all CPU/disk work in
-process, on a pool of `status_concurrency` threads (default half the CPUs).
+process, on a pool of `concurrency.disk` threads (default the performance
+cores, else half the CPUs); discovery uses the same pool.
 Network ops (fetch/pull/clone/push) run on a bounded worker pool
 (default 8, configurable) and stream `Event`s over a channel. CLI and TUI
 consume the same events.
@@ -92,8 +93,12 @@ Two findings:
   With rayon's default of one thread per logical CPU (10 on an M-series
   with 4 performance cores), kernel time rose 4.5× from 1 to 10 threads,
   and wall time stopped improving between 4 and 6. Half the CPUs halves the
-  kernel time at the same wall time. Discovery still uses rayon's default
-  pool (not yet measured), and gix starts two threads per repo's status
+  kernel time at the same wall time. Discovery is sharper still: on 2,000
+  repos and 18,000 directories it was fastest with 4 threads (61 ms), 30%
+  slower with 5 and 40% slower with 10, with kernel time tripling. Threads
+  beyond the performance cores land on efficiency cores and hold everyone
+  up, so the default is the performance-core count (`sysctl` crate, which
+  calls the API, not the command), else half the CPUs. gix starts two threads per repo's status
   (HEAD vs index, index vs worktree), plus up to one per CPU to check files
   in large repos; limiting those made no difference on small repos.
 
@@ -342,7 +347,7 @@ rendering is snapshot-tested via `TestBackend`.
 * **`max_depth` is reported**, not silent: a scan names a directory it
   didn't enter. `max_depth = 0` means no limit (0 as "the root only" had no
   use: the walk stops at a repo anyway).
-* **Automatic concurrency** (`concurrency = 0`, the default): git's
+* **Automatic network concurrency** (`concurrency.network = 0`, the default): git's
   `fetch.parallel` when set above 0 (git's own 0 also means "pick a
   default"), else the CPU count capped at 8. The work is network-bound,
   and OpenSSH allows 10 sessions per multiplexed connection by default,

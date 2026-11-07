@@ -158,9 +158,9 @@ impl Workspace {
     /// forge identity, else the path (`~/…`). Discovery and each repo's
     /// remote only, no status, so it's quick enough to run on every Tab.
     pub fn repo_names(&self) -> Vec<String> {
-        let found = discover::discover_all(&self.config.roots, &self.discover_options()).found;
-        let mut names: Vec<String> = in_pool(self.config.status_jobs(), || {
-            found
+        let mut names: Vec<String> = in_pool(self.config.disk_jobs(), || {
+            discover::discover_all(&self.config.roots, &self.discover_options())
+                .found
                 .par_iter()
                 .map(|f| {
                     let id = match f.kind {
@@ -181,7 +181,9 @@ impl Workspace {
 
     /// Discover repos and compute every status in parallel.
     pub fn scan(&mut self) {
-        let discovery = discover::discover_all(&self.config.roots, &self.discover_options());
+        let discovery = in_pool(self.config.disk_jobs(), || {
+            discover::discover_all(&self.config.roots, &self.discover_options())
+        });
         self.truncated = discovery.truncated;
         let found = discovery.found;
         let old: HashMap<PathBuf, Entry> = self
@@ -499,13 +501,13 @@ pub fn in_pool<R: Send>(n: usize, f: impl FnOnce() -> R + Send) -> R {
     }
 }
 
-/// The status of each of `paths`, in order, [`Config::status_jobs`] at a time.
+/// The status of each of `paths`, in order, [`Config::disk_jobs`] at a time.
 fn statuses<'a>(
     config: &Config,
     paths: impl Iterator<Item = &'a Path>,
 ) -> Vec<Result<RepoStatus, String>> {
     let paths: Vec<&Path> = paths.collect();
-    in_pool(config.status_jobs(), || {
+    in_pool(config.disk_jobs(), || {
         paths
             .par_iter()
             .map(|p| status::status(p, StatusOptions::default()).map_err(|e| e.to_string()))

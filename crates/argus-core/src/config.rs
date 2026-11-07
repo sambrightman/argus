@@ -40,15 +40,8 @@ pub struct Config {
     /// Follow symlinks to directories (`-L`). Cycles are cut and a repo
     /// reachable by several paths is listed once.
     pub follow_symlinks: bool,
-    /// Maximum concurrent network operations (fetch/pull/push/clone). 0:
-    /// automatic, i.e. git's `fetch.parallel` if set above 0, else the CPU
-    /// count up to 8 (forges and ssh limit simultaneous connections).
-    pub concurrency: usize,
-    /// How many repos' status to read at once. 0: automatic, i.e. half the
-    /// CPU count: reading status is mostly file system calls, and beyond
-    /// that they slow each other down in the kernel (measured on macOS)
-    /// with no gain in time.
-    pub status_concurrency: usize,
+    /// How much runs at once.
+    pub concurrency: Concurrency,
     /// Protocol for new clones; unset asks the forge (`gh config get git_protocol`).
     #[schemars(example = crate::forge::Protocol::Ssh)]
     pub clone_protocol: Option<crate::forge::Protocol>,
@@ -109,8 +102,7 @@ impl Default for Config {
             max_depth: 6,
             skip_hidden: true,
             follow_symlinks: false,
-            concurrency: 0,
-            status_concurrency: 0,
+            concurrency: Concurrency::default(),
             clone_protocol: None,
             favourite: vec![],
             sync: vec![],
@@ -193,6 +185,22 @@ fn example_icon_overrides() -> BTreeMap<&'static str, &'static str> {
 
 fn example_colors() -> BTreeMap<&'static str, &'static str> {
     BTreeMap::from([("favourite", "yellow"), ("branch", "bold magenta")])
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema,
+)]
+#[serde(default, deny_unknown_fields)]
+pub struct Concurrency {
+    /// Discovery and status: file system calls on this machine, mostly
+    /// answered from memory. Beyond a point they slow each other down in
+    /// the kernel. 0: automatic, i.e. the performance-core count where
+    /// cores differ (Apple silicon), else half the CPUs.
+    pub disk: usize,
+    /// Network operations (fetch/pull/push/clone). 0: automatic, i.e.
+    /// git's `fetch.parallel` if set above 0, else the CPU count up to 8
+    /// (forges and ssh limit simultaneous connections).
+    pub network: usize,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
@@ -466,6 +474,13 @@ fn merge_table(
 ) -> Result<(), ConfigError> {
     let from = |n: usize| vec![file.map(Path::to_path_buf); n];
     let renamed = layer.into_iter().map(|(k, v)| {
+        // `concurrency` was a number, the network setting, before the section
+        let v = match (prefix, k.as_str(), v) {
+            ("", "concurrency", toml::Value::Integer(n)) => {
+                toml::Value::Table(toml::Table::from_iter([("network".into(), n.into())]))
+            }
+            (_, _, v) => v,
+        };
         let k = match (prefix, k.as_str()) {
             ("", old) => OLD_NAMES
                 .iter()
@@ -593,10 +608,10 @@ impl Config {
         }
     }
 
-    /// How many network operations to run at once: see `concurrency`.
+    /// How many network operations to run at once: see `concurrency.network`.
     pub fn network_jobs(&self) -> usize {
-        if self.concurrency > 0 {
-            return self.concurrency;
+        if self.concurrency.network > 0 {
+            return self.concurrency.network;
         }
         let fetch_parallel = gix::config::File::from_globals()
             .ok()
@@ -605,12 +620,13 @@ impl Config {
         auto_jobs(fetch_parallel, cpus)
     }
 
-    /// How many repos' status to read at once: see `status_concurrency`.
-    pub fn status_jobs(&self) -> usize {
-        if self.status_concurrency > 0 {
-            return self.status_concurrency;
+    /// How many threads discovery and status use: see `concurrency.disk`.
+    pub fn disk_jobs(&self) -> usize {
+        if self.concurrency.disk > 0 {
+            return self.concurrency.disk;
         }
-        auto_status_jobs(std::thread::available_parallelism().map_or(1, |n| n.get()))
+        let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+        auto_disk_jobs(performance_cores(), cpus)
     }
 
     /// Directory new clones for `track` land in.
@@ -636,9 +652,33 @@ pub fn auto_jobs(fetch_parallel: Option<i64>, cpus: usize) -> usize {
     }
 }
 
-/// Automatic status concurrency: half the CPUs, at least one.
-pub fn auto_status_jobs(cpus: usize) -> usize {
-    (cpus / 2).max(1)
+/// Automatic disk concurrency: the performance cores when known, else
+/// half the CPUs; at least one. Measured on an M-series Mac with 4
+/// performance cores of 10: discovery was fastest with 4 threads, 30%
+/// slower with 5 and 40% slower with 10, with kernel time tripling.
+pub fn auto_disk_jobs(performance_cores: Option<usize>, cpus: usize) -> usize {
+    performance_cores
+        .filter(|&n| n > 0)
+        .unwrap_or(cpus / 2)
+        .max(1)
+}
+
+/// The fastest kind of core's count, when cores come in kinds.
+#[cfg(target_os = "macos")]
+fn performance_cores() -> Option<usize> {
+    use sysctl::Sysctl;
+    let read = |name: &str| -> Option<usize> {
+        sysctl::Ctl::new(name).ok()?.value_string().ok()?.trim().parse().ok()
+    };
+    if read("hw.nperflevels")? < 2 {
+        return None;
+    }
+    read("hw.perflevel0.logicalcpu")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn performance_cores() -> Option<usize> {
+    None
 }
 
 #[cfg(test)]
@@ -674,8 +714,9 @@ mod tests {
 
     #[test]
     fn concurrency_zero_is_automatic() {
-        assert_eq!(Config::default().concurrency, 0, "automatic by default");
-        assert_eq!(Config::parse("concurrency = 3").unwrap().network_jobs(), 3);
+        assert_eq!(Config::default().concurrency.network, 0, "automatic by default");
+        let c = Config::parse("[concurrency]\nnetwork = 3").unwrap();
+        assert_eq!(c.network_jobs(), 3);
         assert!(Config::default().network_jobs() >= 1);
         // git's fetch.parallel when positive (0 there also means "pick one"),
         // else the CPU count, capped for forge/ssh connection limits
@@ -696,14 +737,48 @@ mod tests {
     }
 
     #[test]
-    fn status_concurrency_zero_is_half_the_cpus() {
-        assert_eq!(Config::default().status_concurrency, 0, "automatic by default");
-        let c = Config::parse("status_concurrency = 3").unwrap();
-        assert_eq!(c.status_jobs(), 3);
-        assert!(Config::default().status_jobs() >= 1);
-        for (cpus, want) in [(10, 5), (16, 8), (3, 1), (2, 1), (1, 1), (0, 1)] {
-            assert_eq!(auto_status_jobs(cpus), want, "{cpus}");
+    fn disk_concurrency_zero_is_the_performance_cores() {
+        assert_eq!(Config::default().concurrency.disk, 0, "automatic by default");
+        let c = Config::parse("[concurrency]\ndisk = 3").unwrap();
+        assert_eq!((c.disk_jobs(), c.concurrency.network), (3, 0));
+        assert!(Config::default().disk_jobs() >= 1);
+        // the performance cores when known, else half the CPUs
+        for (perf, cpus, want) in [
+            (Some(4), 10, 4),
+            (Some(12), 16, 12),
+            (None, 10, 5),
+            (None, 16, 8),
+            (Some(0), 10, 5),
+            (None, 3, 1),
+            (None, 1, 1),
+            (None, 0, 1),
+        ] {
+            assert_eq!(auto_disk_jobs(perf, cpus), want, "{perf:?} {cpus}");
         }
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn apple_silicon_reports_fewer_performance_cores_than_cpus() {
+        let cpus = std::thread::available_parallelism().unwrap().get();
+        let p = performance_cores().expect("Apple silicon has core kinds");
+        assert!(p >= 1 && p < cpus, "{p} of {cpus}");
+        // the command, as a second opinion
+        let out = std::process::Command::new("sysctl")
+            .args(["-n", "hw.perflevel0.logicalcpu"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), p.to_string());
+        assert_eq!(Config::default().disk_jobs(), p);
+    }
+
+    #[test]
+    fn a_top_level_concurrency_number_is_the_network_setting() {
+        let c = Config::parse("concurrency = 3").unwrap();
+        assert_eq!(c.concurrency, Concurrency { disk: 0, network: 3 });
+        // inverse: the section is read as it is
+        let c = Config::parse("[concurrency]\ndisk = 2\nnetwork = 5").unwrap();
+        assert_eq!(c.concurrency, Concurrency { disk: 2, network: 5 });
     }
 
     #[test]
