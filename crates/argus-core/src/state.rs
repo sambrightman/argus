@@ -119,7 +119,7 @@ impl State {
         let lines = [
             ("favourite", list(|m| m.favourite)),
             ("sync", list(|m| m.sync)),
-            ("ignore", list(|m| m.exclude)),
+            ("ignore.repos", list(|m| m.exclude)),
         ]
         .into_iter()
         .filter(|(_, l)| l != "[]")
@@ -180,7 +180,7 @@ mod tests {
         let s = State::load(&p).unwrap();
         assert_eq!(
             s.old_marks_as_config().unwrap(),
-            "favourite = [\"github.com/a/b\"]\nsync = [\"!github.com/a/b\"]\nignore = [\"/home/me/x\"]"
+            "favourite = [\"github.com/a/b\"]\nsync = [\"!github.com/a/b\"]\nignore.repos = [\"/home/me/x\"]"
         );
         // saving keeps them (never lost without asking); the old clocks go
         s.save(&p).unwrap();

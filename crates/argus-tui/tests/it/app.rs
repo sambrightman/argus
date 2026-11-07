@@ -426,7 +426,7 @@ fn auto_fix_only_targets_repos_with_applicable_fixes() {
 #[test]
 fn auto_fix_all_leaves_hidden_repos_alone_even_when_shown() {
     // feature is the one repo with an applicable fix (see above)
-    let (_sb, mut app) = setup("ignore = ['acme/feature']");
+    let (_sb, mut app) = setup("ignore.repos = ['acme/feature']");
     app.on_key(key('H'));
     assert_eq!(names(&app).len(), 3, "shown");
     assert!(app.act(Action::AutoFix(Scope::All)).is_empty());
@@ -911,7 +911,7 @@ fn clearing_marks_of_several_repos_asks_first() {
     );
     let fx = app.act(Action::ClearMarks);
     assert!(fx.contains(&Effect::SaveState) && matches!(app.mode, Mode::Normal));
-    assert!(app.ws.config.ignore.is_empty() && app.ws.state.snoozed.is_empty());
+    assert!(app.ws.config.ignore.repos.is_empty() && app.ws.state.snoozed.is_empty());
 }
 
 /// The stash ops in `fx`'s jobs, by repo name.

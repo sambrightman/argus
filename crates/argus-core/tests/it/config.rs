@@ -253,3 +253,59 @@ fn an_unmark_alone_is_saved_in_the_file_holding_the_entry() {
         "extend = ['team.toml']\n"
     );
 }
+
+#[test]
+fn issue_lists_are_saved_into_ignore_by_the_same_rule() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path();
+    // none yet: an [ignore] section in the main file
+    let main = write(d, "config.toml", "max_depth = 3\n");
+    let before = Config::load(&main).unwrap();
+    let mut after = before.clone();
+    after.ignore.detached.push("acme/dep@v1.2".into());
+    update_mark_lists(&main, &before, &after).unwrap();
+    let c = Config::load(&main).unwrap();
+    assert_eq!(c.ignore.detached, ["acme/dep@v1.2"]);
+    assert_eq!(c.max_depth, 3);
+    // an extended file has the list: it goes there
+    let team = write(d, "team.toml", "[ignore]\nstashes = ['acme/a']\n");
+    let main = write(d, "config.toml", "extend = ['team.toml']\n");
+    let before = Config::load(&main).unwrap();
+    let mut after = before.clone();
+    after.ignore.stashes.push("acme/b".into());
+    after.ignore.repos.push("acme/old".into());
+    update_mark_lists(&main, &before, &after).unwrap();
+    let c = Config::load(&main).unwrap();
+    assert_eq!(c.ignore.stashes, ["acme/a", "acme/b"]);
+    assert!(std::fs::read_to_string(&team).unwrap().contains("acme/b"));
+    assert_eq!(c.ignore.repos, ["acme/old"], "repos: new, in the main file");
+    // an empty extend_ list in the main file's [ignore] keeps additions there
+    let team = write(d, "team.toml", "[ignore]\nstashes = ['acme/a']\n");
+    let main = write(
+        d,
+        "config.toml",
+        "extend = ['team.toml']\n[ignore]\nextend_stashes = []\n",
+    );
+    let before = Config::load(&main).unwrap();
+    let mut after = before.clone();
+    after.ignore.stashes.push("acme/b".into());
+    update_mark_lists(&main, &before, &after).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&team).unwrap(),
+        "[ignore]\nstashes = ['acme/a']\n"
+    );
+    assert_eq!(
+        Config::load(&main).unwrap().ignore.stashes,
+        ["acme/a", "acme/b"]
+    );
+    // dotted keys are edited where they are
+    let main = write(d, "config.toml", "ignore.behind = ['acme/x']\n");
+    let before = Config::load(&main).unwrap();
+    let mut after = before.clone();
+    after.ignore.behind = vec!["acme/y".into()];
+    update_mark_lists(&main, &before, &after).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&main).unwrap(),
+        "ignore.behind = ['acme/y']\n".replace("'acme/y'", "\"acme/y\"")
+    );
+}

@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
+use argus_core::attention::Issue;
 use argus_core::config::Config;
 use argus_core::discover::RepoKind;
 use argus_core::forge::{Protocol, RemoteRepo};
@@ -134,7 +135,7 @@ fn ignored_and_snoozed_hidden_by_default() {
         sb.remote("acme", n);
         sb.clone_as_github("acme", n, &format!("dev/{n}"));
     }
-    let mut w = ws(&sb, "ignore = ['acme/gone']");
+    let mut w = ws(&sb, "ignore.repos = ['acme/gone']");
     w.state.snoozed.insert(
         "github.com/acme/nap".into(),
         "2999-01-01T00:00:00Z".parse().unwrap(),
@@ -241,7 +242,7 @@ fn sync_pulls_only_syncable_visible_repos() {
     sb.init("dev/local");
     let w = ws(
         &sb,
-        "sync = ['acme/*', '!acme/nosync', '**/local']\nignore = ['acme/excl']",
+        "sync = ['acme/*', '!acme/nosync', '**/local']\nignore.repos = ['acme/excl']",
     );
     let jobs = plan_updates(&w);
     let mut labels: Vec<_> = jobs.iter().map(|j| j.label.clone()).collect();
@@ -344,7 +345,7 @@ fn track_clones_missing_and_reports_orphans() {
     let w = ws(
         &sb,
         &format!(
-            "ignore = ['acme/secret']\n[[track]]\nowner='acme'\ninclude_forks=false\ninto='{}'",
+            "ignore.repos = ['acme/secret']\n[[track]]\nowner='acme'\ninclude_forks=false\ninto='{}'",
             sb.path("dev/acme").display()
         ),
     );
@@ -603,7 +604,7 @@ fn marking_edits_the_config_lists() {
     // a repo without an identity is named by its path
     w.set_mark(&[local], Mark::Ignore, true).unwrap();
     assert_eq!(
-        w.config.ignore,
+        w.config.ignore.repos,
         [argus_core::paths::contract_tilde(&w.entries[local].path)]
     );
     assert!(w.entries[local].flags.ignored);
@@ -755,4 +756,25 @@ fn status_runs_on_a_pool_of_the_given_size() {
     use argus_core::workspace::in_pool;
     assert_eq!(in_pool(2, rayon::current_num_threads), 2);
     assert_eq!(in_pool(3, rayon::current_num_threads), 3);
+}
+
+#[test]
+fn an_ignored_issue_stops_counting_and_a_pin_to_another_value_doesnt() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "dev/w");
+    git(&r, &["switch", "-q", "-c", "feat"]);
+    commit(&r, "feat");
+    git(&r, &["push", "-q", "-u", "origin", "feat"]);
+    let entry = |extra: &str| ws(&sb, extra).entries[0].clone();
+    let e = entry("");
+    assert!(e.issues.contains(&Issue::OffDefault) && e.needs_attention());
+    let e = entry("[ignore]\noff_default = ['acme/w@feat']");
+    assert!(!e.issues.contains(&Issue::OffDefault), "{:?}", e.issues);
+    assert_eq!(e.ignored_issues, [Issue::OffDefault]);
+    assert!(!e.needs_attention());
+    assert!(!e.flags.hidden(), "still shown: only the issue is ignored");
+    // pinned to another branch: this one is flagged
+    let e = entry("[ignore]\noff_default = ['acme/w@release']");
+    assert!(e.issues.contains(&Issue::OffDefault) && e.ignored_issues.is_empty());
 }

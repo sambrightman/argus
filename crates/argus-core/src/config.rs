@@ -63,10 +63,8 @@ pub struct Config {
     /// repos are synced unless an entry here turns them off (`!`).
     #[schemars(example = vec!["acme/*", "!acme/huge-monorepo"])]
     pub sync: Vec<String>,
-    /// Repos hidden and skipped by bulk operations; entries as for
-    /// `favourite`.
-    #[schemars(example = vec!["~/dev/archive/**"])]
-    pub ignore: Vec<String>,
+    /// What not to flag: whole repos, or particular issues in some repos.
+    pub ignore: Ignore,
     /// Forge owners (orgs/users/teams) whose repos should all be cloned and
     /// synced. Their repos are syncable unless `sync` turns them off.
     #[serde(rename = "track")]
@@ -112,7 +110,7 @@ impl Default for Config {
             clone_protocol: None,
             favourite: vec![],
             sync: vec![],
-            ignore: vec![],
+            ignore: Ignore::default(),
             tracks: vec![],
             fix: FixConfig::default(),
             stash: StashConfig::default(),
@@ -194,6 +192,41 @@ fn example_icon_overrides() -> BTreeMap<&'static str, &'static str> {
 
 fn example_colors() -> BTreeMap<&'static str, &'static str> {
     BTreeMap::from([("favourite", "yellow"), ("branch", "bold magenta")])
+}
+
+/// `[ignore]`: entries as for `favourite` (a repo or a pattern, matched
+/// against identity, `owner/name` or path; the last match wins, `!` turns
+/// it off).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(
+    default,
+    deny_unknown_fields,
+    expecting = "a table: [ignore] with repos and issue lists"
+)]
+pub struct Ignore {
+    /// Repos hidden, and left out of sync, clones and bulk operations.
+    #[schemars(example = vec!["~/dev/archive/**"])]
+    pub repos: Vec<String>,
+    /// Repos normally on a branch other than the default. `repo@branch`
+    /// ignores only that branch (glob allowed), so another is flagged.
+    #[schemars(example = vec!["acme/legacy@release-*"])]
+    pub off_default: Vec<String>,
+    /// Repos normally on a detached HEAD. `repo@value` ignores only that:
+    /// a tag on HEAD, its describe (`v1.2-3-g1a2b3c4`) or its commit id
+    /// (7 characters or all of it); glob allowed.
+    #[schemars(example = vec!["acme/pinned-dep@v1.2.0"])]
+    pub detached: Vec<String>,
+    /// Repos with no remote.
+    pub no_remote: Vec<String>,
+    /// Repos whose branch has no upstream. `repo@branch` as for
+    /// `off_default`.
+    pub no_upstream: Vec<String>,
+    /// Repos with stashes.
+    pub stashes: Vec<String>,
+    /// Repos with other local branches holding unpushed commits.
+    pub unpushed_branches: Vec<String>,
+    /// Repos behind their upstream.
+    pub behind: Vec<String>,
 }
 
 #[derive(
@@ -538,6 +571,12 @@ pub enum ConfigError {
     },
     #[error("{key}: {reason}")]
     Extend { key: String, reason: &'static str },
+    #[error("[ignore] {list}: {entry:?}: {reason}")]
+    IgnoreEntry {
+        list: &'static str,
+        entry: String,
+        reason: &'static str,
+    },
     #[error("{path}: extend {what}")]
     ExtendFile { path: PathBuf, what: String },
 }
@@ -834,11 +873,11 @@ mod tests {
         }
         // inverse: the new names
         let c = Config::parse(
-            "exclude_paths = ['x']\nignore = ['a/b']\n[concurrency]\ndisk = 2\nnetwork = 5",
+            "exclude_paths = ['x']\nignore.repos = ['a/b']\n[concurrency]\ndisk = 2\nnetwork = 5",
         )
         .unwrap();
         assert_eq!(
-            (c.exclude_paths, c.ignore),
+            (c.exclude_paths, c.ignore.repos),
             (vec!["x".into()], vec!["a/b".into()])
         );
         assert_eq!(

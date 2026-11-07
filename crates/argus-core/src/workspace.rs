@@ -13,7 +13,7 @@ use crate::config::{Config, ConfigError};
 use crate::discover::{self, DiscoverOptions, RepoKind, Skip};
 use crate::identity::RepoId;
 use crate::paths::contract_tilde;
-use crate::rules::{self, Flags, Mark, RuleSet};
+use crate::rules::{self, Flags, IssueList, Mark, RuleSet};
 use crate::state::State;
 use crate::status::{self, RepoStatus, StatusOptions};
 
@@ -28,7 +28,12 @@ pub struct Entry {
     pub key: String,
     pub flags: Flags,
     pub status: Option<Result<RepoStatus, String>>,
+    /// Issues that count: those of the status, less ignored ones.
     pub issues: Vec<Issue>,
+    /// Issues the status shows that `[ignore]` turns off for this repo.
+    pub ignored_issues: Vec<Issue>,
+    /// Every issue of the status, before ignoring.
+    all_issues: Vec<Issue>,
 }
 
 impl Entry {
@@ -43,6 +48,8 @@ impl Entry {
             flags: Flags::default(),
             status: None,
             issues: vec![],
+            ignored_issues: vec![],
+            all_issues: vec![],
         }
     }
 
@@ -92,7 +99,8 @@ impl Entry {
 
     fn set_status(&mut self, st: Result<RepoStatus, String>) {
         if let Ok(s) = &st {
-            self.issues = attention::issues(s);
+            self.all_issues = attention::issues(s);
+            self.issues = self.all_issues.clone();
             if self.id.is_none() {
                 self.id = s.remote_url.as_deref().and_then(RepoId::from_url);
                 if (self.kind == RepoKind::Main || self.kind == RepoKind::Bare)
@@ -102,8 +110,10 @@ impl Entry {
                 }
             }
         } else {
+            self.all_issues.clear();
             self.issues.clear();
         }
+        self.ignored_issues.clear();
         self.status = Some(st);
     }
 }
@@ -365,6 +375,18 @@ impl Workspace {
                 &e.path,
                 now,
             );
+            let Some(s) = e.status.as_ref().and_then(|s| s.as_ref().ok()) else {
+                continue;
+            };
+            let ignored = |i: &Issue| {
+                IssueList::of(*i).is_some_and(|l| {
+                    self.rules
+                        .ignores_issue(l, e.id.as_ref(), &e.path, &l.values(s))
+                })
+            };
+            let (off, on): (Vec<Issue>, Vec<Issue>) = e.all_issues.iter().partition(|i| ignored(i));
+            e.issues = on;
+            e.ignored_issues = off;
         }
     }
 

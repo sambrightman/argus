@@ -1014,7 +1014,7 @@ fn marks_are_written_to_the_config_lists() {
     let c = argus_core::Config::parse(&text).unwrap();
     assert_eq!(c.favourite, ["github.com/acme/clean"]);
     assert_eq!(c.sync, ["acme/*", "!github.com/acme/dirty"]);
-    assert_eq!(c.ignore, ["github.com/acme/feature"]);
+    assert_eq!(c.ignore.repos, ["github.com/acme/feature"]);
     assert!(text.starts_with("# mine\n"), "{text}");
     // --clear: the repo's own entries go, patterns decide again
     mark(&["acme/dirty", "--clear"]);

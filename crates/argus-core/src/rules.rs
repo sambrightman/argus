@@ -1,5 +1,6 @@
 //! Resolution of per-repo flags from tracked owners, the `favourite`, `sync`
-//! and `ignore` lists in config, and state (snoozes, "new").
+//! and `ignore.repos` lists in config, and state (snoozes, "new"); and which
+//! issues the other `[ignore]` lists turn off.
 
 use std::path::Path;
 
@@ -7,10 +8,12 @@ use globset::GlobMatcher;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::attention::Issue;
 use crate::config::{Config, ConfigError, Track};
 use crate::identity::RepoId;
 use crate::paths::expand_tilde;
 use crate::state::State;
+use crate::status::{Head, RepoStatus};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Flags {
@@ -32,7 +35,7 @@ impl Flags {
 }
 
 /// The per-repo settings kept as lists in config: `favourite`, `sync`,
-/// `ignore`.
+/// `ignore.repos`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Mark {
     Favourite,
@@ -43,7 +46,7 @@ pub enum Mark {
 impl Mark {
     pub const ALL: [Mark; 3] = [Mark::Favourite, Mark::Sync, Mark::Ignore];
 
-    /// The config key.
+    /// The name shown and used in messages.
     pub fn name(self) -> &'static str {
         match self {
             Mark::Favourite => "favourite",
@@ -52,11 +55,20 @@ impl Mark {
         }
     }
 
+    /// The config key, dotted.
+    pub fn path(self) -> &'static str {
+        match self {
+            Mark::Favourite => "favourite",
+            Mark::Sync => "sync",
+            Mark::Ignore => "ignore.repos",
+        }
+    }
+
     pub fn list(self, c: &Config) -> &Vec<String> {
         match self {
             Mark::Favourite => &c.favourite,
             Mark::Sync => &c.sync,
-            Mark::Ignore => &c.ignore,
+            Mark::Ignore => &c.ignore.repos,
         }
     }
 
@@ -64,7 +76,7 @@ impl Mark {
         match self {
             Mark::Favourite => &mut c.favourite,
             Mark::Sync => &mut c.sync,
-            Mark::Ignore => &mut c.ignore,
+            Mark::Ignore => &mut c.ignore.repos,
         }
     }
 
@@ -73,6 +85,153 @@ impl Mark {
             Mark::Favourite => f.favourite,
             Mark::Sync => f.sync,
             Mark::Ignore => f.ignored,
+        }
+    }
+}
+
+/// Issues that can be ignored for some repos: the `[ignore]` lists other
+/// than `repos`. Conflicts, operations in progress and commits only a
+/// detached HEAD holds can't be: they risk losing work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IssueList {
+    OffDefault,
+    Detached,
+    NoRemote,
+    NoUpstream,
+    Stashes,
+    UnpushedBranches,
+    Behind,
+}
+
+impl IssueList {
+    pub const ALL: [IssueList; 7] = [
+        IssueList::OffDefault,
+        IssueList::Detached,
+        IssueList::NoRemote,
+        IssueList::NoUpstream,
+        IssueList::Stashes,
+        IssueList::UnpushedBranches,
+        IssueList::Behind,
+    ];
+
+    /// The key in `[ignore]`.
+    pub fn name(self) -> &'static str {
+        match self {
+            IssueList::OffDefault => "off_default",
+            IssueList::Detached => "detached",
+            IssueList::NoRemote => "no_remote",
+            IssueList::NoUpstream => "no_upstream",
+            IssueList::Stashes => "stashes",
+            IssueList::UnpushedBranches => "unpushed_branches",
+            IssueList::Behind => "behind",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|l| l.name() == name || l.name().replace('_', "-") == name)
+    }
+
+    /// The list that can ignore `issue`, if any.
+    pub fn of(issue: Issue) -> Option<Self> {
+        Some(match issue {
+            Issue::OffDefault => IssueList::OffDefault,
+            Issue::Detached => IssueList::Detached,
+            Issue::NoRemote => IssueList::NoRemote,
+            Issue::NoUpstream => IssueList::NoUpstream,
+            Issue::Stashes(_) => IssueList::Stashes,
+            Issue::UnpushedBranches(_) => IssueList::UnpushedBranches,
+            Issue::Behind(_) => IssueList::Behind,
+            _ => return None,
+        })
+    }
+
+    /// Whether entries can pin a value (`repo@value`).
+    pub fn pins(self) -> bool {
+        matches!(
+            self,
+            IssueList::OffDefault | IssueList::Detached | IssueList::NoUpstream
+        )
+    }
+
+    /// What a pin is matched against in this state; the first is what
+    /// pinning writes. Empty for lists that don't pin.
+    pub fn values(self, s: &RepoStatus) -> Vec<String> {
+        match self {
+            IssueList::OffDefault | IssueList::NoUpstream => {
+                s.head.branch().map(String::from).into_iter().collect()
+            }
+            IssueList::Detached => {
+                let Head::Detached(_) = &s.head else {
+                    return vec![];
+                };
+                let mut v = s.tags.clone();
+                v.extend(s.describe.clone());
+                if let Some(id) = &s.head_commit {
+                    v.push(id.chars().take(7).collect());
+                    v.push(id.clone());
+                }
+                v
+            }
+            _ => vec![],
+        }
+    }
+
+    pub fn list(self, c: &Config) -> &Vec<String> {
+        let i = &c.ignore;
+        match self {
+            IssueList::OffDefault => &i.off_default,
+            IssueList::Detached => &i.detached,
+            IssueList::NoRemote => &i.no_remote,
+            IssueList::NoUpstream => &i.no_upstream,
+            IssueList::Stashes => &i.stashes,
+            IssueList::UnpushedBranches => &i.unpushed_branches,
+            IssueList::Behind => &i.behind,
+        }
+    }
+
+    pub fn list_mut(self, c: &mut Config) -> &mut Vec<String> {
+        let i = &mut c.ignore;
+        match self {
+            IssueList::OffDefault => &mut i.off_default,
+            IssueList::Detached => &mut i.detached,
+            IssueList::NoRemote => &mut i.no_remote,
+            IssueList::NoUpstream => &mut i.no_upstream,
+            IssueList::Stashes => &mut i.stashes,
+            IssueList::UnpushedBranches => &mut i.unpushed_branches,
+            IssueList::Behind => &mut i.behind,
+        }
+    }
+}
+
+/// Any list of repos kept in config: the marks and the issue lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum List {
+    Mark(Mark),
+    Issue(IssueList),
+}
+
+impl List {
+    pub fn all() -> impl Iterator<Item = List> {
+        Mark::ALL
+            .into_iter()
+            .map(List::Mark)
+            .chain(IssueList::ALL.into_iter().map(List::Issue))
+    }
+
+    /// The config key, dotted (`ignore.detached`).
+    pub fn path(self) -> String {
+        match self {
+            List::Mark(m) => m.path().to_string(),
+            List::Issue(l) => format!("ignore.{}", l.name()),
+        }
+    }
+
+    pub fn get(self, c: &Config) -> &Vec<String> {
+        match self {
+            List::Mark(m) => m.list(c),
+            List::Issue(l) => l.list(c),
         }
     }
 }
@@ -119,10 +278,60 @@ impl Entry {
     }
 }
 
+/// An `[ignore]` issue list entry: the repo part, and the pinned value
+/// after `@`, if any.
+#[derive(Clone)]
+struct IssueEntry {
+    /// As written.
+    text: String,
+    repo: Entry,
+    value: Option<GlobMatcher>,
+}
+
+impl IssueEntry {
+    fn new(list: IssueList, text: &str) -> Result<Self, ConfigError> {
+        let bad = |reason| ConfigError::IgnoreEntry {
+            list: list.name(),
+            entry: text.to_string(),
+            reason,
+        };
+        let (repo, value) = match text.rsplit_once('@') {
+            Some(_) if !list.pins() => return Err(bad("this list doesn't take @value")),
+            Some((repo, value)) => {
+                if value.is_empty() {
+                    return Err(bad("nothing after @"));
+                }
+                let m = globset::Glob::new(value)
+                    .map_err(|source| ConfigError::Pattern {
+                        pattern: text.to_string(),
+                        source,
+                    })?
+                    .compile_matcher();
+                (repo, Some(m))
+            }
+            None => (text, None),
+        };
+        Ok(Self {
+            text: text.to_string(),
+            repo: Entry::new(repo)?,
+            value,
+        })
+    }
+
+    fn matches(&self, id: Option<&RepoId>, path: &Path, values: &[String]) -> bool {
+        self.repo.matches(id, path)
+            && self
+                .value
+                .as_ref()
+                .is_none_or(|m| values.iter().any(|v| m.is_match(v)))
+    }
+}
+
 /// The `favourite`, `sync` and `ignore` lists, compiled.
 #[derive(Clone)]
 pub struct RuleSet {
     lists: [Vec<Entry>; 3],
+    issues: Vec<Vec<IssueEntry>>,
 }
 
 impl RuleSet {
@@ -130,12 +339,22 @@ impl RuleSet {
         let compile = |m: Mark| -> Result<Vec<Entry>, ConfigError> {
             m.list(config).iter().map(|t| Entry::new(t)).collect()
         };
+        let issues = IssueList::ALL
+            .into_iter()
+            .map(|l| {
+                l.list(config)
+                    .iter()
+                    .map(|t| IssueEntry::new(l, t))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<_, _>>()?;
         Ok(Self {
             lists: [
                 compile(Mark::Favourite)?,
                 compile(Mark::Sync)?,
                 compile(Mark::Ignore)?,
             ],
+            issues,
         })
     }
 
@@ -155,6 +374,32 @@ impl RuleSet {
     /// Whether a (possibly not yet cloned) repo is ignored.
     pub fn ignores(&self, id: &RepoId, path: &Path) -> bool {
         self.decide(Mark::Ignore, Some(id), path).unwrap_or(false)
+    }
+
+    /// Whether `list` ignores its issue for the repo in a state with these
+    /// [`IssueList::values`]: its last matching entry, if any.
+    pub fn ignores_issue(
+        &self,
+        list: IssueList,
+        id: Option<&RepoId>,
+        path: &Path,
+        values: &[String],
+    ) -> bool {
+        self.issues[list as usize]
+            .iter()
+            .rev()
+            .find(|e| e.matches(id, path, values))
+            .is_some_and(|e| !e.repo.negate)
+    }
+
+    /// Entries of `list` naming this repo itself (not patterns), whatever
+    /// value they pin, as written.
+    fn own_issue_entries(&self, list: IssueList, id: Option<&RepoId>, path: &Path) -> Vec<String> {
+        self.issues[list as usize]
+            .iter()
+            .filter(|e| e.repo.literal && e.repo.matches(id, path))
+            .map(|e| e.text.clone())
+            .collect()
     }
 
     /// Entries of `m`'s list naming this repo itself (not patterns), as
@@ -189,6 +434,33 @@ pub fn set_mark(
             format!("!{name}")
         };
         m.list_mut(config).push(entry);
+    }
+    Ok(())
+}
+
+/// Edit `list` in `config` so the issue is ignored (`on`) or not for the
+/// repo in its current state (`values`): drop the entries naming it, then
+/// add `name@value` (pinned, for lists that pin and when there's a value)
+/// or `!name` only if what's left doesn't already give `on`.
+pub fn set_issue_ignored(
+    config: &mut Config,
+    list: IssueList,
+    id: Option<&RepoId>,
+    path: &Path,
+    name: &str,
+    values: &[String],
+    on: bool,
+) -> Result<(), ConfigError> {
+    let own = RuleSet::new(config)?.own_issue_entries(list, id, path);
+    list.list_mut(config).retain(|e| !own.contains(e));
+    let now = RuleSet::new(config)?.ignores_issue(list, id, path, values);
+    if now != on {
+        let entry = match (on, values.first()) {
+            (true, Some(v)) if list.pins() => format!("{name}@{v}"),
+            (true, _) => name.to_string(),
+            (false, _) => format!("!{name}"),
+        };
+        list.list_mut(config).push(entry);
     }
     Ok(())
 }
@@ -299,6 +571,137 @@ mod tests {
         assert!(!fav("favourite = ['/r/*']", URL, "/r/a/widget"));
     }
 
+    /// Whether `[ignore] <list>` in `cfg` ignores the issue for the widget
+    /// repo in a state with these values.
+    fn ignores(cfg: &str, list: IssueList, values: &[&str]) -> bool {
+        let c = Config::parse(cfg).unwrap();
+        let values: Vec<String> = values.iter().map(|v| v.to_string()).collect();
+        RuleSet::new(&c).unwrap().ignores_issue(
+            list,
+            RepoId::from_url(URL).as_ref(),
+            Path::new("/r/widget"),
+            &values,
+        )
+    }
+
+    #[test]
+    fn issue_lists_pin_values_and_take_globs() {
+        let off = IssueList::OffDefault;
+        assert!(ignores(
+            "[ignore]\noff_default = ['acme/widget']",
+            off,
+            &["any"]
+        ));
+        assert!(ignores(
+            "[ignore]\noff_default = ['acme/widget@release-2']",
+            off,
+            &["release-2"]
+        ));
+        assert!(ignores(
+            "[ignore]\noff_default = ['acme/*@release-*']",
+            off,
+            &["release-3"]
+        ));
+        // inverse: another value, another repo, or no list at all
+        assert!(!ignores(
+            "[ignore]\noff_default = ['acme/widget@release-2']",
+            off,
+            &["main"]
+        ));
+        assert!(!ignores(
+            "[ignore]\noff_default = ['acme/other']",
+            off,
+            &["x"]
+        ));
+        assert!(!ignores("", off, &["x"]));
+        // detached: any of the values matches (a tag, the describe, the id)
+        let det = IssueList::Detached;
+        let state = ["v1.2", "v1.2-0-g1a2b3c4", "1a2b3c4", "1a2b3c4d5e6f"];
+        assert!(ignores(
+            "[ignore]\ndetached = ['acme/widget@1a2b3c4']",
+            det,
+            &state
+        ));
+        assert!(ignores(
+            "[ignore]\ndetached = ['acme/widget@v1.*']",
+            det,
+            &state
+        ));
+        assert!(!ignores(
+            "[ignore]\ndetached = ['acme/widget@v2.0']",
+            det,
+            &state
+        ));
+        // the last match wins; ! turns it off
+        assert!(!ignores(
+            "[ignore]\nstashes = ['acme/*', '!acme/widget']",
+            IssueList::Stashes,
+            &[]
+        ));
+        assert!(ignores(
+            "[ignore]\nstashes = ['!acme/*', 'acme/widget']",
+            IssueList::Stashes,
+            &[]
+        ));
+    }
+
+    #[test]
+    fn only_some_issue_lists_take_a_value() {
+        for (cfg, ok) in [
+            ("[ignore]\nstashes = ['acme/widget@2']", false),
+            ("[ignore]\nbehind = ['acme/widget@x']", false),
+            ("[ignore]\noff_default = ['acme/widget@']", false),
+            ("[ignore]\nno_upstream = ['acme/widget@feat']", true),
+            ("[ignore]\noff_default = ['acme/widget@feat']", true),
+        ] {
+            let c = Config::parse(cfg).unwrap();
+            assert_eq!(RuleSet::new(&c).is_ok(), ok, "{cfg}");
+        }
+    }
+
+    #[test]
+    fn ignoring_an_issue_pins_its_value_and_unignoring_removes_it() {
+        let id = RepoId::from_url(URL);
+        let path = Path::new("/r/widget");
+        let mut c = Config::default();
+        let values = vec!["release-2".to_string()];
+        let set = |c: &mut Config, on| {
+            set_issue_ignored(
+                c,
+                IssueList::OffDefault,
+                id.as_ref(),
+                path,
+                "acme/widget",
+                &values,
+                on,
+            )
+            .unwrap()
+        };
+        set(&mut c, true);
+        assert_eq!(c.ignore.off_default, ["acme/widget@release-2"]);
+        set(&mut c, true);
+        assert_eq!(c.ignore.off_default, ["acme/widget@release-2"], "once");
+        set(&mut c, false);
+        assert!(c.ignore.off_default.is_empty());
+        // a pattern ignores it: unignoring adds `!`
+        c.ignore.off_default = vec!["acme/*".into()];
+        set(&mut c, false);
+        assert_eq!(c.ignore.off_default, ["acme/*", "!acme/widget"]);
+        // lists without values aren't pinned
+        let mut c = Config::default();
+        set_issue_ignored(
+            &mut c,
+            IssueList::Stashes,
+            id.as_ref(),
+            path,
+            "acme/widget",
+            &[],
+            true,
+        )
+        .unwrap();
+        assert_eq!(c.ignore.stashes, ["acme/widget"]);
+    }
+
     #[test]
     fn later_entries_win_and_bang_turns_off() {
         let cfg = "sync = ['acme/*', '!acme/widget']";
@@ -316,7 +719,7 @@ mod tests {
         assert!(fav("favourite = ['!acme/widget', 'acme/*']", URL, "/x"));
         // the lists are independent
         let f = flags(
-            "favourite = ['acme/*']\nignore = ['!acme/*']",
+            "favourite = ['acme/*']\nignore.repos = ['!acme/*']",
             &State::default(),
             URL,
             "/x",
@@ -390,7 +793,7 @@ mod tests {
     #[test]
     fn repos_without_identity_match_by_path_only() {
         let f = flags(
-            "ignore = ['/local/**']",
+            "ignore.repos = ['/local/**']",
             &State::default(),
             "",
             "/local/thing",

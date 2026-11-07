@@ -15,7 +15,7 @@ use serde_json::{Map, Value as Json};
 
 use crate::config::{Config, Layers};
 use crate::paths::{contract_tilde, expand_tilde};
-use crate::rules::Mark;
+use crate::rules::List;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EditError {
@@ -32,7 +32,7 @@ pub enum EditError {
     #[error("{path}: `roots` must be an array of strings")]
     RootsNotArray { path: PathBuf },
     #[error("{path}: `{key}` must be a list")]
-    NotAList { path: PathBuf, key: &'static str },
+    NotAList { path: PathBuf, key: String },
     #[error("{0}: no such directory")]
     NoSuchDir(PathBuf),
     #[error("{path}: result would not be a valid config: {source}")]
@@ -453,16 +453,72 @@ fn entries(doc: &toml_edit::DocumentMut, key: &str, path: &Path) -> Result<Vec<S
 /// `key`), into `extend_<key>` if it has that, as it applies last (which
 /// matters for `!` entries), else `key`. `None` when no file has either.
 fn add_target(docs: &[Doc], key: &str) -> Option<(usize, String)> {
-    let extend_key = format!("extend_{key}");
+    let extend_key = extend_path(key);
     docs.iter().enumerate().find_map(|(i, d)| {
-        if d.doc.contains_key(&extend_key) {
+        if has(&d.doc, &extend_key) {
             Some((i, extend_key.clone()))
-        } else if d.doc.contains_key(key) {
+        } else if has(&d.doc, key) {
             Some((i, key.to_string()))
         } else {
             None
         }
     })
+}
+
+/// A dotted key's tables and last part: `ignore.repos` is (`[ignore]`,
+/// `repos`).
+fn split_path(path: &str) -> (Vec<&str>, &str) {
+    let mut parts: Vec<&str> = path.split('.').collect();
+    let last = parts.pop().unwrap_or_default();
+    (parts, last)
+}
+
+/// The `extend_` form of a dotted key: `ignore.repos` is
+/// `ignore.extend_repos`.
+fn extend_path(path: &str) -> String {
+    match path.rsplit_once('.') {
+        Some((tables, key)) => format!("{tables}.extend_{key}"),
+        None => format!("extend_{path}"),
+    }
+}
+
+/// The table at `tables` (`[ignore]`, or dotted keys `ignore.x = …`),
+/// created when `create`.
+fn table_mut<'a>(
+    doc: &'a mut toml_edit::DocumentMut,
+    tables: &[&str],
+    create: bool,
+) -> Option<&'a mut dyn toml_edit::TableLike> {
+    let mut t: &mut dyn toml_edit::TableLike = doc.as_table_mut();
+    for name in tables {
+        if create && !t.contains_key(name) {
+            t.insert(name, toml_edit::table());
+        }
+        t = t.get_mut(name)?.as_table_like_mut()?;
+    }
+    Some(t)
+}
+
+fn item<'a>(doc: &'a toml_edit::DocumentMut, path: &str) -> Option<&'a toml_edit::Item> {
+    let (tables, key) = split_path(path);
+    let mut t: &dyn toml_edit::TableLike = doc.as_table();
+    for name in tables {
+        t = t.get(name)?.as_table_like()?;
+    }
+    t.get(key)
+}
+
+fn has(doc: &toml_edit::DocumentMut, path: &str) -> bool {
+    item(doc, path).is_some()
+}
+
+/// The list at dotted `path`, if it's there and a list.
+fn array_mut<'a>(
+    doc: &'a mut toml_edit::DocumentMut,
+    path: &str,
+) -> Option<&'a mut toml_edit::Array> {
+    let (tables, key) = split_path(path);
+    table_mut(doc, &tables, false)?.get_mut(key)?.as_array_mut()
 }
 
 /// Write each `(file, text)`, after checking every file can be written and
@@ -663,13 +719,12 @@ pub fn remove_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsRemoved, EditE
 /// `add_target`), else a new list in the main file, as for roots. No
 /// changes, no write.
 pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result<(), EditError> {
-    let changes: Vec<(Mark, Vec<&String>, Vec<&String>)> = Mark::ALL
-        .into_iter()
-        .map(|m| {
-            let (old, new) = (m.list(before), m.list(after));
+    let changes: Vec<(String, Vec<&String>, Vec<&String>)> = List::all()
+        .map(|l| {
+            let (old, new) = (l.get(before), l.get(after));
             let removed: Vec<&String> = old.iter().filter(|e| !new.contains(e)).collect();
             let added: Vec<&String> = new.iter().filter(|e| !old.contains(e)).collect();
-            (m, removed, added)
+            (l.path(), removed, added)
         })
         .filter(|(_, removed, added)| !removed.is_empty() || !added.is_empty())
         .collect();
@@ -679,13 +734,12 @@ pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result
     ensure_exists(path)?;
     let mut docs = docs_highest_first(path)?;
     let mut touched = vec![false; docs.len()];
-    for (m, removed, added) in changes {
-        let key = m.name();
-        let extend_key = format!("extend_{key}");
+    for (key, removed, added) in changes {
+        let extend_key = extend_path(&key);
         for r in removed {
             for (i, d) in docs.iter_mut().enumerate() {
-                for k in [key, extend_key.as_str()] {
-                    if let Some(arr) = d.doc.get_mut(k).and_then(|v| v.as_array_mut()) {
+                for k in [key.as_str(), extend_key.as_str()] {
+                    if let Some(arr) = array_mut(&mut d.doc, k) {
                         let before = arr.len();
                         remove_where(arr, |v| v.as_str() == Some(r.as_str()));
                         touched[i] |= arr.len() != before;
@@ -696,16 +750,19 @@ pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result
         if added.is_empty() {
             continue;
         }
-        let (i, target) = add_target(&docs, key).unwrap_or((0, key.to_string()));
+        let (i, target) = add_target(&docs, &key).unwrap_or((0, key.clone()));
         let d = &mut docs[i];
-        let item = d
-            .doc
-            .entry(&target)
-            .or_insert_with(|| toml_edit::value(toml_edit::Array::new()));
-        let arr = item.as_array_mut().ok_or_else(|| EditError::NotAList {
+        let not_a_list = || EditError::NotAList {
             path: d.path.clone(),
-            key,
-        })?;
+            key: target.clone(),
+        };
+        let (tables, last) = split_path(&target);
+        let table = table_mut(&mut d.doc, &tables, true).ok_or_else(not_a_list)?;
+        let arr = table
+            .entry(last)
+            .or_insert(toml_edit::value(toml_edit::Array::new()))
+            .as_array_mut()
+            .ok_or_else(not_a_list)?;
         for a in added {
             arr.push(a.as_str());
         }
@@ -748,7 +805,7 @@ mod tests {
         assert_eq!(c.fix, d.fix);
         assert_eq!(c.ui.theme, d.ui.theme);
         assert!(c.roots.is_empty(), "roots are never guessed");
-        assert!(c.favourite.is_empty() && c.sync.is_empty() && c.ignore.is_empty());
+        assert!(c.favourite.is_empty() && c.sync.is_empty() && c.ignore.repos.is_empty());
         assert_eq!(c.tracks.len(), 1);
         assert_eq!(
             c.tracks[0].host, "github.com",
@@ -955,12 +1012,12 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&p).unwrap(), text);
         let mut after = before.clone();
         after.favourite = vec!["b/*".into(), "c/y".into()];
-        after.ignore = vec!["!d/z".into()];
+        after.ignore.repos = vec!["!d/z".into()];
         update_mark_lists(&p, &before, &after).unwrap();
         let out = std::fs::read_to_string(&p).unwrap();
         let c = Config::parse(&out).unwrap();
         assert_eq!(c.favourite, ["b/*", "c/y"]);
-        assert_eq!(c.ignore, ["!d/z"], "created when missing");
+        assert_eq!(c.ignore.repos, ["!d/z"], "created when missing");
         assert!(c.sync.is_empty());
         // the rest of the file is as written
         assert!(
