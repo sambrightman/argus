@@ -32,8 +32,8 @@ its default and documentation, commented out, generated from the code (so
 it can't drift). `argus root add|remove|list` edit it in place, keeping
 your comments. With extended files, `root add` appends to the
 highest-precedence file that has `roots` or `extend_roots` (where an
-addition always takes effect), else starts `roots` at the top of the main
-file; `root
+addition always takes effect; `extend_roots` if it has both), else starts
+`roots` at the top of the main file; `root
 remove` takes the directory out of every file that lists it. Each names
 the file it edited when it isn't the main one. If `max_depth` stops a scan before the bottom of a tree,
 argus warns and names a directory it skipped.
@@ -104,9 +104,10 @@ Favourite, sync and ignore live in config: marking a repo in the TUI or
 with `argus mark` adds its name to the list (or `!name` to turn off what a
 pattern says) and saves the change, keeping the rest of the file as
 written; clearing removes the repo's own entries, so patterns decide
-again. With extended files, an entry is removed from whichever file holds it, and
-new entries go into your main file (as `extend_favourite` etc. when an
-extended file sets the list, so its entries stay). Nothing is dropped for
+again. With extended files, an entry is removed from every file that
+lists it, and new entries go where roots do: the highest-precedence file
+with the list or its `extend_` form (to keep them in your main file, give
+it e.g. `extend_favourite = []`). Nothing is dropped for
 repos that have gone. Snoozes and "new"
 flags are kept in `~/.local/state/argus/state.toml`. Marks an older argus
 kept there are shown as config lines to copy, and left in place.

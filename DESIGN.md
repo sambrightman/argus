@@ -137,20 +137,22 @@ Two findings:
   and lists replace, lists of tables (`[[track]]`) add up, and
   `extend_<list>` appends at any level, for every list setting without
   listing them; on a non-list or unknown key it's an error. The merge
-  records which file each list element came from, so saving marks can
-  remove an entry where it lives and add new ones to the main file
-  without overriding an extended file's list. Roots follow a rule of their own,
-  chosen so an addition always takes effect: `root add` appends to the
-  highest-precedence file with `roots` or `extend_roots` (`roots` if it
-  has both), else starts `roots` at the top of the main file. Nothing
-  above that file sets `roots`, so its list, or its addition to the
-  list, takes effect; and when a shared base sets `roots` and the main
-  file extends them, additions go to the main file, not the shared one. Precedence: the main file,
-  then a later extended file before an earlier one, a file before the
-  files it extends (`Layers.files` reversed). `root remove` removes from every
-  file listing the root, reporting removals that changed nothing because
-  a higher `roots` replaces that file's, and checks every file can be
-  written before changing any. Old setting names aren't kept
+  records the order files were merged in. Roots and the mark
+  lists are edited by one rule, chosen so an addition always takes
+  effect: append to the highest-precedence file with the list or its
+  `extend_` form, into `extend_` if it has both (it applies last, so a
+  `!` entry added there wins over the file's own patterns); with
+  neither anywhere, start the list in the main file (`roots` at the
+  top). Nothing above that file sets the list, so the addition counts;
+  and when a shared base sets a list that the main file extends,
+  additions stay in the main file (an empty `extend_favourite = []`
+  there steers them). Precedence: the main file, then a later extended
+  file before an earlier one, a file before the files it extends
+  (`Layers.files` reversed). Removal takes an entry out of every file
+  listing it; `root remove` also reports removals that changed nothing
+  because a higher `roots` replaces that file's. Every file is checked
+  as writable before any changes, so a failure leaves them all as they
+  were. Old setting names aren't kept
   (nothing released yet): they fail as unknown keys.
 * **Diff view.** Tab on a file in the details shows its unstaged then
   staged hunks (from `diff::file_diff`, cached per file and side, dropped

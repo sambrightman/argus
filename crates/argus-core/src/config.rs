@@ -1,7 +1,7 @@
 //! User configuration (hand-edited TOML). Machine-written data lives in
 //! [`crate::state`] so this file is never rewritten behind the user's back.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -342,9 +342,6 @@ impl Default for UiConfig {
 /// lists replace, lists of tables add up, and `extend_<list>` appends.
 pub(crate) struct Layers {
     pub table: toml::Table,
-    /// For each list (dotted key), the file each element came from (`None`:
-    /// the defaults).
-    pub origins: HashMap<String, Vec<Option<PathBuf>>>,
     /// The main file's own `extend`.
     pub main_extends: Vec<String>,
     /// The files read, in the order merged: a file after those it extends, so
@@ -355,11 +352,8 @@ pub(crate) struct Layers {
 impl Layers {
     fn defaults() -> Self {
         let table = toml::Table::try_from(Config::default()).expect("defaults serialize");
-        let mut origins = HashMap::new();
-        record_lists(&table, "", &mut origins);
         Self {
             table,
-            origins,
             main_extends: vec![],
             files: vec![],
         }
@@ -405,13 +399,13 @@ impl Layers {
             }
         }
         chain.pop();
-        self.merge(layer, Some(path))?;
+        self.merge(layer)?;
         self.files.push(path.to_path_buf());
         Ok(bases)
     }
 
-    fn merge(&mut self, layer: toml::Table, file: Option<&Path>) -> Result<(), ConfigError> {
-        merge_table(&mut self.table, layer, "", file, &mut self.origins)
+    fn merge(&mut self, layer: toml::Table) -> Result<(), ConfigError> {
+        merge_table(&mut self.table, layer, "")
     }
 }
 
@@ -476,22 +470,6 @@ fn dotted(prefix: &str, key: &str) -> String {
     }
 }
 
-fn record_lists(
-    t: &toml::Table,
-    prefix: &str,
-    origins: &mut HashMap<String, Vec<Option<PathBuf>>>,
-) {
-    for (k, v) in t {
-        match v {
-            toml::Value::Array(a) => {
-                origins.insert(dotted(prefix, k), vec![None; a.len()]);
-            }
-            toml::Value::Table(sub) => record_lists(sub, &dotted(prefix, k), origins),
-            _ => {}
-        }
-    }
-}
-
 fn is_tables(a: &[toml::Value]) -> bool {
     !a.is_empty() && a.iter().all(|v| v.is_table())
 }
@@ -500,29 +478,20 @@ fn merge_table(
     base: &mut toml::Table,
     layer: toml::Table,
     prefix: &str,
-    file: Option<&Path>,
-    origins: &mut HashMap<String, Vec<Option<PathBuf>>>,
 ) -> Result<(), ConfigError> {
-    let from = |n: usize| vec![file.map(Path::to_path_buf); n];
     let (extends, plain): (Vec<_>, Vec<_>) = layer
         .into_iter()
         .partition(|(k, _)| k.starts_with("extend_"));
     for (k, v) in plain {
         let key = dotted(prefix, &k);
         match (base.get_mut(&k), v) {
-            (Some(toml::Value::Table(b)), toml::Value::Table(l)) => {
-                merge_table(b, l, &key, file, origins)?
-            }
+            (Some(toml::Value::Table(b)), toml::Value::Table(l)) => merge_table(b, l, &key)?,
             (Some(toml::Value::Array(b)), toml::Value::Array(l))
                 if is_tables(&l) || is_tables(b) =>
             {
-                origins.entry(key).or_default().extend(from(l.len()));
                 b.extend(l);
             }
             (_, v) => {
-                if let toml::Value::Array(a) = &v {
-                    origins.insert(key, from(a.len()));
-                }
                 base.insert(k, v);
             }
         }
@@ -534,13 +503,7 @@ fn merge_table(
             reason,
         };
         match (base.get_mut(target), v) {
-            (Some(toml::Value::Array(b)), toml::Value::Array(l)) => {
-                origins
-                    .entry(dotted(prefix, target))
-                    .or_default()
-                    .extend(from(l.len()));
-                b.extend(l);
-            }
+            (Some(toml::Value::Array(b)), toml::Value::Array(l)) => b.extend(l),
             (Some(toml::Value::Array(_)), _) => return Err(err("must be a list")),
             (Some(_), _) => return Err(err("only a list setting can be extended")),
             (None, _) => return Err(err("no such setting to extend")),
@@ -621,7 +584,7 @@ impl Config {
         let mut layer: toml::Table = toml::from_str(s)?;
         let extend = take_extend(&mut layer, Path::new("config"))?;
         let mut layers = Layers::defaults();
-        layers.merge(layer, None)?;
+        layers.merge(layer)?;
         let mut c: Config = toml::Value::Table(layers.table).try_into()?;
         c.extend = extend;
         c.normalize();

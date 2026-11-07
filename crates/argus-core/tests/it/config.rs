@@ -169,13 +169,49 @@ fn marks_are_saved_to_the_file_holding_them() {
         "{inc_text}"
     );
     assert!(inc_text.contains("acme/b"), "{inc_text}");
-    // added to the main file without replacing the extended file's list
-    assert!(
-        main_text.contains("extend_favourite") && main_text.contains("acme/c"),
-        "{main_text}"
-    );
-    assert!(main_text.contains("# mine"), "{main_text}");
+    // the main file doesn't mention favourite, so the addition goes where
+    // the list lives: the highest file with it
+    assert!(inc_text.contains("acme/c"), "{inc_text}");
+    assert_eq!(main_text, "extend = ['marks.toml']\n# mine\n");
     assert_eq!(Config::load(&main).unwrap().favourite, ["acme/b", "acme/c"]);
+}
+
+#[test]
+fn an_empty_extend_list_in_the_main_file_keeps_additions_there() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path();
+    let shared = write(d, "team.toml", "favourite = ['acme/a']\n");
+    let main = write(
+        d,
+        "config.toml",
+        "extend = ['team.toml']\nextend_favourite = []\n",
+    );
+    let before = Config::load(&main).unwrap();
+    let mut after = before.clone();
+    after.favourite.push("acme/c".into());
+    update_mark_lists(&main, &before, &after).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&shared).unwrap(),
+        "favourite = ['acme/a']\n",
+        "shared file untouched"
+    );
+    assert_eq!(Config::load(&main).unwrap().favourite, ["acme/a", "acme/c"]);
+}
+
+#[test]
+fn in_a_file_with_both_keys_an_unmark_goes_last_so_it_wins() {
+    let t = tempfile::tempdir().unwrap();
+    let main = write(
+        t.path(),
+        "config.toml",
+        "sync = []\nextend_sync = ['acme/*']\n",
+    );
+    let before = Config::load(&main).unwrap();
+    let mut after = before.clone();
+    after.sync.push("!acme/big".into());
+    update_mark_lists(&main, &before, &after).unwrap();
+    // extend_sync applies after sync, so the ! entry belongs there
+    assert_eq!(Config::load(&main).unwrap().sync, ["acme/*", "!acme/big"]);
 }
 
 #[test]
@@ -196,4 +232,24 @@ fn marks_are_added_to_the_main_files_own_list_when_it_has_one() {
     assert_eq!(c.sync, ["acme/*", "x/y", "!acme/big"]);
     let text = std::fs::read_to_string(&main).unwrap();
     assert!(!text.contains("\nsync ="), "{text}");
+}
+
+#[test]
+fn an_unmark_alone_is_saved_in_the_file_holding_the_entry() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path();
+    let shared = write(d, "team.toml", "favourite = ['acme/a', 'acme/b']\n");
+    let main = write(d, "config.toml", "extend = ['team.toml']\n");
+    let before = Config::load(&main).unwrap();
+    let mut after = before.clone();
+    after.favourite.retain(|e| e != "acme/a");
+    update_mark_lists(&main, &before, &after).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&shared).unwrap(),
+        "favourite = ['acme/b']\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&main).unwrap(),
+        "extend = ['team.toml']\n"
+    );
 }

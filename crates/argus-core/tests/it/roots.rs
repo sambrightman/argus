@@ -1,5 +1,6 @@
 //! `root add` / `root remove` across extended config files: add to the
-//! highest file with `roots` or `extend_roots` (to `roots` if it has both),
+//! highest file with `roots` or `extend_roots` (to `extend_roots` if it
+//! has both, as that applies last),
 //! else start `roots` at the top of the main file; remove from every
 //! file that mentions the root.
 
@@ -145,10 +146,11 @@ fn the_highest_file_with_either_key_gets_it() {
     );
     assert_eq!(roots(&main), ["c", "a", "b"]);
     assert!(r.replaces.is_empty(), "{r:?}");
-    // a file with both: roots
+    // a file with both: extend_roots, applied last (as for marks, where
+    // order matters)
     let (t, main) = setup(&[("config.toml", "roots = ['{a}']\nextend_roots = ['{c}']\n")]);
     add_roots(&main, &[dir(&t, "b")]).unwrap();
-    assert_eq!(roots(&main), ["a", "b", "c"]);
+    assert_eq!(roots(&main), ["a", "c", "b"]);
 }
 
 #[test]

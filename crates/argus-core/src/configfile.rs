@@ -420,7 +420,6 @@ struct Doc {
 
 /// The files making up `path`'s config, highest first: the main file, then
 /// the files it extends from the last merged down, a file before those it extends.
-/// Each file's `roots` and `extend_roots` must be lists of strings.
 fn docs_highest_first(path: &Path) -> Result<Vec<Doc>, EditError> {
     let layers = Layers::load(path)?;
     let mut docs: Vec<Doc> = vec![];
@@ -429,9 +428,6 @@ fn docs_highest_first(path: &Path) -> Result<Vec<Doc>, EditError> {
             continue; // extended twice: its last merge is what counts
         }
         let (text, doc) = load(&f)?;
-        for k in ROOT_KEYS {
-            entries(&doc, k, &f)?;
-        }
         docs.push(Doc { path: f, text, doc });
     }
     Ok(docs)
@@ -450,6 +446,45 @@ fn entries(doc: &toml_edit::DocumentMut, key: &str, path: &Path) -> Result<Vec<S
             })
             .ok_or_else(|| EditError::RootsNotArray { path: path.into() }),
     }
+}
+
+/// Where an addition to list `key` goes, so that it takes effect: the
+/// highest file with `key` or `extend_<key>` (nothing above it sets
+/// `key`), into `extend_<key>` if it has that, as it applies last (which
+/// matters for `!` entries), else `key`. `None` when no file has either.
+fn add_target(docs: &[Doc], key: &str) -> Option<(usize, String)> {
+    let extend_key = format!("extend_{key}");
+    docs.iter().enumerate().find_map(|(i, d)| {
+        if d.doc.contains_key(&extend_key) {
+            Some((i, extend_key.clone()))
+        } else if d.doc.contains_key(key) {
+            Some((i, key.to_string()))
+        } else {
+            None
+        }
+    })
+}
+
+/// Write each `(file, text)`, after checking every file can be written and
+/// every text is a valid config, so a failure leaves all of them unchanged.
+fn write_all(changed: &[(&Path, String)]) -> Result<(), EditError> {
+    for (file, text) in changed {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(file)
+            .map_err(|source| EditError::Io {
+                path: file.to_path_buf(),
+                source,
+            })?;
+        Config::parse(text).map_err(|source| EditError::Invalid {
+            path: file.to_path_buf(),
+            source: Box::new(source),
+        })?;
+    }
+    for (file, text) in changed {
+        write(file, text)?;
+    }
+    Ok(())
 }
 
 /// Whether `doc` lists `dir` under either root key.
@@ -473,6 +508,11 @@ fn lists(d: &Doc, dir: &Path) -> bool {
 pub fn add_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsAdded, EditError> {
     ensure_exists(path)?;
     let mut docs = docs_highest_first(path)?;
+    for d in &docs {
+        for k in ROOT_KEYS {
+            entries(&d.doc, k, &d.path)?;
+        }
+    }
     let effective = Config::load(path)?.roots;
     let mut added: Vec<String> = vec![];
     let mut already: Vec<(String, PathBuf)> = vec![];
@@ -495,17 +535,12 @@ pub fn add_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsAdded, EditError>
             added.push(entry);
         }
     }
-    // The highest file with either key: nothing above it sets `roots`, so
-    // its list (or its addition to the list) is the one that takes effect.
-    let target = docs.iter().enumerate().find_map(|(i, d)| {
-        ROOT_KEYS
-            .into_iter()
-            .find(|k| d.doc.contains_key(k))
-            .map(|k| (i, k))
-    });
-    let file = target.map_or_else(|| path.to_path_buf(), |(i, _)| docs[i].path.clone());
-    let replaces = match target {
-        Some((i, "roots")) => docs[i + 1..]
+    let target = add_target(&docs, "roots");
+    let file = target
+        .as_ref()
+        .map_or_else(|| path.to_path_buf(), |(i, _)| docs[*i].path.clone());
+    let replaces = match &target {
+        Some((i, key)) if key == "roots" => docs[i + 1..]
             .iter()
             .filter(|d| d.doc.contains_key("roots"))
             .map(|d| d.path.clone())
@@ -524,7 +559,7 @@ pub fn add_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsAdded, EditError>
         Some((i, key)) => {
             let arr = docs[i]
                 .doc
-                .get_mut(key)
+                .get_mut(&key)
                 .and_then(|v| v.as_array_mut())
                 .expect("checked to be a list");
             for a in &added {
@@ -564,6 +599,11 @@ pub fn add_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsAdded, EditError>
 /// valid config), so a failure leaves all of them as they were.
 pub fn remove_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsRemoved, EditError> {
     let mut docs = docs_highest_first(path)?;
+    for d in &docs {
+        for k in ROOT_KEYS {
+            entries(&d.doc, k, &d.path)?;
+        }
+    }
     let has_roots: Vec<bool> = docs.iter().map(|d| d.doc.contains_key("roots")).collect();
     let mut touched = vec![false; docs.len()];
     let mut out = RootsRemoved {
@@ -611,32 +651,17 @@ pub fn remove_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsRemoved, EditE
         .filter(|(_, t)| **t)
         .map(|(d, _)| (d.path.as_path(), d.doc.to_string()))
         .collect();
-    for (file, text) in &changed {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(file)
-            .map_err(|source| EditError::Io {
-                path: file.to_path_buf(),
-                source,
-            })?;
-        Config::parse(text).map_err(|source| EditError::Invalid {
-            path: file.to_path_buf(),
-            source: Box::new(source),
-        })?;
-    }
-    for (file, text) in changed {
-        write(file, &text)?;
-    }
+    write_all(&changed)?;
     Ok(out)
 }
 
 /// Write the `favourite`, `sync` and `ignore` changes from `before` to
 /// `after` into the config at `path` (created from the example if needed)
-/// and the files it extends, leaving the rest of each file as written. An entry
-/// gone from a list is removed from whichever file holds it; new ones go
-/// into the main file: its own list if it has one, else `extend_<list>`
-/// when an extended file sets the list (so its entries stay), else a new
-/// list. No changes, no write.
+/// and the files it extends, leaving the rest of each file as written. An
+/// entry gone from a list is removed from every file that lists it; new
+/// ones go to the highest file with the list or its `extend_` form (see
+/// `add_target`), else a new list in the main file, as for roots. No
+/// changes, no write.
 pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result<(), EditError> {
     let changes: Vec<(Mark, Vec<&String>, Vec<&String>)> = Mark::ALL
         .into_iter()
@@ -652,42 +677,18 @@ pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result
         return Ok(());
     }
     ensure_exists(path)?;
-    let layers = Layers::load(path)?;
-    // file -> its document, edited in turn
-    let mut docs: Vec<(PathBuf, toml_edit::DocumentMut)> = vec![];
-    let doc_of = |docs: &mut Vec<(PathBuf, toml_edit::DocumentMut)>, file: &Path| {
-        if let Some(i) = docs.iter().position(|(p, _)| p == file) {
-            return Ok::<usize, EditError>(i);
-        }
-        docs.push((file.to_path_buf(), load(file)?.1));
-        Ok(docs.len() - 1)
-    };
+    let mut docs = docs_highest_first(path)?;
+    let mut touched = vec![false; docs.len()];
     for (m, removed, added) in changes {
         let key = m.name();
         let extend_key = format!("extend_{key}");
-        let effective: Vec<String> = layers
-            .table
-            .get(key)
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let origins = layers.origins.get(key).cloned().unwrap_or_default();
         for r in removed {
-            let files: Vec<PathBuf> = effective
-                .iter()
-                .zip(&origins)
-                .filter(|(e, _)| *e == r)
-                .filter_map(|(_, o)| o.clone())
-                .collect();
-            for file in files {
-                let i = doc_of(&mut docs, &file)?;
+            for (i, d) in docs.iter_mut().enumerate() {
                 for k in [key, extend_key.as_str()] {
-                    if let Some(arr) = docs[i].1.get_mut(k).and_then(|v| v.as_array_mut()) {
+                    if let Some(arr) = d.doc.get_mut(k).and_then(|v| v.as_array_mut()) {
+                        let before = arr.len();
                         remove_where(arr, |v| v.as_str() == Some(r.as_str()));
+                        touched[i] |= arr.len() != before;
                     }
                 }
             }
@@ -695,29 +696,28 @@ pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result
         if added.is_empty() {
             continue;
         }
-        let i = doc_of(&mut docs, path)?;
-        let doc = &mut docs[i].1;
-        let from_bases = origins.iter().flatten().any(|o| o.as_path() != path);
-        let target = if doc.contains_key(key) || (!doc.contains_key(&extend_key) && !from_bases) {
-            key.to_string()
-        } else {
-            extend_key
-        };
-        let item = doc
+        let (i, target) = add_target(&docs, key).unwrap_or((0, key.to_string()));
+        let d = &mut docs[i];
+        let item = d
+            .doc
             .entry(&target)
             .or_insert_with(|| toml_edit::value(toml_edit::Array::new()));
         let arr = item.as_array_mut().ok_or_else(|| EditError::NotAList {
-            path: path.into(),
+            path: d.path.clone(),
             key,
         })?;
         for a in added {
             arr.push(a.as_str());
         }
+        touched[i] = true;
     }
-    for (file, doc) in docs {
-        save(&file, &doc.to_string())?;
-    }
-    Ok(())
+    let changed: Vec<(&Path, String)> = docs
+        .iter()
+        .zip(&touched)
+        .filter(|(_, t)| **t)
+        .map(|(d, _)| (d.path.as_path(), d.doc.to_string()))
+        .collect();
+    write_all(&changed)
 }
 
 #[cfg(test)]
