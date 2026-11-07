@@ -11,6 +11,8 @@
 #
 # The tree is cached under target/bench/ (keyed by the repo count and this
 # script's contents), so only the first run pays for building it.
+# Sustained runs on macOS can swing between two speeds (scheduler and
+# power state): compare builds in one hyperfine run, or repeat.
 set -euo pipefail
 
 repos=200
@@ -21,7 +23,7 @@ while (($#)); do
         -n) repos=$2; shift 2 ;;
         --cold) cold=true; shift ;;
         --export) export_args=(--export-json "$2"); shift 2 ;;
-        -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
     esac
 done
@@ -45,7 +47,7 @@ key=$(cat "$0" | git hash-object --stdin | cut -c1-8)
 fixture=$here/target/bench/fixture-$repos-$key
 dev=$fixture/dev
 
-# One repo: a few commits in nested files; then, by index, one of: clean,
+# One repo: a few commits in nested files, packed; then, by index, one of: clean,
 # modified, staged, untracked, ahead of its upstream, behind it, on a
 # feature branch, or with a stash. Upstreams are set without a real remote
 # (a remote-tracking ref and branch config), so nothing touches the network.
@@ -64,6 +66,10 @@ make_repo() {
     git -C "$r" config branch.main.remote origin
     git -C "$r" config branch.main.merge refs/heads/main
     git -C "$r" update-ref refs/remotes/origin/main HEAD
+    # packed objects and refs, as in a fresh clone; later commits stay loose
+    git -C "$r" repack -adq
+    git -C "$r" pack-refs --all
+    git -C "$r" prune
     case $((i % 8)) in
         1) echo changed >>"$r/README" ;;
         2) echo staged >>"$r/README"; git -C "$r" add README ;;
