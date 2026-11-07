@@ -8,7 +8,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// Marks as older versions of argus kept them, per repo key. They now live
-/// in config (`favourite`, `sync`, `exclude`); see
+/// in config (`favourite`, `sync`, `ignore`); see
 /// [`State::old_marks_as_config`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -36,7 +36,7 @@ pub struct State {
     /// no longer used); remove them by hand once copied to config.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub marks: BTreeMap<String, Marks>,
-    /// Temporarily excluded until the timestamp.
+    /// Temporarily hidden until the timestamp.
     pub snoozed: BTreeMap<String, Timestamp>,
     /// Repos (by key) cloned or discovered by argus and not yet acknowledged.
     pub new: BTreeSet<String>,
@@ -119,7 +119,7 @@ impl State {
         let lines = [
             ("favourite", list(|m| m.favourite)),
             ("sync", list(|m| m.sync)),
-            ("exclude", list(|m| m.exclude)),
+            ("ignore", list(|m| m.exclude)),
         ]
         .into_iter()
         .filter(|(_, l)| l != "[]")
@@ -180,7 +180,7 @@ mod tests {
         let s = State::load(&p).unwrap();
         assert_eq!(
             s.old_marks_as_config().unwrap(),
-            "favourite = [\"github.com/a/b\"]\nsync = [\"!github.com/a/b\"]\nexclude = [\"/home/me/x\"]"
+            "favourite = [\"github.com/a/b\"]\nsync = [\"!github.com/a/b\"]\nignore = [\"/home/me/x\"]"
         );
         // saving keeps them (never lost without asking); the old clocks go
         s.save(&p).unwrap();

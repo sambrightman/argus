@@ -364,7 +364,11 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
     let changes = if bare {
         Changes::default()
     } else {
-        changes(repo, opts, head_commit.as_ref().and_then(|c| c.tree_id().ok()))?
+        changes(
+            repo,
+            opts,
+            head_commit.as_ref().and_then(|c| c.tree_id().ok()),
+        )?
     };
     let integration = integration(repo, &head, upstream.as_ref());
     let detached_orphans = match &head {
@@ -511,11 +515,7 @@ fn default_branch(repo: &gix::Repository, refs: &Refs, remote: Option<&str>) -> 
 
 /// Commit the default branch points to: remote-tracking ref preferred, as it
 /// is what "pushed/merged" means; local branch as a fallback.
-fn default_tip(
-    refs: &Refs,
-    remote: Option<&str>,
-    default: &str,
-) -> Option<gix::ObjectId> {
+fn default_tip(refs: &Refs, remote: Option<&str>, default: &str) -> Option<gix::ObjectId> {
     let mut names = vec![];
     if let Some(r) = remote {
         names.push(format!("refs/remotes/{r}/{default}"));
@@ -850,11 +850,7 @@ fn detached_orphans(
     if tips.contains(&head) {
         return Ok(0); // e.g. a checked-out tag: no walk needed
     }
-    let walk = repo
-        .rev_walk([head])
-        .with_hidden(tips)
-        .all()
-        .map_err(err)?;
+    let walk = repo.rev_walk([head]).with_hidden(tips).all().map_err(err)?;
     let mut n = 0;
     for info in walk {
         info.map_err(err)?;

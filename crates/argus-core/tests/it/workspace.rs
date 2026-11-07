@@ -128,13 +128,13 @@ fn ordering_attention_then_favourites_then_severity_then_changes_then_name() {
 }
 
 #[test]
-fn excluded_and_snoozed_hidden_by_default() {
+fn ignored_and_snoozed_hidden_by_default() {
     let sb = Sandbox::new();
     for n in ["keep", "gone", "nap"] {
         sb.remote("acme", n);
         sb.clone_as_github("acme", n, &format!("dev/{n}"));
     }
-    let mut w = ws(&sb, "exclude = ['acme/gone']");
+    let mut w = ws(&sb, "ignore = ['acme/gone']");
     w.state.snoozed.insert(
         "github.com/acme/nap".into(),
         "2999-01-01T00:00:00Z".parse().unwrap(),
@@ -241,7 +241,7 @@ fn sync_pulls_only_syncable_visible_repos() {
     sb.init("dev/local");
     let w = ws(
         &sb,
-        "sync = ['acme/*', '!acme/nosync', '**/local']\nexclude = ['acme/excl']",
+        "sync = ['acme/*', '!acme/nosync', '**/local']\nignore = ['acme/excl']",
     );
     let jobs = plan_updates(&w);
     let mut labels: Vec<_> = jobs.iter().map(|j| j.label.clone()).collect();
@@ -344,7 +344,7 @@ fn track_clones_missing_and_reports_orphans() {
     let w = ws(
         &sb,
         &format!(
-            "exclude = ['acme/secret']\n[[track]]\nowner='acme'\ninclude_forks=false\ninto='{}'",
+            "ignore = ['acme/secret']\n[[track]]\nowner='acme'\ninclude_forks=false\ninto='{}'",
             sb.path("dev/acme").display()
         ),
     );
@@ -368,7 +368,7 @@ fn track_clones_missing_and_reports_orphans() {
     assert_eq!(
         clones,
         vec!["clone acme/missing"],
-        "archived, forks, excluded and existing skipped"
+        "archived, forks, ignored and existing skipped"
     );
     assert_eq!(plan.orphans, vec![sb.path("dev/acme/deleted")]);
     assert!(plan.missing.is_empty());
@@ -601,12 +601,12 @@ fn marking_edits_the_config_lists() {
     );
     assert!(w.entries[app].flags.favourite && !w.entries[big].flags.favourite);
     // a repo without an identity is named by its path
-    w.set_mark(&[local], Mark::Exclude, true).unwrap();
+    w.set_mark(&[local], Mark::Ignore, true).unwrap();
     assert_eq!(
-        w.config.exclude,
+        w.config.ignore,
         [argus_core::paths::contract_tilde(&w.entries[local].path)]
     );
-    assert!(w.entries[local].flags.excluded);
+    assert!(w.entries[local].flags.ignored);
     // off against a pattern: a `!` entry
     w.set_mark(&[big], Mark::Sync, false).unwrap();
     assert_eq!(w.config.sync, ["acme/*", "!github.com/acme/big"]);
@@ -676,10 +676,10 @@ fn skip_matches_names_anywhere_and_paths_with_a_slash() {
         v.sort();
         v
     };
-    let all = found("skip = []");
+    let all = found("exclude_paths = []");
     assert_eq!(all.len(), 8, "{all:?}");
     // no slash: a directory name (globs allowed) at any depth
-    let v = found("skip = ['vendored', '*.egg-info']");
+    let v = found("exclude_paths = ['vendored', '*.egg-info']");
     assert!(
         !v.iter()
             .any(|p| p.contains("vendored") || p.contains("egg-info")),
@@ -687,9 +687,11 @@ fn skip_matches_names_anywhere_and_paths_with_a_slash() {
     );
     assert_eq!(v.len(), 5, "{v:?}");
     // a trailing slash still means a name
-    assert_eq!(found("skip = ['vendored/']").len(), 6);
+    assert_eq!(found("exclude_paths = ['vendored/']").len(), 6);
     // absolute (or ~) paths, globs allowed; siblings sharing a prefix stay
-    let v = found(&format!("skip = ['{dev}/archive', '{dev}/*/vendored']"));
+    let v = found(&format!(
+        "exclude_paths = ['{dev}/archive', '{dev}/*/vendored']"
+    ));
     assert!(
         v.contains(&"archive2/x".into()) && !v.contains(&"archive/old".into()),
         "{v:?}"
@@ -700,30 +702,28 @@ fn skip_matches_names_anywhere_and_paths_with_a_slash() {
         "* is one level: {v:?}"
     );
     // relative with a slash: below each root
-    let v = found("skip = ['sub/rel']");
+    let v = found("exclude_paths = ['sub/rel']");
     assert!(
         !v.contains(&"sub/rel/r".into()) && v.contains(&"sub/relx/r".into()),
         "{v:?}"
     );
-    // the old name still works
-    assert_eq!(found("skip_dirs = ['vendored']").len(), 6);
     // patterns through a symlink match the real paths scans walk
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(sb.path("dev"), sb.path("link")).unwrap();
         let link = sb.path("link").display().to_string();
-        let v = found(&format!("skip = ['{link}/archive']"));
+        let v = found(&format!("exclude_paths = ['{link}/archive']"));
         assert!(!v.contains(&"archive/old".into()), "{v:?}");
     }
     // roots are always scanned, as with hidden directories
     for skip in [format!("'{dev}/archive'"), "'archive'".into()] {
-        let cfg = format!("roots = ['{dev}/archive']\nskip = [{skip}]");
+        let cfg = format!("roots = ['{dev}/archive']\nexclude_paths = [{skip}]");
         let mut w = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
         w.scan();
         assert_eq!(w.entries.len(), 1, "{skip}");
     }
     // bad patterns are config errors
-    let cfg = "skip = ['~/dev/[oops']";
+    let cfg = "exclude_paths = ['~/dev/[oops']";
     let Err(err) = Workspace::new(Config::parse(cfg).unwrap(), State::default()) else {
         panic!("bad pattern accepted");
     };

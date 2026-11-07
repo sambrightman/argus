@@ -40,14 +40,14 @@ A taste (see the generated file for everything):
 ```toml
 include = ["~/.config/argus/work.toml"]  # read first; this file overrides them
 roots = ["~/dev", "~/work"]
-extend_skip = ["build-cache"]    # any list: extend_<name> adds instead of replacing
+extend_exclude_paths = ["build-cache"]  # any list: extend_<name> adds instead of replacing
 max_depth = 6                    # levels below each root; 0: no limit
 
 # repos or globs on github.com/org/repo, org/repo or path; later entries
 # win, ! turns off; marking in the TUI or `argus mark` edits these lists
 favourite = ["my-org/core-*"]
 sync = ["someone/dotfiles", "my-org/*", "!my-org/huge-monorepo"]
-exclude = ["~/dev/scratch/**"]
+ignore = ["~/dev/scratch/**"]  # hidden, and left out of sync, clones and bulk actions
 
 [concurrency]                    # 0: automatic
 disk = 0                         # threads for discovery and status
@@ -95,7 +95,7 @@ A detached HEAD shows its tag if the commit has one (`@v1.2 +1` when there
 are more: annotated tags first, then the highest version), otherwise the
 commit id. Details list the commit and all its tags.
 
-Favourite, sync and exclude live in config: marking a repo in the TUI or
+Favourite, sync and ignore live in config: marking a repo in the TUI or
 with `argus mark` adds its name to the list (or `!name` to turn off what a
 pattern says) and saves the change, keeping the rest of the file as
 written; clearing removes the repo's own entries, so patterns decide
@@ -132,13 +132,13 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `$` | process log |
 | `?` | help |
 | `F` | **Pull**: `p` selected, `a` all syncable, `s` sync (forges + clone new + pull) |
-| `f` | **Fetch**: `f` selected, `a` all visible |
+| `f` | **Fetch**: `f` selected, `a` all shown except hidden |
 | `P` | **Push**: `p` push, `u` publish (set upstream) |
 | `z` | **Stash**: switches `u` include untracked, `k` keep index (from `[stash]`, for the session); `z` all, `i` staged only, `m` with a message, `f` files marked in the details |
 | `c` | **Commit** (prompts for message) |
 | `b` | **Branch**: `d` switch to default, `f` fast-forward stale branches |
-| `x` | **Fix**: `x` auto-fix selected, `a` all visible |
-| `m` | **Mark**: `f` favourite, `s` sync, `x` exclude, `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
+| `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden |
+| `m` | **Mark**: `f` favourite, `s` sync, `i` ignore, `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page |
 | `v` | **View**: toggles, expand/collapse all, log |
 
@@ -148,7 +148,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 argus status [-a|--all] [--hidden]     # repos needing attention; -a: clean too
 argus sync [-n] [--no-forge] [PATTERNS…]
 argus fix [-n] [-F] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine; -F fetches first
-argus mark PATTERNS… [--favourite|--no-favourite] [--sync|--no-sync] [--exclude|--include] [--snooze 3d|--unsnooze] [--clear]
+argus mark PATTERNS… [--favourite|--no-favourite] [--sync|--no-sync] [--ignore|--unignore] [--snooze 3d|--unsnooze] [--clear]
 argus ack [PATTERNS…]
 argus forge list ORG [--team T]
 argus root add [DIRS…] | remove DIRS… | list
@@ -183,13 +183,16 @@ the command refuses and changes nothing. Today that's discarding file
 changes (always) and clearing the marks of more than one repo.
 
 Directories whose name starts with `.` are skipped (`skip_hidden`); add
-one as a root to scan it, e.g. `argus root add ~/.emacs.d`. `skip` lists
+one as a root to scan it, e.g. `argus root add ~/.emacs.d`. `exclude_paths` lists
 directories never scanned, like gitignore: without a `/` a pattern is a
 directory name at any depth (`node_modules`, `*.egg-info`); starting with
 `/` or `~` it's a full path (`~/dev/archive`, `~/src/*/third_party`); any
 other with a `/` is below each root (`go/pkg`, in the defaults: the Go
 module cache under a root). Roots are always scanned.
-To keep scanning repos but hide them, list them in `exclude`.
+To keep scanning repos but hide them, list them in `ignore`. Hidden
+repos (ignored or snoozed; `H` shows them) are never part of a bulk
+action such as fetch all or fix all, even while shown; choosing one
+explicitly still works.
 
 A daily crontab entry:
 

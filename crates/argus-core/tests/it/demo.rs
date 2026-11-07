@@ -62,7 +62,7 @@ fn demo_covers_every_state() {
         ("error", has(&|e| e.error().is_some())),
         ("favourite", has(&|e| e.flags.favourite)),
         ("new", has(&|e| e.flags.new)),
-        ("excluded", has(&|e| e.flags.excluded)),
+        ("ignored", has(&|e| e.flags.ignored)),
         ("snoozed", has(&|e| e.flags.snoozed)),
     ];
     let missing: Vec<&str> = checks.iter().filter(|c| !c.1).map(|c| c.0).collect();

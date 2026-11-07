@@ -139,7 +139,7 @@ pub fn build() -> Demo {
             git(&r, &["push", "-q"]);
         }),
         Box::new(|| {
-            for name in ["favourite", "new", "excluded", "snoozed"] {
+            for name in ["favourite", "new", "ignored", "snoozed"] {
                 clone(name);
             }
         }),
@@ -172,7 +172,7 @@ fn conflicting_branch(r: &std::path::Path) {
 
 impl Demo {
     /// Set the marks the sample repos are named after: favourite and
-    /// excluded in `ws.config`, new and snoozed in `ws.state`. Call after a
+    /// ignored in `ws.config`, new and snoozed in `ws.state`. Call after a
     /// scan, so repo keys are known.
     pub fn apply_marks(&self, ws: &mut Workspace) {
         let index = |ws: &Workspace, name: &str| {
@@ -186,8 +186,8 @@ impl Demo {
             .filter_map(|n| index(ws, n))
             .collect();
         ws.set_mark(&favourites, Mark::Favourite, true).unwrap();
-        if let Some(i) = index(ws, "excluded") {
-            ws.set_mark(&[i], Mark::Exclude, true).unwrap();
+        if let Some(i) = index(ws, "ignored") {
+            ws.set_mark(&[i], Mark::Ignore, true).unwrap();
         }
         if let Some(k) = key(ws, "new") {
             ws.state.new.insert(k);

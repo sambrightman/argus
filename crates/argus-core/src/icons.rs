@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 pub struct Icons {
     pub favourite: Cow<'static, str>,
     pub new: Cow<'static, str>,
-    pub excluded: Cow<'static, str>,
+    pub ignored: Cow<'static, str>,
     pub snoozed: Cow<'static, str>,
     pub branch: Cow<'static, str>,
     pub detached: Cow<'static, str>,
@@ -74,7 +74,7 @@ macro_rules! icon_names {
 icon_names!(
     favourite,
     new,
-    excluded,
+    ignored,
     snoozed,
     branch,
     detached,
@@ -137,7 +137,7 @@ const fn s(glyph: &'static str) -> Cow<'static, str> {
 pub const UNICODE: Icons = Icons {
     favourite: s("◆"),
     new: s("+"),
-    excluded: s("×"),
+    ignored: s("×"),
     snoozed: s("z"),
     branch: s(""),
     detached: s("@"),
@@ -169,7 +169,7 @@ pub const UNICODE: Icons = Icons {
 pub const NERD: Icons = Icons {
     favourite: s("\u{eb59} "),        // cod-star_full
     new: s("\u{ec21} "),              // cod-sparkle_filled
-    excluded: s("\u{eae7} "),         // cod-eye_closed
+    ignored: s("\u{eae7} "),          // cod-eye_closed
     snoozed: s("\u{ec08} "),          // cod-bell_slash
     branch: s("\u{e0a0} "),           // Powerline branch
     detached: s("\u{eafc} "),         // cod-git_commit
@@ -210,7 +210,7 @@ pub fn by_name(name: &str) -> Icons {
 pub const ASCII: Icons = Icons {
     favourite: s("*"),
     new: s("+"),
-    excluded: s("x"),
+    ignored: s("x"),
     snoozed: s("z"),
     branch: s(""),
     detached: s("@"),

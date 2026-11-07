@@ -29,7 +29,7 @@ use app::{App, Effect, Msg};
 
 pub struct Options {
     pub state_path: PathBuf,
-    /// Where marks (favourite, sync, exclude) are saved.
+    /// Where marks (favourite, sync, ignore) are saved.
     pub config_path: PathBuf,
     pub forge_factory: ForgeFactory<'static>,
     /// Startup notices (e.g. the current-directory fallback), shown after scans.

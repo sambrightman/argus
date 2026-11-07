@@ -101,7 +101,11 @@ impl MenuId {
                 "Fetch",
                 vec![
                     item('f', "fetch selected", Action::Fetch(Scope::Selected)),
-                    item('a', "fetch all visible", Action::Fetch(Scope::All)),
+                    item(
+                        'a',
+                        "fetch all shown, except hidden",
+                        Action::Fetch(Scope::All),
+                    ),
                 ],
             ),
             MenuId::Push => (
@@ -153,7 +157,11 @@ impl MenuId {
                 "Fix",
                 vec![
                     item('x', "auto-fix selected", Action::AutoFix(Scope::Selected)),
-                    item('a', "auto-fix all visible", Action::AutoFix(Scope::All)),
+                    item(
+                        'a',
+                        "auto-fix all shown, except hidden",
+                        Action::AutoFix(Scope::All),
+                    ),
                 ],
             ),
             MenuId::Mark => (
@@ -161,7 +169,7 @@ impl MenuId {
                 vec![
                     item('f', "toggle favourite", Action::ToggleFavourite),
                     item('s', "toggle syncable", Action::ToggleSync),
-                    item('x', "toggle excluded", Action::ToggleExclude),
+                    item('i', "toggle ignored", Action::ToggleIgnore),
                     item('z', "snooze for…", Action::Snooze),
                     item('u', "unsnooze", Action::Unsnooze),
                     item('a', "acknowledge new", Action::Ack),
@@ -181,11 +189,7 @@ impl MenuId {
                 "View",
                 vec![
                     item('a', "toggle attention only", Action::ToggleAttention),
-                    item(
-                        'h',
-                        "toggle hidden (excluded/snoozed)",
-                        Action::ToggleHidden,
-                    ),
+                    item('h', "toggle hidden (ignored/snoozed)", Action::ToggleHidden),
                     item('e', "expand all", Action::ExpandAll),
                     item('c', "collapse all", Action::CollapseAll),
                     item('l', "toggle process log", Action::ToggleLog),

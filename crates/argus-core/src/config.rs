@@ -17,7 +17,7 @@ pub struct Config {
     /// in the file name (matching nothing is fine). This file's settings
     /// override theirs; lists of tables (`[[track]]`) add up. Any list
     /// setting also takes `extend_<name>` to add to the list rather than
-    /// replace it, e.g. `extend_skip = ["build-cache"]`.
+    /// replace it, e.g. `extend_exclude_paths = ["build-cache"]`.
     pub include: Vec<String>,
     /// Directories scanned (recursively) for repositories. When empty, the
     /// current directory is scanned. Manage with `argus root add|remove|list`.
@@ -28,9 +28,9 @@ pub struct Config {
     /// (`node_modules`, `*.egg-info`); one starting with `/` or `~` is a full
     /// path (`~/dev/archive`, `~/src/*/third_party`); any other with `/` is
     /// below each root (`go/pkg`). Globs: `*` (within one level), `**`, `?`,
-    /// `[ab]`, `{a,b}`. Unlike `exclude`, which hides repos, repos there
+    /// `[ab]`, `{a,b}`. Unlike `ignore`, which hides repos, repos there
     /// aren't scanned at all.
-    pub skip: Vec<String>,
+    pub exclude_paths: Vec<String>,
     /// Maximum directory depth below a root; deeper directories are skipped
     /// (with a warning). 0: no limit.
     pub max_depth: usize,
@@ -60,7 +60,7 @@ pub struct Config {
     /// Repos hidden and skipped by bulk operations; entries as for
     /// `favourite`.
     #[schemars(example = vec!["~/dev/archive/**"])]
-    pub exclude: Vec<String>,
+    pub ignore: Vec<String>,
     /// Forge owners (orgs/users/teams) whose repos should all be cloned and
     /// synced. Their repos are syncable unless `sync` turns them off.
     #[serde(rename = "track")]
@@ -80,7 +80,7 @@ impl Default for Config {
         Self {
             include: vec![],
             roots: vec![],
-            skip: [
+            exclude_paths: [
                 "node_modules",
                 "target",
                 ".venv",
@@ -106,7 +106,7 @@ impl Default for Config {
             clone_protocol: None,
             favourite: vec![],
             sync: vec![],
-            exclude: vec![],
+            ignore: vec![],
             tracks: vec![],
             fix: FixConfig::default(),
             stash: StashConfig::default(),
@@ -264,7 +264,7 @@ pub struct UiConfig {
     /// Icon set: `unicode` (default), `nerd` (Nerd Font glyphs) or `ascii`.
     pub icons: String,
     /// Per-icon overrides on top of the set, by name: favourite, new,
-    /// excluded, snoozed, branch, detached, detached_commits, ahead, behind, staged, unstaged,
+    /// ignored, snoozed, branch, detached, detached_commits, ahead, behind, staged, unstaged,
     /// untracked, conflict, stash, in_progress, gone, no_upstream, branches,
     /// error, sync, worktree, submodule; and in the interface: spinner (one
     /// frame per character), marked, ok, failed, celebrate.
@@ -458,9 +458,6 @@ fn record_lists(
     }
 }
 
-/// Top-level settings renamed since: (old, new).
-const OLD_NAMES: &[(&str, &str)] = &[("skip_dirs", "skip")];
-
 fn is_tables(a: &[toml::Value]) -> bool {
     !a.is_empty() && a.iter().all(|v| v.is_table())
 }
@@ -473,25 +470,9 @@ fn merge_table(
     origins: &mut HashMap<String, Vec<Option<PathBuf>>>,
 ) -> Result<(), ConfigError> {
     let from = |n: usize| vec![file.map(Path::to_path_buf); n];
-    let renamed = layer.into_iter().map(|(k, v)| {
-        // `concurrency` was a number, the network setting, before the section
-        let v = match (prefix, k.as_str(), v) {
-            ("", "concurrency", toml::Value::Integer(n)) => {
-                toml::Value::Table(toml::Table::from_iter([("network".into(), n.into())]))
-            }
-            (_, _, v) => v,
-        };
-        let k = match (prefix, k.as_str()) {
-            ("", old) => OLD_NAMES
-                .iter()
-                .find(|(o, _)| *o == old || format!("extend_{o}") == old)
-                .map(|(o, new)| k.replace(o, new))
-                .unwrap_or(k),
-            _ => k,
-        };
-        (k, v)
-    });
-    let (extends, plain): (Vec<_>, Vec<_>) = renamed.partition(|(k, _)| k.starts_with("extend_"));
+    let (extends, plain): (Vec<_>, Vec<_>) = layer
+        .into_iter()
+        .partition(|(k, _)| k.starts_with("extend_"));
     for (k, v) in plain {
         let key = dotted(prefix, &k);
         match (base.get_mut(&k), v) {
@@ -668,7 +649,13 @@ pub fn auto_disk_jobs(performance_cores: Option<usize>, cpus: usize) -> usize {
 fn performance_cores() -> Option<usize> {
     use sysctl::Sysctl;
     let read = |name: &str| -> Option<usize> {
-        sysctl::Ctl::new(name).ok()?.value_string().ok()?.trim().parse().ok()
+        sysctl::Ctl::new(name)
+            .ok()?
+            .value_string()
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
     };
     if read("hw.nperflevels")? < 2 {
         return None;
@@ -714,7 +701,11 @@ mod tests {
 
     #[test]
     fn concurrency_zero_is_automatic() {
-        assert_eq!(Config::default().concurrency.network, 0, "automatic by default");
+        assert_eq!(
+            Config::default().concurrency.network,
+            0,
+            "automatic by default"
+        );
         let c = Config::parse("[concurrency]\nnetwork = 3").unwrap();
         assert_eq!(c.network_jobs(), 3);
         assert!(Config::default().network_jobs() >= 1);
@@ -738,7 +729,11 @@ mod tests {
 
     #[test]
     fn disk_concurrency_zero_is_the_performance_cores() {
-        assert_eq!(Config::default().concurrency.disk, 0, "automatic by default");
+        assert_eq!(
+            Config::default().concurrency.disk,
+            0,
+            "automatic by default"
+        );
         let c = Config::parse("[concurrency]\ndisk = 3").unwrap();
         assert_eq!((c.disk_jobs(), c.concurrency.network), (3, 0));
         assert!(Config::default().disk_jobs() >= 1);
@@ -773,12 +768,33 @@ mod tests {
     }
 
     #[test]
-    fn a_top_level_concurrency_number_is_the_network_setting() {
-        let c = Config::parse("concurrency = 3").unwrap();
-        assert_eq!(c.concurrency, Concurrency { disk: 0, network: 3 });
-        // inverse: the section is read as it is
-        let c = Config::parse("[concurrency]\ndisk = 2\nnetwork = 5").unwrap();
-        assert_eq!(c.concurrency, Concurrency { disk: 2, network: 5 });
+    fn old_setting_names_are_errors_not_silently_ignored() {
+        for old in [
+            "skip = ['x']",
+            "skip_dirs = ['x']",
+            "extend_skip = ['x']",
+            "exclude = ['x']",
+            "concurrency = 3",
+            "status_concurrency = 3",
+        ] {
+            assert!(Config::parse(old).is_err(), "{old}");
+        }
+        // inverse: the new names
+        let c = Config::parse(
+            "exclude_paths = ['x']\nignore = ['a/b']\n[concurrency]\ndisk = 2\nnetwork = 5",
+        )
+        .unwrap();
+        assert_eq!(
+            (c.exclude_paths, c.ignore),
+            (vec!["x".into()], vec!["a/b".into()])
+        );
+        assert_eq!(
+            c.concurrency,
+            Concurrency {
+                disk: 2,
+                network: 5
+            }
+        );
     }
 
     #[test]

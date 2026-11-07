@@ -109,10 +109,14 @@ Two findings:
   `node_modules`, `target`, `.git` internals and configurable globs.
 * **Identity.** `host/owner/name` parsed from the `origin` remote URL (or the
   first remote).
-* **Marks: `favourite`, `sync`, `exclude`** are lists in config, one per
+* **Marks: `favourite`, `sync`, `ignore`** are lists in config, one per
   kind. An entry is a repo or a glob, matched against identity, `owner/name`
   or path; the last matching entry wins and `!` turns the mark off, as in
-  gitignore. Tracked owners' repos sync unless `sync` says `!`. Marking
+  gitignore. Names: `ignore` hides a repo and leaves it out of sync,
+  clones and bulk actions; *hidden* is the wider set, ignored or snoozed.
+  `exclude_paths` is the other kind of exclusion: directories discovery
+  never enters, matched by name or path, as rsync's and ripgrep's
+  `--exclude` mean it. Tracked owners' repos sync unless `sync` says `!`. Marking
   from the TUI or CLI drops the repo's own (glob-free) entries, then adds
   its name, or `!name`, only if the patterns left don't already give the
   wanted value; clearing drops its own entries. Changes are written as
@@ -131,8 +135,8 @@ Two findings:
   listing them; on a non-list or unknown key it's an error. The merge
   records which file each list element came from, so saving marks can
   remove an entry where it lives and add new ones to the main file
-  without overriding an included list. Renamed settings (`skip_dirs`)
-  are renamed during the merge.
+  without overriding an included list. Old setting names aren't kept
+  (nothing released yet): they fail as unknown keys.
 * **Diff view.** Tab on a file in the details shows its unstaged then
   staged hunks (from `diff::file_diff`, cached per file and side, dropped
   when the repo's status changes); Tab on a hunk folds it. The cursor
@@ -274,7 +278,7 @@ rendering is snapshot-tested via `TestBackend`.
   such operation is tested declined, refused and confirmed. Recoverable
   operations (stash, commit, switch, fast-forward, pull, push) don't ask.
   Clearing marks asks when more than one repo has entries of its own in
-  the favourite/sync/exclude lists; snoozes and "new" flags don't count. `root remove` doesn't ask.
+  the favourite/sync/ignore lists; snoozes and "new" flags don't count. `root remove` doesn't ask.
 
 * **"Unpushed" means "on no remote-tracking ref"**, not "ahead of upstream".
   On real data, a fork branch that tracked `upstream/master` but was pushed
@@ -359,11 +363,11 @@ rendering is snapshot-tested via `TestBackend`.
 * **Hidden directories are skipped** (`skip_hidden = true`): in a home
   directory they're mostly caches, so this avoids a long exclude list.
   Roots are always scanned, so a dot directory can be added as a root.
-* **`skip`**: one list, gitignore-style: no `/` means a directory name at
+* **`exclude_paths`** (directories never scanned; was `skip`): one list, gitignore-style: no `/` means a directory name at
   any depth, a leading `/` or `~` a full path, any other `/` a path below
   each root. Checked on each subdirectory from the listing (no extra
   syscalls); roots are always scanned, like hidden directories.
-* **`skip` and symlinks.** Rule: a directory is skipped if any spelling of
+* **`exclude_paths` and symlinks.** Rule: a directory is skipped if any spelling of
   it matches, wherever it's reached. A path pattern's literal part (all
   of it, or up to the directory before the first glob) is resolved once,
   following every link. Walks start from real roots, so without `-L`
@@ -402,7 +406,7 @@ rendering is snapshot-tested via `TestBackend`.
   would walk in a circle. A repo reached by several paths is listed once,
   by its real path if that was walked, else the first path in sort order.
 * **`argus status` lists only repos needing attention**; `--all` adds clean
-  ones, `--hidden` excluded/snoozed ones, and the footer counts what was
+  ones, `--hidden` ignored/snoozed ones, and the footer counts what was
   left out. `--json` uses the same filter. The TUI starts the same way
   (`[ui] attention_only = true`); the header says how many repos there are
   in all and that `a` shows them.

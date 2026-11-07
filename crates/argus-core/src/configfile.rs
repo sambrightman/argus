@@ -445,7 +445,7 @@ pub fn remove_roots(path: &Path, dirs: &[PathBuf]) -> Result<Vec<String>, EditEr
     Ok(removed)
 }
 
-/// Write the `favourite`, `sync` and `exclude` changes from `before` to
+/// Write the `favourite`, `sync` and `ignore` changes from `before` to
 /// `after` into the config at `path` (created from the example if needed)
 /// and its includes, leaving the rest of each file as written. An entry
 /// gone from a list is removed from whichever file holds it; new ones go
@@ -558,13 +558,13 @@ mod tests {
     fn uncommenting_everything_is_valid_and_keeps_defaults() {
         let c = Config::parse(&uncomment(&example())).expect("uncommented example must parse");
         let d = Config::default();
-        assert_eq!(c.skip, d.skip);
+        assert_eq!(c.exclude_paths, d.exclude_paths);
         assert_eq!(c.max_depth, d.max_depth);
         assert_eq!(c.concurrency, d.concurrency);
         assert_eq!(c.fix, d.fix);
         assert_eq!(c.ui.theme, d.ui.theme);
         assert!(c.roots.is_empty(), "roots are never guessed");
-        assert!(c.favourite.is_empty() && c.sync.is_empty() && c.exclude.is_empty());
+        assert!(c.favourite.is_empty() && c.sync.is_empty() && c.ignore.is_empty());
         assert_eq!(c.tracks.len(), 1);
         assert_eq!(
             c.tracks[0].host, "github.com",
@@ -596,7 +596,7 @@ mod tests {
                 "ui",
                 "favourite",
                 "sync",
-                "exclude",
+                "ignore",
                 "track",
                 "owner",
                 "team",
@@ -643,7 +643,10 @@ mod tests {
         for l in ex.lines() {
             assert!(l.chars().count() <= WIDTH, "too long: {l}");
         }
-        assert!(ex.contains("# skip = [\n#   \"node_modules\",\n"), "{ex}");
+        assert!(
+            ex.contains("# exclude_paths = [\n#   \"node_modules\",\n"),
+            "{ex}"
+        );
     }
 
     fn tmp() -> (tempfile::TempDir, PathBuf) {
@@ -782,12 +785,12 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&p).unwrap(), text);
         let mut after = before.clone();
         after.favourite = vec!["b/*".into(), "c/y".into()];
-        after.exclude = vec!["!d/z".into()];
+        after.ignore = vec!["!d/z".into()];
         update_mark_lists(&p, &before, &after).unwrap();
         let out = std::fs::read_to_string(&p).unwrap();
         let c = Config::parse(&out).unwrap();
         assert_eq!(c.favourite, ["b/*", "c/y"]);
-        assert_eq!(c.exclude, ["!d/z"], "created when missing");
+        assert_eq!(c.ignore, ["!d/z"], "created when missing");
         assert!(c.sync.is_empty());
         // the rest of the file is as written
         assert!(

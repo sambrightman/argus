@@ -132,7 +132,7 @@ pub fn plan_tracks(
                 continue;
             };
             let dest = dir.join(&r.id.name);
-            if ws.rules().excludes(&r.id, &dest) {
+            if ws.rules().ignores(&r.id, &dest) {
                 continue;
             }
             match track.clone {

@@ -156,7 +156,7 @@ fn config(c: &mut Criterion) {
     for i in 0..5 {
         std::fs::write(
             d.join(format!("conf.d/{i}.toml")),
-            format!("extend_skip = ['s{i}']\n"),
+            format!("extend_exclude_paths = ['s{i}']\n"),
         )
         .unwrap();
     }

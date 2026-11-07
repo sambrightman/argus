@@ -89,7 +89,7 @@ enum Cmd {
         #[arg(add = repo_completer())]
         patterns: Vec<String>,
     },
-    /// Set favourite / sync / exclude (edits those lists in config), or
+    /// Set favourite / sync / ignore (edits those lists in config), or
     /// snooze repos.
     Mark(MarkArgs),
     /// Acknowledge "new" repos (all, or matching patterns).
@@ -137,7 +137,7 @@ struct View {
     /// Include clean repos.
     #[arg(long, short = 'a')]
     all: bool,
-    /// Include excluded and snoozed repos.
+    /// Include ignored and snoozed repos.
     #[arg(long)]
     hidden: bool,
 }
@@ -168,19 +168,19 @@ struct MarkArgs {
     /// Don't pull on sync, whatever patterns in config say.
     #[arg(long)]
     no_sync: bool,
-    /// Hide and skip in bulk operations.
-    #[arg(long, overrides_with = "include")]
-    exclude: bool,
-    /// Not excluded, whatever patterns in config say.
+    /// Hide, and leave out of sync, clones and bulk operations.
+    #[arg(long, overrides_with = "unignore")]
+    ignore: bool,
+    /// Not ignored, whatever patterns in config say.
     #[arg(long)]
-    include: bool,
+    unignore: bool,
     /// Hide temporarily, e.g. `3d`, `12h`, `2w`.
     #[arg(long, value_name = "DURATION")]
     snooze: Option<String>,
     /// End a snooze early.
     #[arg(long)]
     unsnooze: bool,
-    /// Remove the repos' own entries from the favourite, sync and exclude
+    /// Remove the repos' own entries from the favourite, sync and ignore
     /// lists (patterns decide again) and end any snooze.
     #[arg(long)]
     clear: bool,
@@ -1181,7 +1181,7 @@ fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> R
     for (mark, on, off) in [
         (Mark::Favourite, m.favourite, m.no_favourite),
         (Mark::Sync, m.sync, m.no_sync),
-        (Mark::Exclude, m.exclude, m.include),
+        (Mark::Ignore, m.ignore, m.unignore),
     ] {
         if on || off {
             ws.set_mark(&sel, mark, on)?;
@@ -1205,7 +1205,7 @@ fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> R
                 "marks": {
                     "favourite": f.favourite,
                     "sync": f.sync,
-                    "exclude": f.excluded,
+                    "ignore": f.ignored,
                 },
                 "snoozed_until": ws.state.snoozed.get(&key),
             }));

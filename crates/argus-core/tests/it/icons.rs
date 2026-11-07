@@ -7,7 +7,7 @@ fn icons(set: &Icons) -> Vec<(&'static str, &str)> {
     vec![
         ("favourite", &*set.favourite),
         ("new", &*set.new),
-        ("excluded", &*set.excluded),
+        ("ignored", &*set.ignored),
         ("snoozed", &*set.snoozed),
         ("branch", &*set.branch),
         ("detached", &*set.detached),

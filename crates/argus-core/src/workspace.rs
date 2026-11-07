@@ -127,7 +127,7 @@ pub struct Workspace {
 impl Workspace {
     pub fn new(config: Config, state: State) -> Result<Self, ConfigError> {
         let rules = RuleSet::new(&config)?;
-        Skip::new(&config.skip, &config.roots)
+        Skip::new(&config.exclude_paths, &config.roots)
             .map_err(|(pattern, source)| ConfigError::Pattern { pattern, source })?;
         Ok(Self {
             config,
@@ -145,7 +145,7 @@ impl Workspace {
     pub fn discover_options(&self) -> DiscoverOptions {
         DiscoverOptions {
             // validated in `new`; compiled per scan, as roots can change
-            skip: Skip::new(&self.config.skip, &self.config.roots).unwrap_or_default(),
+            skip: Skip::new(&self.config.exclude_paths, &self.config.roots).unwrap_or_default(),
             max_depth: self.config.max_depth,
             scan_inside_repos: false,
             skip_hidden: self.config.skip_hidden,

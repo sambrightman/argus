@@ -53,8 +53,8 @@ pub fn flags(e: &Entry, i: &Icons) -> Vec<Badge> {
     if e.flags.new {
         v.push(b(Role::New, &i.new));
     }
-    if e.flags.excluded {
-        v.push(b(Role::Hidden, &i.excluded));
+    if e.flags.ignored {
+        v.push(b(Role::Hidden, &i.ignored));
     } else if e.flags.snoozed {
         v.push(b(Role::Hidden, &i.snoozed));
     }

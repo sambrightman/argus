@@ -49,14 +49,14 @@ proptest! {
     #[test]
     fn extend_appends(base in prop::collection::vec("[a-z]{1,8}", 0..5), more in prop::collection::vec("[a-z]{1,8}", 0..5)) {
         let toml_list = |v: &[String]| format!("[{}]", v.iter().map(|s| format!("{s:?}")).collect::<Vec<_>>().join(", "));
-        let c = Config::parse(&format!("skip = {}\nextend_skip = {}", toml_list(&base), toml_list(&more))).unwrap();
+        let c = Config::parse(&format!("exclude_paths = {}\nextend_exclude_paths = {}", toml_list(&base), toml_list(&more))).unwrap();
         let mut want = base.clone();
         want.extend(more.clone());
-        prop_assert_eq!(c.skip, want);
+        prop_assert_eq!(c.exclude_paths, want);
         // without the base, onto the defaults
-        let c = Config::parse(&format!("extend_skip = {}", toml_list(&more))).unwrap();
-        let mut want = Config::default().skip;
+        let c = Config::parse(&format!("extend_exclude_paths = {}", toml_list(&more))).unwrap();
+        let mut want = Config::default().exclude_paths;
         want.extend(more);
-        prop_assert_eq!(c.skip, want);
+        prop_assert_eq!(c.exclude_paths, want);
     }
 }

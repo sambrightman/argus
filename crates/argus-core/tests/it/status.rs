@@ -177,7 +177,10 @@ fn a_linked_worktree_sees_the_fetch_made_from_its_main_repo() {
     std::fs::remove_file(r.join(".git/FETCH_HEAD")).ok(); // the clone's own
     assert!(st(&wt).last_fetch.is_none(), "no fetch yet");
     git(&r, &["fetch", "-q"]);
-    assert!(st(&wt).last_fetch.is_some(), "FETCH_HEAD is in the common dir");
+    assert!(
+        st(&wt).last_fetch.is_some(),
+        "FETCH_HEAD is in the common dir"
+    );
 }
 
 #[test]

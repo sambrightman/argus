@@ -1,5 +1,5 @@
 //! Resolution of per-repo flags from tracked owners, the `favourite`, `sync`
-//! and `exclude` lists in config, and state (snoozes, "new").
+//! and `ignore` lists in config, and state (snoozes, "new").
 
 use std::path::Path;
 
@@ -16,7 +16,7 @@ use crate::state::State;
 pub struct Flags {
     pub favourite: bool,
     pub sync: bool,
-    pub excluded: bool,
+    pub ignored: bool,
     pub snoozed: bool,
     /// Recently cloned/discovered by argus and not acknowledged.
     pub new: bool,
@@ -27,28 +27,28 @@ pub struct Flags {
 impl Flags {
     /// Hidden from the default view and skipped by bulk operations.
     pub fn hidden(&self) -> bool {
-        self.excluded || self.snoozed
+        self.ignored || self.snoozed
     }
 }
 
 /// The per-repo settings kept as lists in config: `favourite`, `sync`,
-/// `exclude`.
+/// `ignore`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Mark {
     Favourite,
     Sync,
-    Exclude,
+    Ignore,
 }
 
 impl Mark {
-    pub const ALL: [Mark; 3] = [Mark::Favourite, Mark::Sync, Mark::Exclude];
+    pub const ALL: [Mark; 3] = [Mark::Favourite, Mark::Sync, Mark::Ignore];
 
     /// The config key.
     pub fn name(self) -> &'static str {
         match self {
             Mark::Favourite => "favourite",
             Mark::Sync => "sync",
-            Mark::Exclude => "exclude",
+            Mark::Ignore => "ignore",
         }
     }
 
@@ -56,7 +56,7 @@ impl Mark {
         match self {
             Mark::Favourite => &c.favourite,
             Mark::Sync => &c.sync,
-            Mark::Exclude => &c.exclude,
+            Mark::Ignore => &c.ignore,
         }
     }
 
@@ -64,7 +64,7 @@ impl Mark {
         match self {
             Mark::Favourite => &mut c.favourite,
             Mark::Sync => &mut c.sync,
-            Mark::Exclude => &mut c.exclude,
+            Mark::Ignore => &mut c.ignore,
         }
     }
 
@@ -72,7 +72,7 @@ impl Mark {
         match self {
             Mark::Favourite => f.favourite,
             Mark::Sync => f.sync,
-            Mark::Exclude => f.excluded,
+            Mark::Ignore => f.ignored,
         }
     }
 }
@@ -119,7 +119,7 @@ impl Entry {
     }
 }
 
-/// The `favourite`, `sync` and `exclude` lists, compiled.
+/// The `favourite`, `sync` and `ignore` lists, compiled.
 #[derive(Clone)]
 pub struct RuleSet {
     lists: [Vec<Entry>; 3],
@@ -134,7 +134,7 @@ impl RuleSet {
             lists: [
                 compile(Mark::Favourite)?,
                 compile(Mark::Sync)?,
-                compile(Mark::Exclude)?,
+                compile(Mark::Ignore)?,
             ],
         })
     }
@@ -152,9 +152,9 @@ impl RuleSet {
             .map(|e| !e.negate)
     }
 
-    /// Whether a (possibly not yet cloned) repo is excluded.
-    pub fn excludes(&self, id: &RepoId, path: &Path) -> bool {
-        self.decide(Mark::Exclude, Some(id), path).unwrap_or(false)
+    /// Whether a (possibly not yet cloned) repo is ignored.
+    pub fn ignores(&self, id: &RepoId, path: &Path) -> bool {
+        self.decide(Mark::Ignore, Some(id), path).unwrap_or(false)
     }
 
     /// Entries of `m`'s list naming this repo itself (not patterns), as
@@ -244,7 +244,7 @@ pub fn resolve(
             match m {
                 Mark::Favourite => f.favourite = v,
                 Mark::Sync => f.sync = v,
-                Mark::Exclude => f.excluded = v,
+                Mark::Ignore => f.ignored = v,
             }
         }
     }
@@ -316,12 +316,12 @@ mod tests {
         assert!(fav("favourite = ['!acme/widget', 'acme/*']", URL, "/x"));
         // the lists are independent
         let f = flags(
-            "favourite = ['acme/*']\nexclude = ['!acme/*']",
+            "favourite = ['acme/*']\nignore = ['!acme/*']",
             &State::default(),
             URL,
             "/x",
         );
-        assert!(f.favourite && !f.excluded && !f.sync);
+        assert!(f.favourite && !f.ignored && !f.sync);
     }
 
     #[test]
@@ -390,32 +390,32 @@ mod tests {
     #[test]
     fn repos_without_identity_match_by_path_only() {
         let f = flags(
-            "exclude = ['/local/**']",
+            "ignore = ['/local/**']",
             &State::default(),
             "",
             "/local/thing",
         );
-        assert!(f.excluded);
+        assert!(f.ignored);
     }
 
     #[test]
     fn each_mark_reads_its_own_flag() {
-        let f = |favourite, sync, excluded| Flags {
+        let f = |favourite, sync, ignored| Flags {
             favourite,
             sync,
-            excluded,
+            ignored,
             ..Flags::default()
         };
         assert!(Mark::Favourite.of(&f(true, false, false)));
         assert!(Mark::Sync.of(&f(false, true, false)));
-        assert!(Mark::Exclude.of(&f(false, false, true)));
+        assert!(Mark::Ignore.of(&f(false, false, true)));
         // inverse: not the others'
         for m in Mark::ALL {
             assert!(!m.of(&f(false, false, false)), "{m:?}");
         }
         assert!(!Mark::Favourite.of(&f(false, true, true)));
         assert!(!Mark::Sync.of(&f(true, false, true)));
-        assert!(!Mark::Exclude.of(&f(true, true, false)));
+        assert!(!Mark::Ignore.of(&f(true, true, false)));
     }
 
     #[test]

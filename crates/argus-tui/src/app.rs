@@ -67,7 +67,7 @@ pub enum Action {
     Sync,
     ToggleFavourite,
     ToggleSync,
-    ToggleExclude,
+    ToggleIgnore,
     Snooze,
     Unsnooze,
     Ack,
@@ -507,6 +507,15 @@ impl App {
             .collect()
     }
 
+    /// What a bulk action ("all") acts on: the visible repos, less hidden
+    /// ones even while they're shown. Choosing one explicitly still works.
+    fn bulk_repos(&self) -> Vec<usize> {
+        self.visible_repos()
+            .into_iter()
+            .filter(|&i| !self.ws.entries[i].flags.hidden())
+            .collect()
+    }
+
     fn info(&mut self, s: impl Into<String>) {
         self.message = Some((s.into(), false));
     }
@@ -848,7 +857,7 @@ impl App {
                 self.info(if self.view.show_hidden {
                     "showing hidden repos"
                 } else {
-                    "hiding excluded/snoozed repos"
+                    "hiding ignored/snoozed repos"
                 });
             }
             Refresh => {
@@ -901,7 +910,7 @@ impl App {
             }
             AutoFix(scope) => {
                 let idx = if scope == Scope::All {
-                    self.visible_repos()
+                    self.bulk_repos()
                 } else {
                     self.selected()
                 };
@@ -931,7 +940,7 @@ impl App {
             }
             ToggleFavourite => return self.toggle_mark(Mark::Favourite),
             ToggleSync => return self.toggle_mark(Mark::Sync),
-            ToggleExclude => return self.toggle_mark(Mark::Exclude),
+            ToggleIgnore => return self.toggle_mark(Mark::Ignore),
             ClearMarks => {
                 let keys = self.selected_keys();
                 let n = self.ws.marked_count(&self.selected());
@@ -1106,7 +1115,7 @@ impl App {
         explain: bool,
     ) -> Vec<Effect> {
         let idx = if scope == Scope::All {
-            self.visible_repos()
+            self.bulk_repos()
         } else {
             self.selected()
         };

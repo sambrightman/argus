@@ -301,14 +301,37 @@ fn toggle_favourite_edits_the_config_list_and_resorts() {
 }
 
 #[test]
-fn exclude_hides_and_hidden_toggle_shows() {
+fn ignore_hides_and_hidden_toggle_shows() {
     let (_sb, mut app) = setup("");
-    app.act(Action::ToggleExclude);
+    app.act(Action::ToggleIgnore);
     assert_eq!(names(&app).len(), 2);
     app.on_key(key('H'));
     assert_eq!(names(&app).len(), 3);
     app.on_key(key('H'));
     assert_eq!(names(&app).len(), 2);
+}
+
+#[test]
+fn hidden_repos_get_no_bulk_actions_even_when_shown() {
+    let (_sb, mut app) = setup("");
+    let ignored = app.current().unwrap().path.clone();
+    app.act(Action::ToggleIgnore);
+    app.on_key(key('H'));
+    assert_eq!(names(&app).len(), 3, "shown");
+    let paths = |fx: Vec<Effect>| match fx.as_slice() {
+        [Effect::Jobs(j)] => j.iter().map(|j| j.path.clone()).collect::<Vec<_>>(),
+        other => panic!("{other:?}"),
+    };
+    let all = paths(app.act(Action::Fetch(Scope::All)));
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert!(!all.contains(&ignored), "{all:?}");
+    // inverse: chosen explicitly, it's acted on
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path == ignored))
+        .unwrap();
+    assert_eq!(paths(app.act(Action::Fetch(Scope::Selected))), [ignored]);
 }
 
 #[test]
@@ -398,6 +421,15 @@ fn auto_fix_only_targets_repos_with_applicable_fixes() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn auto_fix_all_leaves_hidden_repos_alone_even_when_shown() {
+    // feature is the one repo with an applicable fix (see above)
+    let (_sb, mut app) = setup("ignore = ['acme/feature']");
+    app.on_key(key('H'));
+    assert_eq!(names(&app).len(), 3, "shown");
+    assert!(app.act(Action::AutoFix(Scope::All)).is_empty());
 }
 
 #[test]
@@ -843,7 +875,7 @@ fn clearing_marks_of_several_repos_asks_first() {
     assert!(fx.contains(&Effect::SaveMarks(Box::new(before))) && fx.contains(&Effect::SaveState));
     assert_eq!(favourites(&app), 0);
     // one repo losing marks: no question (a snooze doesn't count)
-    app.ws.set_mark(&[0], Mark::Exclude, true).unwrap();
+    app.ws.set_mark(&[0], Mark::Ignore, true).unwrap();
     let k1 = app.ws.entries[1].key.clone();
     app.ws.state.snoozed.insert(
         k1,
@@ -851,7 +883,7 @@ fn clearing_marks_of_several_repos_asks_first() {
     );
     let fx = app.act(Action::ClearMarks);
     assert!(fx.contains(&Effect::SaveState) && matches!(app.mode, Mode::Normal));
-    assert!(app.ws.config.exclude.is_empty() && app.ws.state.snoozed.is_empty());
+    assert!(app.ws.config.ignore.is_empty() && app.ws.state.snoozed.is_empty());
 }
 
 /// The stash ops in `fx`'s jobs, by repo name.

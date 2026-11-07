@@ -530,7 +530,7 @@ pub fn legend(i: &Icons) -> Vec<(&str, Role, &'static str)> {
             Role::New,
             "new (cloned or found, not yet acknowledged)",
         ),
-        (&i.excluded, Role::Hidden, "excluded"),
+        (&i.ignored, Role::Hidden, "ignored"),
         (&i.snoozed, Role::Hidden, "snoozed"),
         (
             &i.branch,

@@ -24,19 +24,27 @@ fn err(r: Result<Config, argus_core::config::ConfigError>) -> String {
 #[test]
 fn extend_appends_to_any_list_setting() {
     let d = Config::default();
-    let c = Config::parse("extend_skip = ['build-cache']").unwrap();
-    assert_eq!(c.skip.len(), d.skip.len() + 1);
-    assert_eq!(c.skip[..d.skip.len()], d.skip[..]);
-    assert_eq!(c.skip.last().unwrap(), "build-cache");
+    let c = Config::parse("extend_exclude_paths = ['build-cache']").unwrap();
+    assert_eq!(c.exclude_paths.len(), d.exclude_paths.len() + 1);
+    assert_eq!(
+        c.exclude_paths[..d.exclude_paths.len()],
+        d.exclude_paths[..]
+    );
+    assert_eq!(c.exclude_paths.last().unwrap(), "build-cache");
     // in nested tables too
     let c = Config::parse("[fix]\nextend_auto = ['pull']").unwrap();
     assert_eq!(c.fix.auto.len(), d.fix.auto.len() + 1);
     assert_eq!(c.fix.auto.last(), Some(&FixKind::Pull));
     // in one file, the list is set first, then extended
-    let c = Config::parse("skip = ['a']\nextend_skip = ['b']").unwrap();
-    assert_eq!(c.skip, ["a", "b"]);
+    let c = Config::parse("exclude_paths = ['a']\nextend_exclude_paths = ['b']").unwrap();
+    assert_eq!(c.exclude_paths, ["a", "b"]);
     // inverse: replacing still replaces
-    assert_eq!(Config::parse("skip = ['a']").unwrap().skip, ["a"]);
+    assert_eq!(
+        Config::parse("exclude_paths = ['a']")
+            .unwrap()
+            .exclude_paths,
+        ["a"]
+    );
 }
 
 #[test]
@@ -48,8 +56,11 @@ fn extend_only_applies_to_lists() {
         e.contains("extend_nope") && e.contains("no such setting"),
         "{e}"
     );
-    let e = err(Config::parse("extend_skip = 'x'"));
-    assert!(e.contains("extend_skip") && e.contains("list"), "{e}");
+    let e = err(Config::parse("extend_exclude_paths = 'x'"));
+    assert!(
+        e.contains("extend_exclude_paths") && e.contains("list"),
+        "{e}"
+    );
 }
 
 #[test]
@@ -59,7 +70,7 @@ fn includes_are_read_first_and_overridden_by_the_including_file() {
     write(
         d,
         "base.toml",
-        "max_depth = 3\nconcurrency.disk = 1\nconcurrency.network = 2\nskip = ['from-base']\nfavourite = ['base/*']\n[[track]]\nowner = 'base-org'\n",
+        "max_depth = 3\nconcurrency.disk = 1\nconcurrency.network = 2\nexclude_paths = ['from-base']\nfavourite = ['base/*']\n[[track]]\nowner = 'base-org'\n",
     );
     write(
         d,
@@ -69,20 +80,24 @@ fn includes_are_read_first_and_overridden_by_the_including_file() {
     write(
         d,
         "conf.d/a.toml",
-        "concurrency = 4\nextend_favourite = ['a/*']\n[ui]\ntheme = 'dark'\n",
+        "concurrency.network = 4\nextend_favourite = ['a/*']\n[ui]\ntheme = 'dark'\n",
     );
     write(d, "conf.d/notes.txt", "not toml");
     let main = write(
         d,
         "config.toml",
-        "include = ['base.toml', 'conf.d/*.toml', 'none.d/*.toml']\nmax_depth = 9\nextend_skip = ['from-main']\n[[track]]\nowner = 'main-org'\n",
+        "include = ['base.toml', 'conf.d/*.toml', 'none.d/*.toml']\nmax_depth = 9\nextend_exclude_paths = ['from-main']\n[[track]]\nowner = 'main-org'\n",
     );
     let c = Config::load(&main).unwrap();
     // later files win: base, then conf.d/a, conf.d/b (sorted), then main
     assert_eq!(c.max_depth, 9);
-    assert_eq!((c.concurrency.network, c.concurrency.disk), (5, 1), "the old number merges with the section");
+    assert_eq!(
+        (c.concurrency.network, c.concurrency.disk),
+        (5, 1),
+        "sections merge across files"
+    );
     assert_eq!(c.ui.theme, "dark");
-    assert_eq!(c.skip, ["from-base", "from-main"]);
+    assert_eq!(c.exclude_paths, ["from-base", "from-main"]);
     assert_eq!(c.favourite, ["base/*", "a/*"]);
     // lists of tables add up
     let owners: Vec<&str> = c.tracks.iter().map(|t| t.owner.as_str()).collect();
