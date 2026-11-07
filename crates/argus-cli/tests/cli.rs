@@ -159,9 +159,9 @@ fn root_add_list_remove() {
     a(&["root", "add"])
         .success()
         .stdout(predicate::str::contains("added ~/dev"));
-    a(&["root", "add", "../work", "."]).success().stdout(
-        predicate::str::contains("added ~/work").and(predicate::str::contains("~/dev").not()),
-    );
+    a(&["root", "add", "../work", "."])
+        .success()
+        .stdout("~/dev is already configured\nadded ~/work\n");
     a(&["root", "add"])
         .success()
         .stdout(predicate::str::contains("already configured"));
@@ -177,8 +177,11 @@ fn root_add_list_remove() {
         .success()
         .stdout("removed ~/work\n");
     a(&["root", "remove", "~/work"])
-        .failure()
-        .stderr(predicate::str::contains("not configured as a root"));
+        .success()
+        .stdout("")
+        .stderr(predicate::str::contains(
+            "~/work is not configured as a root",
+        ));
     a(&["root", "list"]).success().stdout("~/dev\n");
     // the generated documentation survived the edits
     let text = std::fs::read_to_string(sb.path(".config/argus/config.toml")).unwrap();
@@ -1172,5 +1175,39 @@ fn a_config_error_is_reported_once_in_plain_words() {
     assert!(
         err.contains("[concurrency]") && !err.contains("struct"),
         "{err}"
+    );
+}
+
+#[test]
+fn root_add_and_remove_name_the_included_file_they_edit() {
+    let sb = Sandbox::new();
+    for d in ["dev", "work", "extra"] {
+        std::fs::create_dir_all(sb.path(d)).unwrap();
+    }
+    let conf = sb.path(".config/argus");
+    std::fs::create_dir_all(&conf).unwrap();
+    std::fs::write(conf.join("config.toml"), "include = ['work.toml']\n").unwrap();
+    std::fs::write(conf.join("work.toml"), "roots = ['~/work']\n").unwrap();
+    let a = |args: &[&str]| argus_in(&sb, &sb.path("dev")).args(args).assert();
+    a(&["root", "add", "~/extra"])
+        .success()
+        .stdout("added ~/extra (to ~/.config/argus/work.toml)\n");
+    a(&["root", "add", "~/work"])
+        .success()
+        .stdout("~/work is already configured (in ~/.config/argus/work.toml)\n");
+    a(&["root", "list"]).success().stdout("~/work\n~/extra\n");
+    // listed in two files: both edited, both named
+    std::fs::write(
+        conf.join("config.toml"),
+        "include = ['work.toml']\nextend_roots = ['~/work']\n",
+    )
+    .unwrap();
+    a(&["root", "remove", "~/work"])
+        .success()
+        .stdout("removed ~/work from ~/.config/argus/config.toml, ~/.config/argus/work.toml\n");
+    a(&["root", "list"]).success().stdout("~/extra\n");
+    assert_eq!(
+        std::fs::read_to_string(conf.join("config.toml")).unwrap(),
+        "include = ['work.toml']\nextend_roots = []\n"
     );
 }

@@ -35,8 +35,6 @@ pub enum EditError {
     NotAList { path: PathBuf, key: &'static str },
     #[error("{0}: no such directory")]
     NoSuchDir(PathBuf),
-    #[error("not configured as a root: {0}")]
-    NotARoot(String),
     #[error("{path}: result would not be a valid config: {source}")]
     Invalid {
         path: PathBuf,
@@ -360,8 +358,88 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     canon(a) == canon(b)
 }
 
-fn configured(doc: &toml_edit::DocumentMut, path: &Path) -> Result<Vec<String>, EditError> {
-    match doc.get("roots") {
+/// What [`add_roots`] did.
+#[derive(Debug)]
+pub struct RootsAdded {
+    /// Entries added, as written (`~/…`).
+    pub added: Vec<String>,
+    /// The file they were (or would have been) added to.
+    pub file: PathBuf,
+    /// Directories already configured, each with the highest file listing it.
+    pub already: Vec<(String, PathBuf)>,
+    /// When added to `roots`: lower files whose `roots` that list replaces
+    /// (they already had no effect).
+    pub replaces: Vec<PathBuf>,
+}
+
+/// One root taken out by [`remove_roots`].
+#[derive(Debug)]
+pub struct RootRemoved {
+    /// As written in the first file it was found in.
+    pub root: String,
+    /// Every file it was removed from, highest first.
+    pub files: Vec<PathBuf>,
+    /// Those of `files` whose `roots` a higher file's `roots` replaces, so
+    /// removing it there changed nothing.
+    pub no_effect: Vec<PathBuf>,
+}
+
+/// What [`remove_roots`] did.
+#[derive(Debug)]
+pub struct RootsRemoved {
+    pub removed: Vec<RootRemoved>,
+    /// Arguments that no file lists as a root.
+    pub not_roots: Vec<String>,
+}
+
+const ROOT_KEYS: [&str; 2] = ["roots", "extend_roots"];
+
+/// Remove the entries of `arr` for which `drop` holds, without leaving
+/// `[ 'b']` behind on a one-line list (each element keeps the space before
+/// it, so the new first one would start with a space).
+fn remove_where(arr: &mut toml_edit::Array, mut drop: impl FnMut(&toml_edit::Value) -> bool) {
+    arr.retain(|v| !drop(v));
+    if let Some(first) = arr.get_mut(0) {
+        let prefix = first
+            .decor()
+            .prefix()
+            .and_then(|p| p.as_str())
+            .unwrap_or("");
+        if !prefix.contains('\n') {
+            first.decor_mut().set_prefix("");
+        }
+    }
+}
+
+/// A config file being edited: its path, text and document.
+struct Doc {
+    path: PathBuf,
+    text: String,
+    doc: toml_edit::DocumentMut,
+}
+
+/// The files making up `path`'s config, highest first: the main file, then
+/// its includes from the last merged down, a file before those it includes.
+/// Each file's `roots` and `extend_roots` must be lists of strings.
+fn docs_highest_first(path: &Path) -> Result<Vec<Doc>, EditError> {
+    let layers = Layers::load(path)?;
+    let mut docs: Vec<Doc> = vec![];
+    for f in layers.files.into_iter().rev() {
+        if docs.iter().any(|d| same_dir(&d.path, &f)) {
+            continue; // included twice: its last merge is what counts
+        }
+        let (text, doc) = load(&f)?;
+        for k in ROOT_KEYS {
+            entries(&doc, k, &f)?;
+        }
+        docs.push(Doc { path: f, text, doc });
+    }
+    Ok(docs)
+}
+
+/// The strings in list `key` of `doc` (none if it's absent).
+fn entries(doc: &toml_edit::DocumentMut, key: &str, path: &Path) -> Result<Vec<String>, EditError> {
+    match doc.get(key) {
         None => Ok(vec![]),
         Some(item) => item
             .as_array()
@@ -374,14 +452,28 @@ fn configured(doc: &toml_edit::DocumentMut, path: &Path) -> Result<Vec<String>, 
     }
 }
 
-/// Add directories (which must exist) to `roots`, creating the config from
-/// the example if needed. Returns the entries added, as written (`~/…`);
-/// directories already configured are skipped.
-pub fn add_roots(path: &Path, dirs: &[PathBuf]) -> Result<Vec<String>, EditError> {
+/// Whether `doc` lists `dir` under either root key.
+fn lists(d: &Doc, dir: &Path) -> bool {
+    ROOT_KEYS.iter().any(|k| {
+        entries(&d.doc, k, &d.path)
+            .unwrap_or_default()
+            .iter()
+            .any(|e| same_dir(Path::new(e), dir))
+    })
+}
+
+/// Add directories (which must exist) as roots, creating the config from
+/// the example if needed. They go to `roots` in the highest file that has
+/// it, else `extend_roots` in the highest file that has that, else to a new
+/// `roots` at the top of the main file (below the example's commented one).
+/// Directories already configured, in any file and however spelled, are
+/// skipped and reported.
+pub fn add_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsAdded, EditError> {
     ensure_exists(path)?;
-    let (text, mut doc) = load(path)?;
-    let existing = configured(&doc, path)?;
+    let mut docs = docs_highest_first(path)?;
+    let effective = Config::load(path)?.roots;
     let mut added: Vec<String> = vec![];
+    let mut already: Vec<(String, PathBuf)> = vec![];
     for d in dirs {
         let canon =
             std::fs::canonicalize(expand_tilde(d)).map_err(|_| EditError::NoSuchDir(d.clone()))?;
@@ -389,60 +481,148 @@ pub fn add_roots(path: &Path, dirs: &[PathBuf]) -> Result<Vec<String>, EditError
             return Err(EditError::NoSuchDir(d.clone()));
         }
         let entry = contract_tilde(&canon);
-        let known = existing
-            .iter()
-            .chain(&added)
-            .any(|e| same_dir(Path::new(e), &canon));
-        if !known {
+        if effective.iter().any(|e| same_dir(e, &canon)) {
+            let file = docs
+                .iter()
+                .find(|doc| lists(doc, &canon))
+                .map_or_else(|| path.to_path_buf(), |doc| doc.path.clone());
+            if !already.iter().any(|(e, _)| *e == entry) {
+                already.push((entry, file));
+            }
+        } else if !added.iter().any(|a| same_dir(Path::new(a), &canon)) {
             added.push(entry);
         }
     }
+    let target = ROOT_KEYS.iter().find_map(|&k| {
+        docs.iter()
+            .position(|d| d.doc.contains_key(k))
+            .map(|i| (i, k))
+    });
+    let file = target.map_or_else(|| path.to_path_buf(), |(i, _)| docs[i].path.clone());
+    let replaces = match target {
+        Some((i, "roots")) => docs[i + 1..]
+            .iter()
+            .filter(|d| d.doc.contains_key("roots"))
+            .map(|d| d.path.clone())
+            .collect(),
+        _ => vec![],
+    };
     if added.is_empty() {
-        return Ok(added);
+        return Ok(RootsAdded {
+            added,
+            file,
+            already,
+            replaces,
+        });
     }
-    let text = if let Some(arr) = doc.get_mut("roots").and_then(|i| i.as_array_mut()) {
-        for a in &added {
-            arr.push(a.as_str());
-        }
-        doc.to_string()
-    } else {
-        let mut arr = toml_edit::Array::new();
-        for a in &added {
-            arr.push(a.as_str());
-        }
-        let line = format!("roots = {arr}\n");
-        // Put it right below the documented-but-commented `# roots = …`.
-        match text.lines().position(|l| l.starts_with("# roots = ")) {
-            Some(i) => {
-                let mut lines: Vec<&str> = text.lines().collect();
-                lines.insert(i + 1, line.trim_end());
-                lines.join("\n") + "\n"
+    let text = match target {
+        Some((i, key)) => {
+            let arr = docs[i]
+                .doc
+                .get_mut(key)
+                .and_then(|v| v.as_array_mut())
+                .expect("checked to be a list");
+            for a in &added {
+                arr.push(a.as_str());
             }
-            None => line + &text,
+            docs[i].doc.to_string()
+        }
+        None => {
+            let mut arr = toml_edit::Array::new();
+            for a in &added {
+                arr.push(a.as_str());
+            }
+            let line = format!("roots = {arr}");
+            let main = &docs[0].text;
+            match main.lines().position(|l| l.starts_with("# roots = ")) {
+                Some(i) => {
+                    let mut lines: Vec<&str> = main.lines().collect();
+                    lines.insert(i + 1, &line);
+                    lines.join("\n") + "\n"
+                }
+                None => format!("{line}\n{main}"),
+            }
         }
     };
-    save(path, &text)?;
-    Ok(added)
+    save(&file, &text)?;
+    Ok(RootsAdded {
+        added,
+        file,
+        already,
+        replaces,
+    })
 }
 
-/// Remove directories from `roots`. Every argument must match a configured
-/// root (by path, even if the directory no longer exists).
-pub fn remove_roots(path: &Path, dirs: &[PathBuf]) -> Result<Vec<String>, EditError> {
-    let (_, mut doc) = load(path)?;
-    let existing = configured(&doc, path)?;
-    let mut removed = vec![];
+/// Remove directories from the roots: from every file that lists them,
+/// under `roots` or `extend_roots`. Arguments no file lists are reported,
+/// not errors. Every file to change is checked first (writable, still a
+/// valid config), so a failure leaves all of them as they were.
+pub fn remove_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsRemoved, EditError> {
+    let mut docs = docs_highest_first(path)?;
+    let has_roots: Vec<bool> = docs.iter().map(|d| d.doc.contains_key("roots")).collect();
+    let mut touched = vec![false; docs.len()];
+    let mut out = RootsRemoved {
+        removed: vec![],
+        not_roots: vec![],
+    };
     for d in dirs {
         let abs = std::path::absolute(expand_tilde(d)).unwrap_or_else(|_| d.clone());
-        match existing.iter().find(|e| same_dir(Path::new(e), &abs)) {
-            Some(e) => removed.push(e.clone()),
-            None => return Err(EditError::NotARoot(d.display().to_string())),
+        let mut root: Option<String> = None;
+        let (mut files, mut no_effect) = (vec![], vec![]);
+        for (i, doc) in docs.iter_mut().enumerate() {
+            let mut hit = false;
+            for k in ROOT_KEYS {
+                if let Some(arr) = doc.doc.get_mut(k).and_then(|v| v.as_array_mut()) {
+                    remove_where(arr, |v| {
+                        let matches = v.as_str().is_some_and(|s| same_dir(Path::new(s), &abs));
+                        if matches {
+                            hit = true;
+                            root.get_or_insert_with(|| v.as_str().unwrap_or_default().into());
+                        }
+                        matches
+                    });
+                }
+            }
+            if hit {
+                touched[i] = true;
+                files.push(doc.path.clone());
+                if has_roots[..i].iter().any(|&h| h) {
+                    no_effect.push(doc.path.clone());
+                }
+            }
+        }
+        match root {
+            Some(root) => out.removed.push(RootRemoved {
+                root,
+                files,
+                no_effect,
+            }),
+            None => out.not_roots.push(d.display().to_string()),
         }
     }
-    if let Some(arr) = doc.get_mut("roots").and_then(|i| i.as_array_mut()) {
-        arr.retain(|v| v.as_str().is_none_or(|s| !removed.iter().any(|r| r == s)));
+    let changed: Vec<(&Path, String)> = docs
+        .iter()
+        .zip(&touched)
+        .filter(|(_, t)| **t)
+        .map(|(d, _)| (d.path.as_path(), d.doc.to_string()))
+        .collect();
+    for (file, text) in &changed {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(file)
+            .map_err(|source| EditError::Io {
+                path: file.to_path_buf(),
+                source,
+            })?;
+        Config::parse(text).map_err(|source| EditError::Invalid {
+            path: file.to_path_buf(),
+            source: Box::new(source),
+        })?;
     }
-    save(path, &doc.to_string())?;
-    Ok(removed)
+    for (file, text) in changed {
+        write(file, &text)?;
+    }
+    Ok(out)
 }
 
 /// Write the `favourite`, `sync` and `ignore` changes from `before` to
@@ -502,7 +682,7 @@ pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result
                 let i = doc_of(&mut docs, &file)?;
                 for k in [key, extend_key.as_str()] {
                     if let Some(arr) = docs[i].1.get_mut(k).and_then(|v| v.as_array_mut()) {
-                        arr.retain(|v| v.as_str() != Some(r.as_str()));
+                        remove_where(arr, |v| v.as_str() == Some(r.as_str()));
                     }
                 }
             }
@@ -673,8 +853,8 @@ mod tests {
         let (d, p) = tmp();
         let r = d.path().join("code");
         std::fs::create_dir(&r).unwrap();
-        let added = add_roots(&p, std::slice::from_ref(&r)).unwrap();
-        assert_eq!(added.len(), 1);
+        let r2 = add_roots(&p, std::slice::from_ref(&r)).unwrap();
+        assert_eq!((r2.added.len(), r2.file.as_path()), (1, p.as_path()));
         let text = std::fs::read_to_string(&p).unwrap();
         let i = text
             .lines()
@@ -705,12 +885,13 @@ mod tests {
             ),
         )
         .unwrap();
+        let r = add_roots(&p, std::slice::from_ref(&a)).unwrap();
         assert!(
-            add_roots(&p, std::slice::from_ref(&a)).unwrap().is_empty(),
+            r.added.is_empty() && r.already.len() == 1,
             "already present"
         );
         assert_eq!(
-            add_roots(&p, &[b.clone(), b.clone()]).unwrap().len(),
+            add_roots(&p, &[b.clone(), b.clone()]).unwrap().added.len(),
             1,
             "deduplicated within one call"
         );
@@ -747,30 +928,15 @@ mod tests {
         std::fs::create_dir(&b).unwrap();
         add_roots(&p, &[a.clone(), b.clone()]).unwrap();
         std::fs::remove_dir(&b).unwrap();
-        assert_eq!(
-            remove_roots(&p, &[std::fs::canonicalize(d.path()).unwrap().join("b")])
-                .unwrap()
-                .len(),
-            1
-        );
+        let r = remove_roots(&p, &[std::fs::canonicalize(d.path()).unwrap().join("b")]).unwrap();
+        assert_eq!(r.removed.len(), 1, "a vanished directory still matches");
+        let r = remove_roots(&p, std::slice::from_ref(&b)).unwrap();
         assert!(
-            matches!(
-                remove_roots(&p, std::slice::from_ref(&b)),
-                Err(EditError::NotARoot(_))
-            ),
+            r.removed.is_empty() && r.not_roots.len() == 1,
             "already removed"
         );
         let c = Config::parse(&std::fs::read_to_string(&p).unwrap()).unwrap();
         assert_eq!(c.roots, vec![std::fs::canonicalize(&a).unwrap()]);
-        // all-or-nothing: one bad argument removes nothing
-        assert!(remove_roots(&p, &[a.clone(), d.path().join("zzz")]).is_err());
-        assert_eq!(
-            Config::parse(&std::fs::read_to_string(&p).unwrap())
-                .unwrap()
-                .roots
-                .len(),
-            1
-        );
     }
 
     #[test]

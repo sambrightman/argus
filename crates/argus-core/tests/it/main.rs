@@ -10,6 +10,7 @@ mod icons;
 mod literals;
 mod properties;
 mod pull;
+mod roots;
 mod stash;
 mod status;
 mod workspace;

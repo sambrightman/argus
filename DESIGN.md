@@ -135,7 +135,17 @@ Two findings:
   listing them; on a non-list or unknown key it's an error. The merge
   records which file each list element came from, so saving marks can
   remove an entry where it lives and add new ones to the main file
-  without overriding an included list. Old setting names aren't kept
+  without overriding an included list. Roots follow a rule of their own,
+  chosen so an addition always takes effect: `root add` appends to
+  `roots` in the highest-precedence file that has it (that list is the
+  effective one), else to `extend_roots` in the highest file that has
+  that (with no `roots` anywhere, any `extend_roots` applies), else
+  starts `roots` at the top of the main file. Precedence: the main file,
+  then a later include before an earlier one, a file before its own
+  includes (`Layers.files` reversed). `root remove` removes from every
+  file listing the root, reporting removals that changed nothing because
+  a higher `roots` replaces that file's, and checks every file can be
+  written before changing any. Old setting names aren't kept
   (nothing released yet): they fail as unknown keys.
 * **Diff view.** Tab on a file in the details shows its unstaged then
   staged hunks (from `diff::file_diff`, cached per file and side, dropped

@@ -345,6 +345,9 @@ pub(crate) struct Layers {
     pub origins: HashMap<String, Vec<Option<PathBuf>>>,
     /// The main file's own `include`.
     pub main_includes: Vec<String>,
+    /// The files read, in the order merged: a file after its includes, so
+    /// the main file last.
+    pub files: Vec<PathBuf>,
 }
 
 impl Layers {
@@ -356,6 +359,7 @@ impl Layers {
             table,
             origins,
             main_includes: vec![],
+            files: vec![],
         }
     }
 
@@ -400,6 +404,7 @@ impl Layers {
         }
         chain.pop();
         self.merge(layer, Some(path))?;
+        self.files.push(path.to_path_buf());
         Ok(includes)
     }
 

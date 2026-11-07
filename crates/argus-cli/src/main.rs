@@ -549,24 +549,70 @@ fn root_cmd(ctx: &Ctx, cmd: RootCmd, json: bool) -> Result<()> {
             } else {
                 dirs
             };
-            let added = configfile::add_roots(path, &dirs)?;
+            let r = configfile::add_roots(path, &dirs)?;
+            let shown = |f: &std::path::Path| paths::contract_tilde(f);
             if json {
-                return print_json(&serde_json::json!({ "added": added }));
+                return print_json(&serde_json::json!({
+                    "added": r.added,
+                    "file": shown(&r.file),
+                    "already": r.already.iter().map(|(root, f)| serde_json::json!({
+                        "root": root, "file": shown(f),
+                    })).collect::<Vec<_>>(),
+                    "replaces": r.replaces.iter().map(|f| shown(f)).collect::<Vec<_>>(),
+                }));
             }
-            if added.is_empty() {
-                println!("already configured");
+            // the file is named only when it isn't the main one
+            let other = |f: &std::path::Path, word: &str| {
+                if f == path.as_path() {
+                    String::new()
+                } else {
+                    format!(" ({word} {})", shown(f))
+                }
+            };
+            for (root, f) in &r.already {
+                println!("{root} is already configured{}", other(f, "in"));
             }
-            for a in added {
-                println!("added {a}");
+            for a in &r.added {
+                println!("added {a}{}", other(&r.file, "to"));
+            }
+            for f in &r.replaces {
+                eprintln!(
+                    "argus: note: roots in {} have no effect: those in {} replace them",
+                    shown(f),
+                    shown(&r.file)
+                );
             }
         }
         RootCmd::Remove { dirs } => {
-            let removed = configfile::remove_roots(path, &dirs)?;
+            let r = configfile::remove_roots(path, &dirs)?;
+            let shown = |f: &std::path::Path| paths::contract_tilde(f);
             if json {
-                return print_json(&serde_json::json!({ "removed": removed }));
+                return print_json(&serde_json::json!({
+                    "removed": r.removed.iter().map(|x| serde_json::json!({
+                        "root": x.root,
+                        "files": x.files.iter().map(|f| shown(f)).collect::<Vec<_>>(),
+                        "no_effect": x.no_effect.iter().map(|f| shown(f)).collect::<Vec<_>>(),
+                    })).collect::<Vec<_>>(),
+                    "not_roots": r.not_roots,
+                }));
             }
-            for r in removed {
-                println!("removed {r}");
+            for x in &r.removed {
+                let from = if x.files == [path.clone()] {
+                    String::new()
+                } else {
+                    let names: Vec<String> = x.files.iter().map(|f| shown(f)).collect();
+                    format!(" from {}", names.join(", "))
+                };
+                println!("removed {}{from}", x.root);
+                for f in &x.no_effect {
+                    eprintln!(
+                        "argus: note: removing it from {} had no effect: a higher file's roots replace those",
+                        shown(f)
+                    );
+                }
+            }
+            for n in &r.not_roots {
+                eprintln!("argus: {n} is not configured as a root");
             }
         }
         RootCmd::List => {

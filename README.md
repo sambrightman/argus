@@ -30,7 +30,11 @@ With no roots configured, argus scans the current directory and says so.
 On first run it writes `~/.config/argus/config.toml`: every setting with
 its default and documentation, commented out, generated from the code (so
 it can't drift). `argus root add|remove|list` edit it in place, keeping
-your comments. If `max_depth` stops a scan before the bottom of a tree,
+your comments. With included files, `root add` appends to the `roots` list
+that takes effect (the highest-precedence file that has one), else to an
+`extend_roots`, else starts `roots` at the top of the main file; `root
+remove` takes the directory out of every file that lists it. Each names
+the file it edited when it isn't the main one. If `max_depth` stops a scan before the bottom of a tree,
 argus warns and names a directory it skipped.
 
 ## Configuration
