@@ -265,10 +265,11 @@ cargo machete                     # unused dependencies
 cargo outdated --workspace --root-deps-only
 cargo bench -p argus-core -- --save-baseline before         # criterion; after a change:
 cargo bench -p argus-core -- --baseline before              # compare (likewise -p argus-tui)
+scripts/bench-cli.sh              # hyperfine: whole commands on 200 generated repos (--help)
 ```
 
 Tools: `cargo install --locked cargo-nextest cargo-llvm-cov cargo-mutants
-cargo-deny cargo-machete cargo-outdated`, and `rustup component add
+cargo-deny cargo-machete cargo-outdated` and `brew install hyperfine`, and `rustup component add
 llvm-tools-preview` for coverage. Settings: `.config/nextest.toml`,
 `.cargo/mutants.toml`, `deny.toml`. Plain `cargo test` works too (nextest
 is faster and stops at the first failure). On macOS, list your terminal
