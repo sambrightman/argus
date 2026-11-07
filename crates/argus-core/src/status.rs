@@ -825,17 +825,19 @@ const DESCRIBE_LIMIT: usize = 1000;
 /// Answers are remembered per repo, HEAD and tags, for refreshes.
 fn describe(repo: &gix::Repository, refs: &Refs, head: gix::ObjectId) -> Option<String> {
     use std::hash::{Hash, Hasher};
-    let tagged: std::collections::HashSet<gix::ObjectId> = refs
+    // (name, commit) of every tag: names count too, or a renamed tag would
+    // keep its old name in a remembered answer
+    let mut tags: Vec<(String, gix::ObjectId)> = refs
         .prefixed("refs/tags/")
-        .filter_map(|i| refs.peel_at(i))
+        .filter_map(|i| Some((refs.refs[i].name().as_bstr().to_string(), refs.peel_at(i)?)))
         .collect();
-    if tagged.is_empty() {
+    if tags.is_empty() {
         return None;
     }
+    tags.sort();
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    let mut ids: Vec<_> = tagged.iter().collect();
-    ids.sort();
-    ids.hash(&mut h);
+    tags.hash(&mut h);
+    let tagged: std::collections::HashSet<gix::ObjectId> = tags.iter().map(|t| t.1).collect();
     let key = (repo.git_dir().to_path_buf(), head, h.finish());
     /// Per repo (git dir): the HEAD and tags fingerprint, and the answer.
     type Remembered = HashMap<PathBuf, (gix::ObjectId, u64, Option<String>)>;

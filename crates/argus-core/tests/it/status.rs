@@ -673,7 +673,13 @@ fn a_detached_head_after_a_tag_is_described_as_git_does() {
     let want = git(&r, &["describe", "--tags"]);
     assert!(want.starts_with("v2-1-g"), "{want}");
     assert_eq!(st(&r).describe.as_deref(), Some(want.trim()));
+    // renamed, same commit: the name changes too
+    git(&r, &["tag", "v2-final", "v2"]);
     git(&r, &["tag", "-d", "v2"]);
+    let want = git(&r, &["describe", "--tags"]);
+    assert!(want.starts_with("v2-final-1-g"), "{want}");
+    assert_eq!(st(&r).describe.as_deref(), Some(want.trim()));
+    git(&r, &["tag", "-d", "v2-final"]);
     // inverses: on the tag (the tags say it), on a branch, no tags at all
     git(&r, &["switch", "-q", "--detach", "v1"]);
     assert_eq!(st(&r).describe, None, "on a tag");
