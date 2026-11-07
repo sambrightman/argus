@@ -6,7 +6,7 @@ use argus_core::config::Config;
 use argus_core::ops::Op;
 use argus_core::testkit::{Sandbox, commit, git, write};
 use argus_core::{State, Workspace};
-use argus_tui::app::{Action, App, Effect, Mode, Msg, Row, Scope};
+use argus_tui::app::{Action, App, Effect, Mode, Msg, Row, Scope, StashKind};
 use argus_tui::menu::MenuId;
 use argus_tui::theme::Theme;
 use argus_tui::ui;
@@ -937,6 +937,20 @@ fn stash_staged_only_and_refusals() {
         "{:?}",
         app.message
     );
+    let (_, is_error) = app.message.clone().unwrap();
+    assert!(!is_error, "skipped, not refused");
+    // a clean repo among those selected is skipped; the others are stashed
+    for e in &app.ws.entries {
+        app.marked.insert(e.path.clone());
+    }
+    let fx = app.act(Action::Stash(StashKind::All));
+    let names: Vec<String> = stash_jobs(&app, &fx).into_iter().map(|(n, _)| n).collect();
+    assert!(
+        names.contains(&"acme/dirty".to_string()) && !names.contains(&"acme/clean".to_string()),
+        "{names:?}"
+    );
+    app.marked.clear();
+    app.running.clear();
     // staged only
     app.act(Action::Top);
     app.on_key(key('z'));
