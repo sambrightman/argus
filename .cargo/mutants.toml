@@ -1,0 +1,5 @@
+# cargo-mutants settings: https://mutants.rs
+# Test fixtures and the demo builder aren't product code.
+exclude_globs = ["crates/argus-core/src/testkit.rs", "crates/argus-core/src/demo.rs"]
+# Tests run real git in temp dirs; give slow builds room before a timeout.
+timeout_multiplier = 3.0

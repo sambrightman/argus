@@ -220,6 +220,25 @@ nested repos, bare repos and symlink loops. The forge uses a fake `Forge` impl
 plus JSON fixture parsing tests. The TUI state machine is unit-tested, and
 rendering is snapshot-tested via `TestBackend`.
 
+* **Properties** (proptest): refining never changes a line's text; random
+  key sequences keep the TUI's cursor on a row and always lead back to
+  normal mode; `extend_` appends; version order is a total order; URL and
+  duration parsing never panic. The discovery optimizations are checked
+  against the plain walk on random trees.
+* **Mutation testing**: while developing, targeted mutations of each new
+  condition (the ways it could plausibly be wrong) must each fail a test;
+  survivors become tests, or show code to delete. cargo-mutants adds
+  breadth with generic mutations (`--in-diff` for changes).
+* **Coverage** (cargo-llvm-cov, region and line): about 91% overall. The
+  TUI runtime (`argus-tui/src/lib.rs`: terminal loop, carrying out effects)
+  is barely covered; the app's decisions and the core functions it calls
+  are. Branch coverage needs a nightly toolchain.
+* **Benchmarks** (criterion, `benches/`): discovery variants including
+  `-L` and its optimizations, status and scanning, a large file's diff,
+  config with includes, rule matching, word refinement, rebuilding and
+  drawing the TUI. For before/after comparisons with baselines; timing
+  isn't gated, as laptop noise makes that unreliable.
+
 ## 8. Decisions made during the build
 
 * **Permanently destructive operations ask first** (project rule). TUI:

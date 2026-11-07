@@ -247,10 +247,19 @@ changes in the index after stashing them.
 ## Development
 
 ```sh
-cargo test --workspace      # ~260 tests, real git repos in temp dirs
+cargo test --workspace      # ~290 tests, real git repos in temp dirs
 cargo clippy --workspace --all-targets
 cargo run -p argus-tui --example snapshot -- ~/dev 'jj\t'   # render a frame as text
+
+cargo bench -p argus-core -- --save-baseline before   # criterion benchmarks; after a change:
+cargo bench -p argus-core -- --baseline before        # compare (likewise -p argus-tui)
+cargo llvm-cov --workspace --features argus-core/demo --html   # coverage: target/llvm-cov/html
+cargo mutants --in-diff <(git diff main)              # mutation testing of changed code
 ```
+
+Coverage needs `rustup component add llvm-tools-preview` and `cargo install
+cargo-llvm-cov`; mutation testing `cargo install cargo-mutants` (settings in
+`.cargo/mutants.toml`).
 
 Tests build real repositories with the `git` CLI under an isolated git config
 (`argus_core::testkit`), with local bare repos standing in for GitHub. Each

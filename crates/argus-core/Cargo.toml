@@ -19,8 +19,14 @@ serde_json = "1.0.154"
 
 [dev-dependencies]
 argus-core = { path = ".", features = ["testkit", "demo"] }
+criterion = "0.8.2"
 pretty_assertions = "1.4.1"
+proptest = "1.12.0"
 tempfile = "3.27.0"
+
+[[bench]]
+name = "core"
+harness = false
 
 [features]
 testkit = ["dep:tempfile"]
