@@ -140,11 +140,12 @@ Two findings:
   records which file each list element came from, so saving marks can
   remove an entry where it lives and add new ones to the main file
   without overriding an extended file's list. Roots follow a rule of their own,
-  chosen so an addition always takes effect: `root add` appends to
-  `roots` in the highest-precedence file that has it (that list is the
-  effective one), else to `extend_roots` in the highest file that has
-  that (with no `roots` anywhere, any `extend_roots` applies), else
-  starts `roots` at the top of the main file. Precedence: the main file,
+  chosen so an addition always takes effect: `root add` appends to the
+  highest-precedence file with `roots` or `extend_roots` (`roots` if it
+  has both), else starts `roots` at the top of the main file. Nothing
+  above that file sets `roots`, so its list, or its addition to the
+  list, takes effect; and when a shared base sets `roots` and the main
+  file extends them, additions go to the main file, not the shared one. Precedence: the main file,
   then a later extended file before an earlier one, a file before the
   files it extends (`Layers.files` reversed). `root remove` removes from every
   file listing the root, reporting removals that changed nothing because

@@ -1,6 +1,6 @@
-//! `root add` / `root remove` across extended config files: add to `roots`
-//! in the highest file that has it, else `extend_roots` in the highest that
-//! has that, else `roots` at the top of the main file; remove from every
+//! `root add` / `root remove` across extended config files: add to the
+//! highest file with `roots` or `extend_roots` (to `roots` if it has both),
+//! else start `roots` at the top of the main file; remove from every
 //! file that mentions the root.
 
 use std::path::{Path, PathBuf};
@@ -116,27 +116,39 @@ fn a_file_is_higher_than_the_files_it_extends() {
 }
 
 #[test]
-fn extend_roots_when_no_file_has_roots() {
+fn the_highest_file_with_either_key_gets_it() {
+    // only extend_roots anywhere: it's appended to
     let (t, main) = setup(&[
         ("config.toml", "extend = ['inc.toml']\n"),
         ("inc.toml", "extend_roots = ['{a}']\n"),
     ]);
     let r = add_roots(&main, &[dir(&t, "b")]).unwrap();
     assert!(same(&r.file, &t.path().join("inc.toml")), "{r:?}");
-    assert!(read(&t, "inc.toml").contains("extend_roots"));
-    assert!(!read(&t, "inc.toml").contains("\nroots"));
+    let inc: toml::Table = toml::from_str(&read(&t, "inc.toml")).unwrap();
+    assert_eq!(inc["extend_roots"].as_array().unwrap().len(), 2, "{inc}");
     assert_eq!(roots(&main), ["a", "b"]);
-    // roots anywhere beats extend_roots, even in a higher file
+    // a shared base sets roots, this machine extends them: the addition
+    // stays in the main file, where it also takes effect
     let (t, main) = setup(&[
         (
             "config.toml",
-            "extend = ['inc.toml']\nextend_roots = ['{a}']\n",
+            "extend = ['work.toml']\nextend_roots = ['{a}']\n",
         ),
-        ("inc.toml", "roots = ['{c}']\n"),
+        ("work.toml", "roots = ['{c}']\n"),
     ]);
     let r = add_roots(&main, &[dir(&t, "b")]).unwrap();
-    assert!(same(&r.file, &t.path().join("inc.toml")), "{r:?}");
-    assert_eq!(roots(&main), ["c", "b", "a"]);
+    assert!(same(&r.file, &main), "{r:?}");
+    assert_eq!(
+        read(&t, "work.toml"),
+        fill(t.path(), "roots = ['{c}']\n"),
+        "shared file untouched"
+    );
+    assert_eq!(roots(&main), ["c", "a", "b"]);
+    assert!(r.replaces.is_empty(), "{r:?}");
+    // a file with both: roots
+    let (t, main) = setup(&[("config.toml", "roots = ['{a}']\nextend_roots = ['{c}']\n")]);
+    add_roots(&main, &[dir(&t, "b")]).unwrap();
+    assert_eq!(roots(&main), ["a", "b", "c"]);
 }
 
 #[test]

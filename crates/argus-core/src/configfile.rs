@@ -463,9 +463,11 @@ fn lists(d: &Doc, dir: &Path) -> bool {
 }
 
 /// Add directories (which must exist) as roots, creating the config from
-/// the example if needed. They go to `roots` in the highest file that has
-/// it, else `extend_roots` in the highest file that has that, else to a new
-/// `roots` at the top of the main file (below the example's commented one).
+/// the example if needed. They go to the highest file with `roots` or
+/// `extend_roots` (to `roots` if it has both), else to a new `roots` at
+/// the top of the main file (below the example's commented one). The
+/// highest file with either key always takes effect, and this keeps
+/// additions out of a shared base when a file above it extends the roots.
 /// Directories already configured, in any file and however spelled, are
 /// skipped and reported.
 pub fn add_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsAdded, EditError> {
@@ -493,10 +495,13 @@ pub fn add_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsAdded, EditError>
             added.push(entry);
         }
     }
-    let target = ROOT_KEYS.iter().find_map(|&k| {
-        docs.iter()
-            .position(|d| d.doc.contains_key(k))
-            .map(|i| (i, k))
+    // The highest file with either key: nothing above it sets `roots`, so
+    // its list (or its addition to the list) is the one that takes effect.
+    let target = docs.iter().enumerate().find_map(|(i, d)| {
+        ROOT_KEYS
+            .into_iter()
+            .find(|k| d.doc.contains_key(k))
+            .map(|k| (i, k))
     });
     let file = target.map_or_else(|| path.to_path_buf(), |(i, _)| docs[i].path.clone());
     let replaces = match target {
