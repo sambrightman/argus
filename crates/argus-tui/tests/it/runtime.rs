@@ -9,7 +9,7 @@ use argus_core::config::Config;
 use argus_core::forge::{Forge, ForgeError, RemoteRepo};
 use argus_core::identity::RepoId;
 use argus_core::status::Head;
-use argus_core::testkit::{Sandbox, git, write};
+use argus_core::testkit::{Sandbox, commit, git, write};
 use argus_core::{State, Workspace};
 use argus_tui::app::{Action, App, Effect, Scope};
 use argus_tui::{Options, Runtime, run_suspended};
@@ -239,6 +239,45 @@ fn a_fix_asked_for_an_ignored_state_still_leaves_it_alone() {
     run(&mut app, &mut rt, fx);
     let s = app.ws.get(&feature).unwrap().status().unwrap();
     assert_eq!(s.head, Head::Branch("feat".into()));
+}
+
+#[test]
+fn opening_details_describes_a_head_past_the_limit_and_the_badge_follows() {
+    let (_sb, mut app, mut rt) = setup("describe_limit = 1");
+    let clean = path(&app, "acme/clean");
+    git(&clean, &["tag", "v1"]);
+    for i in 0..3 {
+        commit(&clean, &format!("c{i}"));
+    }
+    git(&clean, &["switch", "-q", "--detach"]);
+    let fx = app.act(Action::Refresh);
+    run(&mut app, &mut rt, fx);
+    let s = app.ws.get(&clean).unwrap().status().unwrap();
+    assert!(s.describe_gave_up && s.describe.is_none(), "{s:?}");
+    select(&mut app, "acme/clean");
+    let fx = app.act(Action::ToggleExpand);
+    assert_eq!(fx, [Effect::Describe(clean.clone())]);
+    run(&mut app, &mut rt, fx);
+    let want = git(&clean, &["describe", "--tags"]);
+    let e = app.ws.get(&clean).unwrap();
+    assert_eq!(e.status().unwrap().describe.as_deref(), Some(want.trim()));
+    let badge = argus_core::badges::branch(e, &argus_core::icons::UNICODE)
+        .unwrap()
+        .text;
+    assert!(badge.ends_with(want.trim()), "{badge}");
+    // later refreshes keep it
+    let fx = app.act(Action::Refresh);
+    run(&mut app, &mut rt, fx);
+    assert_eq!(
+        app.ws
+            .get(&clean)
+            .unwrap()
+            .status()
+            .unwrap()
+            .describe
+            .as_deref(),
+        Some(want.trim())
+    );
 }
 
 #[test]

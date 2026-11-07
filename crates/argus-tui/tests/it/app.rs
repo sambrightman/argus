@@ -831,6 +831,47 @@ fn details_describe_a_detached_head_past_a_tag() {
 }
 
 #[test]
+fn opening_details_asks_once_for_a_full_describe() {
+    let prep = |sb: &Sandbox| {
+        let c = sb.path("dev/clean");
+        git(&c, &["tag", "v1.0"]);
+        commit(&c, "one");
+        commit(&c, "two");
+        git(&c, &["switch", "-q", "--detach"]);
+    };
+    let (sb, mut app) = setup_with("describe_limit = 1", prep);
+    let clean = sb.path("dev/clean");
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path == clean))
+        .unwrap();
+    assert_eq!(
+        app.act(Action::ToggleExpand),
+        [Effect::Describe(clean.clone())]
+    );
+    let texts = detail_texts(&app);
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.starts_with("describe  searching further back")),
+        "{texts:?}"
+    );
+    // closed and opened again while it runs: not asked twice
+    app.act(Action::ToggleExpand);
+    assert!(app.act(Action::ToggleExpand).is_empty());
+    // done: a refresh picks up the remembered answer
+    assert_eq!(
+        app.on_msg(Msg::Described(clean.clone())),
+        [Effect::Refresh(vec![clean.clone()])]
+    );
+    assert!(app.describing.is_empty());
+    // inverse: a repo whose walk didn't give up isn't described again
+    let (_sb, mut app) = setup("");
+    assert!(app.act(Action::ExpandAll).is_empty());
+}
+
+#[test]
 fn view_menu_cycles_themes_and_icon_sets_for_this_session() {
     let (_sb, mut app) = setup("[ui]\ntheme = 'light'\nicons = 'nerd'");
     let mut themes = vec![];

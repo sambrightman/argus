@@ -15,7 +15,7 @@ use crate::identity::RepoId;
 use crate::paths::contract_tilde;
 use crate::rules::{self, Flags, IssueList, Mark, RuleSet};
 use crate::state::State;
-use crate::status::{self, RepoStatus, StatusOptions};
+use crate::status::{self, RepoStatus};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Entry {
@@ -314,7 +314,7 @@ impl Workspace {
 
     /// Re-read one repo's status (after an operation on it).
     pub fn refresh(&mut self, path: &Path) {
-        let r = status::status(path, StatusOptions::default()).map_err(|e| e.to_string());
+        let r = status::status(path, self.config.status_options()).map_err(|e| e.to_string());
         self.update_status(path, r);
     }
 
@@ -562,10 +562,11 @@ fn statuses<'a>(
     paths: impl Iterator<Item = &'a Path>,
 ) -> Vec<Result<RepoStatus, String>> {
     let paths: Vec<&Path> = paths.collect();
+    let opts = config.status_options();
     in_pool(config.disk_jobs(), || {
         paths
             .par_iter()
-            .map(|p| status::status(p, StatusOptions::default()).map_err(|e| e.to_string()))
+            .map(|p| status::status(p, opts).map_err(|e| e.to_string()))
             .collect()
     })
 }

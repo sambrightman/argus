@@ -454,7 +454,14 @@ fn submodule_status_can_be_skipped() {
     );
     commit(&r, "add sub");
     write(&r.join("lib"), "README", "changed");
-    let s = status(&r, StatusOptions { submodules: false }).unwrap();
+    let s = status(
+        &r,
+        StatusOptions {
+            submodules: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert!(s.changes.is_clean());
 }
 
@@ -744,6 +751,81 @@ fn describe_gives_up_on_a_tag_more_than_1000_commits_back() {
     import(commits(1, 1001, true));
     git(&r, &["switch", "-q", "--detach", "main"]);
     assert_eq!(st(&r).describe, None, "1001 back: given up");
+}
+
+/// Status with this `describe_limit`.
+fn st_limit(p: &std::path::Path, limit: usize) -> RepoStatus {
+    let opts = StatusOptions {
+        describe_limit: limit,
+        ..Default::default()
+    };
+    status(p, opts).unwrap()
+}
+
+#[test]
+fn the_describe_limit_is_configurable_and_says_when_it_gave_up() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    git(&r, &["tag", "v1"]);
+    for i in 0..4 {
+        commit(&r, &format!("c{i}"));
+    }
+    git(&r, &["switch", "-q", "--detach"]);
+    // the tag is 4 back
+    let s = st_limit(&r, 3);
+    assert_eq!((s.describe, s.describe_gave_up), (None, true));
+    // a longer walk isn't answered by the shorter one that gave up
+    let s = st_limit(&r, 4);
+    assert!(
+        s.describe
+            .as_deref()
+            .is_some_and(|d| d.starts_with("v1-4-g")),
+        "{s:?}"
+    );
+    assert!(!s.describe_gave_up);
+    // 0: no walk at all, left to the details
+    let r2 = sb.init("r2");
+    git(&r2, &["tag", "v1"]);
+    commit(&r2, "after");
+    git(&r2, &["switch", "-q", "--detach"]);
+    let s = st_limit(&r2, 0);
+    assert_eq!((s.describe, s.describe_gave_up), (None, true));
+}
+
+#[test]
+fn running_out_of_history_before_the_limit_is_a_final_answer() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    commit(&r, "b");
+    git(&r, &["switch", "-q", "--orphan", "other"]);
+    commit(&r, "other");
+    git(&r, &["tag", "elsewhere"]);
+    git(&r, &["switch", "-q", "--detach", "main"]);
+    let s = st_limit(&r, 100);
+    assert_eq!(
+        (s.describe, s.describe_gave_up),
+        (None, false),
+        "2 commits, no tag"
+    );
+}
+
+#[test]
+fn describing_fully_finds_a_tag_past_the_limit_and_is_remembered() {
+    use argus_core::status::describe_fully;
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    git(&r, &["tag", "v1"]);
+    for i in 0..4 {
+        commit(&r, &format!("c{i}"));
+    }
+    git(&r, &["switch", "-q", "--detach"]);
+    assert!(st_limit(&r, 2).describe_gave_up);
+    let want = git(&r, &["describe", "--tags"]);
+    assert_eq!(describe_fully(&r).as_deref(), Some(want.trim()));
+    // the next status uses it, without walking again
+    let s = st_limit(&r, 2);
+    assert_eq!(s.describe.as_deref(), Some(want.trim()));
+    assert!(!s.describe_gave_up);
 }
 
 #[test]

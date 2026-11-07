@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use argus_core::Workspace;
 use argus_core::runner::{self, Event as RunEvent};
-use argus_core::status::{self, StatusOptions};
+use argus_core::status;
 use argus_core::sync::{self, ForgeFactory};
 use argus_core::{configfile, fix};
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -248,12 +248,12 @@ impl Runtime {
             }
             Effect::Refresh(paths) => {
                 let n = app.ws.config.disk_jobs();
+                let opts = app.ws.config.status_options();
                 self.spawn(move |tx| {
                     argus_core::workspace::in_pool(n, || {
                         use rayon::prelude::*;
                         paths.into_par_iter().for_each(|p| {
-                            let r = status::status(&p, StatusOptions::default())
-                                .map_err(|e| e.to_string());
+                            let r = status::status(&p, opts).map_err(|e| e.to_string());
                             let _ = tx.send(Msg::Status(p, Box::new(r)));
                         });
                     })
@@ -305,6 +305,10 @@ impl Runtime {
                     })
                 });
             }
+            Effect::Describe(path) => self.spawn(move |tx| {
+                status::describe_fully(&path);
+                let _ = tx.send(Msg::Described(path));
+            }),
             Effect::PlanSync => {
                 let mut ws = app.ws.clone();
                 let factory = self.opts.forge_factory;

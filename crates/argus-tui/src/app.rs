@@ -218,6 +218,9 @@ pub enum Effect {
     Refresh(Vec<PathBuf>),
     /// List forges and plan clones/pulls; answer with [`Msg::SyncPlanned`].
     PlanSync,
+    /// Describe a detached HEAD however far back its tag is; answer with
+    /// [`Msg::Described`].
+    Describe(PathBuf),
     /// Leave the TUI, run a command in a directory, come back.
     Suspend {
         program: String,
@@ -234,6 +237,8 @@ pub enum Effect {
 /// Results coming back from the runtime.
 #[derive(Debug)]
 pub enum Msg {
+    /// A full describe finished (its answer is remembered by status).
+    Described(PathBuf),
     Scanned {
         entries: Vec<Entry>,
         /// Directories skipped because of `max_depth`.
@@ -325,6 +330,8 @@ pub struct App {
     pub filter: String,
     pub view: ViewFilter,
     pub expanded: BTreeSet<PathBuf>,
+    /// Repos whose full describe is running.
+    pub describing: BTreeSet<PathBuf>,
     pub marked: BTreeSet<PathBuf>,
     /// Files marked in the details view, by repo path.
     pub marked_files: BTreeMap<PathBuf, BTreeSet<String>>,
@@ -365,6 +372,7 @@ impl App {
             filter: String::new(),
             view,
             expanded: BTreeSet::new(),
+            describing: BTreeSet::new(),
             marked: BTreeSet::new(),
             marked_files: BTreeMap::new(),
             expanded_files: BTreeSet::new(),
@@ -748,6 +756,7 @@ impl App {
                     {
                         self.cursor = i;
                     }
+                    return self.describe_opened();
                 }
             }
             ExpandAll => {
@@ -757,6 +766,7 @@ impl App {
                     .map(|i| self.ws.entries[i].path.clone())
                     .collect();
                 self.rebuild();
+                return self.describe_opened();
             }
             CollapseAll => {
                 self.expanded.clear();
@@ -1060,6 +1070,30 @@ impl App {
         }
         self.rebuild();
         vec![Effect::SaveMarks(Box::new(before))]
+    }
+
+    /// Full describes for repos whose details are open and whose walk for
+    /// a tag gave up at `describe_limit`, unless one is already running.
+    fn describe_opened(&mut self) -> Vec<Effect> {
+        let wanted: Vec<PathBuf> = self
+            .expanded
+            .iter()
+            .filter(|p| !self.describing.contains(*p))
+            .filter(|p| {
+                self.ws
+                    .get(p)
+                    .and_then(|e| e.status())
+                    .is_some_and(|s| s.describe_gave_up)
+            })
+            .cloned()
+            .collect();
+        wanted
+            .into_iter()
+            .map(|p| {
+                self.describing.insert(p.clone());
+                Effect::Describe(p)
+            })
+            .collect()
     }
 
     fn toggle_ignore_issue(&mut self) -> Vec<Effect> {
@@ -1451,6 +1485,12 @@ impl App {
                 self.ws.update_status(&path, *st);
                 self.diffs.retain(|k, _| k.0 != path);
                 self.rebuild();
+                return self.describe_opened();
+            }
+            Msg::Described(path) => {
+                self.describing.remove(&path);
+                // status now has the remembered answer
+                return vec![Effect::Refresh(vec![path])];
             }
             Msg::JobStarted { path, label } => {
                 self.running.insert(path, label);

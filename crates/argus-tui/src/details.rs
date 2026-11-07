@@ -103,6 +103,11 @@ pub fn details(
             styled(Role::Dim, "describe  "),
             styled(Role::Detached, d.clone()),
         ]));
+    } else if s.describe_gave_up {
+        v.push(line(vec![
+            styled(Role::Dim, "describe  "),
+            styled(Role::Dim, "searching further back for a tag…"),
+        ]));
     }
     let mut times = vec![];
     if let Some(t) = s.last_commit {

@@ -169,9 +169,16 @@ Two findings:
   can't be bounded, and with no tag in history it walks all of it:
   measured on packed repos, 2.4 ms per 1,000 commits without a
   commit-graph file, 0.15 ms with one (50,000 commits: 121 ms, 7.9 ms).
-  So a bounded walk (1,000 commits, about 2.4 ms at worst) first checks
-  that a tagged commit is in reach; no tags at all costs nothing, and the
-  answer is remembered per repo, HEAD and tags, so refreshes are free.
+  So a bounded walk (`describe_limit`, 1,000 commits: about 2.4 ms at
+  worst) first checks that a tagged commit is in reach; no tags at all
+  costs nothing. A walk that runs out of history first is a final "no
+  tag"; one that stops at the limit is recorded (`describe_gave_up`), and
+  opening the repo's details runs the unbounded describe in the
+  background (`describe_fully`), as diffs are computed on demand.
+  Answers are remembered per repo, HEAD and tags (names included), with
+  the limit a walk gave up at, so a longer walk isn't answered by a
+  shorter one; a full answer is final, so the list's badge picks it up
+  and refreshes don't repeat it.
   Benchmark: `describe, no reachable tag` in `benches/core.rs`.
 * **Diff view.** Tab on a file in the details shows its unstaged then
   staged hunks (from `diff::file_diff`, cached per file and side, dropped

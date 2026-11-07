@@ -468,7 +468,13 @@ pub fn apply_fix(
     allowed: &[FixKind],
     stash: &StashConfig,
 ) -> Result<Option<Applied>, status::StatusError> {
-    let s = status::status(path, StatusOptions { submodules: false })?;
+    let s = status::status(
+        path,
+        StatusOptions {
+            submodules: false,
+            ..Default::default()
+        },
+    )?;
     let Some(fix) = choose(&s, allowed, stash) else {
         return Ok(None);
     };

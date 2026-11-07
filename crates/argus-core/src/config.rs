@@ -48,6 +48,10 @@ pub struct Config {
     pub follow_symlinks: bool,
     /// How much runs at once.
     pub concurrency: Concurrency,
+    /// How many commits back to look for a tag to describe a detached HEAD
+    /// by (`v1.2-3-g1a2b3c4`, as `git describe --tags`). Opening the repo's
+    /// details looks all the way back. 0: only when the details open.
+    pub describe_limit: usize,
     /// Protocol for new clones; unset asks the forge (`gh config get git_protocol`).
     #[schemars(example = crate::forge::Protocol::Ssh)]
     pub clone_protocol: Option<crate::forge::Protocol>,
@@ -107,6 +111,7 @@ impl Default for Config {
             skip_hidden: true,
             follow_symlinks: false,
             concurrency: Concurrency::default(),
+            describe_limit: DESCRIBE_LIMIT,
             clone_protocol: None,
             favourite: vec![],
             sync: vec![],
@@ -653,6 +658,14 @@ impl Config {
         auto_jobs(fetch_parallel, cpus)
     }
 
+    /// What status should do, as configured.
+    pub fn status_options(&self) -> crate::status::StatusOptions {
+        crate::status::StatusOptions {
+            describe_limit: self.describe_limit,
+            ..Default::default()
+        }
+    }
+
     /// How many threads discovery and status use: see `concurrency.disk`.
     pub fn disk_jobs(&self) -> usize {
         if self.concurrency.disk > 0 {
@@ -684,6 +697,10 @@ pub fn auto_jobs(fetch_parallel: Option<i64>, cpus: usize) -> usize {
         _ => cpus.clamp(1, AUTO_MAX_JOBS),
     }
 }
+
+/// Default for `describe_limit`: about 2.4 ms at worst without a
+/// commit-graph file (measured: `describe, no reachable tag` benchmark).
+pub const DESCRIBE_LIMIT: usize = 1000;
 
 /// Automatic disk concurrency: the performance cores when known, else
 /// half the CPUs; at least one. Measured on an M-series Mac with 4

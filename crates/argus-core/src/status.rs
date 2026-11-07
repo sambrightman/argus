@@ -137,6 +137,10 @@ pub struct RepoStatus {
     /// tag in its history, as `git describe --tags` says (`v1.2-3-g1a2b3c4`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub describe: Option<String>,
+    /// For such a HEAD: the walk for a tag stopped at the limit without
+    /// finding one (there may be one further back: see [`describe_fully`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub describe_gave_up: bool,
     pub default_branch: Option<String>,
     /// Remote used for fetching, usually `origin`.
     pub remote: Option<String>,
@@ -214,11 +218,17 @@ fn err(e: impl std::fmt::Display) -> StatusError {
 pub struct StatusOptions {
     /// Compute dirty state of submodules (slower).
     pub submodules: bool,
+    /// How far back to look for a tag to describe a detached HEAD by (see
+    /// `describe_limit` in the config).
+    pub describe_limit: usize,
 }
 
 impl Default for StatusOptions {
     fn default() -> Self {
-        Self { submodules: true }
+        Self {
+            submodules: true,
+            describe_limit: crate::config::DESCRIBE_LIMIT,
+        }
     }
 }
 
@@ -383,12 +393,15 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
     };
 
     let tags = head_tags(repo, &refs, head_id);
-    let describe = match (&head, head_id) {
-        (Head::Detached(_), Some(id)) if tags.is_empty() => describe(repo, &refs, id),
-        _ => None,
+    let (describe, describe_gave_up) = match (&head, head_id) {
+        (Head::Detached(_), Some(id)) if tags.is_empty() => {
+            describe(repo, &refs, id, opts.describe_limit)
+        }
+        _ => (None, false),
     };
     Ok(RepoStatus {
         describe,
+        describe_gave_up,
         head,
         head_commit: head_id.map(|id| id.to_string()),
         tags,
@@ -814,60 +827,107 @@ fn head_tags(repo: &gix::Repository, refs: &Refs, head: Option<gix::ObjectId>) -
     found.into_iter().map(|(_, name)| name).collect()
 }
 
-/// How far back [`describe`] looks for a tagged commit before giving up:
-/// about 2.4 ms without a commit-graph file (measured), where describing
-/// history with no tag in it at all costs about that per 1,000 commits.
-const DESCRIBE_LIMIT: usize = 1000;
+/// Per repo (git dir): HEAD, a fingerprint of the tags, the answer, and
+/// the limit the walk gave up at, if it did (so the answer isn't final).
+type Remembered = HashMap<PathBuf, (gix::ObjectId, u64, Option<String>, Option<usize>)>;
 
-/// `head` as `git describe --tags` names it, if a tag is among its last
-/// [`DESCRIBE_LIMIT`] ancestors. gix's describe can't be bounded, and with
-/// no tag in reach walks all of history, so a bounded walk checks first.
-/// Answers are remembered per repo, HEAD and tags, for refreshes.
-fn describe(repo: &gix::Repository, refs: &Refs, head: gix::ObjectId) -> Option<String> {
+fn remembered() -> &'static std::sync::Mutex<Remembered> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Remembered>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// The tagged commits, and a fingerprint of the tags for [`Remembered`]:
+/// names count too, or a renamed tag would keep its old name.
+fn tags_fingerprint(refs: &Refs) -> (std::collections::HashSet<gix::ObjectId>, u64) {
     use std::hash::{Hash, Hasher};
-    // (name, commit) of every tag: names count too, or a renamed tag would
-    // keep its old name in a remembered answer
     let mut tags: Vec<(String, gix::ObjectId)> = refs
         .prefixed("refs/tags/")
         .filter_map(|i| Some((refs.refs[i].name().as_bstr().to_string(), refs.peel_at(i)?)))
         .collect();
-    if tags.is_empty() {
-        return None;
-    }
     tags.sort();
     let mut h = std::collections::hash_map::DefaultHasher::new();
     tags.hash(&mut h);
-    let tagged: std::collections::HashSet<gix::ObjectId> = tags.iter().map(|t| t.1).collect();
-    let key = (repo.git_dir().to_path_buf(), head, h.finish());
-    /// Per repo (git dir): the HEAD and tags fingerprint, and the answer.
-    type Remembered = HashMap<PathBuf, (gix::ObjectId, u64, Option<String>)>;
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<Remembered>> = std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some((id, tags, answer)) = cache.lock().ok()?.get(&key.0)
-        && (*id, *tags) == (key.1, key.2)
-    {
-        return answer.clone();
-    }
-    let in_reach = repo
-        .rev_walk([head])
-        .all()
+    (tags.into_iter().map(|t| t.1).collect(), h.finish())
+}
+
+/// `head` as `git describe --tags` names it.
+fn describe_unbounded(repo: &gix::Repository, head: gix::ObjectId) -> Option<String> {
+    let found = repo
+        .find_commit(head)
         .ok()?
-        .take(DESCRIBE_LIMIT + 1)
-        .filter_map(Result::ok)
-        .any(|info| tagged.contains(&info.id));
-    let answer = in_reach
-        .then(|| {
-            let commit = repo.find_commit(head).ok()?;
-            let found = commit
-                .describe()
-                .names(gix::commit::describe::SelectRef::AllTags)
-                .try_resolve()
-                .ok()??;
-            Some(found.format().ok()?.to_string())
-        })
-        .flatten();
-    if let Ok(mut c) = cache.lock() {
-        c.insert(key.0, (key.1, key.2, answer.clone()));
+        .describe()
+        .names(gix::commit::describe::SelectRef::AllTags)
+        .try_resolve()
+        .ok()??;
+    Some(found.format().ok()?.to_string())
+}
+
+/// `head` as `git describe --tags` names it, if a tag is among its last
+/// `limit` ancestors; and whether the walk gave up at the limit. gix's
+/// describe can't be bounded, and with no tag in reach walks all of
+/// history (2.4 ms per 1,000 commits without a commit-graph, measured), so
+/// a bounded walk checks first. Answers are remembered per repo, HEAD and
+/// tags; [`describe_fully`] replaces one that gave up.
+fn describe(
+    repo: &gix::Repository,
+    refs: &Refs,
+    head: gix::ObjectId,
+    limit: usize,
+) -> (Option<String>, bool) {
+    let (tagged, fingerprint) = tags_fingerprint(refs);
+    if tagged.is_empty() {
+        return (None, false);
+    }
+    let dir = repo.git_dir().to_path_buf();
+    if let Ok(cache) = remembered().lock()
+        && let Some((id, fp, answer, gave_up_at)) = cache.get(&dir)
+        && (*id, *fp) == (head, fingerprint)
+        // a walk that gave up says nothing about a longer one
+        && gave_up_at.is_none_or(|at| at >= limit)
+    {
+        return (answer.clone(), gave_up_at.is_some());
+    }
+    let (mut seen, mut found) = (0, false);
+    if limit > 0
+        && let Ok(walk) = repo.rev_walk([head]).all()
+    {
+        for info in walk.take(limit + 1).filter_map(Result::ok) {
+            seen += 1;
+            if tagged.contains(&info.id) {
+                found = true;
+                break;
+            }
+        }
+    }
+    // a walk that ran out of history before the limit is final too
+    let (answer, gave_up) = match found {
+        true => (describe_unbounded(repo, head), false),
+        false => (None, limit == 0 || seen > limit),
+    };
+    if let Ok(mut c) = remembered().lock() {
+        c.insert(
+            dir,
+            (head, fingerprint, answer.clone(), gave_up.then_some(limit)),
+        );
+    }
+    (answer, gave_up)
+}
+
+/// Describe the repo's detached HEAD however far back its nearest tag is,
+/// and remember the answer as final, so later statuses use it. For when
+/// the bounded walk gave up (`describe_gave_up`) and the answer is wanted:
+/// with no tag in history it walks all of it.
+pub fn describe_fully(path: &Path) -> Option<String> {
+    let repo = crate::isolation::open(path).ok()?;
+    let head = repo.head_id().ok()?.detach();
+    let refs = Refs::read(&repo).ok()?;
+    let (_, fingerprint) = tags_fingerprint(&refs);
+    let answer = describe_unbounded(&repo, head);
+    if let Ok(mut c) = remembered().lock() {
+        c.insert(
+            repo.git_dir().to_path_buf(),
+            (head, fingerprint, answer.clone(), None),
+        );
     }
     answer
 }
