@@ -31,3 +31,6 @@ harness = false
 [features]
 testkit = ["dep:tempfile"]
 demo = ["testkit"]
+
+[lints]
+workspace = true
