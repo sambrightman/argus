@@ -147,9 +147,14 @@ consume the same events.
     files (on by default, `-u`) and keep index (off). `git stash pop
     --index` restores each change as it was. Previews simulate the options,
     so the predicted chain stays right. `ops::stash_problem` refuses what
-    git can't do cleanly: nothing to stash, or a staged-only stash
-    (`--staged`) of a file that also has unstaged changes, which git saves
-    but then fails to remove. The TUI's `z` menu has magit-style switches
+    git can't do cleanly: no commit yet, nothing to stash, or a
+    staged-only stash (`--staged`) git would save but then fail to take
+    out of the work tree. git does that by reverse-applying the HEAD →
+    index patch (one line of context) to the work tree, which fails where
+    a file's unstaged changes overlap its staged ones; the check runs the
+    same patch through `git apply -R --check` (plumbing `diff-index`, as
+    `git diff` follows settings like `diff.noprefix`), only for files with
+    both, and a test checks it against git's own result. The TUI's `z` menu has magit-style switches
     (untracked, keep index) that start from `[stash]` and last the session;
     choosing a switch keeps the menu open. Its actions stash everything,
     staged changes only, with a message, or the files marked in the details

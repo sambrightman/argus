@@ -1281,8 +1281,8 @@ impl App {
         for (i, paths) in targets {
             let e = &self.ws.entries[i];
             let Some(s) = e.status() else { continue };
-            match argus_core::ops::stash_problem(s, self.stash.untracked, staged, &paths) {
-                Some(why) if why == argus_core::ops::NOTHING_TO_STASH => continue,
+            match ops::stash_problem(&e.path, s, self.stash.untracked, staged, &paths) {
+                Some(why) if why == ops::NOTHING_TO_STASH => continue,
                 Some(why) => refused.push(format!("{}: {why}", e.display_name())),
                 None => {
                     let op = Op::Stash {

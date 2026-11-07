@@ -353,11 +353,14 @@ pub fn discard_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
 pub const NOTHING_TO_STASH: &str = "nothing to stash";
 
 /// Why a stash with these options can't work in this state, if it can't:
-/// nothing to stash, or a staged-only stash (`--staged`) of a file that
-/// also has unstaged changes, which git saves but then fails to remove,
-/// leaving the changes and a stash. `paths` limits what's considered, and
-/// untracked files count only with `untracked`.
+/// no commit yet, nothing to stash, or a staged-only stash (`--staged`)
+/// git would save but then fail to take out of the work tree, leaving the
+/// changes and a stash. That happens when a file's unstaged changes overlap
+/// its staged ones; it's checked exactly, as git does it (see
+/// [`staged_removal_fails`]), for files with both. `paths` limits what's
+/// considered, and untracked files count only with `untracked`.
 pub fn stash_problem(
+    repo: &Path,
     s: &crate::status::RepoStatus,
     untracked: bool,
     staged: bool,
@@ -375,6 +378,9 @@ pub fn stash_problem(
                 })
         })
         .collect();
+    if matches!(s.head, crate::status::Head::Unborn(_)) {
+        return Some("no commit yet to stash against".into());
+    }
     if files.is_empty() {
         return Some(NOTHING_TO_STASH.into());
     }
@@ -385,18 +391,66 @@ pub fn stash_problem(
     if !files.iter().any(|f| is_staged(&f)) {
         return Some("nothing staged to stash".into());
     }
-    let mixed: Vec<&str> = files
+    let failing: Vec<&str> = files
         .iter()
         .filter(|f| is_staged(f) && f.worktree != ' ')
         .map(|f| f.path.as_str())
+        .filter(|f| staged_removal_fails(repo, f))
         .collect();
-    (!mixed.is_empty()).then(|| {
+    (!failing.is_empty()).then(|| {
         format!(
-            "git can't stash only staged changes of files that also have unstaged ones ({}): \
-             stash everything, or keep the index instead",
-            mixed.join(", ")
+            "git can't stash only the staged changes of {}: unstaged changes overlap them \
+             (stash everything, or keep the index instead)",
+            failing.join(", ")
         )
     })
+}
+
+/// Whether git's staged-only stash would fail to take `file`'s staged
+/// changes out of the work tree. git reverse-applies the HEAD → index patch
+/// (one line of context) to the work tree; this tries that with `--check`,
+/// changing nothing. Plumbing (`diff-index`) rather than `git diff`, whose
+/// output follows settings such as `diff.noprefix` that `apply` can't read.
+/// Any failure to check counts as failing.
+pub fn staged_removal_fails(repo: &Path, file: &str) -> bool {
+    let cmd = |args: &[&str]| {
+        let mut c = Command::new("git");
+        c.current_dir(repo)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .envs(crate::isolation::git_env().iter().map(|(k, v)| (k, v)));
+        c
+    };
+    let Ok(patch) = cmd(&[
+        "diff-index",
+        "--cached",
+        "-p",
+        "--binary",
+        "-U1",
+        "HEAD",
+        "--",
+        file,
+    ])
+    .stdin(Stdio::null())
+    .output() else {
+        return true;
+    };
+    if !patch.status.success() {
+        return true;
+    }
+    let Ok(mut apply) = cmd(&["apply", "-R", "--check"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return true;
+    };
+    let wrote = apply
+        .stdin
+        .take()
+        .is_some_and(|mut i| std::io::Write::write_all(&mut i, &patch.stdout).is_ok());
+    !(apply.wait().is_ok_and(|s| s.success()) && wrote)
 }
 
 pub fn run(dir: &Path, op: &Op) -> OpOutcome {

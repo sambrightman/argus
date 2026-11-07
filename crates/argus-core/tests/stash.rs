@@ -215,23 +215,105 @@ fn staged_only_stashes_are_refused_when_git_would_fail() {
     let sb = Sandbox::new();
     let r = dirty(&sb);
     let s = st(&r);
-    let p = stash_problem(&s, true, true, &[]).unwrap();
+    let p = stash_problem(&r, &s, true, true, &[]).unwrap();
     assert!(p.contains("both") && p.contains("unstaged"), "{p}");
     // limited to paths without such a file: fine
-    assert_eq!(stash_problem(&s, true, true, &["staged".into()]), None);
-    assert!(stash_problem(&s, true, true, &["both".into()]).is_some());
+    assert_eq!(stash_problem(&r, &s, true, true, &["staged".into()]), None);
+    assert!(stash_problem(&r, &s, true, true, &["both".into()]).is_some());
     // inverse: other stashes don't care
-    assert_eq!(stash_problem(&s, true, false, &[]), None);
+    assert_eq!(stash_problem(&r, &s, true, false, &[]), None);
     // nothing to stash at all
     let clean = sb.init("clean");
-    let p = stash_problem(&st(&clean), true, false, &[]).unwrap();
+    let p = stash_problem(&clean, &st(&clean), true, false, &[]).unwrap();
     assert!(p.contains("nothing to stash"), "{p}");
     // only untracked files, without untracked
     write(&clean, "x", "1\n");
-    assert_eq!(stash_problem(&st(&clean), true, false, &[]), None);
-    let p = stash_problem(&st(&clean), false, false, &[]).unwrap();
+    assert_eq!(stash_problem(&clean, &st(&clean), true, false, &[]), None);
+    let p = stash_problem(&clean, &st(&clean), false, false, &[]).unwrap();
     assert!(p.contains("nothing to stash"), "{p}");
     // staged only, with nothing staged
-    let p = stash_problem(&st(&clean), true, true, &[]).unwrap();
+    let p = stash_problem(&clean, &st(&clean), true, true, &[]).unwrap();
     assert!(p.contains("nothing staged"), "{p}");
+}
+
+/// A file of 12 lines with line 1 changed and staged, then line `edit`
+/// changed again in the work tree.
+fn staged_then_edited(sb: &Sandbox, name: &str, edit: usize) -> std::path::PathBuf {
+    let r = sb.init(name);
+    let lines = |f: &dyn Fn(usize) -> String| (1..=12).map(|i| f(i) + "\n").collect::<String>();
+    write(&r, "f", &lines(&|i| format!("line {i}")));
+    git(&r, &["add", "f"]);
+    git(&r, &["commit", "-q", "-m", "f"]);
+    write(
+        &r,
+        "f",
+        &lines(&|i| {
+            if i == 1 {
+                "staged".into()
+            } else {
+                format!("line {i}")
+            }
+        }),
+    );
+    git(&r, &["add", "f"]);
+    write(
+        &r,
+        "f",
+        &lines(&|i| match i {
+            1 if edit != 1 => "staged".into(),
+            i if i == edit => "unstaged".into(),
+            i => format!("line {i}"),
+        }),
+    );
+    r
+}
+
+#[test]
+fn the_staged_only_check_agrees_with_git() {
+    use argus_core::ops::stash_problem;
+    // git uses one line of context: an edit two lines away is fine
+    for (edit, git_succeeds) in [(10, true), (3, true), (2, false), (1, false)] {
+        let sb = Sandbox::new();
+        let r = staged_then_edited(&sb, "r", edit);
+        let problem = stash_problem(&r, &st(&r), true, true, &[]);
+        assert_eq!(
+            problem.is_none(),
+            git_succeeds,
+            "edit at line {edit}: {problem:?}"
+        );
+        if let Some(p) = &problem {
+            assert!(p.contains("f") && p.contains("overlap"), "{p}");
+        }
+        // and git, asked for real on a copy, agrees
+        let copy = staged_then_edited(&sb, "copy", edit);
+        let out = ops::run(
+            &copy,
+            &Op::Stash {
+                message: "t".into(),
+                untracked: false,
+                keep_index: false,
+                staged: true,
+                paths: vec![],
+            },
+        );
+        assert_eq!(
+            out.success, git_succeeds,
+            "edit at line {edit}: {}",
+            out.output
+        );
+        // the check changed nothing
+        assert_eq!(st(&r).stashes, 0);
+        assert_eq!(changes(&r), ["MM f"]);
+    }
+}
+
+#[test]
+fn no_stash_before_the_first_commit() {
+    let sb = Sandbox::new();
+    let r = sb.path("empty");
+    std::fs::create_dir_all(&r).unwrap();
+    git(&r, &["init", "-q"]);
+    write(&r, "a", "1\n");
+    let p = argus_core::ops::stash_problem(&r, &st(&r), true, false, &[]).unwrap();
+    assert!(p.contains("no commit"), "{p}");
 }
