@@ -22,12 +22,19 @@ fn detached_head_shows_its_tag_or_commit() {
     git(&r, &["tag", "-a", "-m", "r", "release"]);
     assert_eq!(entry_badge(&r), "main", "a branch shows the branch");
     git(&r, &["switch", "-q", "--detach", "v1.9"]);
-    assert_eq!(entry_badge(&r), "@release +2");
+    assert_eq!(entry_badge(&r), "@release (& 2 more)");
     git(&r, &["tag", "-d", "release", "v1.10"]);
     assert_eq!(entry_badge(&r), "@v1.9");
+    // before every tag: the commit
     git(&r, &["switch", "-q", "--detach", "HEAD~1"]);
     let id = git(&r, &["rev-parse", "--short", "HEAD"]);
     assert_eq!(entry_badge(&r), format!("@{}", id.trim()));
+    // after a tag: where it is relative to the nearest one, as git describe says
+    git(&r, &["switch", "-q", "--detach", "v1.9"]);
+    commit(&r, "third");
+    let described = git(&r, &["describe", "--tags"]);
+    assert_eq!(entry_badge(&r), format!("@{}", described.trim()));
+    assert!(described.starts_with("v1.9-1-g"), "{described}");
 }
 
 #[test]

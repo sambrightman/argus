@@ -133,6 +133,10 @@ pub struct RepoStatus {
     pub head_commit: Option<String>,
     /// Tags on that commit: annotated first, then newest version first.
     pub tags: Vec<String>,
+    /// For a detached HEAD on no tag: where it is relative to the nearest
+    /// tag in its history, as `git describe --tags` says (`v1.2-3-g1a2b3c4`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub describe: Option<String>,
     pub default_branch: Option<String>,
     /// Remote used for fetching, usually `origin`.
     pub remote: Option<String>,
@@ -378,10 +382,16 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         _ => 0,
     };
 
+    let tags = head_tags(repo, &refs, head_id);
+    let describe = match (&head, head_id) {
+        (Head::Detached(_), Some(id)) if tags.is_empty() => describe(repo, &refs, id),
+        _ => None,
+    };
     Ok(RepoStatus {
+        describe,
         head,
         head_commit: head_id.map(|id| id.to_string()),
-        tags: head_tags(repo, &refs, head_id),
+        tags,
         default_branch,
         remote,
         remote_url,
@@ -802,6 +812,62 @@ fn head_tags(repo: &gix::Repository, refs: &Refs, head: Option<gix::ObjectId>) -
     }
     found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| version_cmp(&b.1, &a.1)));
     found.into_iter().map(|(_, name)| name).collect()
+}
+
+/// How far back [`describe`] looks for a tagged commit before giving up:
+/// about 2.4 ms without a commit-graph file (measured), where describing
+/// history with no tag in it at all costs about that per 1,000 commits.
+const DESCRIBE_LIMIT: usize = 1000;
+
+/// `head` as `git describe --tags` names it, if a tag is among its last
+/// [`DESCRIBE_LIMIT`] ancestors. gix's describe can't be bounded, and with
+/// no tag in reach walks all of history, so a bounded walk checks first.
+/// Answers are remembered per repo, HEAD and tags, for refreshes.
+fn describe(repo: &gix::Repository, refs: &Refs, head: gix::ObjectId) -> Option<String> {
+    use std::hash::{Hash, Hasher};
+    let tagged: std::collections::HashSet<gix::ObjectId> = refs
+        .prefixed("refs/tags/")
+        .filter_map(|i| refs.peel_at(i))
+        .collect();
+    if tagged.is_empty() {
+        return None;
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut ids: Vec<_> = tagged.iter().collect();
+    ids.sort();
+    ids.hash(&mut h);
+    let key = (repo.git_dir().to_path_buf(), head, h.finish());
+    /// Per repo (git dir): the HEAD and tags fingerprint, and the answer.
+    type Remembered = HashMap<PathBuf, (gix::ObjectId, u64, Option<String>)>;
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Remembered>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some((id, tags, answer)) = cache.lock().ok()?.get(&key.0)
+        && (*id, *tags) == (key.1, key.2)
+    {
+        return answer.clone();
+    }
+    let in_reach = repo
+        .rev_walk([head])
+        .all()
+        .ok()?
+        .take(DESCRIBE_LIMIT + 1)
+        .filter_map(Result::ok)
+        .any(|info| tagged.contains(&info.id));
+    let answer = in_reach
+        .then(|| {
+            let commit = repo.find_commit(head).ok()?;
+            let found = commit
+                .describe()
+                .names(gix::commit::describe::SelectRef::AllTags)
+                .try_resolve()
+                .ok()??;
+            Some(found.format().ok()?.to_string())
+        })
+        .flatten();
+    if let Ok(mut c) = cache.lock() {
+        c.insert(key.0, (key.1, key.2, answer.clone()));
+    }
+    answer
 }
 
 /// Compare names with digit runs as numbers, so `v1.10` > `v1.9`.

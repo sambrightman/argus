@@ -95,6 +95,12 @@ pub fn details(
             styled(Role::Detached, s.tags.join(", ")),
         ]));
     }
+    if let Some(d) = &s.describe {
+        v.push(line(vec![
+            styled(Role::Dim, "describe  "),
+            styled(Role::Detached, d.clone()),
+        ]));
+    }
     let mut times = vec![];
     if let Some(t) = s.last_commit {
         times.push(format!("commit {}", ago(t)));

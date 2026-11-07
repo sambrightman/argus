@@ -154,6 +154,15 @@ Two findings:
   as writable before any changes, so a failure leaves them all as they
   were. Old setting names aren't kept
   (nothing released yet): they fail as unknown keys.
+* **Describing a detached HEAD.** With no tag on HEAD, the branch slot
+  shows `git describe --tags` (gix's, same algorithm). gix's describe
+  can't be bounded, and with no tag in history it walks all of it:
+  measured on packed repos, 2.4 ms per 1,000 commits without a
+  commit-graph file, 0.15 ms with one (50,000 commits: 121 ms, 7.9 ms).
+  So a bounded walk (1,000 commits, about 2.4 ms at worst) first checks
+  that a tagged commit is in reach; no tags at all costs nothing, and the
+  answer is remembered per repo, HEAD and tags, so refreshes are free.
+  Benchmark: `describe, no reachable tag` in `benches/core.rs`.
 * **Diff view.** Tab on a file in the details shows its unstaged then
   staged hunks (from `diff::file_diff`, cached per file and side, dropped
   when the repo's status changes); Tab on a hunk folds it. The cursor

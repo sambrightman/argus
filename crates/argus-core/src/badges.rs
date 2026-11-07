@@ -73,13 +73,15 @@ pub fn branch(e: &Entry, i: &Icons) -> Option<Badge> {
             },
             text: format!("{}{b}", i.branch),
         },
-        // On a tag, the tag says more than the commit id.
+        // A tag says more than the commit id: the one HEAD is on, else
+        // where it is relative to the nearest one.
         Head::Detached(id) => Badge {
             role: Role::Detached,
-            text: match s.tags.as_slice() {
-                [] => format!("{}{id}", i.detached),
-                [t] => format!("{}{t}", i.detached),
-                [t, rest @ ..] => format!("{}{t} +{}", i.detached, rest.len()),
+            text: match (s.tags.as_slice(), &s.describe) {
+                ([t], _) => format!("{}{t}", i.detached),
+                ([t, rest @ ..], _) => format!("{}{t} (& {} more)", i.detached, rest.len()),
+                ([], Some(d)) => format!("{}{d}", i.detached),
+                ([], None) => format!("{}{id}", i.detached),
             },
         },
     })

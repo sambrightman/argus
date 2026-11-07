@@ -19,7 +19,7 @@ use argus_core::discover::{DiscoverOptions, Skip, Tuning, discover_all};
 use argus_core::identity::RepoId;
 use argus_core::rules::{Mark, RuleSet};
 use argus_core::status::{StatusOptions, status};
-use argus_core::testkit::{Sandbox, commit, write};
+use argus_core::testkit::{Sandbox, commit, git, write};
 use argus_core::{State, Workspace};
 use criterion::{Criterion, criterion_group, criterion_main};
 
@@ -197,5 +197,85 @@ fn rules(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, discovery, status_and_scan, diff, config, rules);
+/// A packed repo with `n` commits on `main`, a tag only on an unrelated
+/// branch, and HEAD detached at `main`'s tip: describe's worst case, where
+/// no tag is reachable and the walk covers all of history.
+fn untagged_history(sb: &Sandbox, n: usize, commit_graph: bool) -> PathBuf {
+    use std::io::Write;
+    let r = sb.path(&format!("hist-{n}-{commit_graph}"));
+    std::fs::create_dir_all(&r).unwrap();
+    git(&r, &["init", "-q", "-b", "main"]);
+    let mut script = String::new();
+    for i in 1..=n {
+        let msg = format!("c{i}");
+        script.push_str(&format!(
+            "commit refs/heads/main\ncommitter a <a@b> {} +0000\ndata {}\n{msg}\n",
+            1_700_000_000 + i,
+            msg.len()
+        ));
+        if i == 1 {
+            script.push_str("deleteall\n");
+        }
+    }
+    script.push_str(
+        "commit refs/heads/other\ncommitter a <a@b> 1600000000 +0000\ndata 5\nother\ndeleteall\n",
+    );
+    let mut p = std::process::Command::new("git")
+        .args(["fast-import", "--quiet"])
+        .current_dir(&r)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    p.stdin
+        .take()
+        .unwrap()
+        .write_all(script.as_bytes())
+        .unwrap();
+    assert!(p.wait().unwrap().success());
+    git(&r, &["tag", "v1", "other"]);
+    git(&r, &["checkout", "-q", "--detach", "main"]);
+    git(&r, &["gc", "-q"]);
+    git(&r, &["commit-graph", "write", "--reachable"]);
+    if !commit_graph {
+        std::fs::remove_file(r.join(".git/objects/info/commit-graph")).ok();
+        std::fs::remove_dir_all(r.join(".git/objects/info/commit-graphs")).ok();
+    }
+    r
+}
+
+fn describe(c: &mut Criterion) {
+    let sb = Sandbox::new();
+    let mut g = c.benchmark_group("describe, no reachable tag");
+    g.sample_size(20);
+    for n in [1_000, 10_000, 50_000] {
+        for graph in [false, true] {
+            let r = untagged_history(&sb, n, graph);
+            let repo = gix::open(&r).unwrap();
+            let name = format!("{n} commits{}", if graph { ", commit-graph" } else { "" });
+            g.bench_function(name, |b| {
+                b.iter(|| {
+                    let head = repo.head_commit().unwrap();
+                    black_box(
+                        head.describe()
+                            .names(gix::commit::describe::SelectRef::AllTags)
+                            .try_resolve()
+                            .unwrap()
+                            .is_some(),
+                    )
+                })
+            });
+        }
+    }
+    g.finish();
+}
+
+criterion_group!(
+    benches,
+    discovery,
+    status_and_scan,
+    diff,
+    config,
+    rules,
+    describe
+);
 criterion_main!(benches);

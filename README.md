@@ -96,9 +96,12 @@ letters (`|◆|M◆M`): a glyph your font lacks is drawn from a fallback
 font and may run into its neighbours. `*` marks glyphs that take two
 cells in CJK (ambiguous-width) mode.
 
-A detached HEAD shows its tag if the commit has one (`@v1.2 +1` when there
-are more: annotated tags first, then the highest version), otherwise the
-commit id. Details list the commit and all its tags.
+A detached HEAD shows its tag if the commit has one (`@v1.2 (& 1 more)`
+when there are more: annotated tags first, then the highest version);
+otherwise where it is relative to the nearest tag in its history, as `git
+describe --tags` says (`@v1.2-3-g1a2b3c4`: 3 commits after v1.2), if one is
+within 1,000 commits; otherwise the commit id. Details list the commit,
+its tags and the describe line.
 
 Favourite, sync and ignore live in config: marking a repo in the TUI or
 with `argus mark` adds its name to the list (or `!name` to turn off what a

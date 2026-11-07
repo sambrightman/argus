@@ -658,6 +658,89 @@ fn a_broken_tag_is_skipped_but_a_broken_branch_fails_status() {
 }
 
 #[test]
+fn a_detached_head_after_a_tag_is_described_as_git_does() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    git(&r, &["tag", "-a", "-m", "one", "v1"]);
+    commit(&r, "a");
+    commit(&r, "b");
+    git(&r, &["switch", "-q", "--detach"]);
+    let want = git(&r, &["describe", "--tags"]);
+    assert_eq!(st(&r).describe.as_deref(), Some(want.trim()));
+    assert!(want.starts_with("v1-2-g"), "{want}");
+    // a nearer tag, same HEAD: the remembered answer is replaced
+    git(&r, &["tag", "v2", "HEAD~1"]);
+    let want = git(&r, &["describe", "--tags"]);
+    assert!(want.starts_with("v2-1-g"), "{want}");
+    assert_eq!(st(&r).describe.as_deref(), Some(want.trim()));
+    git(&r, &["tag", "-d", "v2"]);
+    // inverses: on the tag (the tags say it), on a branch, no tags at all
+    git(&r, &["switch", "-q", "--detach", "v1"]);
+    assert_eq!(st(&r).describe, None, "on a tag");
+    git(&r, &["switch", "-q", "main"]);
+    assert_eq!(st(&r).describe, None, "on a branch");
+    git(&r, &["switch", "-q", "--detach"]);
+    git(&r, &["tag", "-d", "v1"]);
+    assert_eq!(st(&r).describe, None, "no tags");
+    // a tag only on another branch isn't in HEAD's history
+    git(&r, &["switch", "-q", "--orphan", "other"]);
+    commit(&r, "other");
+    git(&r, &["tag", "elsewhere"]);
+    git(&r, &["switch", "-q", "--detach", "main"]);
+    assert_eq!(st(&r).describe, None, "unreachable tag");
+}
+
+#[test]
+fn describe_gives_up_on_a_tag_more_than_1000_commits_back() {
+    use std::io::Write;
+    let sb = Sandbox::new();
+    let r = sb.path("r");
+    std::fs::create_dir_all(&r).unwrap();
+    git(&r, &["init", "-q", "-b", "main"]);
+    // `n` more commits on main (timestamps from `t`), continuing it if `from`
+    let commits = |n: usize, t: usize, from: bool| {
+        let mut script = String::new();
+        for i in 0..n {
+            script.push_str(&format!(
+                "commit refs/heads/main\ncommitter a <a@b> {} +0000\ndata 1\nc\n",
+                1_700_000_000 + t + i
+            ));
+            if i == 0 && from {
+                script.push_str("from refs/heads/main^0\n");
+            }
+        }
+        script
+    };
+    let import = |script: String| {
+        let mut p = std::process::Command::new("git")
+            .args(["fast-import", "--quiet"])
+            .current_dir(&r)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        p.stdin
+            .take()
+            .unwrap()
+            .write_all(script.as_bytes())
+            .unwrap();
+        assert!(p.wait().unwrap().success());
+    };
+    import(commits(1, 0, false));
+    git(&r, &["tag", "v1"]);
+    import(commits(1000, 1, true));
+    git(&r, &["switch", "-q", "--detach", "main"]);
+    let depth: usize = git(&r, &["rev-list", "--count", "v1..HEAD"])
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(depth, 1000);
+    assert!(st(&r).describe.is_some(), "1000 back: found");
+    import(commits(1, 1001, true));
+    git(&r, &["switch", "-q", "--detach", "main"]);
+    assert_eq!(st(&r).describe, None, "1001 back: given up");
+}
+
+#[test]
 fn version_order_compares_numbers_as_numbers() {
     use argus_core::status::version_cmp;
     use std::cmp::Ordering::*;

@@ -703,6 +703,34 @@ fn details_show_the_commit_and_its_tags() {
         "{texts:?}"
     );
     assert!(!texts.iter().any(|t| t.starts_with("tags")), "{texts:?}");
+    assert!(
+        !texts.iter().any(|t| t.starts_with("describe")),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn details_describe_a_detached_head_past_a_tag() {
+    let prep = |sb: &Sandbox| {
+        let c = sb.path("dev/clean");
+        git(&c, &["tag", "v1.0"]);
+        commit(&c, "after the tag");
+        git(&c, &["switch", "-q", "--detach"]);
+    };
+    let (sb, mut app) = setup_with("", prep);
+    let clean = sb.path("dev/clean");
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path == clean))
+        .unwrap();
+    app.on_key(code(KeyCode::Tab));
+    let want = git(&clean, &["describe", "--tags"]);
+    let texts = detail_texts(&app);
+    assert!(
+        texts.contains(&format!("describe  {}", want.trim())),
+        "{texts:?}"
+    );
 }
 
 #[test]
@@ -827,7 +855,7 @@ fn demo_renders_in_every_theme_and_icon_set() {
         println!("{out}");
     }
     assert!(
-        out.contains("demo/tagged") && out.contains("@release-1.0 +1"),
+        out.contains("demo/tagged") && out.contains("@release-1.0 (& 1 more)"),
         "{out}"
     );
     assert!(out.contains("tags      release-1.0, v1.0"), "{out}");
