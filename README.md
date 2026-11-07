@@ -159,9 +159,13 @@ document on stdout (messages and progress stay on stderr). For example
 `alternatives`; `argus --json sync` lists each job's `outcome` (`ok`,
 `failed`, `skipped`) and a `summary`.
 
-Completions: `argus completions zsh > ~/.zfunc/_argus` (with `~/.zfunc`
-on `fpath`), `argus completions fish > ~/.config/fish/completions/argus.fish`,
-or `source <(argus completions bash)` in `~/.bashrc`.
+Completions cover commands, options and your repos' names (`argus mark
+acme/<Tab>`). The shell asks `argus` for them as you type, so load the
+script fresh at shell startup, where it always matches the installed argus:
+`source <(argus completions zsh)` in `~/.zshrc` (likewise bash), or
+`argus completions fish | source` in `~/.config/fish/config.fish`. Repo
+names come from your config (or `ARGUS_CONFIG`); `--root` on the command
+line isn't seen while completing.
 
 Every command takes `--config FILE` / `--state FILE`, or the environment
 variables `ARGUS_CONFIG` / `ARGUS_STATE`, and `--root DIR` (repeatable)

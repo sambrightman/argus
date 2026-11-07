@@ -248,8 +248,9 @@ fn without_path(msg: &str, path: &Path) -> String {
     }
 }
 
-pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStatus, StatusError> {
-    let head = read_head(repo)?;
+/// The fetch remote (the default one, else the first) and its URL as
+/// configured, before `insteadOf` rewrites: that is the repo's identity.
+pub fn remote_and_url(repo: &gix::Repository) -> (Option<String>, Option<String>) {
     let remote = repo
         .remote_default_name(Direction::Fetch)
         .map(|n| n.to_str_lossy().into_owned())
@@ -259,12 +260,17 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
                 .next()
                 .map(|n| n.to_str_lossy().into_owned())
         });
-    let remote_url = remote.as_deref().and_then(|r| {
-        // The URL as configured, before `insteadOf` rewrites: that is the identity.
+    let url = remote.as_deref().and_then(|r| {
         let r = repo.try_find_remote_without_url_rewrite(r)?.ok()?;
         r.url(Direction::Fetch)
             .map(|u| u.to_bstring().to_str_lossy().into_owned())
     });
+    (remote, url)
+}
+
+pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStatus, StatusError> {
+    let head = read_head(repo)?;
+    let (remote, remote_url) = remote_and_url(repo);
     let default_branch = default_branch(repo, remote.as_deref());
     let default_tip = default_branch
         .as_deref()

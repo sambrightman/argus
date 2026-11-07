@@ -280,6 +280,12 @@ rendering is snapshot-tested via `TestBackend`.
   up (pull, fast-forward) on the branch you end up on. "Behind" comes from
   the remote-tracking refs as of the last fetch: status never fetches
   (`f`/`F` in the TUI, `argus sync` or cron do).
+* **Shell completion** uses clap_complete's dynamic engine (the
+  `unstable-dynamic` feature): the shell code asks `argus` for candidates
+  (`COMPLETE=<shell> argus -- <words>`), so repo patterns complete with
+  names from discovery plus each repo's remote, no status (~10 ms on
+  `~/dev`). The interface between shell code and binary may change
+  between versions, hence sourcing it fresh at shell startup.
 * **Pulls are made safe rather than avoided.**
   * A diverged branch gets a conflict prediction (`merge-tree`, above) and
     a check of `pull.rebase`/`branch.<b>.rebase`/`pull.ff`: without them
@@ -449,7 +455,5 @@ speed.
   (git has no config for this). Today: staged + unstaged + untracked.
 * Path subsets for operations (stash/commit/discard selected files), e.g.
   from the details view.
-* Completing repo patterns (names, keys) in shell completions; today
-  `argus completions <shell>` covers commands and options only.
 * Python bindings to `argus-core` (pyo3/maturin), for scripting over the
   same workspace, status and fix planning.

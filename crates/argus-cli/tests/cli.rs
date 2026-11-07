@@ -777,10 +777,11 @@ fn demo_glyphs_prints_every_icon_between_markers_without_a_terminal() {
 #[test]
 fn completions_for_each_shell() {
     let sb = Sandbox::new();
+    // the scripts register argus to be asked for candidates while typing
     for (shell, marker) in [
-        ("bash", "complete -F"),
+        ("bash", "complete -o"),
         ("zsh", "#compdef argus"),
-        ("fish", "complete -c argus"),
+        ("fish", "complete --keep-order"),
         ("elvish", "edit:completion:arg-completer[argus]"),
         ("powershell", "Register-ArgumentCompleter"),
     ] {
@@ -788,9 +789,10 @@ fn completions_for_each_shell() {
         assert!(out.status.success(), "{shell}: {out:?}");
         let script = String::from_utf8(out.stdout).unwrap();
         assert!(script.contains(marker), "{shell}:\n{script}");
-        for word in ["status", "sync", "max-depth", "follow-symlinks"] {
-            assert!(script.contains(word), "{shell} lacks {word}");
-        }
+        assert!(
+            script.contains(&format!("COMPLETE={shell}")) || script.contains("COMPLETE"),
+            "{shell}:\n{script}"
+        );
         // where the shell is installed, the script must parse
         if matches!(shell, "bash" | "zsh" | "fish") {
             let file = sb.path(&format!("completion.{shell}"));
@@ -1100,4 +1102,56 @@ fn the_stash_fix_follows_the_stash_config() {
         .assert()
         .success();
     assert!(short_status(&d).is_empty(), "{:?}", short_status(&d));
+}
+
+/// What the completion engine offers for the command line `words` (as
+/// typed so far, the last being completed), asked the way fish asks.
+fn complete(sb: &Sandbox, config: &std::path::Path, words: &[&str]) -> Vec<String> {
+    let mut c = std::process::Command::new(assert_cmd::cargo::cargo_bin("argus"));
+    for (k, v) in subprocess_env(&sb.root()) {
+        c.env(k, v);
+    }
+    let out = c
+        .env("COMPLETE", "fish")
+        .env("ARGUS_CONFIG", config)
+        .arg("--")
+        .arg("argus")
+        .args(words)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| l.split('\t').next().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn completion_offers_commands_options_and_repo_names() {
+    let sb = Sandbox::new();
+    three(&sb);
+    sb.init("dev/local/thing");
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, format!("roots = ['{}']\n", sb.path("dev").display())).unwrap();
+    assert!(complete(&sb, &cfg, &["sy"]).contains(&"sync".to_string()));
+    assert!(complete(&sb, &cfg, &["mark", "--fav"]).contains(&"--favourite".to_string()));
+    // repo names, by owner/name or path, for every command taking patterns
+    for cmd in ["mark", "sync", "fix", "ack"] {
+        assert_eq!(
+            complete(&sb, &cfg, &[cmd, "acme/c"]),
+            ["acme/clean"],
+            "{cmd}"
+        );
+    }
+    let all = complete(&sb, &cfg, &["mark", ""]);
+    for name in ["acme/clean", "acme/dirty", "acme/feature"] {
+        assert!(all.contains(&name.to_string()), "{all:?}");
+    }
+    assert!(
+        all.iter().any(|n| n.ends_with("dev/local/thing")),
+        "local repos by path: {all:?}"
+    );
+    // inverse: nothing matches, nothing offered
+    assert!(complete(&sb, &cfg, &["mark", "nomatch/"]).is_empty());
 }

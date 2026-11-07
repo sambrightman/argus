@@ -69,6 +69,7 @@ enum Cmd {
         #[arg(long)]
         no_forge: bool,
         /// Only these repos (glob on name/key/path).
+        #[arg(add = repo_completer())]
         patterns: Vec<String>,
     },
     /// Apply safe fixes (default: those in `[fix] auto`).
@@ -85,6 +86,7 @@ enum Cmd {
         #[arg(long, short = 'F')]
         fetch: bool,
         /// Repos to fix (glob on name/key/path); default all visible.
+        #[arg(add = repo_completer())]
         patterns: Vec<String>,
     },
     /// Set favourite / sync / exclude (edits those lists in config), or
@@ -93,6 +95,7 @@ enum Cmd {
     /// Acknowledge "new" repos (all, or matching patterns).
     Ack {
         /// Repos (glob on name/key/path).
+        #[arg(add = repo_completer())]
         patterns: Vec<String>,
     },
     /// Forge queries.
@@ -151,7 +154,7 @@ impl From<View> for ViewFilter {
 #[derive(Args)]
 struct MarkArgs {
     /// Repos (glob on name/key/path).
-    #[arg(required = true)]
+    #[arg(required = true, add = repo_completer())]
     patterns: Vec<String>,
     /// Sort above other repos in the same group.
     #[arg(long, overrides_with = "no_favourite")]
@@ -244,6 +247,9 @@ struct Ctx {
 }
 
 fn main() {
+    // When the shell asks for completions (`COMPLETE=<shell>`), answer and
+    // exit.
+    clap_complete::CompleteEnv::with_factory(<Cli as clap::CommandFactory>::command).complete();
     if let Err(e) = run() {
         eprintln!("argus: {e:#}");
         std::process::exit(1);
@@ -289,8 +295,20 @@ fn run() -> Result<()> {
         }
         Some(Cmd::Forge { cmd }) => return forge_cmd(cmd, json),
         Some(Cmd::Completions { shell }) => {
-            let mut cmd = <Cli as clap::CommandFactory>::command();
-            clap_complete::generate(shell, &mut cmd, "argus", &mut std::io::stdout());
+            // The shell code asks `argus` for candidates as you type; source it
+            // fresh at shell startup, so it always matches the installed argus.
+            let name = shell.to_string();
+            let shells = clap_complete::env::Shells::builtins();
+            let completer = shells
+                .completer(&name)
+                .with_context(|| format!("no completions for {name}"))?;
+            completer.write_registration(
+                "COMPLETE",
+                "argus",
+                "argus",
+                "argus",
+                &mut std::io::stdout(),
+            )?;
             return Ok(());
         }
         Some(Cmd::Demo { glyphs: true, .. }) => return demo_glyphs(&ctx, json),
@@ -470,6 +488,34 @@ fn confirm_with(
         "y" | "yes" => Ok(()),
         _ => bail!("cancelled"),
     }
+}
+
+/// Completes repo patterns with the names of the repos argus finds, using
+/// the config named by `ARGUS_CONFIG` or the default one (options like
+/// `--root` aren't seen while completing).
+fn repo_completer() -> clap_complete::ArgValueCompleter {
+    clap_complete::ArgValueCompleter::new(|current: &std::ffi::OsStr| {
+        let Some(current) = current.to_str() else {
+            return vec![];
+        };
+        let path = std::env::var_os("ARGUS_CONFIG")
+            .map(PathBuf::from)
+            .unwrap_or_else(paths::config_file);
+        let mut config = Config::load(&path).unwrap_or_default();
+        if config.roots.is_empty()
+            && let Ok(cwd) = std::env::current_dir()
+        {
+            config.roots = vec![cwd];
+        }
+        let Ok(ws) = Workspace::new(config, State::default()) else {
+            return vec![];
+        };
+        ws.repo_names()
+            .into_iter()
+            .filter(|n| n.starts_with(current))
+            .map(clap_complete::CompletionCandidate::new)
+            .collect()
+    })
 }
 
 /// `--json` output: one pretty-printed document on stdout.

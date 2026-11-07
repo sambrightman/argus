@@ -154,6 +154,29 @@ impl Workspace {
         }
     }
 
+    /// Names to complete repo patterns with: `owner/name` for repos with a
+    /// forge identity, else the path (`~/…`). Discovery and each repo's
+    /// remote only, no status, so it's quick enough to run on every Tab.
+    pub fn repo_names(&self) -> Vec<String> {
+        let found = discover::discover_all(&self.config.roots, &self.discover_options()).found;
+        let mut names: Vec<String> = found
+            .par_iter()
+            .map(|f| {
+                let id = match f.kind {
+                    RepoKind::Main | RepoKind::Bare => crate::isolation::open(&f.path)
+                        .ok()
+                        .and_then(|r| status::remote_and_url(&r).1)
+                        .and_then(|u| RepoId::from_url(&u)),
+                    _ => None,
+                };
+                id.map_or_else(|| contract_tilde(&f.path), |i| i.slug())
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     /// Discover repos and compute every status in parallel.
     pub fn scan(&mut self) {
         let discovery = discover::discover_all(&self.config.roots, &self.discover_options());
