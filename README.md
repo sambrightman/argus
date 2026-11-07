@@ -247,19 +247,30 @@ changes in the index after stashing them.
 ## Development
 
 ```sh
-cargo test --workspace      # ~290 tests, real git repos in temp dirs
+cargo nextest run --workspace     # the tests (~290; real git repos in temp dirs)
 cargo clippy --workspace --all-targets
 cargo run -p argus-tui --example snapshot -- ~/dev 'jj\t'   # render a frame as text
 
-cargo bench -p argus-core -- --save-baseline before   # criterion benchmarks; after a change:
-cargo bench -p argus-core -- --baseline before        # compare (likewise -p argus-tui)
-cargo llvm-cov --workspace --features argus-core/demo --html   # coverage: target/llvm-cov/html
-cargo mutants --in-diff <(git diff main)              # mutation testing of changed code
+# before committing a change
+cargo mutants --in-diff <(git diff HEAD)                    # mutation-test what changed
+cargo llvm-cov nextest --workspace --html                   # coverage: target/llvm-cov/html
+
+# now and then
+cargo deny check                  # advisories, licences, duplicate versions, sources
+cargo machete                     # unused dependencies
+cargo outdated --workspace --root-deps-only
+cargo bench -p argus-core -- --save-baseline before         # criterion; after a change:
+cargo bench -p argus-core -- --baseline before              # compare (likewise -p argus-tui)
 ```
 
-Coverage needs `rustup component add llvm-tools-preview` and `cargo install
-cargo-llvm-cov`; mutation testing `cargo install cargo-mutants` (settings in
-`.cargo/mutants.toml`).
+Tools: `cargo install --locked cargo-nextest cargo-llvm-cov cargo-mutants
+cargo-deny cargo-machete cargo-outdated`, and `rustup component add
+llvm-tools-preview` for coverage. Settings: `.config/nextest.toml`,
+`.cargo/mutants.toml`, `deny.toml`. Plain `cargo test` works too (nextest
+is faster and stops at the first failure). On macOS, list your terminal
+under System Settings → Privacy & Security → Developer Tools: otherwise
+macOS scans every freshly built test binary before it runs, adding about
+30 s after each rebuild.
 
 Tests build real repositories with the `git` CLI under an isolated git config
 (`argus_core::testkit`), with local bare repos standing in for GitHub. Each

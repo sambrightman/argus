@@ -3,3 +3,6 @@
 exclude_globs = ["crates/argus-core/src/testkit.rs", "crates/argus-core/src/demo.rs"]
 # Tests run real git in temp dirs; give slow builds room before a timeout.
 timeout_multiplier = 3.0
+
+# Mutants run their tests with nextest: stops at the first failure.
+test_tool = "nextest"

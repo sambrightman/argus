@@ -2,10 +2,10 @@
 name = "argus-core"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dependencies]
 tempfile = { version = "3.27.0", optional = true }
-crossbeam-channel = "0.5.17"
 gix = { version = "0.90.0", default-features = false, features = ["attributes", "dirwalk", "excludes", "index", "max-performance", "parallel", "revision", "sha1", "status"] }
 globset = "0.4.21"
 jiff = { version = "0.2.39", features = ["serde"] }

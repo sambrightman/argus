@@ -145,7 +145,6 @@ version = "0.1.0"
 dependencies = [
  "argus-core",
  "criterion",
- "crossbeam-channel",
  "gix",
  "globset",
  "jiff",
@@ -168,7 +167,6 @@ dependencies = [
  "argus-core",
  "serde",
  "serde_json",
- "thiserror 2.0.21",
  "ureq",
 ]
 
@@ -177,7 +175,6 @@ name = "argus-tui"
 version = "0.1.0"
 dependencies = [
  "argus-core",
- "argus-forge",
  "criterion",
  "crossbeam-channel",
  "crossterm",

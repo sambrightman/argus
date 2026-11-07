@@ -2,10 +2,10 @@
 name = "argus-tui"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dependencies]
 argus-core = { version = "0.1.0", path = "../argus-core" }
-argus-forge = { version = "0.1.0", path = "../argus-forge" }
 crossbeam-channel = "0.5.17"
 crossterm = "0.29.0"
 jiff = "0.2.39"

@@ -1,0 +1,19 @@
+# cargo-nextest settings: https://nexte.st/docs/configuration/
+
+[profile.default]
+# Locally: stop at the first failure, and never retry (a flaky test
+# should be fixed, not hidden).
+fail-fast = true
+retries = 0
+# Report tests slower than 15 s (the slowest take 7-9 s); kill one still
+# running after 60 s, so a hang can't stall a run.
+slow-timeout = { period = "15s", terminate-after = 4 }
+
+[profile.ci]
+# In CI: run everything, retry twice to tell flaky from broken, and write
+# JUnit for the CI's test report.
+fail-fast = false
+retries = 2
+
+[profile.ci.junit]
+path = "junit.xml"
