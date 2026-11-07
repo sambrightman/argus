@@ -408,8 +408,11 @@ tests without running them:
 * Coverage (`cargo llvm-cov nextest`): 36 s, about 15 s more than a plain
   run.
 * `cargo mutants --in-diff --test-tool nextest --jobs 4`: a typical change
-  (14 mutants) took 4.6 min with the scan still applying (about 10 s
-  build and 24 s test per mutant).
+  (14 mutants) took 4.6 min with the scan still applying, 3.5 min
+  without it: about half fixed costs (the baseline, and each job's first
+  build from scratch, competing), then 2–10 s build and 12–33 s test per
+  mutant. `--baseline=skip` saves the baseline (~30 s) when the tests
+  just passed; a full run (~1,700 mutants) is about 3 h.
 
 **CI (planned, none yet).** Different trade-offs from local work:
 incremental off (`CARGO_INCREMENTAL=0`: its caches are large and rarely

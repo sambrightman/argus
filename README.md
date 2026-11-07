@@ -252,7 +252,7 @@ cargo clippy --workspace --all-targets
 cargo run -p argus-tui --example snapshot -- ~/dev 'jj\t'   # render a frame as text
 
 # now and then (weekly, before a release)
-cargo mutants --in-diff <(git diff main)                    # mutation-test what changed
+cargo mutants --in-diff <(git diff main) --baseline=skip   # mutation-test what changed
 cargo mutants                                               # everything (hours)
 cargo llvm-cov nextest --workspace --html                   # coverage: target/llvm-cov/html
 ARGUS_RANDOM_TREES=5000 cargo nextest run --workspace       # more random trees for -L
