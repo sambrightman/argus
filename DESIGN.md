@@ -378,6 +378,48 @@ rendering is snapshot-tested via `TestBackend`.
   worktrees share refs), then refreshes their status before planning.
   Fetch failures are reported and planning continues with what is known.
 
+## 8a. Build and test setup
+
+Measured locally (macOS, 10 cores, stable 1.99), compiling the workspace's
+tests without running them:
+
+* Full build 19 s, incremental after editing a core file 2.8 s. The
+  parallel front end (nightly `-Zthreads=8`) gave nothing (19.4 s, 3.2 s):
+  it speeds up big crates, and ours are small. Optimizing dependencies in
+  dev builds (`opt-level = 2` for `"*"`) didn't speed the tests up.
+* **macOS scans each newly linked binary the first time it runs**
+  (XProtect, about 1 s per binary, queued). With ~25 test binaries that's
+  30–36 s after every rebuild, by far the largest cost in the edit-test
+  loop, and in every cargo-mutants mutant. Listing the terminal under
+  System Settings → Privacy & Security → Developer Tools exempts what it
+  starts (`spctl developer-mode enable-terminal` shows that pane).
+  Fewer, merged integration-test binaries would also mean fewer scans and
+  links.
+* Debug info is already split, unpacked (Cargo's default on macOS: no
+  `dsymutil`). `debug = "line-tables-only"` still needs measuring without
+  the scan in the way.
+* The linker is Apple's ld-prime; mold and wild only link Linux binaries.
+* Still to measure on a quiet machine: cargo-nextest against `cargo test`
+  (one run showed 20 s against 50 s, but the scan affected the
+  comparison), and the slowest tests (random discovery trees, building
+  the demo repos, ~7–9 s each).
+
+**CI (planned, none yet).** Different trade-offs from local work:
+incremental off (`CARGO_INCREMENTAL=0`: its caches are large and rarely
+reused), less or no debug info in test builds to keep caches small,
+caching dependencies (e.g. `Swatinem/rust-cache`, or sccache), nextest
+with JUnit output and retries, mold or wild on Linux runners, coverage
+there, and the full cargo-mutants run sharded (`--shard k/n`) weekly or
+before a release.
+
+**Release builds (planned).** Measure before choosing: `lto` (thin or
+fat) with `codegen-units = 1` for speed and size, `strip` for size while
+keeping split, packed debug info (a `.dSYM` on macOS) aside to symbolicate
+crash reports, and possibly `panic = "abort"` (the TUI restores the
+terminal from its panic hook, which still runs). argus is mostly bound by
+file-system calls and git processes, so expect size to change more than
+speed.
+
 ## 9. Not done yet / next steps
 
 * Embedded terminal pane; per-file actions in the details view (stage,
