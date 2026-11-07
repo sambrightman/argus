@@ -283,10 +283,21 @@ impl Runtime {
             Effect::Fix { paths, kinds } => {
                 let n = app.ws.config.network_jobs();
                 let stash = app.ws.config.stash;
+                // each repo's own kinds: less those undoing an ignored state
+                let jobs: Vec<(PathBuf, Vec<fix::FixKind>)> = paths
+                    .into_iter()
+                    .map(|p| {
+                        let k = app
+                            .ws
+                            .get(&p)
+                            .map_or_else(|| kinds.clone(), |e| e.fix_kinds(&kinds));
+                        (p, k)
+                    })
+                    .collect();
                 self.spawn(move |tx| {
                     argus_core::workspace::in_pool(n, || {
                         use rayon::prelude::*;
-                        paths.into_par_iter().for_each(|p| {
+                        jobs.into_par_iter().for_each(|(p, kinds)| {
                             let applied =
                                 fix::apply_fix(&p, &kinds, &stash).map_err(|e| e.to_string());
                             let _ = tx.send(Msg::FixDone { path: p, applied });

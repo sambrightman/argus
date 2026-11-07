@@ -918,8 +918,9 @@ impl App {
                 let paths: Vec<PathBuf> = idx
                     .into_iter()
                     .filter(|&i| {
-                        self.ws.entries[i].status().is_some_and(|s| {
-                            fix::choose(s, &kinds, &self.ws.config.stash).is_some()
+                        let e = &self.ws.entries[i];
+                        e.status().is_some_and(|s| {
+                            fix::choose(s, &e.fix_kinds(&kinds), &self.ws.config.stash).is_some()
                         })
                     })
                     .map(|i| self.ws.entries[i].path.clone())

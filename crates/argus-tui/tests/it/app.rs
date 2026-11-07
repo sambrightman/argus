@@ -433,6 +433,26 @@ fn auto_fix_all_leaves_hidden_repos_alone_even_when_shown() {
 }
 
 #[test]
+fn auto_fix_leaves_an_ignored_state_alone() {
+    // feature's only fix switches it to main; its branch is ignored
+    let (_sb, mut app) = setup("[ignore]\noff_default = ['acme/feature@feat']");
+    assert!(app.act(Action::AutoFix(Scope::All)).is_empty());
+    let texts: Vec<String> = {
+        app.cursor = app
+            .rows
+            .iter()
+            .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("feature")))
+            .unwrap();
+        app.on_key(code(KeyCode::Tab));
+        detail_texts(&app)
+    };
+    assert!(
+        !texts.iter().any(|t| t.starts_with("auto-fix")),
+        "{texts:?}"
+    );
+}
+
+#[test]
 fn shell_and_quit_effects() {
     let (_sb, mut app) = setup("");
     let p = app.current().unwrap().path.clone();

@@ -1211,3 +1211,26 @@ fn root_add_and_remove_name_the_included_file_they_edit() {
         "extend = ['work.toml']\nextend_roots = []\n"
     );
 }
+
+#[test]
+fn fix_leaves_an_ignored_state_alone() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "[ignore]\noff_default = ['acme/feature@feat']\n").unwrap();
+    let fix = |args: &[&str]| {
+        argus(&sb)
+            .arg("--config")
+            .arg(&cfg)
+            .args(args)
+            .assert()
+            .success()
+    };
+    fix(&["fix", "--dry-run"]).stdout(predicate::str::contains("would switch main").not());
+    fix(&["fix"]).stdout(predicate::str::contains("nothing to fix"));
+    let branch = git(&sb.path("dev/feature"), &["branch", "--show-current"]);
+    assert_eq!(branch.trim(), "feat");
+    // inverse: pinned to another branch, it's fixed as before
+    std::fs::write(&cfg, "[ignore]\noff_default = ['acme/feature@other']\n").unwrap();
+    fix(&["fix"]).stdout(predicate::str::contains("switch main"));
+}

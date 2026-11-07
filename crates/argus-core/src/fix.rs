@@ -86,6 +86,24 @@ pub struct Fix {
 /// Nothing is proposed while a merge/rebase is in progress or conflicts exist:
 /// that needs a human.
 /// `stash` gives the stash fix's options (the `[stash]` defaults).
+/// Fixes that would undo a state `[ignore]` says is normal: switching to
+/// the default branch for an ignored off-default branch or detached HEAD,
+/// publishing for an ignored missing upstream, pulling for ignored
+/// "behind". Auto-fix leaves them out; choosing one explicitly still works.
+pub fn turned_off_by(ignored: &[crate::attention::Issue]) -> Vec<FixKind> {
+    use crate::attention::Issue;
+    let mut v = vec![];
+    for i in ignored {
+        v.push(match i {
+            Issue::OffDefault | Issue::Detached => FixKind::SwitchDefault,
+            Issue::NoUpstream => FixKind::Publish,
+            Issue::Behind(_) => FixKind::Pull,
+            _ => continue,
+        });
+    }
+    v
+}
+
 pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
     let mut v = vec![];
     if s.bare || s.in_progress.is_some() || s.changes.conflicted > 0 {

@@ -227,6 +227,21 @@ fn auto_fix_applies_and_refreshes() {
 }
 
 #[test]
+fn a_fix_asked_for_an_ignored_state_still_leaves_it_alone() {
+    let (_sb, mut app, mut rt) =
+        setup("[fix]\nauto = ['switch-default']\n[ignore]\noff_default = ['acme/feature@feat']");
+    let feature = path(&app, "acme/feature");
+    // as a stale selection might: the runtime checks for itself
+    let fx = vec![Effect::Fix {
+        paths: vec![feature.clone()],
+        kinds: app.ws.config.fix.auto.clone(),
+    }];
+    run(&mut app, &mut rt, fx);
+    let s = app.ws.get(&feature).unwrap().status().unwrap();
+    assert_eq!(s.head, Head::Branch("feat".into()));
+}
+
+#[test]
 fn a_sync_lists_the_forge_and_clones_new_repos() {
     let sb = Sandbox::new();
     sb.remote("acme", "fresh");

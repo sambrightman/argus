@@ -1134,7 +1134,7 @@ fn fix_cmd(
             let fix::Preview {
                 chain,
                 alternatives,
-            } = fix::preview(s, kinds, &stash);
+            } = fix::preview(s, &e.fix_kinds(kinds), &stash);
             if chain.is_empty() && alternatives.is_empty() {
                 continue;
             }
@@ -1172,7 +1172,7 @@ fn fix_cmd(
             }
             continue;
         }
-        if let Some(a) = fix::apply_fix(&path, kinds, &stash)? {
+        if let Some(a) = fix::apply_fix(&path, &e.fix_kinds(kinds), &stash)? {
             any = true;
             if json {
                 records.push(serde_json::json!({

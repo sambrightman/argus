@@ -144,7 +144,7 @@ pub fn details(
             styled(role, text),
         ]));
     }
-    let p = fix::preview(s, priority, stash);
+    let p = fix::preview(s, &e.fix_kinds(priority), stash);
     let labelled = p
         .chain
         .iter()

@@ -93,6 +93,13 @@ impl Entry {
         self.error().is_some() || attention::needs_attention(&self.issues) || self.flags.new
     }
 
+    /// The kinds of fix auto-fix may use here: `kinds`, less those that
+    /// would undo an ignored state (see [`crate::fix::turned_off_by`]).
+    pub fn fix_kinds(&self, kinds: &[crate::fix::FixKind]) -> Vec<crate::fix::FixKind> {
+        let off = crate::fix::turned_off_by(&self.ignored_issues);
+        kinds.iter().copied().filter(|k| !off.contains(k)).collect()
+    }
+
     pub fn change_count(&self) -> usize {
         self.status().map_or(0, |s| s.changes.total() + s.ahead())
     }
