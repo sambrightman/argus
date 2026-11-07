@@ -749,3 +749,10 @@ fn default_skip_includes_the_go_module_cache_below_each_root() {
     // only directly below a root, as relative patterns are
     assert!(v.iter().any(|n| n.ends_with("other/go/pkg/r")), "{v:?}");
 }
+
+#[test]
+fn status_runs_on_a_pool_of_the_given_size() {
+    use argus_core::workspace::in_pool;
+    assert_eq!(in_pool(2, rayon::current_num_threads), 2);
+    assert_eq!(in_pool(3, rayon::current_num_threads), 3);
+}

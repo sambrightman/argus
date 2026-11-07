@@ -159,19 +159,21 @@ impl Workspace {
     /// remote only, no status, so it's quick enough to run on every Tab.
     pub fn repo_names(&self) -> Vec<String> {
         let found = discover::discover_all(&self.config.roots, &self.discover_options()).found;
-        let mut names: Vec<String> = found
-            .par_iter()
-            .map(|f| {
-                let id = match f.kind {
-                    RepoKind::Main | RepoKind::Bare => crate::isolation::open(&f.path)
-                        .ok()
-                        .and_then(|r| status::remote_and_url(&r).1)
-                        .and_then(|u| RepoId::from_url(&u)),
-                    _ => None,
-                };
-                id.map_or_else(|| contract_tilde(&f.path), |i| i.slug())
-            })
-            .collect();
+        let mut names: Vec<String> = in_pool(self.config.status_jobs(), || {
+            found
+                .par_iter()
+                .map(|f| {
+                    let id = match f.kind {
+                        RepoKind::Main | RepoKind::Bare => crate::isolation::open(&f.path)
+                            .ok()
+                            .and_then(|r| status::remote_and_url(&r).1)
+                            .and_then(|u| RepoId::from_url(&u)),
+                        _ => None,
+                    };
+                    id.map_or_else(|| contract_tilde(&f.path), |i| i.slug())
+                })
+                .collect()
+        });
         names.sort();
         names.dedup();
         names
@@ -256,12 +258,7 @@ impl Workspace {
     }
 
     pub fn refresh_all(&mut self) {
-        let opts = StatusOptions::default();
-        let results: Vec<_> = self
-            .entries
-            .par_iter()
-            .map(|e| status::status(&e.path, opts).map_err(|e| e.to_string()))
-            .collect();
+        let results = statuses(&self.config, self.entries.iter().map(|e| e.path.as_path()));
         for (e, r) in self.entries.iter_mut().zip(results) {
             e.set_status(r);
         }
@@ -325,11 +322,7 @@ impl Workspace {
         if extra.is_empty() {
             return;
         }
-        let opts = StatusOptions::default();
-        let results: Vec<_> = extra
-            .par_iter()
-            .map(|e| status::status(&e.path, opts).map_err(|e| e.to_string()))
-            .collect();
+        let results = statuses(&self.config, extra.iter().map(|e| e.path.as_path()));
         for (mut e, r) in extra.into_iter().zip(results) {
             e.set_status(r);
             self.entries.push(e);
@@ -495,4 +488,27 @@ impl Workspace {
             })
             .collect()
     }
+}
+
+/// Run `f` on a pool of `n` threads, so its parallel iterators use at most
+/// that many (on the current thread if the pool can't be made).
+pub fn in_pool<R: Send>(n: usize, f: impl FnOnce() -> R + Send) -> R {
+    match rayon::ThreadPoolBuilder::new().num_threads(n).build() {
+        Ok(pool) => pool.install(f),
+        Err(_) => f(),
+    }
+}
+
+/// The status of each of `paths`, in order, [`Config::status_jobs`] at a time.
+fn statuses<'a>(
+    config: &Config,
+    paths: impl Iterator<Item = &'a Path>,
+) -> Vec<Result<RepoStatus, String>> {
+    let paths: Vec<&Path> = paths.collect();
+    in_pool(config.status_jobs(), || {
+        paths
+            .par_iter()
+            .map(|p| status::status(p, StatusOptions::default()).map_err(|e| e.to_string()))
+            .collect()
+    })
 }

@@ -246,13 +246,19 @@ impl Runtime {
                     });
                 });
             }
-            Effect::Refresh(paths) => self.spawn(move |tx| {
-                use rayon::prelude::*;
-                paths.into_par_iter().for_each(|p| {
-                    let r = status::status(&p, StatusOptions::default()).map_err(|e| e.to_string());
-                    let _ = tx.send(Msg::Status(p, Box::new(r)));
+            Effect::Refresh(paths) => {
+                let n = app.ws.config.status_jobs();
+                self.spawn(move |tx| {
+                    argus_core::workspace::in_pool(n, || {
+                        use rayon::prelude::*;
+                        paths.into_par_iter().for_each(|p| {
+                            let r = status::status(&p, StatusOptions::default())
+                                .map_err(|e| e.to_string());
+                            let _ = tx.send(Msg::Status(p, Box::new(r)));
+                        });
+                    })
                 });
-            }),
+            }
             Effect::Jobs(jobs) => {
                 let n = app.ws.config.network_jobs();
                 let cancel = self.cancel.clone();
@@ -278,19 +284,14 @@ impl Runtime {
                 let n = app.ws.config.network_jobs();
                 let stash = app.ws.config.stash;
                 self.spawn(move |tx| {
-                    let pool = rayon::ThreadPoolBuilder::new().num_threads(n).build();
-                    let work = || {
+                    argus_core::workspace::in_pool(n, || {
                         use rayon::prelude::*;
                         paths.into_par_iter().for_each(|p| {
                             let applied =
                                 fix::apply_fix(&p, &kinds, &stash).map_err(|e| e.to_string());
                             let _ = tx.send(Msg::FixDone { path: p, applied });
                         });
-                    };
-                    match pool {
-                        Ok(pool) => pool.install(work),
-                        Err(_) => work(),
-                    }
+                    })
                 });
             }
             Effect::PlanSync => {

@@ -168,6 +168,19 @@ fn ahead_and_behind() {
 }
 
 #[test]
+fn a_linked_worktree_sees_the_fetch_made_from_its_main_repo() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    git(&r, &["worktree", "add", "-q", "../wt", "-b", "wt"]);
+    let wt = sb.path("wt");
+    std::fs::remove_file(r.join(".git/FETCH_HEAD")).ok(); // the clone's own
+    assert!(st(&wt).last_fetch.is_none(), "no fetch yet");
+    git(&r, &["fetch", "-q"]);
+    assert!(st(&wt).last_fetch.is_some(), "FETCH_HEAD is in the common dir");
+}
+
+#[test]
 fn feature_branch_pushed_vs_unpushed() {
     let sb = Sandbox::new();
     sb.remote("acme", "w");
@@ -625,6 +638,20 @@ fn tags_on_head_annotated_first_then_newest_version() {
     git(&u, &["init", "-q"]);
     let s = st(&u);
     assert!(s.tags.is_empty() && s.head_commit.is_none());
+}
+
+#[test]
+fn a_broken_tag_is_skipped_but_a_broken_branch_fails_status() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    git(&r, &["tag", "v1"]);
+    std::fs::write(r.join(".git/refs/tags/bad"), "garbage\n").unwrap();
+    let s = st(&r);
+    assert_eq!(s.tags, ["v1"]);
+    assert_eq!(s.head, Head::Branch("main".into()));
+    // inverse: a broken branch can't be reported on, so status says so
+    std::fs::write(r.join(".git/refs/heads/bad"), "garbage\n").unwrap();
+    assert!(status(&r, StatusOptions::default()).is_err());
 }
 
 #[test]

@@ -44,6 +44,11 @@ pub struct Config {
     /// automatic, i.e. git's `fetch.parallel` if set above 0, else the CPU
     /// count up to 8 (forges and ssh limit simultaneous connections).
     pub concurrency: usize,
+    /// How many repos' status to read at once. 0: automatic, i.e. half the
+    /// CPU count: reading status is mostly file system calls, and beyond
+    /// that they slow each other down in the kernel (measured on macOS)
+    /// with no gain in time.
+    pub status_concurrency: usize,
     /// Protocol for new clones; unset asks the forge (`gh config get git_protocol`).
     #[schemars(example = crate::forge::Protocol::Ssh)]
     pub clone_protocol: Option<crate::forge::Protocol>,
@@ -105,6 +110,7 @@ impl Default for Config {
             skip_hidden: true,
             follow_symlinks: false,
             concurrency: 0,
+            status_concurrency: 0,
             clone_protocol: None,
             favourite: vec![],
             sync: vec![],
@@ -599,6 +605,14 @@ impl Config {
         auto_jobs(fetch_parallel, cpus)
     }
 
+    /// How many repos' status to read at once: see `status_concurrency`.
+    pub fn status_jobs(&self) -> usize {
+        if self.status_concurrency > 0 {
+            return self.status_concurrency;
+        }
+        auto_status_jobs(std::thread::available_parallelism().map_or(1, |n| n.get()))
+    }
+
     /// Directory new clones for `track` land in.
     pub fn clone_dir(&self, track: &Track) -> Option<PathBuf> {
         track
@@ -620,6 +634,11 @@ pub fn auto_jobs(fetch_parallel: Option<i64>, cpus: usize) -> usize {
         Some(n) if n > 0 => n as usize,
         _ => cpus.clamp(1, AUTO_MAX_JOBS),
     }
+}
+
+/// Automatic status concurrency: half the CPUs, at least one.
+pub fn auto_status_jobs(cpus: usize) -> usize {
+    (cpus / 2).max(1)
 }
 
 #[cfg(test)]
@@ -673,6 +692,17 @@ mod tests {
                 want,
                 "{fetch_parallel:?} {cpus}"
             );
+        }
+    }
+
+    #[test]
+    fn status_concurrency_zero_is_half_the_cpus() {
+        assert_eq!(Config::default().status_concurrency, 0, "automatic by default");
+        let c = Config::parse("status_concurrency = 3").unwrap();
+        assert_eq!(c.status_jobs(), 3);
+        assert!(Config::default().status_jobs() >= 1);
+        for (cpus, want) in [(10, 5), (16, 8), (3, 1), (2, 1), (1, 1), (0, 1)] {
+            assert_eq!(auto_status_jobs(cpus), want, "{cpus}");
         }
     }
 

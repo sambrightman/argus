@@ -76,9 +76,26 @@ the `git` backend module. Another backend (jj, hg) would produce the same
 model. Ops are an enum (`Op`) executed by a backend runner.
 
 **Concurrency.** Status uses rayon over discovered repos, all CPU/disk work in
-process. Network ops (fetch/pull/clone/push) run on a bounded worker pool
+process, on a pool of `status_concurrency` threads (default half the CPUs).
+Network ops (fetch/pull/clone/push) run on a bounded worker pool
 (default 8, configurable) and stream `Event`s over a channel. CLI and TUI
 consume the same events.
+
+**Where status time goes** (profiled 2026-11 with Instruments on 200 packed
+repos, `scripts/bench-cli.sh`): over 80% in the kernel, mostly `open()`.
+Two findings:
+- Ref lookups by name each try a loose file (usually missing, as clones
+  pack refs) and then packed-refs. Status now reads branches, remote
+  branches and tags once per repo and answers from that (status 26–31%
+  faster in criterion).
+- File system calls from many threads slow each other down in the kernel.
+  With rayon's default of one thread per logical CPU (10 on an M-series
+  with 4 performance cores), kernel time rose 4.5× from 1 to 10 threads,
+  and wall time stopped improving between 4 and 6. Half the CPUs halves the
+  kernel time at the same wall time. Discovery still uses rayon's default
+  pool (not yet measured), and gix starts two threads per repo's status
+  (HEAD vs index, index vs worktree), plus up to one per CPU to check files
+  in large repos; limiting those made no difference on small repos.
 
 ## 5. Concepts
 

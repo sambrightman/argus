@@ -1,6 +1,7 @@
 //! Read-only repository status via gix (in-process, no `git` subprocesses).
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -268,15 +269,92 @@ pub fn remote_and_url(repo: &gix::Repository) -> (Option<String>, Option<String>
     (remote, url)
 }
 
+/// Every ref of a repo, read once. Looking names up one at a time costs an
+/// `open` of the loose file (usually missing: clones pack their refs) and a
+/// packed-refs check each, and `open` dominated status's time.
+struct Refs<'r> {
+    refs: Vec<gix::Reference<'r>>,
+    by_name: HashMap<String, usize>,
+    peeled: RefCell<HashMap<usize, Option<gix::ObjectId>>>,
+}
+
+impl<'r> Refs<'r> {
+    /// Branches, remote branches and tags: all that status uses. An
+    /// unreadable branch fails, as status can't report on it; an
+    /// unreadable tag is skipped.
+    fn read(repo: &'r gix::Repository) -> Result<Self, StatusError> {
+        let platform = repo.references().map_err(err)?;
+        let mut refs = vec![];
+        for (prefix, strict) in [
+            ("refs/heads/", true),
+            ("refs/remotes/", true),
+            ("refs/tags/", false),
+        ] {
+            for r in platform.prefixed(prefix).map_err(err)? {
+                match r {
+                    Ok(r) => refs.push(r),
+                    Err(e) if strict => return Err(err(e)),
+                    Err(_) => {}
+                }
+            }
+        }
+        let by_name = refs
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.name().as_bstr().to_str_lossy().into_owned(), i))
+            .collect();
+        Ok(Refs {
+            refs,
+            by_name,
+            peeled: RefCell::default(),
+        })
+    }
+
+    fn get(&self, name: &str) -> Option<&gix::Reference<'r>> {
+        self.by_name.get(name).map(|&i| &self.refs[i])
+    }
+
+    fn exists(&self, name: &str) -> bool {
+        self.by_name.contains_key(name)
+    }
+
+    /// Indices of the refs under `prefix` (e.g. `refs/heads/`).
+    fn prefixed<'a>(&'a self, prefix: &'a str) -> impl Iterator<Item = usize> + 'a {
+        self.refs
+            .iter()
+            .enumerate()
+            .filter(move |(_, r)| r.name().as_bstr().starts_with(prefix.as_bytes()))
+            .map(|(i, _)| i)
+    }
+
+    /// The object ref `i` leads to, through symbolic refs and tags.
+    fn peel_at(&self, i: usize) -> Option<gix::ObjectId> {
+        if let Some(&id) = self.peeled.borrow().get(&i) {
+            return id;
+        }
+        let id = self.refs[i].clone().peel_to_id().ok().map(|id| id.detach());
+        self.peeled.borrow_mut().insert(i, id);
+        id
+    }
+
+    fn peel(&self, name: &str) -> Option<gix::ObjectId> {
+        self.by_name.get(name).and_then(|&i| self.peel_at(i))
+    }
+}
+
 pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStatus, StatusError> {
-    let head = read_head(repo)?;
+    let h = repo.head().map_err(err)?;
+    let head = head_of(&h);
+    let head_id = h.id().map(|id| id.detach());
+    let head_commit = head_id.and_then(|id| repo.find_commit(id).ok());
+    let refs = Refs::read(repo)?;
     let (remote, remote_url) = remote_and_url(repo);
-    let default_branch = default_branch(repo, remote.as_deref());
+    let default_branch = default_branch(repo, &refs, remote.as_deref());
     let default_tip = default_branch
         .as_deref()
-        .and_then(|d| default_tip(repo, remote.as_deref(), d));
+        .and_then(|d| default_tip(&refs, remote.as_deref(), d));
 
-    let branches = branches(repo, head.branch(), default_tip)?;
+    let branches = branches(repo, &refs, head.branch(), default_tip)?;
     let upstream = head
         .branch()
         .and_then(|b| branches.iter().find(|bi| bi.name == b))
@@ -286,20 +364,20 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
     let changes = if bare {
         Changes::default()
     } else {
-        changes(repo, opts)?
+        changes(repo, opts, head_commit.as_ref().and_then(|c| c.tree_id().ok()))?
     };
     let integration = integration(repo, &head, upstream.as_ref());
     let detached_orphans = match &head {
         Head::Detached(_) if repo.kind() != gix::repository::Kind::Submodule => {
-            detached_orphans(repo)?
+            detached_orphans(repo, &refs, head_id)?
         }
         _ => 0,
     };
 
     Ok(RepoStatus {
         head,
-        head_commit: repo.head_id().ok().map(|id| id.to_string()),
-        tags: head_tags(repo),
+        head_commit: head_id.map(|id| id.to_string()),
+        tags: head_tags(repo, &refs, head_id),
         default_branch,
         remote,
         remote_url,
@@ -311,11 +389,12 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         branches,
         worktrees: worktrees(repo),
         submodules: submodules(repo),
-        last_fetch: mtime(&repo.git_dir().join("FETCH_HEAD"))
-            .or_else(|| mtime(&repo.common_dir().join("FETCH_HEAD"))),
-        last_commit: repo
-            .head_commit()
-            .ok()
+        last_fetch: mtime(&repo.git_dir().join("FETCH_HEAD")).or_else(|| {
+            (repo.common_dir() != repo.git_dir())
+                .then(|| mtime(&repo.common_dir().join("FETCH_HEAD")))
+                .flatten()
+        }),
+        last_commit: head_commit
             .and_then(|c| c.time().ok())
             .and_then(|t| Timestamp::from_second(t.seconds).ok()),
         bare,
@@ -394,9 +473,8 @@ fn pull_refusal(repo: &gix::Repository, branch: &str) -> Option<String> {
     None
 }
 
-fn read_head(repo: &gix::Repository) -> Result<Head, StatusError> {
-    let head = repo.head().map_err(err)?;
-    Ok(match &head.kind {
+fn head_of(head: &gix::Head<'_>) -> Head {
+    match &head.kind {
         gix::head::Kind::Symbolic(r) => Head::Branch(r.name.shorten().to_str_lossy().into_owned()),
         gix::head::Kind::Unborn(name) => Head::Unborn(name.shorten().to_str_lossy().into_owned()),
         gix::head::Kind::Detached { .. } => Head::Detached(
@@ -404,14 +482,14 @@ fn read_head(repo: &gix::Repository) -> Result<Head, StatusError> {
                 .map(|id| id.shorten_or_id().to_string())
                 .unwrap_or_default(),
         ),
-    })
+    }
 }
 
 /// The remote's HEAD if known (`refs/remotes/origin/HEAD`), otherwise a
 /// local `main`/`master`, otherwise `init.defaultBranch`.
-fn default_branch(repo: &gix::Repository, remote: Option<&str>) -> Option<String> {
+fn default_branch(repo: &gix::Repository, refs: &Refs, remote: Option<&str>) -> Option<String> {
     if let Some(remote) = remote
-        && let Ok(Some(r)) = repo.try_find_reference(format!("refs/remotes/{remote}/HEAD").as_str())
+        && let Some(r) = refs.get(&format!("refs/remotes/{remote}/HEAD"))
         && let gix::refs::TargetRef::Symbolic(target) = r.target()
     {
         let prefix = format!("refs/remotes/{remote}/");
@@ -422,7 +500,7 @@ fn default_branch(repo: &gix::Repository, remote: Option<&str>) -> Option<String
     for candidate in ["main", "master"] {
         let local = format!("refs/heads/{candidate}");
         let tracked = remote.map(|r| format!("refs/remotes/{r}/{candidate}"));
-        if exists(repo, &local) || tracked.is_some_and(|t| exists(repo, &t)) {
+        if refs.exists(&local) || tracked.is_some_and(|t| refs.exists(&t)) {
             return Some(candidate.to_string());
         }
     }
@@ -431,14 +509,10 @@ fn default_branch(repo: &gix::Repository, remote: Option<&str>) -> Option<String
         .map(|s| s.to_str_lossy().into_owned())
 }
 
-fn exists(repo: &gix::Repository, name: &str) -> bool {
-    matches!(repo.try_find_reference(name), Ok(Some(_)))
-}
-
 /// Commit the default branch points to: remote-tracking ref preferred, as it
 /// is what "pushed/merged" means; local branch as a fallback.
 fn default_tip(
-    repo: &gix::Repository,
+    refs: &Refs,
     remote: Option<&str>,
     default: &str,
 ) -> Option<gix::ObjectId> {
@@ -447,12 +521,7 @@ fn default_tip(
         names.push(format!("refs/remotes/{r}/{default}"));
     }
     names.push(format!("refs/heads/{default}"));
-    names.iter().find_map(|n| peel(repo, n))
-}
-
-fn peel(repo: &gix::Repository, name: &str) -> Option<gix::ObjectId> {
-    let mut r = repo.try_find_reference(name).ok()??;
-    r.peel_to_id().ok().map(|id| id.detach())
+    names.iter().find_map(|n| refs.peel(n))
 }
 
 /// Number of commits reachable from `a` but not from `b`.
@@ -475,33 +544,30 @@ fn count_exclusive(
 
 fn branches(
     repo: &gix::Repository,
+    refs: &Refs,
     head_branch: Option<&str>,
     default_tip: Option<gix::ObjectId>,
 ) -> Result<Vec<BranchInfo>, StatusError> {
-    let platform = repo.references().map_err(err)?;
     let mut remote_tips: Vec<gix::ObjectId> = vec![];
-    for r in platform.remote_branches().map_err(err)? {
-        let mut r = r.map_err(err)?;
-        if let gix::refs::TargetRef::Symbolic(_) = r.target() {
+    for i in refs.prefixed("refs/remotes/") {
+        if let gix::refs::TargetRef::Symbolic(_) = refs.refs[i].target() {
             continue; // origin/HEAD
         }
-        if let Ok(id) = r.peel_to_id() {
-            remote_tips.push(id.detach());
+        if let Some(id) = refs.peel_at(i) {
+            remote_tips.push(id);
         }
     }
     remote_tips.sort();
     remote_tips.dedup();
     let mut out = vec![];
-    for r in platform.local_branches().map_err(err)? {
-        let mut r = r.map_err(err)?;
-        let full = r.name().to_owned();
+    for i in refs.prefixed("refs/heads/") {
+        let full = refs.refs[i].name().to_owned();
         let name = full.shorten().to_str_lossy().into_owned();
-        let Ok(tip) = r.peel_to_id() else { continue };
-        let tip = tip.detach();
+        let Some(tip) = refs.peel_at(i) else { continue };
         let upstream = match repo.branch_remote_tracking_ref_name(full.as_ref(), Direction::Fetch) {
             Some(Ok(tracking)) => {
                 let short = tracking.shorten().to_str_lossy().into_owned();
-                match peel(repo, &tracking.as_bstr().to_str_lossy()) {
+                match refs.peel(&tracking.as_bstr().to_str_lossy()) {
                     Some(up) => Some(Tracking {
                         name: short,
                         ahead: count_exclusive(repo, tip, up)?,
@@ -551,7 +617,12 @@ fn branches(
     Ok(out)
 }
 
-fn changes(repo: &gix::Repository, opts: StatusOptions) -> Result<Changes, StatusError> {
+/// `head_tree`, when known, saves gix reading HEAD again.
+fn changes(
+    repo: &gix::Repository,
+    opts: StatusOptions,
+    head_tree: Option<gix::Id<'_>>,
+) -> Result<Changes, StatusError> {
     use gix::status::index_worktree::Item as IW;
     use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
 
@@ -563,9 +634,11 @@ fn changes(repo: &gix::Repository, opts: StatusOptions) -> Result<Changes, Statu
             check_dirty: false,
         }
     };
-    let iter = repo
-        .status(gix::progress::Discard)
-        .map_err(err)?
+    let mut platform = repo.status(gix::progress::Discard).map_err(err)?;
+    if let Some(t) = head_tree {
+        platform = platform.head_tree(t.detach());
+    }
+    let iter = platform
         // Per-file, then collapsed below like git does. gix's own collapsing
         // reports directories holding only ignored files/empty dirs as untracked.
         .untracked_files(gix::status::UntrackedFiles::Files)
@@ -701,19 +774,13 @@ fn collapse_untracked(
 
 /// Tags pointing at HEAD's commit. Packed refs record where annotated tags
 /// lead, so only loose annotated tags cost an object read.
-fn head_tags(repo: &gix::Repository) -> Vec<String> {
-    let Ok(head) = repo.head_id() else {
-        return vec![];
-    };
-    let head = head.detach();
-    let Ok(platform) = repo.references() else {
-        return vec![];
-    };
-    let Ok(refs) = platform.prefixed("refs/tags/") else {
+fn head_tags(repo: &gix::Repository, refs: &Refs, head: Option<gix::ObjectId>) -> Vec<String> {
+    let Some(head) = head else {
         return vec![];
     };
     let mut found: Vec<(bool, String)> = vec![];
-    for mut r in refs.flatten() {
+    for i in refs.prefixed("refs/tags/") {
+        let r = &refs.refs[i];
         let gix::refs::Target::Object(target) = r.inner.target.clone() else {
             continue;
         };
@@ -721,9 +788,9 @@ fn head_tags(repo: &gix::Repository) -> Vec<String> {
             Some(p) => p,
             None if target == head => head,
             None => match repo.find_header(target) {
-                Ok(h) if h.kind() == gix::object::Kind::Tag => match r.peel_to_id() {
-                    Ok(id) => id.detach(),
-                    Err(_) => continue,
+                Ok(h) if h.kind() == gix::object::Kind::Tag => match refs.peel_at(i) {
+                    Some(id) => id,
+                    None => continue,
                 },
                 _ => continue,
             },
@@ -767,26 +834,24 @@ pub fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     ca.len().cmp(&cb.len()).then_with(|| a.cmp(b))
 }
 
-fn detached_orphans(repo: &gix::Repository) -> Result<usize, StatusError> {
-    let Ok(head) = repo.head_id() else {
+fn detached_orphans(
+    repo: &gix::Repository,
+    refs: &Refs,
+    head: Option<gix::ObjectId>,
+) -> Result<usize, StatusError> {
+    let Some(head) = head else {
         return Ok(0);
     };
-    let platform = repo.references().map_err(err)?;
     let mut tips = vec![];
-    // not `all()`: stash commits have HEAD as a parent and would hide everything
+    // not every ref: stash commits have HEAD as a parent and would hide everything
     for prefix in ["refs/heads/", "refs/remotes/", "refs/tags/"] {
-        for r in platform.prefixed(prefix).map_err(err)? {
-            let mut r = r.map_err(err)?;
-            if let Ok(id) = r.peel_to_id() {
-                tips.push(id.detach());
-            }
-        }
+        tips.extend(refs.prefixed(prefix).filter_map(|i| refs.peel_at(i)));
     }
-    if tips.contains(&head.detach()) {
+    if tips.contains(&head) {
         return Ok(0); // e.g. a checked-out tag: no walk needed
     }
     let walk = repo
-        .rev_walk([head.detach()])
+        .rev_walk([head])
         .with_hidden(tips)
         .all()
         .map_err(err)?;
