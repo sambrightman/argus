@@ -28,7 +28,7 @@ pub struct Config {
     /// (`node_modules`, `*.egg-info`); one starting with `/` or `~` is a full
     /// path (`~/dev/archive`, `~/src/*/third_party`); any other with `/` is
     /// below each root (`go/pkg`). Globs: `*` (within one level), `**`, `?`,
-    /// `[ab]`, `{a,b}`. Unlike a rule with `exclude = true`, repos there
+    /// `[ab]`, `{a,b}`. Unlike `exclude`, which hides repos, repos there
     /// aren't scanned at all.
     pub skip: Vec<String>,
     /// Maximum directory depth below a root; deeper directories are skipped
