@@ -229,10 +229,14 @@ rendering is snapshot-tested via `TestBackend`.
   condition (the ways it could plausibly be wrong) must each fail a test;
   survivors become tests, or show code to delete. cargo-mutants adds
   breadth with generic mutations (`--in-diff` for changes).
-* **Coverage** (cargo-llvm-cov, region and line): about 91% overall. The
-  TUI runtime (`argus-tui/src/lib.rs`: terminal loop, carrying out effects)
-  is barely covered; the app's decisions and the core functions it calls
-  are. Branch coverage needs a nightly toolchain.
+* **Coverage** (cargo-llvm-cov, region and line): about 93% overall.
+  Effects are carried out by `Runtime`, separate from the terminal loop,
+  so tests drive it (`settle` waits for background work): saving marks
+  and state and reporting failures, scans, refreshes, jobs, fixes, a sync
+  against a fake forge cloning for real, the URL opener (configurable, a
+  recording script in tests), and running suspended programs. What's left
+  uncovered in `argus-tui/src/lib.rs` is the terminal loop itself. Branch
+  coverage needs a nightly toolchain.
 * **Benchmarks** (criterion, `benches/`): discovery variants including
   `-L` and its optimizations, status and scanning, a large file's diff,
   config with includes, rule matching, word refinement, rebuilding and

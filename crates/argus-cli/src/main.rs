@@ -336,6 +336,7 @@ fn run() -> Result<()> {
                 config_path: ctx.config_path.clone(),
                 forge_factory: forge_factory(),
                 notices,
+                opener: argus_tui::default_opener().into(),
             };
             argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))?;
         }
@@ -913,6 +914,7 @@ fn demo(ctx: &Ctx, theme: Option<String>, icons: Option<String>) -> Result<()> {
             "demo repos in {} (deleted on quit) · v t: theme · v i: icons · ?: legend",
             d.root.display()
         )],
+        opener: argus_tui::default_opener().into(),
     };
     argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))
 }

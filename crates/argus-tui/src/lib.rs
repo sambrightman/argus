@@ -1,6 +1,8 @@
 //! argus-tui: the interactive front-end, as a library so other binaries can
-//! embed it. [`app::App`] holds all logic; this module only wires the
-//! terminal, the event loop and background workers together.
+//! embed it. [`app::App`] holds all logic and asks for effects; [`Runtime`]
+//! carries them out (files, background work, opening URLs), and [`run`]
+//! wires it to the terminal: drawing, keys, and suspending for a shell or
+//! editor.
 
 pub mod app;
 pub mod details;
@@ -10,9 +12,9 @@ pub mod refine;
 pub mod theme;
 pub mod ui;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use argus_core::Workspace;
@@ -32,6 +34,17 @@ pub struct Options {
     pub forge_factory: ForgeFactory<'static>,
     /// Startup notices (e.g. the current-directory fallback), shown after scans.
     pub notices: Vec<String>,
+    /// The program opening URLs (see [`default_opener`]).
+    pub opener: String,
+}
+
+/// `open` on macOS, `xdg-open` elsewhere.
+pub fn default_opener() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    }
 }
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -56,19 +69,13 @@ pub fn run(ws: Workspace, opts: Options) -> Result<(), Error> {
     let mut app = App::new(ws);
     app.notices = opts.notices.clone();
     if let Some(w) = warnings.iter().chain(&icon_warnings).next() {
-        app.on_msg(Msg::Suspended(Err(format!("config: {w}"))));
+        app.report_error(format!("config: {w}"));
     }
-    let (tx, rx) = unbounded::<Msg>();
-    let cancel = Arc::new(AtomicBool::new(false));
-    let mut rt = Runtime {
-        tx,
-        opts,
-        cancel: cancel.clone(),
-    };
+    let mut rt = Runtime::new(opts);
 
     let mut terminal = ratatui::init();
     app.scanning = true;
-    rt.exec(&mut app, &mut terminal, Effect::Scan);
+    rt.exec(&mut app, Effect::Scan);
     let mut tick = 0usize;
     let result = (|| -> Result<(), Error> {
         while !app.quit {
@@ -89,58 +96,148 @@ pub fn run(ws: Workspace, opts: Options) -> Result<(), Error> {
             };
             terminal.draw(|f| ui::draw(f, &mut app, &view))?;
             let busy = app.scanning || !app.running.is_empty();
+            let mut left = vec![];
             if event::poll(Duration::from_millis(if busy { 80 } else { 250 }))?
                 && let Event::Key(k) = event::read()?
                 && k.kind != KeyEventKind::Release
             {
                 for e in app.on_key(k) {
-                    rt.exec(&mut app, &mut terminal, e);
+                    left.extend(rt.exec(&mut app, e));
                 }
             }
-            drain(&rx, &mut app, &mut rt, &mut terminal);
+            left.extend(rt.drain(&mut app));
+            // only suspending is left: it needs the terminal
+            while let Some(e) = left.pop() {
+                if let Effect::Suspend { program, args, cwd } = e {
+                    ratatui::restore();
+                    println!(
+                        "argus: {} in {} — exit to return",
+                        program,
+                        argus_core::paths::contract_tilde(&cwd)
+                    );
+                    let r = run_suspended(&program, &args, &cwd);
+                    terminal = ratatui::init();
+                    let _ = terminal.clear();
+                    for e in app.on_msg(Msg::Suspended(r)) {
+                        left.extend(rt.exec(&mut app, e));
+                    }
+                }
+            }
         }
         Ok(())
     })();
-    cancel.store(true, Ordering::Relaxed);
+    rt.cancel.store(true, Ordering::Relaxed);
     ratatui::restore();
     result
 }
 
-fn drain(rx: &Receiver<Msg>, app: &mut App, rt: &mut Runtime, term: &mut ratatui::DefaultTerminal) {
-    // Bounded so a flood of messages can't starve input handling.
-    for _ in 0..512 {
-        let Ok(m) = rx.try_recv() else { break };
-        for e in app.on_msg(m) {
-            rt.exec(app, term, e);
-        }
-    }
+/// Run `program` with the terminal handed over (shell, git UI, editor),
+/// waiting for it. A shell (no `args`) exits with its last command's code,
+/// which isn't an error.
+pub fn run_suspended(program: &str, args: &[String], cwd: &Path) -> Result<(), String> {
+    std::process::Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .status()
+        .map_err(|e| format!("{program}: {e}"))
+        .and_then(|s| {
+            if s.success() || args.is_empty() {
+                Ok(())
+            } else {
+                Err(format!("{program} exited with {s}"))
+            }
+        })
 }
 
-struct Runtime {
+/// Carries out the app's effects, except suspending the terminal: saving
+/// marks and state, opening URLs, and background work (scans, refreshes,
+/// jobs, fixes, planning a sync) whose results come back as messages.
+pub struct Runtime {
     tx: Sender<Msg>,
+    rx: Receiver<Msg>,
     opts: Options,
     cancel: Arc<AtomicBool>,
+    /// Background work started and not yet finished (its messages sent).
+    pending: Arc<AtomicUsize>,
 }
 
 impl Runtime {
-    fn exec(&mut self, app: &mut App, term: &mut ratatui::DefaultTerminal, e: Effect) {
-        let tx = self.tx.clone();
+    pub fn new(opts: Options) -> Self {
+        let (tx, rx) = unbounded::<Msg>();
+        Self {
+            tx,
+            rx,
+            opts,
+            cancel: Arc::new(AtomicBool::new(false)),
+            pending: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Handle messages that have arrived (a bounded number, so a flood
+    /// can't starve input handling). Returns effects needing the terminal.
+    pub fn drain(&mut self, app: &mut App) -> Vec<Effect> {
+        let mut left = vec![];
+        for _ in 0..512 {
+            let Ok(m) = self.rx.try_recv() else { break };
+            for e in app.on_msg(m) {
+                left.extend(self.exec(app, e));
+            }
+        }
+        left
+    }
+
+    /// Handle messages until no background work is left, or `timeout`
+    /// passes; returns whether it settled. Effects needing the terminal
+    /// are dropped (for tests and headless use).
+    pub fn settle(&mut self, app: &mut App, timeout: Duration) -> bool {
+        let until = std::time::Instant::now() + timeout;
+        loop {
+            match self.rx.recv_timeout(Duration::from_millis(10)) {
+                Ok(m) => {
+                    for e in app.on_msg(m) {
+                        self.exec(app, e);
+                    }
+                }
+                Err(_) if self.pending.load(Ordering::SeqCst) == 0 && self.rx.is_empty() => {
+                    return true;
+                }
+                Err(_) => {}
+            }
+            if std::time::Instant::now() > until {
+                return false;
+            }
+        }
+    }
+
+    /// Run `work` on a thread, counted as pending until it returns.
+    fn spawn(&self, work: impl FnOnce(Sender<Msg>) + Send + 'static) {
+        let (tx, pending) = (self.tx.clone(), self.pending.clone());
+        pending.fetch_add(1, Ordering::SeqCst);
+        std::thread::spawn(move || {
+            work(tx);
+            pending.fetch_sub(1, Ordering::SeqCst);
+        });
+    }
+
+    /// Carry out `e` and what follows from it. Suspending needs the
+    /// terminal: it's returned to the caller.
+    pub fn exec(&mut self, app: &mut App, e: Effect) -> Vec<Effect> {
         match e {
             Effect::Quit => app.quit = true,
             Effect::SaveMarks(before) => {
                 let path = &self.opts.config_path;
                 if let Err(err) = configfile::update_mark_lists(path, &before, &app.ws.config) {
-                    app.on_msg(Msg::Suspended(Err(err.to_string())));
+                    app.report_error(err.to_string());
                 }
             }
             Effect::SaveState => {
                 if let Err(err) = app.ws.state.save(&self.opts.state_path) {
-                    app.on_msg(Msg::Suspended(Err(err.to_string())));
+                    app.report_error(err.to_string());
                 }
             }
             Effect::Scan => {
                 let mut ws = app.ws.clone();
-                std::thread::spawn(move || {
+                self.spawn(move |tx| {
                     ws.entries.clear();
                     ws.scan();
                     let _ = tx.send(Msg::Scanned {
@@ -149,20 +246,17 @@ impl Runtime {
                     });
                 });
             }
-            Effect::Refresh(paths) => {
-                std::thread::spawn(move || {
-                    use rayon::prelude::*;
-                    paths.into_par_iter().for_each(|p| {
-                        let r =
-                            status::status(&p, StatusOptions::default()).map_err(|e| e.to_string());
-                        let _ = tx.send(Msg::Status(p, Box::new(r)));
-                    });
+            Effect::Refresh(paths) => self.spawn(move |tx| {
+                use rayon::prelude::*;
+                paths.into_par_iter().for_each(|p| {
+                    let r = status::status(&p, StatusOptions::default()).map_err(|e| e.to_string());
+                    let _ = tx.send(Msg::Status(p, Box::new(r)));
                 });
-            }
+            }),
             Effect::Jobs(jobs) => {
                 let n = app.ws.config.network_jobs();
                 let cancel = self.cancel.clone();
-                std::thread::spawn(move || {
+                self.spawn(move |tx| {
                     runner::run_jobs(&jobs, n, &cancel, &|ev| {
                         let m = match ev {
                             RunEvent::Started { index } => Msg::JobStarted {
@@ -183,7 +277,7 @@ impl Runtime {
             Effect::Fix { paths, kinds } => {
                 let n = app.ws.config.network_jobs();
                 let stash = app.ws.config.stash;
-                std::thread::spawn(move || {
+                self.spawn(move |tx| {
                     let pool = rayon::ThreadPoolBuilder::new().num_threads(n).build();
                     let work = || {
                         use rayon::prelude::*;
@@ -202,7 +296,7 @@ impl Runtime {
             Effect::PlanSync => {
                 let mut ws = app.ws.clone();
                 let factory = self.opts.forge_factory;
-                std::thread::spawn(move || {
+                self.spawn(move |tx| {
                     let listings = sync::list_tracks(&mut ws, factory);
                     let plan = sync::plan_tracks(&ws, &listings.repos, listings.protocol);
                     let _ = tx.send(Msg::SyncPlanned {
@@ -213,11 +307,7 @@ impl Runtime {
                 });
             }
             Effect::Open(url) => {
-                let opener = if cfg!(target_os = "macos") {
-                    "open"
-                } else {
-                    "xdg-open"
-                };
+                let opener = &self.opts.opener;
                 let r = std::process::Command::new(opener)
                     .arg(&url)
                     .stdin(std::process::Stdio::null())
@@ -225,35 +315,11 @@ impl Runtime {
                     .stderr(std::process::Stdio::null())
                     .spawn();
                 if let Err(e) = r {
-                    app.on_msg(Msg::Suspended(Err(format!("{opener} {url}: {e}"))));
+                    app.report_error(format!("{opener} {url}: {e}"));
                 }
             }
-            Effect::Suspend { program, args, cwd } => {
-                ratatui::restore();
-                println!(
-                    "argus: {} in {} — exit to return",
-                    program,
-                    argus_core::paths::contract_tilde(&cwd)
-                );
-                let r = std::process::Command::new(&program)
-                    .args(&args)
-                    .current_dir(&cwd)
-                    .status()
-                    .map_err(|e| format!("{program}: {e}"))
-                    .and_then(|s| {
-                        // A shell's exit code reflects the last command run in it: not an error.
-                        if s.success() || args.is_empty() {
-                            Ok(())
-                        } else {
-                            Err(format!("{program} exited with {s}"))
-                        }
-                    });
-                *term = ratatui::init();
-                let _ = term.clear();
-                for e in app.on_msg(Msg::Suspended(r)) {
-                    self.exec(app, term, e);
-                }
-            }
+            suspend @ Effect::Suspend { .. } => return vec![suspend],
         }
+        vec![]
     }
 }

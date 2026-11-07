@@ -511,6 +511,11 @@ impl App {
         self.message = Some((s.into(), false));
     }
 
+    /// Report a failure in the status line (e.g. a save that failed).
+    pub fn report_error(&mut self, s: impl Into<String>) {
+        self.error(s);
+    }
+
     fn error(&mut self, s: impl Into<String>) {
         self.message = Some((s.into(), true));
     }
