@@ -4,7 +4,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 
+use argus_core::badges::Role;
 use argus_core::config::StashConfig;
+use argus_core::diff::{self, FileDiff, LineKind, Side};
 use argus_core::fix::{self, Applied, FixKind};
 use argus_core::ops::{Op, OpOutcome};
 use argus_core::rules::Mark;
@@ -13,7 +15,7 @@ use argus_core::sync::{self, Job, SyncPlan};
 use argus_core::{Entry, ViewFilter, Workspace, paths};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::details::{DetailLine, details};
+use crate::details::{DetailLine, DiffRef, details};
 use crate::input::{Edit, LineEditor};
 use crate::menu::{Menu, MenuId};
 
@@ -77,6 +79,95 @@ pub enum Action {
     NextTheme,
     /// Next icon set, for this session only.
     NextIcons,
+}
+
+/// A row's identity across rebuilds: repo path, file, and diff position
+/// (side, hunk, whether a line).
+type RowKey = (PathBuf, Option<String>, Option<(Side, Option<usize>, bool)>);
+
+/// The diff rows under an expanded file's line: each side with changes (unstaged first), its hunks
+/// (unless folded) and their lines.
+fn diff_rows(
+    cache: &mut HashMap<(PathBuf, String, Side), Result<FileDiff, String>>,
+    folded: &BTreeSet<(PathBuf, String, Side, usize)>,
+    repo: &std::path::Path,
+    s: &RepoStatus,
+    file: &str,
+) -> Vec<DetailLine> {
+    let Some(c) = s.changes.files.iter().find(|c| c.path == file) else {
+        return vec![];
+    };
+    let sides = [
+        (
+            Side::Unstaged,
+            c.worktree != ' ' || c.index == '?',
+            "unstaged changes",
+        ),
+        (
+            Side::Staged,
+            c.index != ' ' && c.index != '?',
+            "staged changes",
+        ),
+    ];
+    let indent = || (None, "      ".to_string());
+    let row = |parts: Vec<(Option<Role>, String)>, side, hunk, line| DetailLine {
+        parts,
+        file: Some(file.to_string()),
+        diff: Some(DiffRef { side, hunk, line }),
+    };
+    let mut v = vec![];
+    for (side, _, title) in sides.into_iter().filter(|s| s.1) {
+        v.push(row(
+            vec![indent(), (Some(Role::Dim), title.into())],
+            side,
+            None,
+            None,
+        ));
+        let d = cache
+            .entry((repo.to_path_buf(), file.to_string(), side))
+            .or_insert_with(|| diff::file_diff(repo, file, side).map_err(|e| e.to_string()));
+        let note = |text: &str| {
+            row(
+                vec![indent(), (Some(Role::Dim), text.into())],
+                side,
+                None,
+                None,
+            )
+        };
+        match d {
+            Err(e) => v.push(row(
+                vec![indent(), (Some(Role::Error), e.clone())],
+                side,
+                None,
+                None,
+            )),
+            Ok(FileDiff::Binary) => v.push(note("binary file")),
+            Ok(FileDiff::External) => v.push(note("external diff configured")),
+            Ok(FileDiff::Text(hunks)) if hunks.is_empty() => v.push(note("no change in content")),
+            Ok(FileDiff::Text(hunks)) => {
+                for (h, hunk) in hunks.iter().enumerate() {
+                    let header = vec![indent(), (Some(Role::DiffHunk), hunk.header())];
+                    v.push(row(header, side, Some(h), None));
+                    if folded.contains(&(repo.to_path_buf(), file.to_string(), side, h)) {
+                        continue;
+                    }
+                    for l in &hunk.lines {
+                        let (role, mark) = match l.kind {
+                            LineKind::Add => (Some(Role::DiffAdd), '+'),
+                            LineKind::Remove => (Some(Role::DiffRemove), '-'),
+                            LineKind::Context => (None, ' '),
+                        };
+                        let mut parts = vec![indent(), (role, format!("{mark}{}", l.text))];
+                        if l.no_newline {
+                            parts.push((Some(Role::Dim), "  (no newline at end of file)".into()));
+                        }
+                        v.push(row(parts, side, Some(h), Some(l.clone())));
+                    }
+                }
+            }
+        }
+    }
+    v
 }
 
 /// What a stash action takes.
@@ -223,6 +314,12 @@ pub struct App {
     pub marked: BTreeSet<PathBuf>,
     /// Files marked in the details view, by repo path.
     pub marked_files: BTreeMap<PathBuf, BTreeSet<String>>,
+    /// Files whose diff is shown, by repo path and file.
+    pub expanded_files: BTreeSet<(PathBuf, String)>,
+    /// Folded hunks: repo, file, side, hunk index.
+    pub folded_hunks: BTreeSet<(PathBuf, String, Side, usize)>,
+    /// Diffs read so far; a repo's go when its status changes.
+    diffs: HashMap<(PathBuf, String, Side), Result<FileDiff, String>>,
     /// The stash switches for this session.
     pub stash: StashConfig,
     pub running: HashMap<PathBuf, String>,
@@ -256,6 +353,9 @@ impl App {
             expanded: BTreeSet::new(),
             marked: BTreeSet::new(),
             marked_files: BTreeMap::new(),
+            expanded_files: BTreeSet::new(),
+            folded_hunks: BTreeSet::new(),
+            diffs: HashMap::new(),
             stash,
             running: HashMap::new(),
             log: vec![],
@@ -272,9 +372,33 @@ impl App {
 
     // ---------- rows ----------
 
-    /// Recompute rows, keeping the cursor on the same repo where possible.
+    /// Recompute rows, keeping the cursor on the same row where possible
+    /// (else on its repo).
     pub fn rebuild(&mut self) {
-        let keep = self.current_path();
+        let target = self.row_key(self.cursor);
+        self.rebuild_at(target);
+    }
+
+    /// What identifies row `n` across rebuilds: its repo, and for detail
+    /// rows its file and diff position.
+    fn row_key(&self, n: usize) -> Option<RowKey> {
+        match self.rows.get(n)? {
+            Row::Repo(i) => Some((self.ws.entries[*i].path.clone(), None, None)),
+            Row::Detail { repo, line } => Some((
+                self.ws.entries[*repo].path.clone(),
+                line.file.clone(),
+                line.diff
+                    .as_ref()
+                    .map(|d| (d.side, d.hunk, d.line.is_some())),
+            )),
+        }
+    }
+
+    /// [`Self::rebuild`], putting the cursor on the row `target` names: the
+    /// exact row if it's still there (a diff line's position within its
+    /// hunk isn't kept), else its file's line, else its repo.
+    fn rebuild_at(&mut self, target: Option<RowKey>) {
+        let keep = target.as_ref().map(|t| t.0.clone());
         let needle = self.filter.to_lowercase();
         let (icons, _) = self.ws.config.ui.icons();
         let mut rows = vec![];
@@ -288,11 +412,20 @@ impl App {
             }
             rows.push(Row::Repo(i));
             if self.expanded.contains(&e.path) {
-                rows.extend(
-                    details(e, &self.ws.config.fix.auto, &self.ws.config.stash, &icons)
-                        .into_iter()
-                        .map(|line| Row::Detail { repo: i, line }),
-                );
+                for line in details(e, &self.ws.config.fix.auto, &self.ws.config.stash, &icons) {
+                    let expanded = line.file.as_ref().filter(|f| {
+                        self.expanded_files
+                            .contains(&(e.path.clone(), f.to_string()))
+                    });
+                    let diff = match (expanded, e.status()) {
+                        (Some(f), Some(s)) => {
+                            diff_rows(&mut self.diffs, &self.folded_hunks, &e.path, s, f)
+                        }
+                        _ => vec![],
+                    };
+                    rows.push(Row::Detail { repo: i, line });
+                    rows.extend(diff.into_iter().map(|line| Row::Detail { repo: i, line }));
+                }
             }
         }
         self.rows = rows;
@@ -306,11 +439,21 @@ impl App {
             files.retain(|f| changed.is_some_and(|c| c.iter().any(|x| x.path == *f)));
             !files.is_empty()
         });
-        self.cursor = keep
-            .and_then(|p| {
-                self.rows
-                    .iter()
-                    .position(|r| matches!(r, Row::Repo(i) if self.ws.entries[*i].path == p))
+        let exact = target.as_ref().and_then(|t| {
+            let file_line = (t.0.clone(), t.1.clone(), None);
+            (0..self.rows.len())
+                .find(|&n| self.row_key(n).as_ref() == Some(t))
+                .or_else(|| {
+                    (0..self.rows.len()).find(|&n| self.row_key(n) == Some(file_line.clone()))
+                })
+        });
+        self.cursor = exact
+            .or_else(|| {
+                keep.and_then(|p| {
+                    self.rows
+                        .iter()
+                        .position(|r| matches!(r, Row::Repo(i) if self.ws.entries[*i].path == p))
+                })
             })
             .unwrap_or(self.cursor)
             .min(self.rows.len().saturating_sub(1));
@@ -559,6 +702,7 @@ impl App {
                     self.cursor = i;
                 }
             }
+            ToggleExpand if self.on_file_or_diff() => return self.toggle_file_or_hunk(),
             ToggleExpand => {
                 if let Some(p) = self.current_path() {
                     if !self.expanded.remove(&p) {
@@ -936,6 +1080,41 @@ impl App {
         self.start_jobs(jobs)
     }
 
+    fn on_file_or_diff(&self) -> bool {
+        matches!(self.rows.get(self.cursor), Some(Row::Detail { line, .. }) if line.file.is_some())
+    }
+
+    /// Tab on a file's line (or a side's heading) shows or hides its diff;
+    /// on a hunk's header or lines, folds or unfolds the hunk, leaving the
+    /// cursor on its header.
+    fn toggle_file_or_hunk(&mut self) -> Vec<Effect> {
+        let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor) else {
+            return vec![];
+        };
+        let (path, file) = (
+            self.ws.entries[*repo].path.clone(),
+            line.file.clone().unwrap(),
+        );
+        match line.diff.as_ref().and_then(|d| d.hunk.map(|h| (d.side, h))) {
+            Some((side, h)) => {
+                let key = (path.clone(), file.clone(), side, h);
+                if !self.folded_hunks.remove(&key) {
+                    self.folded_hunks.insert(key);
+                }
+                self.rebuild_at(Some((path, Some(file), Some((side, Some(h), false)))));
+            }
+            None => {
+                let key = (path, file);
+                if !self.expanded_files.remove(&key) {
+                    self.expanded_files.insert(key);
+                }
+                // the cursor stays on the file's line (from a heading too)
+                self.rebuild();
+            }
+        }
+        vec![]
+    }
+
     /// Whether a switch is on this session.
     pub fn switch_on(&self, s: Switch) -> bool {
         match s {
@@ -1108,6 +1287,7 @@ impl App {
         match m {
             Msg::Scanned { entries, truncated } => {
                 self.scanning = false;
+                self.diffs.clear();
                 self.ws.entries = entries;
                 self.ws.truncated = truncated;
                 self.ws.resolve_flags();
@@ -1119,6 +1299,7 @@ impl App {
             }
             Msg::Status(path, st) => {
                 self.ws.update_status(&path, *st);
+                self.diffs.retain(|k, _| k.0 != path);
                 self.rebuild();
             }
             Msg::JobStarted { path, label } => {

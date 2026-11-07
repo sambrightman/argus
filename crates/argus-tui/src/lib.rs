@@ -6,6 +6,7 @@ pub mod app;
 pub mod details;
 pub mod input;
 pub mod menu;
+pub mod refine;
 pub mod theme;
 pub mod ui;
 

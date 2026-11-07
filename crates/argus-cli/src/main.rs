@@ -567,6 +567,9 @@ impl Paint {
             Role::Conflict | Role::Error => "1;31",
             Role::Stash => "34",
             Role::Warning => "31",
+            Role::DiffAdd => "32",
+            Role::DiffRemove => "31",
+            Role::DiffHunk => "36",
         };
         format!("\x1b[{code}m{s}\x1b[0m")
     }

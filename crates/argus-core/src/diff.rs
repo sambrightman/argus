@@ -16,7 +16,7 @@ use gix::object::tree::EntryKind;
 use serde::Serialize;
 
 /// Which changes of a file to show.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub enum Side {
     /// Index → work tree (untracked files: everything added).
     Unstaged,

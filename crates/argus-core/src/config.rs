@@ -258,6 +258,20 @@ pub struct UiConfig {
     pub icon_overrides: BTreeMap<String, String>,
     /// Show only repos needing attention at startup (`a` toggles).
     pub attention_only: bool,
+    /// Highlight the changed words in diffs: in every hunk, only the hunk
+    /// under the cursor, or none.
+    pub refine: Refine,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Refine {
+    #[default]
+    All,
+    Selected,
+    Off,
 }
 
 impl UiConfig {
@@ -275,6 +289,7 @@ impl Default for UiConfig {
             icons: "unicode".into(),
             icon_overrides: BTreeMap::new(),
             attention_only: true,
+            refine: Refine::All,
         }
     }
 }

@@ -1010,6 +1010,13 @@ fn files_marked_in_details_can_be_stashed() {
         out.lines().any(|l| l.contains('▌') && l.contains("README")),
         "{out}"
     );
+    // with its diff open, only the file's own line carries the mark
+    app.cursor = at;
+    app.on_key(code(KeyCode::Tab));
+    let out = render(&mut app, 100, 30);
+    assert_eq!(out.lines().filter(|l| l.contains('▌')).count(), 1, "{out}");
+    app.cursor = at;
+    app.on_key(code(KeyCode::Tab));
     app.on_key(key('z'));
     let fx = app.on_key(key('f'));
     let jobs = stash_jobs(&app, &fx);
@@ -1029,4 +1036,198 @@ fn files_marked_in_details_can_be_stashed() {
     app.ws.refresh(&d);
     app.rebuild();
     assert!(app.marked_files.is_empty(), "{:?}", app.marked_files);
+}
+
+/// Detail rows' text, trimmed.
+fn trimmed(app: &App) -> Vec<String> {
+    detail_texts(app)
+        .iter()
+        .map(|t| t.trim().to_string())
+        .collect()
+}
+
+/// Expand the current repo and put the cursor on `file`'s line.
+fn to_file(app: &mut App, file: &str) {
+    if !trimmed(app).iter().any(|t| t.ends_with(file)) {
+        app.on_key(code(KeyCode::Tab));
+    }
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Detail { line, .. } if line.file.as_deref() == Some(file) && line.diff.is_none()))
+        .unwrap_or_else(|| panic!("{file} listed: {:?}", trimmed(app)));
+}
+
+/// In `dirty`: README "hello world" committed, then "hello there"; `both`
+/// staged then changed again; `bin` binary and untracked; `new` untracked.
+fn diff_fixture(sb: &Sandbox) {
+    let d = sb.path("dev/dirty");
+    write(&d, "README", "hello world\n");
+    write(&d, "both", "one\n");
+    commit(&d, "files");
+    write(&d, "README", "hello there\n");
+    write(&d, "both", "two\n");
+    git(&d, &["add", "both"]);
+    write(&d, "both", "three\n");
+    std::fs::write(d.join("bin"), [0u8, 159, 146, 150]).unwrap();
+    write(&d, "new", "a\nb\n");
+}
+
+#[test]
+fn files_unfold_to_their_diff() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "README");
+    app.on_key(code(KeyCode::Tab));
+    let t = trimmed(&app);
+    let at = t
+        .iter()
+        .position(|l| l == "unstaged changes")
+        .expect("section");
+    assert_eq!(
+        t[at + 1..at + 4],
+        ["@@ -1 +1 @@", "-hello world", "+hello there"]
+    );
+    // a file with both sides shows both, unstaged first
+    to_file(&mut app, "both");
+    app.on_key(code(KeyCode::Tab));
+    let t = trimmed(&app);
+    let both = t.iter().position(|l| l.ends_with("both")).unwrap();
+    assert_eq!(
+        t[both + 1..both + 9],
+        [
+            "unstaged changes",
+            "@@ -1 +1 @@",
+            "-two",
+            "+three",
+            "staged changes",
+            "@@ -1 +1 @@",
+            "-one",
+            "+two"
+        ]
+    );
+    // untracked: everything added; binary: said so
+    to_file(&mut app, "new");
+    app.on_key(code(KeyCode::Tab));
+    to_file(&mut app, "bin");
+    app.on_key(code(KeyCode::Tab));
+    let t = trimmed(&app);
+    let new = t.iter().position(|l| l.ends_with("new")).unwrap();
+    assert_eq!(
+        t[new + 1..new + 5],
+        ["unstaged changes", "@@ -0,0 +1,2 @@", "+a", "+b"]
+    );
+    // nothing is staged for an untracked file (it's the last one listed)
+    assert!(
+        !t[new + 1..].contains(&"staged changes".to_string()),
+        "{t:?}"
+    );
+    let bin = t.iter().position(|l| l.ends_with("bin")).unwrap();
+    assert_eq!(t[bin + 1..bin + 3], ["unstaged changes", "binary file"]);
+    // Tab on the file again folds it
+    to_file(&mut app, "README");
+    app.on_key(code(KeyCode::Tab));
+    assert!(!trimmed(&app).contains(&"-hello world".to_string()));
+}
+
+#[test]
+fn hunks_fold() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "README");
+    app.on_key(code(KeyCode::Tab));
+    let header = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Detail { line, .. } if line.diff.as_ref().is_some_and(|d| d.hunk.is_some() && d.line.is_none())))
+        .unwrap();
+    app.cursor = header;
+    app.on_key(code(KeyCode::Tab));
+    let t = trimmed(&app);
+    assert!(
+        t.contains(&"@@ -1 +1 @@".to_string()) && !t.contains(&"-hello world".to_string()),
+        "{t:?}"
+    );
+    // Tab on any line of a hunk folds it too; on the header again unfolds
+    app.on_key(code(KeyCode::Tab));
+    assert!(trimmed(&app).contains(&"-hello world".to_string()));
+    app.cursor = header + 1;
+    app.on_key(code(KeyCode::Tab));
+    assert!(!trimmed(&app).contains(&"-hello world".to_string()));
+    assert_eq!(app.cursor, header, "cursor moves to the folded header");
+}
+
+/// Whether every cell of `word` on the line containing `line_text` is drawn
+/// reversed (refined), checking the first match.
+fn word_reversed(app: &mut App, line_text: &str, word: &str) -> bool {
+    let (theme, _) = Theme::build("terminal", &Default::default());
+    let mut t = Terminal::new(TestBackend::new(100, 40)).unwrap();
+    let view = ui::View {
+        theme: &theme,
+        icons: argus_core::icons::UNICODE,
+        tick: 0,
+    };
+    t.draw(|f| ui::draw(f, app, &view)).unwrap();
+    let buf = t.backend().buffer().clone();
+    for y in 0..40 {
+        let row: String = (0..100).map(|x| buf[(x, y)].symbol().to_string()).collect();
+        if let Some(lx) = row.find(line_text) {
+            let wx = lx + line_text.find(word).unwrap();
+            return (wx..wx + word.len()).all(|x| {
+                buf[(x as u16, y)]
+                    .modifier
+                    .contains(ratatui::style::Modifier::REVERSED)
+            });
+        }
+    }
+    panic!("{line_text} not drawn");
+}
+
+#[test]
+fn changed_words_are_highlighted() {
+    for (setting, there, hello) in [("all", true, false), ("off", false, false)] {
+        let (_sb, mut app) = setup_with(&format!("[ui]\nrefine = '{setting}'"), diff_fixture);
+        to_file(&mut app, "README");
+        app.on_key(code(KeyCode::Tab));
+        assert_eq!(
+            word_reversed(&mut app, "+hello there", "there"),
+            there,
+            "{setting}"
+        );
+        assert_eq!(
+            word_reversed(&mut app, "+hello there", "hello"),
+            hello,
+            "{setting}: unchanged word"
+        );
+        assert_eq!(
+            word_reversed(&mut app, "-hello world", "world"),
+            there,
+            "{setting}: removed side"
+        );
+    }
+    // selected: only the hunk under the cursor
+    let (_sb, mut app) = setup_with("[ui]\nrefine = 'selected'", diff_fixture);
+    to_file(&mut app, "README");
+    app.on_key(code(KeyCode::Tab));
+    assert!(
+        !word_reversed(&mut app, "+hello there", "there"),
+        "cursor on the file line"
+    );
+    app.cursor += 3; // the + line
+    assert!(word_reversed(&mut app, "+hello there", "there"));
+}
+
+#[test]
+fn diffs_follow_status_updates() {
+    let (sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "README");
+    app.on_key(code(KeyCode::Tab));
+    assert!(trimmed(&app).contains(&"+hello there".to_string()));
+    let d = sb.path("dev/dirty");
+    write(&d, "README", "hello again\n");
+    let s = argus_core::status::status(&d, Default::default()).map_err(|e| e.to_string());
+    app.on_msg(Msg::Status(d, Box::new(s)));
+    let t = trimmed(&app);
+    assert!(
+        t.contains(&"+hello again".to_string()) && !t.contains(&"+hello there".to_string()),
+        "{t:?}"
+    );
 }

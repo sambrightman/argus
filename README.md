@@ -119,7 +119,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `n p` `M-n M-p` | next / previous repo |
 | `PgUp PgDn` `C-v M-v` `C-u C-d` | page |
 | `Home End` `M-< M->` `gg G` | top / bottom |
-| `Tab` `Enter` | unfold details: issues, available fixes, branches, files |
+| `Tab` `Enter` | unfold details: issues, available fixes, branches, files; on a file, its diff (unstaged, then staged); on a hunk, fold it. Changed words are highlighted (`[ui] refine = "all"`, `"selected"` for the hunk under the cursor, or `"off"`) |
 | `Space` / `U` | mark / unmark (actions apply to marked repos, else current); on a file in the details, marks the file |
 | `/` `C-s` | filter (readline editing) |
 | `a` / `H` | show all / attention only (the default, `[ui] attention_only`); show hidden |

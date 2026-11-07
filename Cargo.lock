@@ -168,6 +168,7 @@ dependencies = [
  "pretty_assertions",
  "ratatui",
  "rayon",
+ "similar",
  "tempfile",
  "unicode-width",
 ]

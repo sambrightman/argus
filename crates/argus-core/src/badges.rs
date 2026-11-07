@@ -29,6 +29,9 @@ pub enum Role {
     Warning,
     Error,
     Dim,
+    DiffAdd,
+    DiffRemove,
+    DiffHunk,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

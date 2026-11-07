@@ -1,7 +1,11 @@
 //! Rendering. Reads [`App`], never mutates anything but scroll bookkeeping.
 
+use std::collections::{BTreeSet, HashMap};
+
 use argus_core::ViewFilter;
 use argus_core::badges::{self, Role};
+use argus_core::config::Refine;
+use argus_core::diff::LineKind;
 use argus_core::discover::RepoKind;
 use argus_core::icons::Icons;
 use ratatui::Frame;
@@ -13,6 +17,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Mode, Prompt, Row};
 use crate::menu::MenuId;
+use crate::refine;
 use crate::theme::{Theme, Ui};
 
 pub struct View<'a> {
@@ -141,6 +146,7 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
         .unwrap_or(0)
         .min(30);
 
+    let refined = refined_rows(app, app.scroll..app.scroll + height);
     let mut lines = vec![];
     for (row_idx, row) in app.rows.iter().enumerate().skip(app.scroll).take(height) {
         let selected = row_idx == app.cursor;
@@ -148,11 +154,12 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
             Row::Repo(i) => repo_line(app, v, *i, name_w, branch_w),
             Row::Detail { repo, line } => {
                 let indent = "  ".repeat(app.ws.depth(*repo)) + "      ";
-                let marked = line.file.as_ref().is_some_and(|f| {
-                    app.marked_files
-                        .get(&app.ws.entries[*repo].path)
-                        .is_some_and(|m| m.contains(f))
-                });
+                let marked = line.diff.is_none()
+                    && line.file.as_ref().is_some_and(|f| {
+                        app.marked_files
+                            .get(&app.ws.entries[*repo].path)
+                            .is_some_and(|m| m.contains(f))
+                    });
                 let mut spans = if marked {
                     vec![
                         Span::styled(v.icons.marked.to_string(), t.ui(Ui::Marked)),
@@ -161,12 +168,32 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
                 } else {
                     vec![Span::raw(indent)]
                 };
-                spans.extend(line.parts.iter().map(|(role, s)| {
-                    Span::styled(
-                        s.clone(),
-                        role.map(|r| t.role(r)).unwrap_or(t.ui(Ui::Detail)),
-                    )
-                }));
+                let style =
+                    |role: &Option<Role>| role.map(|r| t.role(r)).unwrap_or(t.ui(Ui::Detail));
+                match (refined.get(&row_idx), line.parts.as_slice()) {
+                    // a refined diff line: indent, +/-, words, then any note
+                    (Some(segs), [indent, (role, text), rest @ ..]) => {
+                        spans.push(Span::styled(indent.1.clone(), style(&indent.0)));
+                        spans.push(Span::styled(
+                            text.chars().take(1).collect::<String>(),
+                            style(role),
+                        ));
+                        for (changed, word) in segs {
+                            let st = if *changed {
+                                style(role).add_modifier(Modifier::REVERSED)
+                            } else {
+                                style(role)
+                            };
+                            spans.push(Span::styled(word.clone(), st));
+                        }
+                        spans.extend(rest.iter().map(|(r, s)| Span::styled(s.clone(), style(r))));
+                    }
+                    _ => spans.extend(
+                        line.parts
+                            .iter()
+                            .map(|(role, s)| Span::styled(s.clone(), style(role))),
+                    ),
+                }
                 Line::from(spans)
             }
         };
@@ -184,6 +211,41 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
         lines.push(line);
     }
     f.render_widget(Paragraph::new(lines), body);
+}
+
+/// Changed-word segments for the diff lines to refine among `visible`
+/// rows (`[ui] refine`: every hunk shown, the cursor's, or none), by row.
+fn refined_rows(app: &App, visible: std::ops::Range<usize>) -> HashMap<usize, refine::Segments> {
+    let hunk_of = |n: usize| match app.rows.get(n) {
+        Some(Row::Detail { repo, line }) => {
+            let d = line.diff.as_ref()?;
+            Some((*repo, line.file.clone()?, d.side, d.hunk?))
+        }
+        _ => None,
+    };
+    let targets: BTreeSet<_> = match app.ws.config.ui.refine {
+        Refine::Off => return HashMap::new(),
+        Refine::Selected => hunk_of(app.cursor).into_iter().collect(),
+        Refine::All => visible.filter_map(hunk_of).collect(),
+    };
+    let mut out = HashMap::new();
+    for key in targets {
+        let rows: Vec<(usize, LineKind, &str)> = (0..app.rows.len())
+            .filter(|&n| hunk_of(n).as_ref() == Some(&key))
+            .filter_map(|n| match &app.rows[n] {
+                Row::Detail { line, .. } => {
+                    let l = line.diff.as_ref()?.line.as_ref()?;
+                    Some((n, l.kind, l.text.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        let lines: Vec<(LineKind, &str)> = rows.iter().map(|(_, k, t)| (*k, *t)).collect();
+        for ((n, _, _), segs) in rows.iter().zip(refine::refine(&lines)) {
+            out.insert(*n, segs);
+        }
+    }
+    out
 }
 
 fn repo_line<'a>(app: &App, v: &View, i: usize, name_w: usize, branch_w: usize) -> Line<'a> {

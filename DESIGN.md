@@ -111,6 +111,14 @@ consume the same events.
   remove an entry where it lives and add new ones to the main file
   without overriding an included list. Renamed settings (`skip_dirs`)
   are renamed during the merge.
+* **Diff view.** Tab on a file in the details shows its unstaged then
+  staged hunks (from `diff::file_diff`, cached per file and side, dropped
+  when the repo's status changes); Tab on a hunk folds it. The cursor
+  keeps its row across rebuilds (a folded hunk's lines move it to the
+  header). Changed words are found as magit does: each run of removed
+  lines and the added run after it are split into words and diffed, here
+  with `similar`; changed words are drawn reversed, which works in every
+  theme. `[ui] refine` picks all hunks shown, the cursor's, or none.
 * **No forgetting.** Nothing about a repo is dropped because scans no
   longer find it (an earlier version dropped marks after 30 days; that
   broke the rule that permanent loss needs confirmation). Expired snoozes

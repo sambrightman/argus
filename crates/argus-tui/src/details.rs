@@ -4,6 +4,7 @@ use argus_core::Entry;
 use argus_core::attention::Issue;
 use argus_core::badges::Role;
 use argus_core::config::StashConfig;
+use argus_core::diff::Side;
 use argus_core::fix::{self, FixKind};
 use argus_core::icons::Icons;
 use argus_core::paths::contract_tilde;
@@ -14,12 +15,29 @@ pub struct DetailLine {
     pub parts: Vec<(Option<Role>, String)>,
     /// The changed file this line shows (repo-relative), for marking.
     pub file: Option<String>,
+    /// Part of that file's diff (see [`DiffRef`]).
+    pub diff: Option<DiffRef>,
+}
+
+/// A diff row under a file's line: a side's heading, a hunk header, or one
+/// of its lines.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffRef {
+    pub side: Side,
+    /// The hunk's index on that side (headers and lines).
+    pub hunk: Option<usize>,
+    /// The line (lines only).
+    pub line: Option<argus_core::diff::Line>,
 }
 
 const MAX_FILES: usize = 25;
 
 fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
-    DetailLine { parts, file: None }
+    DetailLine {
+        parts,
+        file: None,
+        diff: None,
+    }
 }
 
 fn plain(s: impl Into<String>) -> (Option<Role>, String) {
