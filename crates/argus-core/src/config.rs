@@ -10,7 +10,11 @@ use crate::fix::FixKind;
 use crate::paths::expand_tilde;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
+#[serde(
+    default,
+    deny_unknown_fields,
+    expecting = "argus settings: a table of keys"
+)]
 pub struct Config {
     /// Other config files to read first, e.g. `["~/.config/argus/work.toml",
     /// "conf.d/*.toml"]`: paths relative to this file, `~` allowed, `*` etc.
@@ -129,7 +133,10 @@ pub enum CloneMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(
+    deny_unknown_fields,
+    expecting = "a [[track]] table with owner and its options"
+)]
 pub struct Track {
     /// Forge kind; only `github` so far.
     #[serde(default = "default_forge")]
@@ -190,7 +197,11 @@ fn example_colors() -> BTreeMap<&'static str, &'static str> {
 #[derive(
     Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema,
 )]
-#[serde(default, deny_unknown_fields)]
+#[serde(
+    default,
+    deny_unknown_fields,
+    expecting = "a table: [concurrency] with disk and network"
+)]
 pub struct Concurrency {
     /// Discovery and status: file system calls on this machine, mostly
     /// answered from memory. Beyond a point they slow each other down in
@@ -204,7 +215,11 @@ pub struct Concurrency {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
+#[serde(
+    default,
+    deny_unknown_fields,
+    expecting = "a table: [stash] with untracked and keep_index"
+)]
 pub struct StashConfig {
     /// Include untracked files.
     pub untracked: bool,
@@ -222,7 +237,11 @@ impl Default for StashConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
+#[serde(
+    default,
+    deny_unknown_fields,
+    expecting = "a table: [fix] with its options"
+)]
 pub struct FixConfig {
     /// Fixes an auto-fix action may apply, highest priority first. Each
     /// action applies one: the first in this list that the repo needs.
@@ -238,7 +257,11 @@ impl Default for FixConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
+#[serde(
+    default,
+    deny_unknown_fields,
+    expecting = "a table: [tools] with its options"
+)]
 pub struct Tools {
     /// Shell for "drop to shell"; unset means `$SHELL`.
     #[schemars(example = &"/bin/zsh")]
@@ -253,7 +276,11 @@ pub struct Tools {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
+#[serde(
+    default,
+    deny_unknown_fields,
+    expecting = "a table: [ui] with its options"
+)]
 pub struct UiConfig {
     /// Built-in theme name (`terminal`, `dark`, `light`, `mono`).
     pub theme: String,
@@ -522,7 +549,7 @@ pub enum ConfigError {
         path: PathBuf,
         source: std::io::Error,
     },
-    #[error("parsing {path}: {source}")]
+    #[error("parsing {path}: {}", plain(source))]
     Parse {
         path: PathBuf,
         source: toml::de::Error,
@@ -532,9 +559,9 @@ pub enum ConfigError {
         pattern: String,
         source: globset::Error,
     },
-    #[error("config: {0}")]
+    #[error("config: {}", plain(.0))]
     Toml(#[from] toml::de::Error),
-    #[error("{path} (with its includes): {source}")]
+    #[error("{path} (with its includes): {}", plain(source))]
     Invalid {
         path: PathBuf,
         source: toml::de::Error,
@@ -543,6 +570,22 @@ pub enum ConfigError {
     Extend { key: String, reason: &'static str },
     #[error("{path}: include {what}")]
     Include { path: PathBuf, what: String },
+}
+
+/// A TOML or type error in plain words: Rust's type names (`usize`,
+/// "a sequence") mean nothing to someone editing a config file.
+fn plain(e: &toml::de::Error) -> String {
+    let mut s = e.to_string();
+    for (rust, words) in [
+        ("expected usize", "expected a whole number, 0 or more"),
+        ("expected u64", "expected a whole number, 0 or more"),
+        ("expected i64", "expected a whole number"),
+        ("expected a sequence", "expected a list"),
+        ("expected a boolean", "expected true or false"),
+    ] {
+        s = s.replace(rust, words);
+    }
+    s
 }
 
 impl Config {
@@ -765,6 +808,45 @@ mod tests {
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), p.to_string());
         assert_eq!(Config::default().disk_jobs(), p);
+    }
+
+    #[test]
+    fn a_misused_section_says_what_it_expects() {
+        for (key, toml) in [
+            ("concurrency", "concurrency = 3"),
+            ("stash", "stash = 3"),
+            ("fix", "fix = 3"),
+            ("tools", "tools = 3"),
+            ("ui", "ui = 3"),
+            ("[track]", "track = [3]"),
+        ] {
+            let e = Config::parse(toml).unwrap_err().to_string();
+            assert!(e.contains(&format!("[{key}]")), "{toml}: {e}");
+            assert!(!e.contains("struct"), "{toml}: {e}");
+        }
+        // the top level too
+        let e = toml::Value::Integer(3).try_into::<Config>().unwrap_err();
+        assert!(!e.to_string().contains("struct"), "{e}");
+    }
+
+    #[test]
+    fn type_errors_are_in_plain_words() {
+        for (toml, want) in [
+            ("max_depth = 'deep'", "expected a whole number, 0 or more"),
+            (
+                "[concurrency]\ndisk = -1",
+                "expected a whole number, 0 or more",
+            ),
+            ("roots = '~/dev'", "expected a list"),
+            ("skip_hidden = 'yes'", "expected true or false"),
+        ] {
+            let e = Config::parse(toml).unwrap_err().to_string();
+            assert!(e.contains(want), "{toml}: {e}");
+            assert!(
+                !e.contains("usize") && !e.contains("sequence"),
+                "{toml}: {e}"
+            );
+        }
     }
 
     #[test]

@@ -251,9 +251,22 @@ fn main() {
     // exit.
     clap_complete::CompleteEnv::with_factory(<Cli as clap::CommandFactory>::command).complete();
     if let Err(e) = run() {
-        eprintln!("argus: {e:#}");
+        eprintln!("argus: {}", report(&e));
         std::process::exit(1);
     }
+}
+
+/// `e` and its causes, leaving out a cause whose text is already in the
+/// message: many errors include their cause in their own message.
+fn report(e: &anyhow::Error) -> String {
+    let mut msg = e.to_string();
+    for cause in e.chain().skip(1) {
+        let c = cause.to_string();
+        if !msg.contains(&c) {
+            msg = format!("{msg}: {c}");
+        }
+    }
+    msg
 }
 
 fn run() -> Result<()> {
@@ -1246,6 +1259,18 @@ fn forge_cmd(cmd: ForgeCmd, json: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn causes_are_reported_unless_the_message_already_says_them() {
+        let inner = anyhow::anyhow!("disk full");
+        assert_eq!(report(&inner.context("saving")), "saving: disk full");
+        let inner = anyhow::anyhow!("disk full");
+        assert_eq!(
+            report(&inner.context("saving: disk full")),
+            "saving: disk full",
+            "not twice"
+        );
+    }
 
     #[test]
     fn confirmation_takes_yes_and_nothing_else() {

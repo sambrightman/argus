@@ -1155,3 +1155,22 @@ fn completion_offers_commands_options_and_repo_names() {
     // inverse: nothing matches, nothing offered
     assert!(complete(&sb, &cfg, &["mark", "nomatch/"]).is_empty());
 }
+
+#[test]
+fn a_config_error_is_reported_once_in_plain_words() {
+    let sb = Sandbox::new();
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "concurrency = 3\n").unwrap();
+    let out = argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .arg("status")
+        .assert()
+        .failure();
+    let err = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert_eq!(err.matches("invalid type").count(), 1, "{err}");
+    assert!(
+        err.contains("[concurrency]") && !err.contains("struct"),
+        "{err}"
+    );
+}
