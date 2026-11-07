@@ -396,13 +396,19 @@ tests without running them:
   Fewer, merged integration-test binaries would also mean fewer scans and
   links.
 * Debug info is already split, unpacked (Cargo's default on macOS: no
-  `dsymutil`). `debug = "line-tables-only"` still needs measuring without
-  the scan in the way.
+  `dsymutil`). `debug = "line-tables-only"`: full build 17 s instead of
+  21 s and 15% less disk, incremental unchanged (3.0 s); not worth losing
+  variables in the debugger locally, worth it in CI.
 * The linker is Apple's ld-prime; mold and wild only link Linux binaries.
-* Still to measure on a quiet machine: cargo-nextest against `cargo test`
-  (one run showed 20 s against 50 s, but the scan affected the
-  comparison), and the slowest tests (random discovery trees, building
-  the demo repos, ~7–9 s each).
+* With binaries already scanned: `cargo test` 24.5 s, cargo-nextest
+  20.5 s. The tests are CPU-bound (they spawn git), and the slowest ones
+  (random discovery trees, building the demo repos, 7–9 s each) set the
+  floor.
+* Coverage (`cargo llvm-cov nextest`): 36 s, about 15 s more than a plain
+  run.
+* `cargo mutants --in-diff --test-tool nextest --jobs 4`: a typical change
+  (14 mutants) took 4.6 min with the scan still applying (about 10 s
+  build and 24 s test per mutant).
 
 **CI (planned, none yet).** Different trade-offs from local work:
 incremental off (`CARGO_INCREMENTAL=0`: its caches are large and rarely
