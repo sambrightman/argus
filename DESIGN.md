@@ -393,8 +393,9 @@ tests without running them:
   loop, and in every cargo-mutants mutant. Listing the terminal under
   System Settings → Privacy & Security → Developer Tools exempts what it
   starts (`spctl developer-mode enable-terminal` shows that pane).
-  Fewer, merged integration-test binaries would also mean fewer scans and
-  links.
+  Integration tests are one binary per crate (`tests/it/`, a module per
+  former file): 7 test binaries instead of 19, which took a rebuild after
+  an edit from 44 s to 18 s with the scan still in place.
 * Debug info is already split, unpacked (Cargo's default on macOS: no
   `dsymutil`). `debug = "line-tables-only"`: full build 17 s instead of
   21 s and 15% less disk, incremental unchanged (3.0 s); not worth losing
