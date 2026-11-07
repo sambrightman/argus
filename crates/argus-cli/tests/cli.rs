@@ -1186,7 +1186,7 @@ fn root_add_and_remove_name_the_included_file_they_edit() {
     }
     let conf = sb.path(".config/argus");
     std::fs::create_dir_all(&conf).unwrap();
-    std::fs::write(conf.join("config.toml"), "include = ['work.toml']\n").unwrap();
+    std::fs::write(conf.join("config.toml"), "extend = ['work.toml']\n").unwrap();
     std::fs::write(conf.join("work.toml"), "roots = ['~/work']\n").unwrap();
     let a = |args: &[&str]| argus_in(&sb, &sb.path("dev")).args(args).assert();
     a(&["root", "add", "~/extra"])
@@ -1199,7 +1199,7 @@ fn root_add_and_remove_name_the_included_file_they_edit() {
     // listed in two files: both edited, both named
     std::fs::write(
         conf.join("config.toml"),
-        "include = ['work.toml']\nextend_roots = ['~/work']\n",
+        "extend = ['work.toml']\nextend_roots = ['~/work']\n",
     )
     .unwrap();
     a(&["root", "remove", "~/work"])
@@ -1208,6 +1208,6 @@ fn root_add_and_remove_name_the_included_file_they_edit() {
     a(&["root", "list"]).success().stdout("~/extra\n");
     assert_eq!(
         std::fs::read_to_string(conf.join("config.toml")).unwrap(),
-        "include = ['work.toml']\nextend_roots = []\n"
+        "extend = ['work.toml']\nextend_roots = []\n"
     );
 }

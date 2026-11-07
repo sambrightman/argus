@@ -126,23 +126,27 @@ Two findings:
   versioned and shared; nothing about them is temporary.
 * **Snooze.** Temporary exclusion until a date. Kept in the *state* file, not
   config, so config stays hand-edited.
-* **Includes and `extend_*`.** Config files are merged as TOML before
-  becoming a `Config`: the defaults, then each file after its includes
-  (paths relative to the including file, globs in the file name only,
+* **`extend` and `extend_*`.** Config files are merged as TOML before
+  becoming a `Config`: the defaults, then each file after the files it
+  extends, so a file overrides its bases wherever its `extend` line is
+  (as ruff's `extend`, tsconfig's and ESLint's `extends`; not git's
+  positional `include`). Named `extend` rather than `include` for that
+  reason: "include" suggests pasting the file in at that point. (Paths
+  relative to the extending file, globs in the file name only,
   cycles and missing files are errors). Tables merge key by key, values
   and lists replace, lists of tables (`[[track]]`) add up, and
   `extend_<list>` appends at any level, for every list setting without
   listing them; on a non-list or unknown key it's an error. The merge
   records which file each list element came from, so saving marks can
   remove an entry where it lives and add new ones to the main file
-  without overriding an included list. Roots follow a rule of their own,
+  without overriding an extended file's list. Roots follow a rule of their own,
   chosen so an addition always takes effect: `root add` appends to
   `roots` in the highest-precedence file that has it (that list is the
   effective one), else to `extend_roots` in the highest file that has
   that (with no `roots` anywhere, any `extend_roots` applies), else
   starts `roots` at the top of the main file. Precedence: the main file,
-  then a later include before an earlier one, a file before its own
-  includes (`Layers.files` reversed). `root remove` removes from every
+  then a later extended file before an earlier one, a file before the
+  files it extends (`Layers.files` reversed). `root remove` removes from every
   file listing the root, reporting removals that changed nothing because
   a higher `roots` replaces that file's, and checks every file can be
   written before changing any. Old setting names aren't kept
@@ -275,7 +279,7 @@ rendering is snapshot-tested via `TestBackend`.
   coverage needs a nightly toolchain.
 * **Benchmarks** (criterion, `benches/`): discovery variants including
   `-L` and its optimizations, status and scanning, a large file's diff,
-  config with includes, rule matching, word refinement, rebuilding and
+  config extending other files, rule matching, word refinement, rebuilding and
   drawing the TUI. For before/after comparisons with baselines; timing
   isn't gated, as laptop noise makes that unreliable.
 

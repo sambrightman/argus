@@ -1,4 +1,4 @@
-//! Config files: `include`, `extend_*`, and saving marks across included
+//! Config files: `extend`, `extend_*`, and saving marks across extended
 //! files.
 
 use std::path::Path;
@@ -64,7 +64,7 @@ fn extend_only_applies_to_lists() {
 }
 
 #[test]
-fn includes_are_read_first_and_overridden_by_the_including_file() {
+fn extended_files_are_read_first_and_overridden_by_the_extending_file() {
     let t = tempfile::tempdir().unwrap();
     let d = t.path();
     write(
@@ -86,7 +86,7 @@ fn includes_are_read_first_and_overridden_by_the_including_file() {
     let main = write(
         d,
         "config.toml",
-        "include = ['base.toml', 'conf.d/*.toml', 'none.d/*.toml']\nmax_depth = 9\nextend_exclude_paths = ['from-main']\n[[track]]\nowner = 'main-org'\n",
+        "extend = ['base.toml', 'conf.d/*.toml', 'none.d/*.toml']\nmax_depth = 9\nextend_exclude_paths = ['from-main']\n[[track]]\nowner = 'main-org'\n",
     );
     let c = Config::load(&main).unwrap();
     // later files win: base, then conf.d/a, conf.d/b (sorted), then main
@@ -102,49 +102,49 @@ fn includes_are_read_first_and_overridden_by_the_including_file() {
     // lists of tables add up
     let owners: Vec<&str> = c.tracks.iter().map(|t| t.owner.as_str()).collect();
     assert_eq!(owners, ["base-org", "b-org", "main-org"]);
-    assert_eq!(c.include, ["base.toml", "conf.d/*.toml", "none.d/*.toml"]);
+    assert_eq!(c.extend, ["base.toml", "conf.d/*.toml", "none.d/*.toml"]);
 }
 
 #[test]
-fn includes_nest_and_resolve_relative_to_their_file() {
+fn extended_files_nest_and_resolve_relative_to_their_file() {
     let t = tempfile::tempdir().unwrap();
     let d = t.path();
     write(d, "a/inner.toml", "concurrency.network = 7\n");
-    write(d, "a/outer.toml", "include = ['inner.toml']\n");
-    let main = write(d, "config.toml", "include = ['a/outer.toml']\n");
+    write(d, "a/outer.toml", "extend = ['inner.toml']\n");
+    let main = write(d, "config.toml", "extend = ['a/outer.toml']\n");
     assert_eq!(Config::load(&main).unwrap().concurrency.network, 7);
 }
 
 #[test]
-fn include_errors_name_the_file() {
+fn extend_errors_name_the_file() {
     let t = tempfile::tempdir().unwrap();
     let d = t.path();
     // a missing file (globs may match nothing)
-    let main = write(d, "m1.toml", "include = ['gone.toml']\n");
+    let main = write(d, "m1.toml", "extend = ['gone.toml']\n");
     let e = err(Config::load(&main));
     assert!(e.contains("gone.toml") && e.contains("no such file"), "{e}");
     // a cycle
-    write(d, "x.toml", "include = ['y.toml']\n");
-    write(d, "y.toml", "include = ['x.toml']\n");
-    let main = write(d, "m2.toml", "include = ['x.toml']\n");
+    write(d, "x.toml", "extend = ['y.toml']\n");
+    write(d, "y.toml", "extend = ['x.toml']\n");
+    let main = write(d, "m2.toml", "extend = ['x.toml']\n");
     let e = err(Config::load(&main));
     assert!(
         e.contains("cycle") && e.contains("x.toml") && e.contains("y.toml"),
         "{e}"
     );
-    // bad TOML in an included file
+    // bad TOML in an extended file
     write(d, "bad.toml", "max_depth = = 1\n");
-    let main = write(d, "m3.toml", "include = ['bad.toml']\n");
+    let main = write(d, "m3.toml", "extend = ['bad.toml']\n");
     let e = err(Config::load(&main));
     assert!(e.contains("bad.toml"), "{e}");
     // a glob outside the file name
-    let main = write(d, "m4.toml", "include = ['*/x.toml']\n");
+    let main = write(d, "m4.toml", "extend = ['*/x.toml']\n");
     let e = err(Config::load(&main));
     assert!(e.contains("*/x.toml"), "{e}");
-    // include must be a list of strings
-    let main = write(d, "m5.toml", "include = 'x.toml'\n");
+    // extend must be a list of strings
+    let main = write(d, "m5.toml", "extend = 'x.toml'\n");
     let e = err(Config::load(&main));
-    assert!(e.contains("include"), "{e}");
+    assert!(e.contains("extend"), "{e}");
 }
 
 #[test]
@@ -156,10 +156,10 @@ fn marks_are_saved_to_the_file_holding_them() {
         "marks.toml",
         "# shared\nfavourite = ['acme/a', 'acme/b']\n",
     );
-    let main = write(d, "config.toml", "include = ['marks.toml']\n# mine\n");
+    let main = write(d, "config.toml", "extend = ['marks.toml']\n# mine\n");
     let before = Config::load(&main).unwrap();
     let mut after = before.clone();
-    // drop an entry that lives in the included file, add a new one
+    // drop an entry that lives in the extended file, add a new one
     after.favourite = vec!["acme/b".into(), "acme/c".into()];
     update_mark_lists(&main, &before, &after).unwrap();
     let inc_text = std::fs::read_to_string(&inc).unwrap();
@@ -169,7 +169,7 @@ fn marks_are_saved_to_the_file_holding_them() {
         "{inc_text}"
     );
     assert!(inc_text.contains("acme/b"), "{inc_text}");
-    // added to the main file without replacing the included list
+    // added to the main file without replacing the extended file's list
     assert!(
         main_text.contains("extend_favourite") && main_text.contains("acme/c"),
         "{main_text}"
@@ -186,7 +186,7 @@ fn marks_are_added_to_the_main_files_own_list_when_it_has_one() {
     let main = write(
         d,
         "config.toml",
-        "include = ['marks.toml']\nextend_sync = ['x/y']\n",
+        "extend = ['marks.toml']\nextend_sync = ['x/y']\n",
     );
     let before = Config::load(&main).unwrap();
     let mut after = before.clone();

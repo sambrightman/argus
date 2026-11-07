@@ -30,7 +30,7 @@ With no roots configured, argus scans the current directory and says so.
 On first run it writes `~/.config/argus/config.toml`: every setting with
 its default and documentation, commented out, generated from the code (so
 it can't drift). `argus root add|remove|list` edit it in place, keeping
-your comments. With included files, `root add` appends to the `roots` list
+your comments. With extended files, `root add` appends to the `roots` list
 that takes effect (the highest-precedence file that has one), else to an
 `extend_roots`, else starts `roots` at the top of the main file; `root
 remove` takes the directory out of every file that lists it. Each names
@@ -42,7 +42,7 @@ argus warns and names a directory it skipped.
 A taste (see the generated file for everything):
 
 ```toml
-include = ["~/.config/argus/work.toml"]  # read first; this file overrides them
+extend = ["~/.config/argus/work.toml"]  # read first; this file overrides them
 roots = ["~/dev", "~/work"]
 extend_exclude_paths = ["build-cache"]  # any list: extend_<name> adds instead of replacing
 max_depth = 6                    # levels below each root; 0: no limit
@@ -103,9 +103,9 @@ Favourite, sync and ignore live in config: marking a repo in the TUI or
 with `argus mark` adds its name to the list (or `!name` to turn off what a
 pattern says) and saves the change, keeping the rest of the file as
 written; clearing removes the repo's own entries, so patterns decide
-again. With includes, an entry is removed from whichever file holds it, and
+again. With extended files, an entry is removed from whichever file holds it, and
 new entries go into your main file (as `extend_favourite` etc. when an
-included file sets the list, so its entries stay). Nothing is dropped for
+extended file sets the list, so its entries stay). Nothing is dropped for
 repos that have gone. Snoozes and "new"
 flags are kept in `~/.local/state/argus/state.toml`. Marks an older argus
 kept there are shown as config lines to copy, and left in place.

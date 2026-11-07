@@ -419,14 +419,14 @@ struct Doc {
 }
 
 /// The files making up `path`'s config, highest first: the main file, then
-/// its includes from the last merged down, a file before those it includes.
+/// the files it extends from the last merged down, a file before those it extends.
 /// Each file's `roots` and `extend_roots` must be lists of strings.
 fn docs_highest_first(path: &Path) -> Result<Vec<Doc>, EditError> {
     let layers = Layers::load(path)?;
     let mut docs: Vec<Doc> = vec![];
     for f in layers.files.into_iter().rev() {
         if docs.iter().any(|d| same_dir(&d.path, &f)) {
-            continue; // included twice: its last merge is what counts
+            continue; // extended twice: its last merge is what counts
         }
         let (text, doc) = load(&f)?;
         for k in ROOT_KEYS {
@@ -627,10 +627,10 @@ pub fn remove_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsRemoved, EditE
 
 /// Write the `favourite`, `sync` and `ignore` changes from `before` to
 /// `after` into the config at `path` (created from the example if needed)
-/// and its includes, leaving the rest of each file as written. An entry
+/// and the files it extends, leaving the rest of each file as written. An entry
 /// gone from a list is removed from whichever file holds it; new ones go
 /// into the main file: its own list if it has one, else `extend_<list>`
-/// when an included file sets the list (so its entries stay), else a new
+/// when an extended file sets the list (so its entries stay), else a new
 /// list. No changes, no write.
 pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result<(), EditError> {
     let changes: Vec<(Mark, Vec<&String>, Vec<&String>)> = Mark::ALL
@@ -692,9 +692,8 @@ pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result
         }
         let i = doc_of(&mut docs, path)?;
         let doc = &mut docs[i].1;
-        let from_includes = origins.iter().flatten().any(|o| o.as_path() != path);
-        let target = if doc.contains_key(key) || (!doc.contains_key(&extend_key) && !from_includes)
-        {
+        let from_bases = origins.iter().flatten().any(|o| o.as_path() != path);
+        let target = if doc.contains_key(key) || (!doc.contains_key(&extend_key) && !from_bases) {
             key.to_string()
         } else {
             extend_key

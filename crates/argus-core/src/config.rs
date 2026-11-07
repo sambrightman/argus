@@ -16,13 +16,15 @@ use crate::paths::expand_tilde;
     expecting = "argus settings: a table of keys"
 )]
 pub struct Config {
-    /// Other config files to read first, e.g. `["~/.config/argus/work.toml",
-    /// "conf.d/*.toml"]`: paths relative to this file, `~` allowed, `*` etc.
-    /// in the file name (matching nothing is fine). This file's settings
-    /// override theirs; lists of tables (`[[track]]`) add up. Any list
-    /// setting also takes `extend_<name>` to add to the list rather than
-    /// replace it, e.g. `extend_exclude_paths = ["build-cache"]`.
-    pub include: Vec<String>,
+    /// Config files this one builds on, e.g. `["~/.config/argus/work.toml",
+    /// "conf.d/*.toml"]`: read first, in order (later ones win), then this
+    /// file's settings override theirs, wherever this line is. Paths are
+    /// relative to this file, `~` allowed, `*` etc. in the file name
+    /// (matching nothing is fine). Lists of tables (`[[track]]`) add up.
+    /// Separately, any list setting also takes `extend_<name>` to add to
+    /// the list rather than replace it, e.g. `extend_exclude_paths =
+    /// ["build-cache"]`.
+    pub extend: Vec<String>,
     /// Directories scanned (recursively) for repositories. When empty, the
     /// current directory is scanned. Manage with `argus root add|remove|list`.
     #[schemars(example = vec!["~/dev"])]
@@ -82,7 +84,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            include: vec![],
+            extend: vec![],
             roots: vec![],
             exclude_paths: [
                 "node_modules",
@@ -336,16 +338,16 @@ impl Default for UiConfig {
 }
 
 /// Config files merged as TOML, before becoming a [`Config`]: the defaults,
-/// then each file after its includes. Tables merge key by key; values and
+/// then each file after the files it extends. Tables merge key by key; values and
 /// lists replace, lists of tables add up, and `extend_<list>` appends.
 pub(crate) struct Layers {
     pub table: toml::Table,
     /// For each list (dotted key), the file each element came from (`None`:
     /// the defaults).
     pub origins: HashMap<String, Vec<Option<PathBuf>>>,
-    /// The main file's own `include`.
-    pub main_includes: Vec<String>,
-    /// The files read, in the order merged: a file after its includes, so
+    /// The main file's own `extend`.
+    pub main_extends: Vec<String>,
+    /// The files read, in the order merged: a file after those it extends, so
     /// the main file last.
     pub files: Vec<PathBuf>,
 }
@@ -358,19 +360,19 @@ impl Layers {
         Self {
             table,
             origins,
-            main_includes: vec![],
+            main_extends: vec![],
             files: vec![],
         }
     }
 
-    /// The defaults, then `path` with its includes (read first).
+    /// The defaults, then `path` with the files it extends (read first).
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let mut layers = Self::defaults();
-        layers.main_includes = layers.read(path, &mut vec![])?;
+        layers.main_extends = layers.read(path, &mut vec![])?;
         Ok(layers)
     }
 
-    /// Merge `path`, after its includes; returns its own `include`.
+    /// Merge `path`, after the files it extends; returns its own `extend`.
     fn read(&mut self, path: &Path, chain: &mut Vec<PathBuf>) -> Result<Vec<String>, ConfigError> {
         let io = |source| ConfigError::Io {
             path: path.into(),
@@ -383,7 +385,7 @@ impl Layers {
                 .chain([&real])
                 .map(|p| p.display().to_string())
                 .collect();
-            return Err(ConfigError::Include {
+            return Err(ConfigError::ExtendFile {
                 path: path.into(),
                 what: format!("cycle: {}", names.join(" -> ")),
             });
@@ -394,18 +396,18 @@ impl Layers {
                 path: path.into(),
                 source,
             })?;
-        let includes = take_include(&mut layer, path)?;
+        let bases = take_extend(&mut layer, path)?;
         chain.push(real);
         let dir = path.parent().unwrap_or(Path::new("."));
-        for inc in &includes {
-            for file in resolve_include(dir, inc, path)? {
+        for inc in &bases {
+            for file in resolve_extend(dir, inc, path)? {
                 self.read(&file, chain)?;
             }
         }
         chain.pop();
         self.merge(layer, Some(path))?;
         self.files.push(path.to_path_buf());
-        Ok(includes)
+        Ok(bases)
     }
 
     fn merge(&mut self, layer: toml::Table, file: Option<&Path>) -> Result<(), ConfigError> {
@@ -413,13 +415,13 @@ impl Layers {
     }
 }
 
-/// Remove and return `include` from a file's table.
-fn take_include(layer: &mut toml::Table, path: &Path) -> Result<Vec<String>, ConfigError> {
-    let bad = || ConfigError::Include {
+/// Remove and return `extend` from a file's table.
+fn take_extend(layer: &mut toml::Table, path: &Path) -> Result<Vec<String>, ConfigError> {
+    let bad = || ConfigError::ExtendFile {
         path: path.into(),
         what: "must be a list of paths".into(),
     };
-    match layer.remove("include") {
+    match layer.remove("extend") {
         None => Ok(vec![]),
         Some(toml::Value::Array(a)) => a
             .into_iter()
@@ -431,8 +433,8 @@ fn take_include(layer: &mut toml::Table, path: &Path) -> Result<Vec<String>, Con
 
 /// The files `inc` names, relative to `dir`: one path, or the files a glob
 /// in its last component matches (sorted; none is fine).
-fn resolve_include(dir: &Path, inc: &str, from: &Path) -> Result<Vec<PathBuf>, ConfigError> {
-    let err = |what: String| ConfigError::Include {
+fn resolve_extend(dir: &Path, inc: &str, from: &Path) -> Result<Vec<PathBuf>, ConfigError> {
+    let err = |what: String| ConfigError::ExtendFile {
         path: from.into(),
         what,
     };
@@ -566,15 +568,15 @@ pub enum ConfigError {
     },
     #[error("config: {}", plain(.0))]
     Toml(#[from] toml::de::Error),
-    #[error("{path} (with its includes): {}", plain(source))]
+    #[error("{path} (with the files it extends): {}", plain(source))]
     Invalid {
         path: PathBuf,
         source: toml::de::Error,
     },
     #[error("{key}: {reason}")]
     Extend { key: String, reason: &'static str },
-    #[error("{path}: include {what}")]
-    Include { path: PathBuf, what: String },
+    #[error("{path}: extend {what}")]
+    ExtendFile { path: PathBuf, what: String },
 }
 
 /// A TOML or type error in plain words: Rust's type names (`usize`,
@@ -594,34 +596,34 @@ fn plain(e: &toml::de::Error) -> String {
 }
 
 impl Config {
-    /// Load from `path`, with its includes; a missing file yields the
+    /// Load from `path`, with the files it extends; a missing file yields the
     /// default config.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         if !path.exists() {
             return Ok(Self::default());
         }
         let layers = Layers::load(path)?;
-        let main_includes = layers.main_includes.clone();
+        let main_extends = layers.main_extends.clone();
         let mut c: Config = toml::Value::Table(layers.table)
             .try_into()
             .map_err(|source| ConfigError::Invalid {
                 path: path.into(),
                 source,
             })?;
-        c.include = main_includes;
+        c.extend = main_extends;
         c.normalize();
         Ok(c)
     }
 
     /// Parse one file's text over the defaults (`extend_*` applies; any
-    /// `include` is kept but not read).
+    /// `extend` is kept but not read).
     pub fn parse(s: &str) -> Result<Self, ConfigError> {
         let mut layer: toml::Table = toml::from_str(s)?;
-        let include = take_include(&mut layer, Path::new("config"))?;
+        let extend = take_extend(&mut layer, Path::new("config"))?;
         let mut layers = Layers::defaults();
         layers.merge(layer, None)?;
         let mut c: Config = toml::Value::Table(layers.table).try_into()?;
-        c.include = include;
+        c.extend = extend;
         c.normalize();
         Ok(c)
     }
@@ -863,6 +865,7 @@ mod tests {
             "exclude = ['x']",
             "concurrency = 3",
             "status_concurrency = 3",
+            "include = ['x.toml']",
         ] {
             assert!(Config::parse(old).is_err(), "{old}");
         }

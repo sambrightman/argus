@@ -1,6 +1,6 @@
 //! Benchmarks for the hot paths: discovery (with and without `-L` and its
 //! optimizations), status and scanning real repos, a file's diff, config
-//! loading with includes, and rule matching. Fixtures are built once per
+//! loading with extended files, and rule matching. Fixtures are built once per
 //! run in a temp directory.
 //!
 //! ```sh
@@ -163,11 +163,11 @@ fn config(c: &mut Criterion) {
     let main = d.join("config.toml");
     std::fs::write(
         &main,
-        "include = ['base.toml', 'conf.d/*.toml']\nextend_favourite = ['x/y']\n",
+        "extend = ['base.toml', 'conf.d/*.toml']\nextend_favourite = ['x/y']\n",
     )
     .unwrap();
     let mut g = c.benchmark_group("config");
-    g.bench_function("load with 6 includes", |b| {
+    g.bench_function("load extending 6 files", |b| {
         b.iter(|| black_box(Config::load(&main).unwrap()))
     });
     g.bench_function("parse defaults", |b| {
