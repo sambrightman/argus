@@ -251,11 +251,11 @@ cargo nextest run --workspace     # the tests (~290; real git repos in temp dirs
 cargo clippy --workspace --all-targets
 cargo run -p argus-tui --example snapshot -- ~/dev 'jj\t'   # render a frame as text
 
-# before committing a change
-cargo mutants --in-diff <(git diff HEAD)                    # mutation-test what changed
+# now and then (weekly, before a release)
+cargo mutants --in-diff <(git diff main)                    # mutation-test what changed
+cargo mutants                                               # everything (hours)
 cargo llvm-cov nextest --workspace --html                   # coverage: target/llvm-cov/html
-
-# now and then
+ARGUS_RANDOM_TREES=5000 cargo nextest run --workspace       # more random trees for -L
 cargo deny check                  # advisories, licences, duplicate versions, sources
 cargo machete                     # unused dependencies
 cargo outdated --workspace --root-deps-only

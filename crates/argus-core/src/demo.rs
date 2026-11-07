@@ -16,127 +16,146 @@ pub struct Demo {
     pub root: PathBuf,
 }
 
-/// Build the sample repos (takes a second or two: many git commands).
+/// Build the sample repos: many git commands, so the repos (independent of
+/// each other) are built in parallel.
 pub fn build() -> Demo {
     let sb = Sandbox::new();
     let clone = |name: &str| {
         sb.remote("demo", name);
         sb.clone_as_github("demo", name, &format!("repos/{name}"))
     };
-
-    clone("clean");
-
-    let r = clone("changes");
-    write(&r, "new.txt", "staged\n");
-    git(&r, &["add", "new.txt"]);
-    write(&r, "README", "edited\n");
-    write(&r, "scratch-1.txt", "untracked\n");
-    write(&r, "scratch-2.txt", "untracked\n");
-
-    let r = clone("ahead");
-    commit(&r, "local work");
-    commit(&r, "more local work");
-
-    let r = clone("behind");
-    sb.advance_remote("demo", "behind", "news.txt");
-    sb.advance_remote("demo", "behind", "more-news.txt");
-    git(&r, &["fetch", "-q"]);
-
-    // diverged, and a trial merge predicts a conflict: pull isn't automatic
-    let r = sb.diverged("demo", "diverged", "repos/diverged", true);
-    git(&r, &["config", "pull.rebase", "false"]);
-
-    let r = clone("feature");
-    git(&r, &["switch", "-q", "-c", "feat"]);
-    commit(&r, "feature work");
-    git(&r, &["push", "-q", "-u", "origin", "feat"]);
-
-    let r = clone("unpublished");
-    git(&r, &["switch", "-q", "-c", "wip"]);
-    commit(&r, "not pushed anywhere");
-
-    // upstream deleted on the remote, with unmerged commits locally
-    let r = clone("gone");
-    git(&r, &["switch", "-q", "-c", "old-feature"]);
-    commit(&r, "unmerged");
-    git(&r, &["push", "-q", "-u", "origin", "old-feature"]);
-    git(&r, &["push", "-q", "origin", "--delete", "old-feature"]);
-    git(&r, &["fetch", "-q", "--prune"]);
-
-    let r = clone("merging");
-    conflicting_branch(&r);
-    git_may_fail(&r, &["merge", "--no-edit", "other"]);
-
-    let r = clone("rebasing");
-    conflicting_branch(&r);
-    git_may_fail(&r, &["rebase", "other"]);
-
-    let r = clone("tagged");
-    git(&r, &["tag", "v1.0"]);
-    git(&r, &["tag", "-a", "-m", "release", "release-1.0"]);
-    git(&r, &["switch", "-q", "--detach", "v1.0"]);
-
-    // detached, with a commit no branch or tag holds
-    let r = clone("detached");
-    git(&r, &["switch", "-q", "--detach"]);
-    commit(&r, "experiment");
-
-    let r = clone("stashed");
-    for i in 1..=2 {
-        write(&r, "README", &format!("edit {i}\n"));
-        git(&r, &["stash", "-q"]);
-    }
-
-    let r = clone("branches");
-    git(&r, &["switch", "-q", "-c", "topic"]);
-    commit(&r, "unpushed topic work");
-    git(&r, &["switch", "-q", "main"]);
-
-    sb.init("repos/local-only");
-
-    let r = clone("worktrees");
-    let wt = sb.path("repos/worktrees-feat");
-    git(
-        &r,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "wt-feat",
-            wt.to_str().unwrap(),
-        ],
-    );
-
-    let r = clone("with-submodule");
-    let lib = sb.remote("demo", "lib");
-    git(
-        &r,
-        &["submodule", "add", "-q", lib.to_str().unwrap(), "lib"],
-    );
-    commit(&r, "add submodule");
-    git(&r, &["push", "-q"]);
-
-    git(
-        &sb.root(),
-        &[
-            "clone",
-            "-q",
-            "--bare",
-            sb.path("forge/demo/clean.git").to_str().unwrap(),
-            sb.path("repos/mirror.git").to_str().unwrap(),
-        ],
-    );
-
-    for name in ["favourite", "new", "excluded", "snoozed"] {
-        clone(name);
-    }
-
-    // unreadable: status reports an error
-    let broken = sb.path("repos/broken/.git");
-    std::fs::create_dir_all(&broken).unwrap();
-    std::fs::write(broken.join("HEAD"), "not a ref\n").unwrap();
-
+    type Step<'a> = Box<dyn Fn() + Send + Sync + 'a>;
+    let steps: Vec<Step> = vec![
+        // and a bare mirror of it
+        Box::new(|| {
+            clone("clean");
+            git(
+                &sb.root(),
+                &[
+                    "clone",
+                    "-q",
+                    "--bare",
+                    sb.path("forge/demo/clean.git").to_str().unwrap(),
+                    sb.path("repos/mirror.git").to_str().unwrap(),
+                ],
+            );
+        }),
+        Box::new(|| {
+            let r = clone("changes");
+            write(&r, "new.txt", "staged\n");
+            git(&r, &["add", "new.txt"]);
+            write(&r, "README", "edited\n");
+            write(&r, "scratch-1.txt", "untracked\n");
+            write(&r, "scratch-2.txt", "untracked\n");
+        }),
+        Box::new(|| {
+            let r = clone("ahead");
+            commit(&r, "local work");
+            commit(&r, "more local work");
+        }),
+        Box::new(|| {
+            let r = clone("behind");
+            sb.advance_remote("demo", "behind", "news.txt");
+            sb.advance_remote("demo", "behind", "more-news.txt");
+            git(&r, &["fetch", "-q"]);
+        }),
+        // diverged, and a trial merge predicts a conflict: pull isn't automatic
+        Box::new(|| {
+            let r = sb.diverged("demo", "diverged", "repos/diverged", true);
+            git(&r, &["config", "pull.rebase", "false"]);
+        }),
+        Box::new(|| {
+            let r = clone("feature");
+            git(&r, &["switch", "-q", "-c", "feat"]);
+            commit(&r, "feature work");
+            git(&r, &["push", "-q", "-u", "origin", "feat"]);
+        }),
+        Box::new(|| {
+            let r = clone("unpublished");
+            git(&r, &["switch", "-q", "-c", "wip"]);
+            commit(&r, "not pushed anywhere");
+        }),
+        // upstream deleted on the remote, with unmerged commits locally
+        Box::new(|| {
+            let r = clone("gone");
+            git(&r, &["switch", "-q", "-c", "old-feature"]);
+            commit(&r, "unmerged");
+            git(&r, &["push", "-q", "-u", "origin", "old-feature"]);
+            git(&r, &["push", "-q", "origin", "--delete", "old-feature"]);
+            git(&r, &["fetch", "-q", "--prune"]);
+        }),
+        Box::new(|| {
+            let r = clone("merging");
+            conflicting_branch(&r);
+            git_may_fail(&r, &["merge", "--no-edit", "other"]);
+        }),
+        Box::new(|| {
+            let r = clone("rebasing");
+            conflicting_branch(&r);
+            git_may_fail(&r, &["rebase", "other"]);
+        }),
+        Box::new(|| {
+            let r = clone("tagged");
+            git(&r, &["tag", "v1.0"]);
+            git(&r, &["tag", "-a", "-m", "release", "release-1.0"]);
+            git(&r, &["switch", "-q", "--detach", "v1.0"]);
+        }),
+        // detached, with a commit no branch or tag holds
+        Box::new(|| {
+            let r = clone("detached");
+            git(&r, &["switch", "-q", "--detach"]);
+            commit(&r, "experiment");
+        }),
+        Box::new(|| {
+            let r = clone("stashed");
+            for i in 1..=2 {
+                write(&r, "README", &format!("edit {i}\n"));
+                git(&r, &["stash", "-q"]);
+            }
+        }),
+        Box::new(|| {
+            let r = clone("branches");
+            git(&r, &["switch", "-q", "-c", "topic"]);
+            commit(&r, "unpushed topic work");
+            git(&r, &["switch", "-q", "main"]);
+        }),
+        Box::new(|| {
+            sb.init("repos/local-only");
+        }),
+        Box::new(|| {
+            let r = clone("worktrees");
+            let wt = sb.path("repos/worktrees-feat");
+            let wt = wt.to_str().unwrap();
+            git(&r, &["worktree", "add", "-q", "-b", "wt-feat", wt]);
+        }),
+        Box::new(|| {
+            let r = clone("with-submodule");
+            let lib = sb.remote("demo", "lib");
+            git(
+                &r,
+                &["submodule", "add", "-q", lib.to_str().unwrap(), "lib"],
+            );
+            commit(&r, "add submodule");
+            git(&r, &["push", "-q"]);
+        }),
+        Box::new(|| {
+            for name in ["favourite", "new", "excluded", "snoozed"] {
+                clone(name);
+            }
+        }),
+        // unreadable: status reports an error
+        Box::new(|| {
+            let broken = sb.path("repos/broken/.git");
+            std::fs::create_dir_all(&broken).unwrap();
+            std::fs::write(broken.join("HEAD"), "not a ref\n").unwrap();
+        }),
+    ];
+    rayon::scope(|s| {
+        for step in &steps {
+            s.spawn(move |_| step());
+        }
+    });
+    drop(steps);
     let root = sb.path("repos");
     Demo { sandbox: sb, root }
 }

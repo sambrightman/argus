@@ -1111,7 +1111,8 @@ mod tests {
 
     /// Each optimization against the plain `-L` walk, on random trees with
     /// loops, link chains, links into repos and hidden directories,
-    /// overlapping roots, and every kind of skip pattern.
+    /// overlapping roots, and every kind of skip pattern
+    /// (`ARGUS_RANDOM_TREES` sets how many).
     #[cfg(unix)]
     #[test]
     fn link_optimizations_agree_with_the_plain_walk_on_random_trees() {
@@ -1125,7 +1126,13 @@ mod tests {
         };
         let names = ["a", "b", "c", "go", "pkg", "vendor", ".h", "x"];
         let mut pruned_somewhere = false;
-        for seed in 0..400 {
+        // 400 trees by default (fewer may not exercise pruning);
+        // ARGUS_RANDOM_TREES=5000 for a thorough run
+        let trees: u64 = std::env::var("ARGUS_RANDOM_TREES")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(400);
+        for seed in 0..trees {
             let t = tempfile::tempdir().unwrap();
             let base = fs::canonicalize(t.path()).unwrap();
             let mut dirs = vec![base.clone()];
