@@ -52,7 +52,12 @@ max_depth = 6                    # levels below each root; 0: no limit
 # win, ! turns off; marking in the TUI or `argus mark` edits these lists
 favourite = ["my-org/core-*"]
 sync = ["someone/dotfiles", "my-org/*", "!my-org/huge-monorepo"]
-ignore = ["~/dev/scratch/**"]  # hidden, and left out of sync, clones and bulk actions
+
+[ignore]                         # what not to flag; same kind of entries
+repos = ["~/dev/scratch/**"]     # hidden, and left out of sync, clones and bulk actions
+off_default = ["my-org/legacy@release-*"]  # normally on that branch: another is flagged
+detached = ["my-org/pinned@v1.2.0"]        # a tag, its describe, or the commit
+stashes = ["my-org/big"]         # also no_remote, no_upstream, unpushed_branches, behind
 
 [concurrency]                    # 0: automatic
 disk = 0                         # threads for discovery and status
@@ -147,7 +152,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `c` | **Commit** (prompts for message) |
 | `b` | **Branch**: `d` switch to default, `f` fast-forward stale branches |
 | `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden |
-| `m` | **Mark**: `f` favourite, `s` sync, `i` ignore, `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
+| `m` | **Mark**: `f` favourite, `s` sync, `i` ignore, `I` ignore the issue under the cursor (pinned to the branch, tag or commit), `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page |
 | `v` | **View**: toggles, expand/collapse all, log |
 
@@ -157,7 +162,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 argus status [-a|--all] [--hidden]     # repos needing attention; -a: clean too
 argus sync [-n] [--no-forge] [PATTERNS…]
 argus fix [-n] [-F] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine; -F fetches first
-argus mark PATTERNS… [--favourite|--no-favourite] [--sync|--no-sync] [--ignore|--unignore] [--snooze 3d|--unsnooze] [--clear]
+argus mark PATTERNS… [--favourite|--no-favourite] [--sync|--no-sync] [--ignore|--unignore] [--ignore-issue ISSUE|--unignore-issue ISSUE] [--snooze 3d|--unsnooze] [--clear]
 argus ack [PATTERNS…]
 argus forge list ORG [--team T]
 argus root add [DIRS…] | remove DIRS… | list
@@ -198,10 +203,15 @@ directory name at any depth (`node_modules`, `*.egg-info`); starting with
 `/` or `~` it's a full path (`~/dev/archive`, `~/src/*/third_party`); any
 other with a `/` is below each root (`go/pkg`, in the defaults: the Go
 module cache under a root). Roots are always scanned.
-To keep scanning repos but hide them, list them in `ignore`. Hidden
-repos (ignored or snoozed; `H` shows them) are never part of a bulk
-action such as fetch all or fix all, even while shown; choosing one
-explicitly still works.
+To keep scanning repos but hide them, list them in `[ignore] repos`.
+Hidden repos (ignored or snoozed; `H` shows them) are never part of a
+bulk action such as fetch all or fix all, even while shown; choosing one
+explicitly still works. For a repo that's normally in a state argus
+would flag (always on a release branch, pinned at a tag), ignore just
+that issue: the repo stays visible, everything else is still flagged,
+the details show the issue dimmed as ignored, and auto-fix leaves that
+state alone. Conflicts, operations in progress and commits only a
+detached HEAD holds can't be ignored.
 
 A daily crontab entry:
 

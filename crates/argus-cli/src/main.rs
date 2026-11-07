@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use argus_core::badges::{self, Badge, Role};
 use argus_core::fix::{self, FixKind};
 use argus_core::icons::{self, Icons};
-use argus_core::rules::Mark;
+use argus_core::rules::{IssueList, Mark};
 use argus_core::runner::{self, Event};
 use argus_core::sync;
 use argus_core::{Config, State, ViewFilter, Workspace, configfile, paths};
@@ -174,6 +174,14 @@ struct MarkArgs {
     /// Not ignored, whatever patterns in config say.
     #[arg(long)]
     unignore: bool,
+    /// Ignore one issue for these repos (`[ignore] <issue>`), pinned to the
+    /// current branch, tag or commit where the list pins: off-default,
+    /// detached, no-remote, no-upstream, stashes, unpushed-branches, behind.
+    #[arg(long, value_name = "ISSUE", value_parser = issue_list)]
+    ignore_issue: Vec<IssueList>,
+    /// Stop ignoring an issue for these repos.
+    #[arg(long, value_name = "ISSUE", value_parser = issue_list)]
+    unignore_issue: Vec<IssueList>,
     /// Hide temporarily, e.g. `3d`, `12h`, `2w`.
     #[arg(long, value_name = "DURATION")]
     snooze: Option<String>,
@@ -1208,6 +1216,20 @@ fn fix_cmd(
 
 // ---------- mark ----------
 
+/// An `[ignore]` issue list by name (`off-default` or `off_default`).
+fn issue_list(s: &str) -> std::result::Result<IssueList, String> {
+    IssueList::from_name(s).ok_or_else(|| {
+        let names: Vec<String> = IssueList::ALL
+            .iter()
+            .map(|l| l.name().replace('_', "-"))
+            .collect();
+        format!(
+            "{s:?} isn't an issue that can be ignored; these can: {}",
+            names.join(", ")
+        )
+    })
+}
+
 fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> Result<()> {
     let sel = ws.select(
         &m.patterns,
@@ -1246,6 +1268,11 @@ fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> R
             ws.set_mark(&sel, mark, on)?;
         }
     }
+    for (lists, on) in [(&m.ignore_issue, true), (&m.unignore_issue, false)] {
+        for &l in lists {
+            ws.set_issue_ignored(&sel, l, on)?;
+        }
+    }
     configfile::update_mark_lists(&ctx.config_path, &before, &ws.config)?;
     let mut records = vec![];
     for i in sel {
@@ -1266,6 +1293,9 @@ fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> R
                     "sync": f.sync,
                     "ignore": f.ignored,
                 },
+                "ignored_issues": ws.entries[i].ignored_issues.iter()
+                    .filter_map(|i| IssueList::of(*i).map(|l| l.name()))
+                    .collect::<Vec<_>>(),
                 "snoozed_until": ws.state.snoozed.get(&key),
             }));
         } else {

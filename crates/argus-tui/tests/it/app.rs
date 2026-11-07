@@ -452,6 +452,83 @@ fn auto_fix_leaves_an_ignored_state_alone() {
     );
 }
 
+/// Put the cursor on the details line of `repo` starting with `text`,
+/// opening the repo's details first.
+fn cursor_on_detail(app: &mut App, repo: &str, text: &str) {
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with(repo)))
+        .unwrap();
+    if !matches!(app.rows.get(app.cursor + 1), Some(Row::Detail { .. })) {
+        app.on_key(code(KeyCode::Tab));
+    }
+    let at = app
+        .rows
+        .iter()
+        .position(|r| match r {
+            Row::Detail { line, .. } => line
+                .parts
+                .iter()
+                .map(|(_, t)| t.as_str())
+                .collect::<String>()
+                .starts_with(text),
+            _ => false,
+        })
+        .unwrap_or_else(|| panic!("no {text:?}: {:?}", detail_texts(app)));
+    app.cursor = at;
+}
+
+#[test]
+fn an_issue_under_the_cursor_can_be_ignored_and_unignored() {
+    let (_sb, mut app) = setup("");
+    cursor_on_detail(&mut app, "feature", "issue     not on default branch");
+    let fx = app.act(Action::ToggleIgnoreIssue);
+    assert!(matches!(fx.as_slice(), [Effect::SaveMarks(_)]), "{fx:?}");
+    assert_eq!(
+        app.ws.config.ignore.off_default,
+        ["github.com/acme/feature@feat"]
+    );
+    let texts = detail_texts(&app);
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.starts_with("issue     not on default branch") && t.ends_with("(ignored)")),
+        "{texts:?}"
+    );
+    // and back
+    cursor_on_detail(&mut app, "feature", "issue     not on default branch");
+    app.act(Action::ToggleIgnoreIssue);
+    assert!(app.ws.config.ignore.off_default.is_empty());
+    assert!(!detail_texts(&app).iter().any(|t| t.ends_with("(ignored)")));
+}
+
+#[test]
+fn only_an_issue_that_can_be_ignored_is() {
+    let (_sb, mut app) = setup("");
+    // not an issue line
+    cursor_on_detail(&mut app, "feature", "commit    ");
+    assert!(app.act(Action::ToggleIgnoreIssue).is_empty());
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("no issue")),
+        "{:?}",
+        app.message
+    );
+    // uncommitted changes risk losing work: not ignorable
+    cursor_on_detail(&mut app, "dirty", "issue     ");
+    assert!(app.act(Action::ToggleIgnoreIssue).is_empty());
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("can't be ignored")),
+        "{:?}",
+        app.message
+    );
+    assert_eq!(app.ws.config.ignore, Default::default());
+}
+
 #[test]
 fn shell_and_quit_effects() {
     let (_sb, mut app) = setup("");

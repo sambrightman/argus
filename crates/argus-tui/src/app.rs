@@ -9,7 +9,7 @@ use argus_core::config::StashConfig;
 use argus_core::diff::{self, FileDiff, LineKind, Side};
 use argus_core::fix::{self, Applied, FixKind};
 use argus_core::ops::{self, Op, OpOutcome};
-use argus_core::rules::Mark;
+use argus_core::rules::{IssueList, Mark};
 use argus_core::status::RepoStatus;
 use argus_core::sync::{self, Job, SyncPlan};
 use argus_core::{Entry, ViewFilter, Workspace, paths};
@@ -68,6 +68,9 @@ pub enum Action {
     ToggleFavourite,
     ToggleSync,
     ToggleIgnore,
+    /// Ignore (or stop ignoring) the issue on the details line under the
+    /// cursor, for that repo.
+    ToggleIgnoreIssue,
     Snooze,
     Unsnooze,
     Ack,
@@ -119,6 +122,7 @@ fn diff_rows(
         parts,
         file: Some(file.to_string()),
         diff: Some(DiffRef { side, hunk, line }),
+        issue: None,
     };
     let mut v = vec![];
     for (side, _, title) in sides.into_iter().filter(|s| s.1) {
@@ -942,6 +946,7 @@ impl App {
             ToggleFavourite => return self.toggle_mark(Mark::Favourite),
             ToggleSync => return self.toggle_mark(Mark::Sync),
             ToggleIgnore => return self.toggle_mark(Mark::Ignore),
+            ToggleIgnoreIssue => return self.toggle_ignore_issue(),
             ClearMarks => {
                 let keys = self.selected_keys();
                 let n = self.ws.marked_count(&self.selected());
@@ -1054,6 +1059,37 @@ impl App {
             return vec![];
         }
         self.rebuild();
+        vec![Effect::SaveMarks(Box::new(before))]
+    }
+
+    fn toggle_ignore_issue(&mut self) -> Vec<Effect> {
+        let Some(Row::Detail {
+            repo,
+            line: DetailLine {
+                issue: Some(issue), ..
+            },
+        }) = self.rows.get(self.cursor)
+        else {
+            self.info("no issue under the cursor");
+            return vec![];
+        };
+        let (i, issue) = (*repo, *issue);
+        let Some(list) = IssueList::of(issue) else {
+            self.info("this issue can't be ignored: it risks losing work");
+            return vec![];
+        };
+        let on = !self.ws.entries[i].ignored_issues.contains(&issue);
+        let before = self.ws.config.clone();
+        if let Err(e) = self.ws.set_issue_ignored(&[i], list, on) {
+            self.error(e.to_string());
+            return vec![];
+        }
+        self.rebuild();
+        self.info(format!(
+            "{} [ignore] {}",
+            if on { "added to" } else { "removed from" },
+            list.name()
+        ));
         vec![Effect::SaveMarks(Box::new(before))]
     }
 

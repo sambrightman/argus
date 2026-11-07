@@ -109,11 +109,21 @@ Two findings:
   `node_modules`, `target`, `.git` internals and configurable globs.
 * **Identity.** `host/owner/name` parsed from the `origin` remote URL (or the
   first remote).
-* **Marks: `favourite`, `sync`, `ignore`** are lists in config, one per
+* **Marks: `favourite`, `sync`, `ignore.repos`** are lists in config, one per
   kind. An entry is a repo or a glob, matched against identity, `owner/name`
   or path; the last matching entry wins and `!` turns the mark off, as in
-  gitignore. Names: `ignore` hides a repo and leaves it out of sync,
-  clones and bulk actions; *hidden* is the wider set, ignored or snoozed.
+  gitignore. Names: `ignore.repos` hides a repo and leaves it out of
+  sync, clones and bulk actions; *hidden* is the wider set, ignored or
+  snoozed. The other `[ignore]` lists turn off one issue (off-default,
+  detached, no remote, no upstream, stashes, unpushed branches, behind):
+  ignoring a whole repo is the special case of ignoring everything about
+  it, so one section holds both. `repo@value` pins the branch, tag,
+  describe or commit (glob allowed), and the TUI and CLI write the pinned
+  form, so a repo that moves is flagged again: an expectation, not
+  silence. Ignored issues don't count towards attention, show dimmed in
+  the details, and turn off the auto-fix that would undo them
+  (`fix::turned_off_by`). Conflicts, operations in progress and commits
+  only a detached HEAD holds can't be ignored: they risk losing work.
   `exclude_paths` is the other kind of exclusion: directories discovery
   never enters, matched by name or path, as rsync's and ripgrep's
   `--exclude` mean it. Tracked owners' repos sync unless `sync` says `!`. Marking
@@ -304,7 +314,7 @@ rendering is snapshot-tested via `TestBackend`.
   such operation is tested declined, refused and confirmed. Recoverable
   operations (stash, commit, switch, fast-forward, pull, push) don't ask.
   Clearing marks asks when more than one repo has entries of its own in
-  the favourite/sync/ignore lists; snoozes and "new" flags don't count. `root remove` doesn't ask.
+  the favourite/sync/ignore.repos lists; snoozes and "new" flags don't count. `root remove` doesn't ask.
 
 * **"Unpushed" means "on no remote-tracking ref"**, not "ahead of upstream".
   On real data, a fork branch that tracked `upstream/master` but was pushed

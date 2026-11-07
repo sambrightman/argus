@@ -244,6 +244,32 @@ impl Workspace {
         self.marks_changed()
     }
 
+    /// Ignore (`on`) or stop ignoring `list`'s issue for the repos at
+    /// `indices`, pinned to each one's current state where the list pins
+    /// (see [`rules::set_issue_ignored`]). Saving config is the caller's.
+    pub fn set_issue_ignored(
+        &mut self,
+        indices: &[usize],
+        list: IssueList,
+        on: bool,
+    ) -> Result<(), ConfigError> {
+        for &i in indices {
+            let e = &self.entries[i];
+            let values = e.status().map(|s| list.values(s)).unwrap_or_default();
+            let (id, path, name) = (e.id.clone(), e.path.clone(), Self::mark_name(e));
+            rules::set_issue_ignored(
+                &mut self.config,
+                list,
+                id.as_ref(),
+                &path,
+                &name,
+                &values,
+                on,
+            )?;
+        }
+        self.marks_changed()
+    }
+
     /// Drop the entries naming the repos at `indices` from every mark list,
     /// so patterns decide again.
     pub fn clear_marks(&mut self, indices: &[usize]) -> Result<(), ConfigError> {

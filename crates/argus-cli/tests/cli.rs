@@ -1234,3 +1234,28 @@ fn fix_leaves_an_ignored_state_alone() {
     std::fs::write(&cfg, "[ignore]\noff_default = ['acme/feature@other']\n").unwrap();
     fix(&["fix"]).stdout(predicate::str::contains("switch main"));
 }
+
+#[test]
+fn mark_ignores_and_unignores_an_issue() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "").unwrap();
+    let mark = |args: &[&str]| {
+        argus(&sb)
+            .arg("--config")
+            .arg(&cfg)
+            .arg("mark")
+            .args(args)
+            .assert()
+    };
+    let read = || argus_core::Config::parse(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+    mark(&["acme/feature", "--ignore-issue", "off-default"]).success();
+    assert_eq!(read().ignore.off_default, ["github.com/acme/feature@feat"]);
+    mark(&["acme/feature", "--unignore-issue", "off-default"]).success();
+    assert!(read().ignore.off_default.is_empty());
+    // unknown or not ignorable: an error naming the ones that are
+    mark(&["acme/dirty", "--ignore-issue", "dirty"])
+        .failure()
+        .stderr(predicate::str::contains("off-default"));
+}

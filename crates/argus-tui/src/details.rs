@@ -17,6 +17,8 @@ pub struct DetailLine {
     pub file: Option<String>,
     /// Part of that file's diff (see [`DiffRef`]).
     pub diff: Option<DiffRef>,
+    /// The issue this line shows, for ignoring it.
+    pub issue: Option<Issue>,
 }
 
 /// A diff row under a file's line: a side's heading, a hunk header, or one
@@ -37,6 +39,7 @@ fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
         parts,
         file: None,
         diff: None,
+        issue: None,
     }
 }
 
@@ -139,10 +142,20 @@ pub fn details(
     }
     for issue in &e.issues {
         let (role, text) = describe(issue, s.default_branch.as_deref());
-        v.push(line(vec![
-            styled(Role::Dim, "issue     "),
-            styled(role, text),
-        ]));
+        v.push(DetailLine {
+            issue: Some(*issue),
+            ..line(vec![styled(Role::Dim, "issue     "), styled(role, text)])
+        });
+    }
+    for issue in &e.ignored_issues {
+        let (_, text) = describe(issue, s.default_branch.as_deref());
+        v.push(DetailLine {
+            issue: Some(*issue),
+            ..line(vec![
+                styled(Role::Dim, "issue     "),
+                styled(Role::Dim, format!("{text}  (ignored)")),
+            ])
+        });
     }
     let p = fix::preview(s, &e.fix_kinds(priority), stash);
     let labelled = p

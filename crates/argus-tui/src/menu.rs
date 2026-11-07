@@ -170,6 +170,11 @@ impl MenuId {
                     item('f', "toggle favourite", Action::ToggleFavourite),
                     item('s', "toggle syncable", Action::ToggleSync),
                     item('i', "toggle ignored", Action::ToggleIgnore),
+                    item(
+                        'I',
+                        "ignore the issue under the cursor (or not)",
+                        Action::ToggleIgnoreIssue,
+                    ),
                     item('z', "snooze for…", Action::Snooze),
                     item('u', "unsnooze", Action::Unsnooze),
                     item('a', "acknowledge new", Action::Ack),
