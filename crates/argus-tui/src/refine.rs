@@ -132,6 +132,38 @@ mod tests {
     }
 
     #[test]
+    fn long_runs_are_left_unrefined() {
+        let changed = |n: usize, m: usize| {
+            let old: Vec<String> = (0..n).map(|i| format!("a {i}")).collect();
+            let new: Vec<String> = (0..m).map(|i| format!("b {i}")).collect();
+            let lines: Vec<(LineKind, &str)> = old
+                .iter()
+                .map(|l| (Remove, l.as_str()))
+                .chain(new.iter().map(|l| (Add, l.as_str())))
+                .collect();
+            refine(&lines).iter().any(|s| !marked(s).is_empty())
+        };
+        // up to MAX_RUN lines on either side: refined
+        assert!(changed(MAX_RUN, 1) && changed(1, MAX_RUN) && changed(MAX_RUN, MAX_RUN));
+        // one more on either side: not
+        assert!(!changed(MAX_RUN + 1, 1));
+        assert!(!changed(1, MAX_RUN + 1));
+    }
+
+    #[test]
+    fn segments_alternate() {
+        let r = refine(&[(Remove, "one two three four"), (Add, "one 2 3 four")]);
+        for segs in &r {
+            assert!(segs.windows(2).all(|w| w[0].0 != w[1].0), "{segs:?}");
+        }
+        // the unchanged space between them keeps two changed words apart
+        assert_eq!(marked(&r[1]), ["2", "3"]);
+        // consecutive changed words (and spaces) form one segment
+        let r = refine(&[(Remove, "keep one two"), (Add, "keep")]);
+        assert_eq!(marked(&r[0]), [" one two"]);
+    }
+
+    #[test]
     fn uneven_runs_and_blank_lines() {
         let r = refine(&[(Remove, "a b"), (Add, "a c"), (Add, ""), (Add, "d")]);
         assert_eq!(marked(&r[0]), ["b"]);

@@ -399,6 +399,26 @@ mod tests {
     }
 
     #[test]
+    fn each_mark_reads_its_own_flag() {
+        let f = |favourite, sync, excluded| Flags {
+            favourite,
+            sync,
+            excluded,
+            ..Flags::default()
+        };
+        assert!(Mark::Favourite.of(&f(true, false, false)));
+        assert!(Mark::Sync.of(&f(false, true, false)));
+        assert!(Mark::Exclude.of(&f(false, false, true)));
+        // inverse: not the others'
+        for m in Mark::ALL {
+            assert!(!m.of(&f(false, false, false)), "{m:?}");
+        }
+        assert!(!Mark::Favourite.of(&f(false, true, true)));
+        assert!(!Mark::Sync.of(&f(true, false, true)));
+        assert!(!Mark::Exclude.of(&f(true, true, false)));
+    }
+
+    #[test]
     fn bad_patterns_are_config_errors() {
         let c = Config::parse("favourite = ['acme/[oops']").unwrap();
         let Err(e) = RuleSet::new(&c) else {
