@@ -121,6 +121,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `Home End` `M-< M->` `gg G` | top / bottom |
 | `Tab` `Enter` | unfold details: issues, available fixes, branches, files; on a file, its diff (unstaged, then staged); on a hunk, fold it. Changed words are highlighted (`[ui] refine = "all"`, `"selected"` for the hunk under the cursor, or `"off"`) |
 | `Space` / `U` | mark / unmark (actions apply to marked repos, else current); on a file in the details, marks the file |
+| `s` `u` `K` | stage / unstage / discard files: the marked ones, else the one under the cursor in the details. Discard returns them to HEAD (deleting untracked files) and always asks first |
 | `/` `C-s` | filter (readline editing) |
 | `a` / `H` | show all / attention only (the default, `[ui] attention_only`); show hidden |
 | `g` `C-l` / `R` | refresh statuses / rescan roots |
@@ -171,8 +172,8 @@ directories (or set `follow_symlinks = true`).
 Anything that permanently loses data asks first: in the TUI a `y/n` in the
 status line, in the CLI a prompt on the terminal. `-y` / `--yes` proceeds
 without asking (scripts, cron); without a terminal and without `--yes`,
-the command refuses and changes nothing. Today that's clearing the marks
-of more than one repo.
+the command refuses and changes nothing. Today that's discarding file
+changes (always) and clearing the marks of more than one repo.
 
 Directories whose name starts with `.` are skipped (`skip_hidden`); add
 one as a root to scan it, e.g. `argus root add ~/.emacs.d`. `skip` lists

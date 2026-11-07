@@ -8,7 +8,7 @@ use argus_core::badges::Role;
 use argus_core::config::StashConfig;
 use argus_core::diff::{self, FileDiff, LineKind, Side};
 use argus_core::fix::{self, Applied, FixKind};
-use argus_core::ops::{Op, OpOutcome};
+use argus_core::ops::{self, Op, OpOutcome};
 use argus_core::rules::Mark;
 use argus_core::status::RepoStatus;
 use argus_core::sync::{self, Job, SyncPlan};
@@ -55,6 +55,11 @@ pub enum Action {
     Stash(StashKind),
     /// Flip a menu switch for this session.
     Toggle(Switch),
+    /// Stage, unstage or discard the marked files, else the one under the
+    /// cursor in the details.
+    StageFiles,
+    UnstageFiles,
+    DiscardFiles,
     Commit,
     SwitchDefault,
     FastForward,
@@ -170,6 +175,9 @@ fn diff_rows(
     v
 }
 
+/// Where file operations apply, for when there's no file to act on.
+const FILE_HINT: &str = "move to a file in the details (Tab), or mark files with space";
+
 /// What a stash action takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StashKind {
@@ -283,6 +291,8 @@ pub enum Mode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Confirmed {
     ClearMarks(Vec<String>),
+    /// Files to discard, by repo path.
+    Discard(Vec<(PathBuf, Vec<String>)>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -656,6 +666,9 @@ impl App {
                 '<' => Top,
                 '>' => Bottom,
                 ' ' => ToggleMark,
+                's' => StageFiles,
+                'u' => UnstageFiles,
+                'K' => DiscardFiles,
                 'U' => UnmarkAll,
                 '/' => StartFilter,
                 '?' | 'h' => Help,
@@ -758,6 +771,28 @@ impl App {
             Toggle(Switch::Untracked) => self.stash.untracked = !self.stash.untracked,
             Toggle(Switch::KeepIndex) => self.stash.keep_index = !self.stash.keep_index,
             Stash(kind) => return self.stash_action(kind),
+            StageFiles => return self.file_op(ops::stage_ops, "stage"),
+            UnstageFiles => return self.file_op(ops::unstage_ops, "unstage"),
+            DiscardFiles => {
+                let targets = self.file_targets();
+                if targets.is_empty() {
+                    self.info(FILE_HINT);
+                    return vec![];
+                }
+                let files: Vec<&String> = targets.iter().flat_map(|(_, f)| f).collect();
+                let question = match files.as_slice() {
+                    [one] => format!("Discard changes to {one}?"),
+                    many => format!("Discard changes to {} files?", many.len()),
+                };
+                let then = targets
+                    .iter()
+                    .map(|(i, f)| (self.ws.entries[*i].path.clone(), f.clone()))
+                    .collect();
+                self.mode = Mode::Confirm {
+                    question,
+                    then: Confirmed::Discard(then),
+                };
+            }
             OpenMenu(m) => {
                 self.mode = Mode::Menu {
                     menu: m.menu(),
@@ -1010,6 +1045,14 @@ impl App {
     /// Carry out a confirmed (or harmless enough) destructive action.
     fn confirmed(&mut self, c: Confirmed) -> Vec<Effect> {
         match c {
+            Confirmed::Discard(by_repo) => {
+                let targets = by_repo
+                    .into_iter()
+                    .filter_map(|(p, f)| Some((self.ws.index_of(&p)?, f)))
+                    .collect();
+                let jobs = self.file_jobs(targets, ops::discard_ops);
+                self.start_jobs(jobs)
+            }
             Confirmed::ClearMarks(keys) => {
                 // by key: a scan may have arrived while asking
                 let indices: Vec<usize> = (0..self.ws.entries.len())
@@ -1076,6 +1119,62 @@ impl App {
         }
         if jobs.is_empty() && explain {
             self.info("not applicable to the selection (see details with Tab)");
+        }
+        self.start_jobs(jobs)
+    }
+
+    /// The marked files, else the file under the cursor (its line or its
+    /// diff), by repo index.
+    fn file_targets(&self) -> Vec<(usize, Vec<String>)> {
+        if !self.marked_files.is_empty() {
+            return self
+                .marked_files
+                .iter()
+                .filter_map(|(repo, files)| {
+                    Some((self.ws.index_of(repo)?, files.iter().cloned().collect()))
+                })
+                .collect();
+        }
+        match self.rows.get(self.cursor) {
+            Some(Row::Detail { repo, line }) => {
+                line.file.iter().map(|f| (*repo, vec![f.clone()])).collect()
+            }
+            _ => vec![],
+        }
+    }
+
+    /// Jobs running `plan`'s ops for each target repo's files, in order.
+    fn file_jobs(
+        &self,
+        targets: Vec<(usize, Vec<String>)>,
+        plan: fn(&RepoStatus, &[String]) -> Vec<Op>,
+    ) -> Vec<Job> {
+        let mut jobs = vec![];
+        for (i, files) in targets {
+            let e = &self.ws.entries[i];
+            let Some(s) = e.status() else { continue };
+            for op in plan(s, &files) {
+                jobs.push(Job {
+                    label: format!("{} in {}", op.label(), e.display_name()),
+                    family: e.parent.clone().unwrap_or_else(|| e.path.clone()),
+                    path: e.path.clone(),
+                    op,
+                });
+            }
+        }
+        jobs
+    }
+
+    fn file_op(&mut self, plan: fn(&RepoStatus, &[String]) -> Vec<Op>, verb: &str) -> Vec<Effect> {
+        let targets = self.file_targets();
+        if targets.is_empty() {
+            self.info(FILE_HINT);
+            return vec![];
+        }
+        let jobs = self.file_jobs(targets, plan);
+        if jobs.is_empty() {
+            self.info(format!("nothing to {verb}"));
+            return vec![];
         }
         self.start_jobs(jobs)
     }

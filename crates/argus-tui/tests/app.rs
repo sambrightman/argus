@@ -1231,3 +1231,130 @@ fn diffs_follow_status_updates() {
         "{t:?}"
     );
 }
+
+/// The ops in `fx`'s jobs, in order.
+fn job_ops(fx: &[Effect]) -> Vec<Op> {
+    fx.iter()
+        .flat_map(|e| match e {
+            Effect::Jobs(j) => j.iter().map(|j| j.op.clone()).collect(),
+            _ => vec![],
+        })
+        .collect()
+}
+
+fn paths(v: &[&str]) -> Vec<String> {
+    v.iter().map(|p| p.to_string()).collect()
+}
+
+#[test]
+fn stage_and_unstage_the_file_under_the_cursor() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        diff_fixture(sb);
+        let d = sb.path("dev/dirty");
+        write(&d, "added", "x\n");
+        git(&d, &["add", "added"]);
+    });
+    // not on a file: a hint, nothing run
+    let fx = app.on_key(key('s'));
+    assert!(fx.is_empty());
+    assert!(
+        app.message.as_ref().unwrap().0.contains("file"),
+        "{:?}",
+        app.message
+    );
+    to_file(&mut app, "README");
+    let fx = app.on_key(key('s'));
+    assert_eq!(
+        job_ops(&fx),
+        [Op::Add {
+            paths: paths(&["README"])
+        }]
+    );
+    app.running.clear();
+    // on a diff line of a file: that file
+    to_file(&mut app, "both");
+    app.on_key(code(KeyCode::Tab));
+    app.cursor += 3;
+    let fx = app.on_key(key('u'));
+    assert_eq!(
+        job_ops(&fx),
+        [Op::Restore {
+            staged: true,
+            worktree: false,
+            from_head: false,
+            paths: paths(&["both"])
+        }]
+    );
+    app.running.clear();
+    // a newly added file unstages with rm --cached
+    to_file(&mut app, "added");
+    let fx = app.on_key(key('u'));
+    assert_eq!(
+        job_ops(&fx),
+        [Op::Remove {
+            cached: true,
+            paths: paths(&["added"])
+        }]
+    );
+    app.running.clear();
+    // nothing staged: nothing to unstage, said so
+    to_file(&mut app, "new");
+    let fx = app.on_key(key('u'));
+    assert!(fx.is_empty());
+    assert!(
+        app.message.as_ref().unwrap().0.contains("nothing"),
+        "{:?}",
+        app.message
+    );
+}
+
+#[test]
+fn file_operations_apply_to_marked_files() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "README");
+    app.on_key(key(' '));
+    to_file(&mut app, "new");
+    app.on_key(key(' '));
+    app.act(Action::Top); // cursor away from both
+    let fx = app.on_key(key('s'));
+    assert_eq!(
+        job_ops(&fx),
+        [Op::Add {
+            paths: paths(&["README", "new"])
+        }]
+    );
+}
+
+#[test]
+fn discarding_always_asks() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "README");
+    let fx = app.on_key(key('K'));
+    assert!(fx.is_empty());
+    assert!(matches!(app.mode, Mode::Confirm { .. }));
+    assert!(render(&mut app, 100, 30).contains("Discard changes to README? (y/n)"));
+    let fx = app.on_key(key('n'));
+    assert!(fx.is_empty() && matches!(app.mode, Mode::Normal));
+    // several files: counted; y runs the discard
+    to_file(&mut app, "README");
+    app.on_key(key(' '));
+    to_file(&mut app, "new");
+    app.on_key(key(' '));
+    app.on_key(key('K'));
+    assert!(render(&mut app, 100, 30).contains("Discard changes to 2 files? (y/n)"));
+    let fx = app.on_key(key('y'));
+    assert_eq!(
+        job_ops(&fx),
+        [
+            Op::Restore {
+                staged: true,
+                worktree: true,
+                from_head: true,
+                paths: paths(&["README"])
+            },
+            Op::Clean {
+                paths: paths(&["new"])
+            },
+        ]
+    );
+}

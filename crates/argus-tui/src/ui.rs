@@ -487,7 +487,14 @@ pub fn help_lines() -> Vec<(String, String)> {
         ("PgUp PgDn C-v M-v C-u C-d", "page"),
         ("Home End M-< M-> < > gg G", "top / bottom"),
         ("Tab Enter", "unfold / fold details"),
-        ("Space", "mark repo (actions apply to marked, else current)"),
+        (
+            "Space",
+            "mark repo, or file in the details (actions apply to marked, else current)",
+        ),
+        (
+            "s u K",
+            "stage / unstage / discard files (marked, else current; discard asks)",
+        ),
         ("U Esc C-g", "unmark all (Esc also clears filter)"),
         ("/ C-s", "filter (readline keys)"),
         ("a", "toggle attention only"),

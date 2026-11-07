@@ -119,6 +119,11 @@ consume the same events.
   lines and the added run after it are split into words and diffed, here
   with `similar`; changed words are drawn reversed, which works in every
   theme. `[ui] refine` picks all hunks shown, the cursor's, or none.
+* **File operations** (`s` `u` `K`) act on the marked files, else the file
+  under the cursor, planned per file by `ops::stage_ops` / `unstage_ops` /
+  `discard_ops` and run as jobs (one family per repo, so in order).
+  Discard always asks, naming the file or the count. Hunk and line
+  operations would build on the same diff rows.
 * **No forgetting.** Nothing about a repo is dropped because scans no
   longer find it (an earlier version dropped marks after 30 days; that
   broke the rule that permanent loss needs confirmation). Expired snoozes
