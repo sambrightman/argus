@@ -118,6 +118,7 @@ impl MenuId {
                         Action::Publish,
                     ),
                     item('b', "push other branches", Action::PushBranches),
+                    item('r', "add a remote (origin)…", Action::AddRemote),
                 ],
             ),
             MenuId::Stash => (
@@ -155,6 +156,11 @@ impl MenuId {
                         'r',
                         "reattach detached HEAD to its branch",
                         Action::Reattach,
+                    ),
+                    item(
+                        'c',
+                        "create a branch at detached HEAD…",
+                        Action::CreateBranch,
                     ),
                     item(
                         'f',

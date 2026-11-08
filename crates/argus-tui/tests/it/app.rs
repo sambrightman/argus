@@ -1703,3 +1703,72 @@ fn explicit_fixes_run_for_every_branch_and_explain_blocked_ones() {
         "{msg}"
     );
 }
+
+#[test]
+fn branch_and_remote_prompts_ask_then_run() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let c = sb.path("dev/clean");
+        git(&c, &["switch", "-q", "--detach", "main"]);
+        commit(&c, "adrift");
+        git(&c, &["remote", "remove", "origin"]);
+        git(&sb.path("dev/dirty"), &["remote", "remove", "origin"]);
+    });
+    let go = |app: &mut App, name: &str| {
+        app.act(Action::Top);
+        for _ in 0..app.ws.entries.len() {
+            if app.current().unwrap().path == sb.path(name) {
+                return;
+            }
+            app.act(Action::Down);
+        }
+        panic!("{name} not listed");
+    };
+    go(&mut app, "dev/clean");
+    let typed = |app: &mut App, a: Action, text: &str| {
+        app.act(a);
+        assert!(matches!(app.mode, Mode::Input { .. }));
+        for c in text.chars() {
+            app.on_key(key(c));
+        }
+        app.on_key(code(KeyCode::Enter))
+    };
+    assert!(
+        typed(&mut app, Action::CreateBranch, "").is_empty(),
+        "empty aborts"
+    );
+    match typed(&mut app, Action::CreateBranch, "rescue").as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(
+            j[0].op,
+            Op::CreateBranch {
+                name: "rescue".into()
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
+    app.running.clear();
+    match typed(&mut app, Action::AddRemote, "git@example.com:me/clean.git").as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(
+            j[0].op,
+            Op::AddRemote {
+                name: "origin".into(),
+                url: "git@example.com:me/clean.git".into()
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
+    // inverse: not for repos where they don't apply, nor several remotes at once
+    app.running.clear();
+    go(&mut app, "dev/feature");
+    let fx = app.act(Action::CreateBranch);
+    assert!(fx.is_empty() && matches!(app.mode, Mode::Normal));
+    app.marked = app.ws.entries.iter().map(|e| e.path.clone()).collect();
+    assert!(app.act(Action::AddRemote).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
+    assert!(
+        app.message
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("one repo at a time")
+    );
+}

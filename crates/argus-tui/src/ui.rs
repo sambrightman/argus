@@ -372,6 +372,8 @@ fn draw_status(f: &mut Frame, app: &App, v: &View, area: Rect) {
                 Prompt::Filter => "filter: ".to_string(),
                 Prompt::CommitMessage(p) => format!("commit message ({} repo(s)): ", p.len()),
                 Prompt::StashMessage(p) => format!("stash message ({} repo(s)): ", p.len()),
+                Prompt::BranchName(p) => format!("new branch at HEAD ({} repo(s)): ", p.len()),
+                Prompt::RemoteUrl(_) => "URL of the remote to add as origin: ".to_string(),
                 Prompt::SnoozeDuration(k) => format!("snooze {} repo(s) for: ", k.len()),
             };
             let x = area.x + (UnicodeWidthStr::width(label.as_str()) + editor.cursor()) as u16;

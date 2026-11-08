@@ -292,7 +292,11 @@ Two findings:
     none. No `argus stash` command: for one repo it
     would only pass git's own options through, and `argus fix -k stash`
     stashes in bulk.
-  * `commit`: needs a message (TUI prompt / `--message`) → `git add -A && git commit`.
+  * `commit`: needs a message (TUI prompt) → `git add -A && git commit`.
+  * `branch`: detached HEAD with commits on no branch → `git switch -c
+    <name>`, the name asked for (TUI `b c`).
+  * `add-remote`: no remote → `git remote add -- origin <url>`, the URL
+    asked for (TUI `P r`, one repo at a time).
   * `pull` / `fetch`: plain `git pull` / `git fetch`, so your config decides.
 
 ## 6. TUI

@@ -35,6 +35,15 @@ pub enum Op {
     Switch {
         branch: String,
     },
+    /// `git switch -c`: a new branch at HEAD, checked out.
+    CreateBranch {
+        name: String,
+    },
+    /// `git remote add`.
+    AddRemote {
+        name: String,
+        url: String,
+    },
     /// `git stash push`. `staged` stashes only staged changes (untracked
     /// files never, as git refuses the pair); `paths` limits it to those.
     Stash {
@@ -111,6 +120,8 @@ impl Op {
                 vec!["push".into(), remote.clone(), format!("{r}:{r}")]
             }
             Op::Switch { branch } => v(&["switch", branch]),
+            Op::CreateBranch { name } => v(&["switch", "-c", name]),
+            Op::AddRemote { name, url } => v(&["remote", "add", "--", name, url]),
             Op::Stash {
                 message,
                 untracked,
@@ -197,6 +208,8 @@ impl Op {
             Op::PushSetUpstream { remote, branch } => format!("push -u {remote} {branch}"),
             Op::PushTo { remote, branch } => format!("push {branch} to {remote}/{branch}"),
             Op::Switch { branch } => format!("switch {branch}"),
+            Op::CreateBranch { name } => format!("create branch {name}"),
+            Op::AddRemote { name, url } => format!("add remote {name} {url}"),
             Op::Stash {
                 untracked,
                 keep_index,

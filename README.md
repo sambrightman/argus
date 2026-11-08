@@ -149,10 +149,10 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `?` | help |
 | `F` | **Pull**: `p` selected, `a` all marked for pull, `c` clone new repos of tracked owners, then pull all marked |
 | `f` | **Fetch**: `f` selected, `a` all shown except hidden |
-| `P` | **Push**: `p` push, `u` publish, `b` push other branches |
+| `P` | **Push**: `p` push, `u` publish, `b` push other branches, `r` add a remote… |
 | `z` | **Stash**: switches `u` include untracked, `k` keep index (from `[stash]`, for the session); `z` all, `i` staged only, `m` with a message, `f` files marked in the details |
 | `c` | **Commit** (prompts for message) |
-| `b` | **Branch**: `d` switch to default, `r` reattach detached HEAD, `f` fast-forward stale branches |
+| `b` | **Branch**: `d` switch to default, `r` reattach detached HEAD, `c` create a branch at detached HEAD…, `f` fast-forward stale branches |
 | `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden |
 | `m` | **Mark**: `f` favourite, `p` pull, `i` ignore, `I` ignore the issue under the cursor (pinned to the branch, tag or commit), `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page |
@@ -255,6 +255,10 @@ Nothing is offered during a conflict.
 * **`reattach`** switches a detached HEAD to the branch at the same commit
   (the default branch if it's one of them; several others are left to you).
   Not in submodules, where a detached HEAD is normal.
+* **Commits on no branch** (a detached HEAD that moved on) get `b c`: a
+  branch there, by the name you give. **No remote** gets `P r`: the URL
+  you give, added as `origin`. Like `commit`, they need input, so they're
+  never automatic.
 
 Pushes that would need force (the branch was rewritten after pushing) are
 shown, with why, and never applied.
@@ -263,8 +267,8 @@ Each auto-fix action applies **one** fix: the first kind in `[fix] auto`
 branch is pushed by one `x x` (or `argus fix`) and switched back to the
 default branch by the next. Or snooze it in between (`m z`).
 Kinds you don't list rank after the ones you do, in the default order:
-stash, commit, push, publish, push-branches, switch-default, reattach, pull,
-fast-forward.
+stash, commit, branch, push, publish, add-remote, push-branches,
+switch-default, reattach, pull, fast-forward.
 
 `argus fix -n` shows, per repo, the fix this run would apply, then the
 chain later runs would continue with, then other fixes available now

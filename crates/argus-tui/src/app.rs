@@ -64,6 +64,12 @@ pub enum Action {
     Commit,
     SwitchDefault,
     Reattach,
+    /// Ask for a name, then create a branch at each selected detached HEAD
+    /// that has commits on no branch.
+    CreateBranch,
+    /// Ask for a URL, then add it as `origin` to the current repo, if it
+    /// has no remote.
+    AddRemote,
     FastForward,
     AutoFix(Scope),
     PullAndClone,
@@ -278,6 +284,8 @@ pub enum Prompt {
     Filter,
     CommitMessage(Vec<PathBuf>),
     StashMessage(Vec<PathBuf>),
+    BranchName(Vec<PathBuf>),
+    RemoteUrl(PathBuf),
     SnoozeDuration(Vec<String>),
 }
 
@@ -908,6 +916,27 @@ impl App {
             PushBranches => return self.fix_ops(FixKind::PushBranches),
             SwitchDefault => return self.fix_ops(FixKind::SwitchDefault),
             Reattach => return self.fix_ops(FixKind::Reattach),
+            CreateBranch => {
+                let targets = self.applicable(FixKind::Branch);
+                if targets.is_empty() {
+                    self.info("no detached HEAD with commits on no branch selected");
+                } else {
+                    self.mode = Mode::Input {
+                        prompt: Prompt::BranchName(targets),
+                        editor: LineEditor::default(),
+                    };
+                }
+            }
+            AddRemote => match self.applicable(FixKind::AddRemote).as_slice() {
+                [] => self.info("the selection has remotes"),
+                [one] => {
+                    self.mode = Mode::Input {
+                        prompt: Prompt::RemoteUrl(one.clone()),
+                        editor: LineEditor::default(),
+                    }
+                }
+                _ => self.error("add a remote to one repo at a time"),
+            },
             FastForward => return self.fix_ops(FixKind::FastForward),
             Commit => {
                 let targets: Vec<PathBuf> = self
@@ -1178,6 +1207,20 @@ impl App {
         vec![Effect::SaveState]
     }
 
+    /// The selected repos a fix of `kind` applies to.
+    fn applicable(&self, kind: FixKind) -> Vec<PathBuf> {
+        let stash = self.ws.config.stash;
+        self.selected()
+            .into_iter()
+            .map(|i| &self.ws.entries[i])
+            .filter(|e| {
+                e.status()
+                    .is_some_and(|s| fix::plan(s, &stash).iter().any(|f| f.kind == kind))
+            })
+            .map(|e| e.path.clone())
+            .collect()
+    }
+
     /// Run every fix of a kind (one per branch, for kinds that have
     /// several) on the selected repos where it applies and isn't blocked.
     fn fix_ops(&mut self, kind: FixKind) -> Vec<Effect> {
@@ -1431,6 +1474,17 @@ impl App {
         vec![Effect::Jobs(jobs)]
     }
 
+    /// A job running `op` in the repo at `path`, if it's still there.
+    fn job(&self, path: &std::path::Path, op: Op) -> Option<Job> {
+        let e = self.ws.get(path)?;
+        Some(Job {
+            label: format!("{} {}", op.label(), e.display_name()),
+            family: e.parent.clone().unwrap_or_else(|| path.to_path_buf()),
+            path: path.to_path_buf(),
+            op,
+        })
+    }
+
     fn submit(&mut self, prompt: Prompt, text: String) -> Vec<Effect> {
         match prompt {
             Prompt::Filter => {
@@ -1459,6 +1513,26 @@ impl App {
                         },
                     })
                     .collect();
+                self.start_jobs(jobs)
+            }
+            Prompt::BranchName(_) | Prompt::RemoteUrl(_) if text.trim().is_empty() => {
+                self.error("nothing entered: aborted");
+                vec![]
+            }
+            Prompt::BranchName(paths) => {
+                let name = text.trim().to_string();
+                let jobs = paths
+                    .iter()
+                    .filter_map(|p| self.job(p, Op::CreateBranch { name: name.clone() }))
+                    .collect();
+                self.start_jobs(jobs)
+            }
+            Prompt::RemoteUrl(path) => {
+                let op = Op::AddRemote {
+                    name: "origin".into(),
+                    url: text.trim().to_string(),
+                };
+                let jobs = self.job(&path, op).into_iter().collect();
                 self.start_jobs(jobs)
             }
             Prompt::StashMessage(paths) => {

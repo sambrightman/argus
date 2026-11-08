@@ -906,3 +906,72 @@ fn a_detached_head_at_a_branch_is_reattached() {
     git(&r, &["switch", "-q", "a"]);
     assert!(st(&r).at_head.is_empty());
 }
+
+#[test]
+fn commits_on_no_branch_get_a_branch_by_name_never_automatically() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    git(&r, &["switch", "-q", "--detach", "main"]);
+    // inverse: nothing on no branch, nothing to name
+    assert!(of_kind(&r, FixKind::Branch).is_empty());
+    commit(&r, "adrift");
+    let before = st(&r);
+    let fixes = plan(&before, &StashConfig::default());
+    let f = fixes.iter().find(|f| f.kind == FixKind::Branch).unwrap();
+    assert_eq!(f.reason, "1 commit(s) on no branch");
+    assert!(choose(&before, &FixKind::ALL, &StashConfig::default()).is_none());
+    let named = argus_core::fix::Fix {
+        op: Op::CreateBranch {
+            name: "rescue".into(),
+        },
+        ..f.clone()
+    };
+    let out = argus_core::ops::run(&r, &named.op);
+    assert!(out.success, "{}", out.output);
+    let after = st(&r);
+    assert_eq!(after.head, Head::Branch("rescue".into()));
+    assert_eq!(after.detached_orphans, 0);
+    let predicted = argus_core::fix::simulate(&before, &named);
+    assert_eq!(
+        (
+            &predicted.head,
+            &predicted.branches,
+            predicted.detached_orphans
+        ),
+        (&after.head, &after.branches, after.detached_orphans),
+        "the prediction matches"
+    );
+}
+
+#[test]
+fn a_repo_without_a_remote_gets_one_by_url_never_automatically() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    let before = st(&r);
+    let fixes = plan(&before, &StashConfig::default());
+    let f = fixes.iter().find(|f| f.kind == FixKind::AddRemote).unwrap();
+    assert!(
+        choose(&before, &FixKind::ALL, &StashConfig::default())
+            .is_none_or(|c| c.kind != FixKind::AddRemote)
+    );
+    let bare = sb.remote("acme", "w");
+    let added = argus_core::fix::Fix {
+        op: Op::AddRemote {
+            name: "origin".into(),
+            url: bare.display().to_string(),
+        },
+        ..f.clone()
+    };
+    let out = argus_core::ops::run(&r, &added.op);
+    assert!(out.success, "{}", out.output);
+    let after = st(&r);
+    let predicted = argus_core::fix::simulate(&before, &added);
+    assert_eq!(
+        (&predicted.remote, &predicted.remote_url),
+        (&after.remote, &after.remote_url)
+    );
+    // inverse: a clone has one
+    let c = sb.clone_as_github("acme", "w", "c");
+    assert!(of_kind(&c, FixKind::AddRemote).is_empty());
+}

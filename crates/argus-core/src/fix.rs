@@ -30,6 +30,9 @@ pub enum FixKind {
     Stash,
     /// Commit everything (never automatic: needs a message).
     Commit,
+    /// Name the commits a detached HEAD has on no branch: create a branch
+    /// there (never automatic: needs a name).
+    Branch,
     /// Push commits to the current branch's remote branch (fast-forward
     /// only): its upstream when that's the same-named branch, else the
     /// same-named branch on its push remote, never a differently named
@@ -39,6 +42,8 @@ pub enum FixKind {
     /// when it has none or its upstream is gone; push to its own name when
     /// it pulls from another branch.
     Publish,
+    /// Add a remote to a repo with none (never automatic: needs a URL).
+    AddRemote,
     /// Push other local branches to their remote branches, as `push`
     /// would (existing ones only, fast-forward only).
     PushBranches,
@@ -55,11 +60,13 @@ pub enum FixKind {
 impl FixKind {
     /// Default priority: clean up uncommitted work, share commits, leave
     /// the branch, then catch up (on the branch you end up on).
-    pub const ALL: [FixKind; 9] = [
+    pub const ALL: [FixKind; 11] = [
         FixKind::Stash,
         FixKind::Commit,
+        FixKind::Branch,
         FixKind::Push,
         FixKind::Publish,
+        FixKind::AddRemote,
         FixKind::PushBranches,
         FixKind::SwitchDefault,
         FixKind::Reattach,
@@ -67,9 +74,9 @@ impl FixKind {
         FixKind::FastForward,
     ];
 
-    /// Requires a message from the user.
+    /// Requires a message, name or URL from the user.
     pub fn needs_input(self) -> bool {
-        matches!(self, FixKind::Commit)
+        matches!(self, FixKind::Commit | FixKind::Branch | FixKind::AddRemote)
     }
 
     /// The name used in config and on the command line.
@@ -84,6 +91,8 @@ impl FixKind {
             FixKind::Pull => "pull",
             FixKind::Stash => "stash",
             FixKind::Commit => "commit",
+            FixKind::Branch => "branch",
+            FixKind::AddRemote => "add-remote",
         }
     }
 }
@@ -256,6 +265,30 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
                 branch: b.to_string(),
             },
             reason: format!("{b} has no upstream"),
+        });
+    }
+
+    if let Head::Detached(_) = s.head
+        && s.detached_orphans > 0
+    {
+        v.push(Fix {
+            blocked: None,
+            kind: FixKind::Branch,
+            op: Op::CreateBranch {
+                name: String::new(),
+            },
+            reason: format!("{} commit(s) on no branch", s.detached_orphans),
+        });
+    }
+    if s.remote.is_none() {
+        v.push(Fix {
+            blocked: None,
+            kind: FixKind::AddRemote,
+            op: Op::AddRemote {
+                name: "origin".into(),
+                url: String::new(),
+            },
+            reason: "no remote".into(),
         });
     }
 
@@ -561,6 +594,29 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
                     s.upstream = b.upstream.clone();
                 }
             }
+        }
+        Op::CreateBranch { name } => {
+            for b in &mut s.branches {
+                b.is_head = false;
+            }
+            s.branches.insert(
+                0,
+                BranchInfo {
+                    name: name.clone(),
+                    upstream: None,
+                    is_head: true,
+                    merged: false,
+                    unpushed: s.remote.as_ref().map(|_| s.detached_orphans),
+                    own: None,
+                },
+            );
+            s.head = Head::Branch(name.clone());
+            s.upstream = None;
+            s.detached_orphans = 0;
+        }
+        Op::AddRemote { name, url } => {
+            s.remote = Some(name.clone());
+            s.remote_url = Some(url.clone());
         }
         Op::FastForward { branch, .. } => {
             if let Some(b) = s.branches.iter_mut().find(|b| &b.name == branch)
