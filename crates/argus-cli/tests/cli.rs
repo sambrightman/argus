@@ -346,6 +346,23 @@ fn fix_with_explicit_kind_and_pattern() {
         git(&sb.path("dev/clean"), &["branch", "--show-current"]).trim(),
         "main"
     );
+    // a kind that's never automatic, in [fix] auto: warned about
+    let cfg = sb.path(".config/argus/config.toml");
+    std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+    std::fs::write(&cfg, "[fix]\nauto = ['push', 'commit']\n").unwrap();
+    argus(&sb)
+        .args(["fix", "-n"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "argus: [fix] auto lists commit, which need input or confirmation",
+        ));
+    std::fs::remove_file(&cfg).unwrap();
+    argus(&sb)
+        .args(["fix", "-n"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("[fix] auto").not());
     // an unknown kind is rejected
     argus(&sb)
         .args(["fix", "-n", "-k", "push,shove"])

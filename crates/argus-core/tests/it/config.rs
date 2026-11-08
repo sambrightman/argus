@@ -342,3 +342,17 @@ fn an_addition_to_a_list_with_a_default_extends_it_rather_than_replacing_it() {
     assert_eq!(c.ignore.stashes, ["**", "!**@argus *", "acme/a"]);
     assert_eq!(c.ignore.behind, ["acme/b"]);
 }
+
+#[test]
+fn auto_fix_kinds_that_are_never_automatic_are_warned_about() {
+    assert!(Config::default().fix.warnings().is_empty());
+    let c = Config::parse("[fix]\nauto = ['push', 'stash-pop', 'reattach']").unwrap();
+    assert!(c.fix.warnings().is_empty(), "all can be automatic");
+    let c = Config::parse("[fix]\nauto = ['commit', 'push', 'abort']").unwrap();
+    let w = c.fix.warnings();
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(
+        w[0].contains("commit, abort") && w[0].contains("never automatic"),
+        "{w:?}"
+    );
+}

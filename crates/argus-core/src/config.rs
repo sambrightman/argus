@@ -310,6 +310,27 @@ pub struct FixConfig {
     pub auto: Vec<FixKind>,
 }
 
+impl FixConfig {
+    /// What's wrong with `auto` that isn't an error: kinds listed that are
+    /// never automatic, so are left out.
+    pub fn warnings(&self) -> Vec<String> {
+        let manual: Vec<&str> = self
+            .auto
+            .iter()
+            .filter(|k| k.manual())
+            .map(|k| k.name())
+            .collect();
+        if manual.is_empty() {
+            return vec![];
+        }
+        vec![format!(
+            "[fix] auto lists {}, which need input or confirmation, so are never automatic: \
+             they're left out (use their keys in the TUI)",
+            manual.join(", ")
+        )]
+    }
+}
+
 impl Default for FixConfig {
     fn default() -> Self {
         Self {

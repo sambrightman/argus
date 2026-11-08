@@ -460,7 +460,7 @@ fn load(
     max_depth: Option<usize>,
 ) -> Result<(Workspace, Vec<String>)> {
     let mut config = Config::load(&ctx.config_path)?;
-    let mut notices = vec![];
+    let mut notices = config.fix.warnings();
     if let Some(d) = max_depth {
         config.max_depth = d;
     }

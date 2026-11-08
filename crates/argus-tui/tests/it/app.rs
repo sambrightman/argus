@@ -1855,6 +1855,28 @@ fn destructive_fixes_ask_first_and_do_nothing_unless_told_yes() {
         app.act(Action::Down);
     }
     let id = git(&sb.path("dev/dirty"), &["rev-parse", "stash@{1}"]);
+    // questions say which selected repos have nothing to do
+    app.marked = app.ws.entries.iter().map(|e| e.path.clone()).collect();
+    app.act(Action::DeleteMergedBranches);
+    match &app.mode {
+        Mode::Confirm { question, .. } => assert_eq!(
+            question,
+            "Delete 1 merged branch(es): done? · 2 not applicable"
+        ),
+        _ => panic!("no question"),
+    }
+    app.on_key(key('n'));
+    app.act(Action::AbortOperation);
+    match &app.mode {
+        Mode::Confirm { question, .. } => assert!(
+            question.starts_with("Abort merge in acme/clean?")
+                && question.ends_with("is lost. · 2 not applicable"),
+            "{question}"
+        ),
+        _ => panic!("no question"),
+    }
+    app.on_key(key('n'));
+    app.marked.clear();
     assert_eq!(confirm(&mut app, Action::DropStash, 'n'), Some(vec![]));
     assert_eq!(
         confirm(&mut app, Action::DropStash, 'y'),
@@ -1863,4 +1885,46 @@ fn destructive_fixes_ask_first_and_do_nothing_unless_told_yes() {
             id: id.trim().to_string()
         }])
     );
+}
+
+#[test]
+fn fix_actions_say_what_they_left_out() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let f = sb.path("dev/feature");
+        git(&f, &["switch", "-q", "-c", "b2"]);
+        git(&f, &["push", "-q", "-u", "origin", "b2"]);
+        commit(&f, "b2 work");
+        git(&f, &["push", "-q"]);
+        git(&f, &["reset", "-q", "--hard", "HEAD~1"]);
+        commit(&f, "rewritten");
+        git(&f, &["switch", "-q", "feat"]);
+        commit(&f, "feat work");
+        git(&f, &["switch", "-q", "main"]);
+    });
+    let msg = |app: &App| app.message.as_ref().unwrap().0.clone();
+    app.marked = app.ws.entries.iter().map(|e| e.path.clone()).collect();
+    assert!(!app.act(Action::PushBranches).is_empty());
+    assert_eq!(
+        msg(&app),
+        "running 1 job(s)… · 2 not applicable · 1 blocked (acme/feature: origin/b2 has 1 commit(s) this branch doesn't (rebased?): pushing needs force)"
+    );
+    // a repo already running something is skipped, and said so
+    assert!(app.act(Action::PushBranches).is_empty());
+    assert!(
+        msg(&app).starts_with("nothing started · 1 busy"),
+        "{}",
+        msg(&app)
+    );
+    // auto-fix: what had nothing to apply
+    app.running.clear();
+    git(&sb.path("dev/feature"), &["switch", "-q", "feat"]);
+    let f = sb.path("dev/feature");
+    app.ws.refresh(&f);
+    assert!(!app.act(Action::AutoFix(Scope::Selected)).is_empty());
+    assert_eq!(
+        msg(&app),
+        "auto-fixing 1 repo(s)… · 2 with nothing to apply"
+    );
+    assert!(app.act(Action::AutoFix(Scope::Selected)).is_empty());
+    assert_eq!(msg(&app), "nothing started · 1 busy");
 }

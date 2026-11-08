@@ -272,6 +272,11 @@ Nothing is offered during a conflict.
 
 Pushes that would need force (the branch was rewritten after pushing) are
 shown, with why, and never applied.
+
+A fix chosen from a menu runs in the selected repos it applies to; the
+status line says what it left out (`running 3 job(s)… · 2 not applicable
+· 1 blocked (…)`, `busy` for repos already running something). Kinds that
+are never automatic are left out of `[fix] auto`, with a warning.
 Each auto-fix action applies **one** fix: the first kind in `[fix] auto`
 (or `-k`, in the order given) that the repo needs. An unpushed feature
 branch is pushed by one `x x` (or `argus fix`) and switched back to the

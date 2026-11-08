@@ -97,7 +97,7 @@ impl FixKind {
     }
 
     /// Something a fix of this kind can't do alone: never automatic.
-    fn manual(self) -> bool {
+    pub fn manual(self) -> bool {
         self.needs_input() || self.needs_confirmation()
     }
 

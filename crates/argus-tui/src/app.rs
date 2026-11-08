@@ -938,7 +938,8 @@ impl App {
                 }
             }
             AbortOperation => {
-                let ops = self.planned_ops(FixKind::Abort);
+                let p = self.planned(FixKind::Abort);
+                let ops = p.ops.clone();
                 let question = match ops.as_slice() {
                     [] => return self.not_applicable("nothing in progress"),
                     [(p, op)] => format!(
@@ -950,14 +951,15 @@ impl App {
                         "Abort what's in progress in {} repos? What each did so far is lost.",
                         ops.len()
                     ),
-                };
+                } + &p.note();
                 self.mode = Mode::Confirm {
                     question,
                     then: Confirmed::Ops(ops),
                 };
             }
             DeleteMergedBranches => {
-                let ops = self.planned_ops(FixKind::DeleteBranches);
+                let p = self.planned(FixKind::DeleteBranches);
+                let ops = p.ops.clone();
                 if ops.is_empty() {
                     return self.not_applicable("no merged branches to delete");
                 }
@@ -973,7 +975,11 @@ impl App {
                     shown.push_str(&format!(" and {} more", names.len() - 3));
                 }
                 self.mode = Mode::Confirm {
-                    question: format!("Delete {} merged branch(es): {shown}?", names.len()),
+                    question: format!(
+                        "Delete {} merged branch(es): {shown}?{}",
+                        names.len(),
+                        p.note()
+                    ),
                     then: Confirmed::Ops(ops),
                 };
             }
@@ -1042,7 +1048,8 @@ impl App {
                     self.selected()
                 };
                 let kinds = self.ws.config.fix.auto.clone();
-                let paths: Vec<PathBuf> = idx
+                let total = idx.len();
+                let fixable: Vec<PathBuf> = idx
                     .into_iter()
                     .filter(|&i| {
                         let e = &self.ws.entries[i];
@@ -1051,15 +1058,23 @@ impl App {
                         })
                     })
                     .map(|i| self.ws.entries[i].path.clone())
-                    .filter(|p| !self.running.contains_key(p))
                     .collect();
+                let none = skipped(total - fixable.len(), "with nothing to apply");
+                let (paths, busy): (Vec<PathBuf>, Vec<PathBuf>) = fixable
+                    .into_iter()
+                    .partition(|p| !self.running.contains_key(p));
+                let busy = skipped(busy.len(), "busy");
                 if paths.is_empty() {
-                    self.info(format!("no auto-fixes ({}) apply", kinds_label(&kinds)));
+                    match busy.is_empty() {
+                        true => self.info(format!("no auto-fixes ({}) apply", kinds_label(&kinds))),
+                        false => self.info(format!("nothing started{busy}")),
+                    }
                     return vec![];
                 }
                 for p in &paths {
                     self.running.insert(p.clone(), "fix".into());
                 }
+                self.info(format!("auto-fixing {} repo(s)…{none}{busy}", paths.len()));
                 return vec![Effect::Fix { paths, kinds }];
             }
             PullAndClone => {
@@ -1294,20 +1309,32 @@ impl App {
         vec![Effect::SaveState]
     }
 
-    /// Every fix of `kind` for the selected repos, as (repo path, op).
-    fn planned_ops(&self, kind: FixKind) -> Vec<(PathBuf, Op)> {
+    /// Every fix of `kind` the selected repos have and can run, and what
+    /// was left out.
+    fn planned(&self, kind: FixKind) -> Planned {
         let stash = self.ws.config.stash;
-        let mut v = vec![];
+        let mut p = Planned::default();
         for i in self.selected() {
             let e = &self.ws.entries[i];
             let Some(s) = e.status() else { continue };
-            for f in fix::plan(s, &stash) {
-                if f.kind == kind && f.blocked.is_none() {
-                    v.push((e.path.clone(), f.op));
+            let fixes: Vec<_> = fix::plan(s, &stash)
+                .into_iter()
+                .filter(|f| f.kind == kind)
+                .collect();
+            if fixes.is_empty() {
+                p.none += 1;
+            }
+            for f in fixes {
+                match f.blocked {
+                    Some(why) => {
+                        p.blocked += 1;
+                        p.why.get_or_insert(format!("{}: {why}", e.display_name()));
+                    }
+                    None => p.ops.push((e.path.clone(), f.op)),
                 }
             }
         }
-        v
+        p
     }
 
     fn not_applicable(&mut self, why: &str) -> Vec<Effect> {
@@ -1338,32 +1365,23 @@ impl App {
     /// Run every fix of a kind (one per branch, for kinds that have
     /// several) on the selected repos where it applies and isn't blocked.
     fn fix_ops(&mut self, kind: FixKind) -> Vec<Effect> {
-        let stash = self.ws.config.stash;
-        let (mut jobs, mut blocked) = (vec![], None);
-        for i in self.selected() {
-            let e = &self.ws.entries[i];
-            let Some(s) = e.status() else { continue };
-            for f in fix::plan(s, &stash).into_iter().filter(|f| f.kind == kind) {
-                if let Some(why) = f.blocked {
-                    blocked.get_or_insert(format!("{}: {why}", e.display_name()));
-                    continue;
-                }
-                jobs.push(Job {
-                    label: format!("{} {}", f.op.label(), e.display_name()),
-                    family: e.parent.clone().unwrap_or_else(|| e.path.clone()),
-                    path: e.path.clone(),
-                    op: f.op,
-                });
-            }
-        }
-        if jobs.is_empty() {
-            match blocked {
+        let p = self.planned(kind);
+        if p.ops.is_empty() {
+            match p.why {
                 Some(why) => self.error(why),
                 None => self.info("not applicable to the selection (see details with Tab)"),
             }
             return vec![];
         }
-        self.start_jobs(jobs)
+        let note = p.note();
+        let jobs = p
+            .ops
+            .into_iter()
+            .filter_map(|(path, op)| self.job(&path, op))
+            .collect();
+        let fx = self.start_jobs(jobs);
+        self.add_note(&note);
+        fx
     }
 
     fn jobs_for(&mut self, scope: Scope, op: impl Fn(&Entry) -> Option<Op>) -> Vec<Effect> {
@@ -1576,16 +1594,33 @@ impl App {
         self.start_jobs(jobs)
     }
 
+    /// Start `jobs`, except in repos already running something (said so).
     fn start_jobs(&mut self, mut jobs: Vec<Job>) -> Vec<Effect> {
-        jobs.retain(|j| !self.running.contains_key(&j.path));
+        let busy: BTreeSet<PathBuf> = jobs
+            .iter()
+            .filter(|j| self.running.contains_key(&j.path))
+            .map(|j| j.path.clone())
+            .collect();
+        jobs.retain(|j| !busy.contains(&j.path));
+        let busy = skipped(busy.len(), "busy");
         if jobs.is_empty() {
+            if !busy.is_empty() {
+                self.info(format!("nothing started{busy}"));
+            }
             return vec![];
         }
         for j in &jobs {
             self.running.insert(j.path.clone(), j.op.label());
         }
-        self.info(format!("running {} job(s)…", jobs.len()));
+        self.info(format!("running {} job(s)…{busy}", jobs.len()));
         vec![Effect::Jobs(jobs)]
+    }
+
+    /// Add `note` to the status line's message.
+    fn add_note(&mut self, note: &str) {
+        if let Some((m, _)) = &mut self.message {
+            m.push_str(note);
+        }
     }
 
     /// A job running `op` in the repo at `path`, if it's still there.
@@ -1830,6 +1865,37 @@ impl App {
         if self.log.len() > 1000 {
             self.log.drain(..100);
         }
+    }
+}
+
+/// The fixes of one kind an action runs, and what it leaves out.
+#[derive(Default)]
+struct Planned {
+    ops: Vec<(PathBuf, Op)>,
+    /// Selected repos with no fix of the kind.
+    none: usize,
+    /// Fixes left out as blocked, and the first one's reason.
+    blocked: usize,
+    why: Option<String>,
+}
+
+impl Planned {
+    /// ` · 2 not applicable · 1 blocked (acme/w: …)`, or nothing.
+    fn note(&self) -> String {
+        let mut s = skipped(self.none, "not applicable");
+        if let Some(why) = &self.why {
+            s.push_str(&format!("{} ({why})", skipped(self.blocked, "blocked")));
+        }
+        s
+    }
+}
+
+/// ` · 2 busy`, or nothing for none.
+fn skipped(n: usize, what: &str) -> String {
+    if n == 0 {
+        String::new()
+    } else {
+        format!(" · {n} {what}")
     }
 }
 
