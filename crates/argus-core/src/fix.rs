@@ -30,12 +30,22 @@ pub enum FixKind {
     Stash,
     /// Commit everything (never automatic: needs a message).
     Commit,
-    /// Push commits to an existing upstream (fast-forward only).
+    /// Push commits to the current branch's remote branch (fast-forward
+    /// only): its upstream when that's the same-named branch, else the
+    /// same-named branch on its push remote, never a differently named
+    /// upstream such as the `main` a feature branch pulls from.
     Push,
-    /// Push a branch that has no upstream yet.
+    /// Put the current branch on the remote: push and set the upstream
+    /// when it has none or its upstream is gone; push to its own name when
+    /// it pulls from another branch.
     Publish,
+    /// Push other local branches to their remote branches, as `push`
+    /// would (existing ones only, fast-forward only).
+    PushBranches,
     /// Leave a fully pushed / merged branch for the default branch.
     SwitchDefault,
+    /// Switch a detached HEAD to the branch at the same commit.
+    Reattach,
     /// Pull the current branch (your pull settings apply).
     Pull,
     /// Fast-forward local branches that aren't checked out.
@@ -45,12 +55,14 @@ pub enum FixKind {
 impl FixKind {
     /// Default priority: clean up uncommitted work, share commits, leave
     /// the branch, then catch up (on the branch you end up on).
-    pub const ALL: [FixKind; 7] = [
+    pub const ALL: [FixKind; 9] = [
         FixKind::Stash,
         FixKind::Commit,
         FixKind::Push,
         FixKind::Publish,
+        FixKind::PushBranches,
         FixKind::SwitchDefault,
+        FixKind::Reattach,
         FixKind::Pull,
         FixKind::FastForward,
     ];
@@ -66,6 +78,8 @@ impl FixKind {
             FixKind::SwitchDefault => "switch-default",
             FixKind::Push => "push",
             FixKind::Publish => "publish",
+            FixKind::PushBranches => "push-branches",
+            FixKind::Reattach => "reattach",
             FixKind::FastForward => "fast-forward",
             FixKind::Pull => "pull",
             FixKind::Stash => "stash",
@@ -89,16 +103,18 @@ pub struct Fix {
 /// that needs a human.
 /// `stash` gives the stash fix's options (the `[stash]` defaults).
 /// Fixes that would undo a state `[ignore]` says is normal: switching to
-/// the default branch for an ignored non-default-branch branch or detached HEAD,
-/// publishing for an ignored missing upstream, pulling for ignored
-/// "behind". Auto-fix leaves them out; choosing one explicitly still works.
+/// the default branch for an ignored non-default-branch branch,
+/// reattaching an ignored detached HEAD, publishing for an ignored missing
+/// or gone upstream, pulling for ignored "behind". Auto-fix leaves them
+/// out; choosing one explicitly still works.
 pub fn turned_off_by(ignored: &[crate::attention::Issue]) -> Vec<FixKind> {
     use crate::attention::Issue;
     let mut v = vec![];
     for i in ignored {
         v.push(match i {
-            Issue::NonDefaultBranch | Issue::Detached => FixKind::SwitchDefault,
-            Issue::NoUpstream => FixKind::Publish,
+            Issue::NonDefaultBranch => FixKind::SwitchDefault,
+            Issue::Detached => FixKind::Reattach,
+            Issue::NoUpstream | Issue::UpstreamGone => FixKind::Publish,
             Issue::Behind(_) => FixKind::Pull,
             _ => continue,
         });
@@ -137,13 +153,57 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
 
     if let Some(t) = &s.upstream {
         let same_name = head_info.is_some_and(|h| h.upstream_is_same_name());
-        if !t.gone && t.ahead > 0 && t.behind == 0 && same_name {
+        let own = head_info.and_then(|h| h.own.as_ref());
+        if own.is_none() && !t.gone && t.ahead > 0 && t.behind == 0 && same_name {
             v.push(Fix {
                 blocked: None,
                 kind: FixKind::Push,
                 op: Op::Push,
                 reason: format!("{} commit(s) ahead of {}", t.ahead, t.name),
             });
+        }
+        if let (Some(b), Some(h)) = (head_branch, head_info) {
+            if own.is_none()
+                && t.gone
+                && h.is_unpushed()
+                && let Some(remote) = remote_of(t, b)
+            {
+                v.push(Fix {
+                    blocked: None,
+                    kind: FixKind::Publish,
+                    op: Op::PushSetUpstream {
+                        remote: remote.to_string(),
+                        branch: b.to_string(),
+                    },
+                    reason: format!("{b}'s upstream {} is gone", t.name),
+                });
+            }
+            if let Some(o) = own
+                && let Some(remote) = remote_of(o, b)
+            {
+                let op = Op::PushTo {
+                    remote: remote.to_string(),
+                    branch: b.to_string(),
+                };
+                if o.gone && h.is_unpushed() {
+                    v.push(Fix {
+                        blocked: None,
+                        kind: FixKind::Publish,
+                        op,
+                        reason: format!("{b} isn't on {remote} yet (it pulls from {})", t.name),
+                    });
+                } else if !o.gone && o.ahead > 0 {
+                    v.push(Fix {
+                        blocked: diverged_from(o),
+                        kind: FixKind::Push,
+                        op,
+                        reason: format!(
+                            "{} commit(s) ahead of {} (it pulls from {})",
+                            o.ahead, o.name, t.name
+                        ),
+                    });
+                }
+            }
         }
         if !t.gone && t.behind > 0 {
             let diverged = t.ahead > 0;
@@ -199,6 +259,54 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
         });
     }
 
+    if let Head::Detached(_) = s.head
+        && !s.submodule
+    {
+        // the default branch, or the only one; several are left to the user
+        let (here, blocked): (Vec<&String>, _) = match &s.default_branch {
+            Some(d) if s.at_head.contains(d) => (vec![d], None),
+            _ if s.at_head.len() == 1 => (s.at_head.iter().collect(), None),
+            _ => (
+                s.at_head.iter().collect(),
+                Some(format!(
+                    "{} branches are at HEAD: {}",
+                    s.at_head.len(),
+                    list(&s.at_head, 3)
+                )),
+            ),
+        };
+        for b in here {
+            v.push(Fix {
+                blocked: blocked.clone(),
+                kind: FixKind::Reattach,
+                op: Op::Switch { branch: b.clone() },
+                reason: format!("HEAD is at {b}"),
+            });
+        }
+    }
+
+    for b in s.branches.iter().filter(|b| !b.is_head) {
+        // where `push` would push it, if that exists
+        let target = match (&b.own, &b.upstream) {
+            (Some(o), _) => Some(o),
+            (None, Some(t)) if b.upstream_is_same_name() => Some(t),
+            _ => None,
+        };
+        if let Some(t) = target.filter(|t| !t.gone && t.ahead > 0)
+            && let Some(remote) = remote_of(t, &b.name)
+        {
+            v.push(Fix {
+                blocked: diverged_from(t),
+                kind: FixKind::PushBranches,
+                op: Op::PushTo {
+                    remote: remote.to_string(),
+                    branch: b.name.clone(),
+                },
+                reason: format!("{} is {} commit(s) ahead of {}", b.name, t.ahead, t.name),
+            });
+        }
+    }
+
     for b in s.branches.iter().filter(|b| !b.is_head) {
         if let Some(t) = &b.upstream
             && !t.gone
@@ -244,6 +352,24 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
         });
     }
     v
+}
+
+/// The remote of `t`, a tracking ref named after `branch` (`origin/feat`).
+fn remote_of<'a>(t: &'a Tracking, branch: &str) -> Option<&'a str> {
+    t.name
+        .strip_suffix(branch)
+        .and_then(|r| r.strip_suffix('/'))
+        .filter(|r| !r.is_empty())
+}
+
+/// Why pushing to `t` can't fast-forward, if it can't.
+fn diverged_from(t: &Tracking) -> Option<String> {
+    (t.behind > 0).then(|| {
+        format!(
+            "{} has {} commit(s) this branch doesn't (rebased?): pushing needs force",
+            t.name, t.behind
+        )
+    })
 }
 
 /// `a, b, c and 2 more`
@@ -421,6 +547,21 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
                 }
             }
         }
+        Op::PushTo { remote, branch } => {
+            let name = format!("{remote}/{branch}");
+            if let Some(b) = s.branches.iter_mut().find(|b| &b.name == branch) {
+                b.unpushed = Some(0);
+                for t in [b.own.as_mut(), b.upstream.as_mut()].into_iter().flatten() {
+                    if t.name == name {
+                        t.ahead = 0;
+                        t.gone = false;
+                    }
+                }
+                if b.is_head {
+                    s.upstream = b.upstream.clone();
+                }
+            }
+        }
         Op::FastForward { branch, .. } => {
             if let Some(b) = s.branches.iter_mut().find(|b| &b.name == branch)
                 && let Some(t) = &mut b.upstream
@@ -442,6 +583,7 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
                     is_head: false,
                     merged: true,
                     unpushed: Some(0),
+                    own: None,
                 });
             }
             for b in &mut s.branches {
@@ -505,8 +647,9 @@ mod tests {
             turned_off_by(&[Issue::NonDefaultBranch]),
             [FixKind::SwitchDefault]
         );
-        assert_eq!(turned_off_by(&[Issue::Detached]), [FixKind::SwitchDefault]);
+        assert_eq!(turned_off_by(&[Issue::Detached]), [FixKind::Reattach]);
         assert_eq!(turned_off_by(&[Issue::NoUpstream]), [FixKind::Publish]);
+        assert_eq!(turned_off_by(&[Issue::UpstreamGone]), [FixKind::Publish]);
         assert_eq!(turned_off_by(&[Issue::Behind(3)]), [FixKind::Pull]);
         // inverse: issues with no fix to undo them
         for i in [

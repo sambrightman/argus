@@ -49,6 +49,14 @@ pub struct BranchInfo {
     /// Commits not reachable from any remote-tracking ref; `None` when the
     /// repo has no remote-tracking refs at all.
     pub unpushed: Option<usize>,
+    /// When `git push` would push to a branch other than the upstream, and
+    /// that's the same-named branch (say `feat` pulls from `origin/main`,
+    /// and `push.default` is `current`): that branch, which argus pushes
+    /// to. On the push remote (`branch.<name>.pushRemote`,
+    /// `remote.pushDefault`, else the upstream's). `gone` means it doesn't
+    /// exist there yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own: Option<Tracking>,
 }
 
 impl BranchInfo {
@@ -153,6 +161,9 @@ pub struct RepoStatus {
     /// Detached HEAD only: commits reachable from HEAD but from no branch,
     /// tag or remote ref (lost to gc once HEAD moves).
     pub detached_orphans: usize,
+    /// Detached HEAD only: local branches whose tip is the HEAD commit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub at_head: Vec<String>,
     pub in_progress: Option<InProgress>,
     pub branches: Vec<BranchInfo>,
     /// Linked worktrees (excluding the main one).
@@ -547,6 +558,14 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         }
         _ => 0,
     };
+    let at_head = match (&head, head_id) {
+        (Head::Detached(_), Some(id)) => refs
+            .prefixed("refs/heads/")
+            .filter(|&i| refs.peel_at(i) == Some(id))
+            .map(|i| refs.refs[i].name().shorten().to_str_lossy().into_owned())
+            .collect(),
+        _ => vec![],
+    };
 
     let tags = head_tags(repo, &refs, head_id);
     let (describe, describe_gave_up) = match (&head, head_id) {
@@ -568,6 +587,7 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         changes,
         stashes: stash_messages(repo.common_dir()),
         detached_orphans,
+        at_head,
         in_progress: repo.state().map(map_state),
         branches,
         worktrees: worktrees(repo),
@@ -726,6 +746,22 @@ fn count_exclusive(
     Ok(n)
 }
 
+/// The remote-tracking ref of the branch `git push` would push `branch`
+/// to, when that's the same-named branch (`push.default` `current`, say);
+/// `None` when it's another (`upstream` to a feature branch's `main`) or
+/// `git push` would refuse (`simple` with a differently named upstream).
+fn own_push_ref(
+    repo: &gix::Repository,
+    branch: &gix::refs::FullNameRef,
+) -> Option<gix::refs::FullName> {
+    match repo.branch_remote_ref_name(branch, Direction::Push)? {
+        Ok(dest) if dest.as_ref() == branch => {}
+        _ => return None,
+    }
+    repo.branch_remote_tracking_ref_name(branch, Direction::Push)?
+        .ok()
+}
+
 fn branches(
     repo: &gix::Repository,
     refs: &Refs,
@@ -768,6 +804,26 @@ fn branches(
             }
             _ => None,
         };
+        let own = match (&upstream, own_push_ref(repo, full.as_ref())) {
+            (Some(t), Some(tracking)) if t.name != tracking.shorten().to_str_lossy() => {
+                let short = tracking.shorten().to_str_lossy().into_owned();
+                Some(match refs.peel(&tracking.as_bstr().to_str_lossy()) {
+                    Some(o) => Tracking {
+                        ahead: count_exclusive(repo, tip, o)?,
+                        behind: count_exclusive(repo, o, tip)?,
+                        name: short,
+                        gone: false,
+                    },
+                    None => Tracking {
+                        name: short,
+                        ahead: 0,
+                        behind: 0,
+                        gone: true,
+                    },
+                })
+            }
+            _ => None,
+        };
         let merged = match default_tip {
             Some(d) => count_exclusive(repo, tip, d)? == 0,
             None => false,
@@ -795,6 +851,7 @@ fn branches(
             upstream,
             merged,
             unpushed,
+            own,
         });
     }
     out.sort_by(|a, b| b.is_head.cmp(&a.is_head).then_with(|| a.name.cmp(&b.name)));

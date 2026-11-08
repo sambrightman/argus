@@ -627,6 +627,17 @@ fn submodule_detached_head_is_normal() {
     );
     // inverse: the parent sees the submodule moved
     assert_eq!(st(&r).changes.unstaged, 1);
+    // a branch at the pinned commit isn't switched to: that's not normal
+    git(&sub, &["branch", "here"]);
+    let s = st(&sub);
+    assert_eq!(s.at_head, ["here"]);
+    let fixes = argus_core::fix::plan(&s, &Default::default());
+    assert!(
+        !fixes
+            .iter()
+            .any(|f| f.kind == argus_core::fix::FixKind::Reattach),
+        "{fixes:?}"
+    );
 }
 
 #[test]

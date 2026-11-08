@@ -254,7 +254,23 @@ Two findings:
 * **Auto-fixes** (planned and shown first, then executed; never destructive):
   * `switch-default`: on a non-default branch, worktree clean, branch fully
     pushed (or merged into default) → `git switch <default>`.
-  * `push`: ahead of upstream, nothing behind → `git push`.
+  * `push`: ahead of upstream, nothing behind → `git push`. When `git
+    push` would go to a branch other than the upstream and that's the
+    same-named one (status's `own`: `push.default` `current` on a branch
+    that pulls from `main`) → `git push <remote>
+    refs/heads/<b>:refs/heads/<b>`, explicit so `push.default` can't
+    redirect it. Nothing when `git push` would go to a differently named
+    branch (`upstream` to `main`) or refuse (`simple`). Ahead *and*
+    behind its remote branch (rewritten after pushing) → shown, blocked:
+    it needs force.
+  * `publish`: no upstream → `git push --set-upstream`; upstream gone with
+    unpushed work → the same; `own` branch not on the remote yet → the
+    explicit push above, leaving the upstream alone.
+  * `push-branches`: other branches, the same as `push`, to remote
+    branches that exist (never created). One fix per branch.
+  * `reattach`: detached HEAD at a branch tip (status's `at_head`) →
+    `git switch <branch>`; the default branch if it's there, else the only
+    one, else blocked. Not in submodules.
   * `stash`: something to stash → `git stash push -m "argus <timestamp>"`
     with the `[stash]` defaults (git has no config for these): untracked
     files (on by default, `-u`) and keep index (off). `git stash pop

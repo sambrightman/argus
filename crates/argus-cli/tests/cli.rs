@@ -329,6 +329,23 @@ fn fix_with_explicit_kind_and_pattern() {
         .success()
         .stdout(predicate::str::contains("acme/dirty: would stash"))
         .stdout(predicate::str::contains("acme/feature: nothing automatic"));
+    // the newer kinds by name: a detached HEAD at main is reattached
+    git(&sb.path("dev/clean"), &["switch", "-q", "--detach", "main"]);
+    argus(&sb)
+        .args(["fix", "-n", "-k", "push-branches,reattach", "acme/clean"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "acme/clean: would switch main (HEAD is at main)",
+        ));
+    argus(&sb)
+        .args(["fix", "-k", "reattach", "acme/clean"])
+        .assert()
+        .success();
+    assert_eq!(
+        git(&sb.path("dev/clean"), &["branch", "--show-current"]).trim(),
+        "main"
+    );
     // an unknown kind is rejected
     argus(&sb)
         .args(["fix", "-n", "-k", "push,shove"])

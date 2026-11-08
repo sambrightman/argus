@@ -1653,3 +1653,53 @@ fn the_stash_list_says_how_many_are_ignored_and_stops_after_ten() {
         assert_eq!(texts.get(at + 11).map(|t| t.trim()), more, "{n}: {texts:?}");
     }
 }
+
+#[test]
+fn explicit_fixes_run_for_every_branch_and_explain_blocked_ones() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let f = sb.path("dev/feature");
+        git(&f, &["switch", "-q", "-c", "b2"]);
+        git(&f, &["push", "-q", "-u", "origin", "b2"]);
+        commit(&f, "b2 work");
+        git(&f, &["switch", "-q", "feat"]);
+        commit(&f, "feat work");
+        git(&f, &["switch", "-q", "main"]);
+    });
+    while current(&app) != "acme/feature" {
+        app.act(Action::Down);
+    }
+    let pushes = |fx: Vec<Effect>| -> Vec<Op> {
+        match fx.as_slice() {
+            [Effect::Jobs(jobs)] => jobs.iter().map(|j| j.op.clone()).collect(),
+            _ => vec![],
+        }
+    };
+    let to = |b: &str| Op::PushTo {
+        remote: "origin".into(),
+        branch: b.into(),
+    };
+    assert_eq!(
+        pushes(app.act(Action::PushBranches)),
+        [to("b2"), to("feat")]
+    );
+    // rewritten after pushing: b2 is left out, feat still pushed
+    let f = sb.path("dev/feature");
+    git(&f, &["push", "-q", "origin", "b2"]);
+    git(&f, &["switch", "-q", "b2"]);
+    git(&f, &["reset", "-q", "--hard", "HEAD~1"]);
+    commit(&f, "rewritten");
+    git(&f, &["switch", "-q", "main"]);
+    app.running.clear();
+    app.ws.refresh(&f);
+    assert_eq!(pushes(app.act(Action::PushBranches)), [to("feat")]);
+    // only blocked ones: nothing runs, and the reason is shown
+    git(&f, &["branch", "-q", "-D", "feat"]);
+    app.running.clear();
+    app.ws.refresh(&f);
+    assert!(app.act(Action::PushBranches).is_empty());
+    let (msg, is_error) = app.message.clone().unwrap();
+    assert!(
+        is_error && msg.contains("b2") && msg.contains("force"),
+        "{msg}"
+    );
+}

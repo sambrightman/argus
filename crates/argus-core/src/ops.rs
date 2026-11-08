@@ -26,6 +26,12 @@ pub enum Op {
         remote: String,
         branch: String,
     },
+    /// Push `branch` to the same-named branch on `remote`, whatever the
+    /// branch's upstream and `push.default` say (fast-forward only).
+    PushTo {
+        remote: String,
+        branch: String,
+    },
     Switch {
         branch: String,
     },
@@ -100,6 +106,10 @@ impl Op {
             Op::PushSetUpstream { remote, branch } => {
                 v(&["push", "--set-upstream", remote, branch])
             }
+            Op::PushTo { remote, branch } => {
+                let r = format!("refs/heads/{branch}");
+                vec!["push".into(), remote.clone(), format!("{r}:{r}")]
+            }
             Op::Switch { branch } => v(&["switch", branch]),
             Op::Stash {
                 message,
@@ -170,7 +180,12 @@ impl Op {
     pub fn is_network(&self) -> bool {
         matches!(
             self,
-            Op::Fetch | Op::Pull | Op::Push | Op::PushSetUpstream { .. } | Op::Clone { .. }
+            Op::Fetch
+                | Op::Pull
+                | Op::Push
+                | Op::PushSetUpstream { .. }
+                | Op::PushTo { .. }
+                | Op::Clone { .. }
         )
     }
 
@@ -180,6 +195,7 @@ impl Op {
             Op::Pull => "pull".into(),
             Op::Push => "push".into(),
             Op::PushSetUpstream { remote, branch } => format!("push -u {remote} {branch}"),
+            Op::PushTo { remote, branch } => format!("push {branch} to {remote}/{branch}"),
             Op::Switch { branch } => format!("switch {branch}"),
             Op::Stash {
                 untracked,

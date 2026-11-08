@@ -52,6 +52,7 @@ pub enum Action {
     Pull(Scope),
     Push,
     Publish,
+    PushBranches,
     Stash(StashKind),
     /// Flip a menu switch for this session.
     Toggle(Switch),
@@ -62,6 +63,7 @@ pub enum Action {
     DiscardFiles,
     Commit,
     SwitchDefault,
+    Reattach,
     FastForward,
     AutoFix(Scope),
     PullAndClone,
@@ -886,28 +888,26 @@ impl App {
                 self.scanning = true;
                 return vec![Effect::Scan];
             }
-            Fetch(scope) => return self.jobs_for(scope, |_| Some(Op::Fetch), false),
+            Fetch(scope) => return self.jobs_for(scope, |_| Some(Op::Fetch)),
             Pull(Scope::All) => {
                 let jobs = pull::plan_updates(&self.ws);
                 return self.start_jobs(jobs);
             }
             Pull(Scope::Selected) => {
-                return self.jobs_for(
-                    Scope::Selected,
-                    |e| {
-                        let s = e.status()?;
-                        Some(if s.upstream.as_ref().is_some_and(|t| !t.gone) {
-                            Op::Pull
-                        } else {
-                            Op::Fetch
-                        })
-                    },
-                    false,
-                );
+                return self.jobs_for(Scope::Selected, |e| {
+                    let s = e.status()?;
+                    Some(if s.upstream.as_ref().is_some_and(|t| !t.gone) {
+                        Op::Pull
+                    } else {
+                        Op::Fetch
+                    })
+                });
             }
             Push => return self.fix_ops(FixKind::Push),
             Publish => return self.fix_ops(FixKind::Publish),
+            PushBranches => return self.fix_ops(FixKind::PushBranches),
             SwitchDefault => return self.fix_ops(FixKind::SwitchDefault),
+            Reattach => return self.fix_ops(FixKind::Reattach),
             FastForward => return self.fix_ops(FixKind::FastForward),
             Commit => {
                 let targets: Vec<PathBuf> = self
@@ -1178,27 +1178,38 @@ impl App {
         vec![Effect::SaveState]
     }
 
-    /// Run the op of a specific fix kind on every selected repo where it applies.
+    /// Run every fix of a kind (one per branch, for kinds that have
+    /// several) on the selected repos where it applies and isn't blocked.
     fn fix_ops(&mut self, kind: FixKind) -> Vec<Effect> {
         let stash = self.ws.config.stash;
-        self.jobs_for(
-            Scope::Selected,
-            |e| {
-                fix::plan(e.status()?, &stash)
-                    .into_iter()
-                    .find(|f| f.kind == kind)
-                    .map(|f| f.op)
-            },
-            true,
-        )
+        let (mut jobs, mut blocked) = (vec![], None);
+        for i in self.selected() {
+            let e = &self.ws.entries[i];
+            let Some(s) = e.status() else { continue };
+            for f in fix::plan(s, &stash).into_iter().filter(|f| f.kind == kind) {
+                if let Some(why) = f.blocked {
+                    blocked.get_or_insert(format!("{}: {why}", e.display_name()));
+                    continue;
+                }
+                jobs.push(Job {
+                    label: format!("{} {}", f.op.label(), e.display_name()),
+                    family: e.parent.clone().unwrap_or_else(|| e.path.clone()),
+                    path: e.path.clone(),
+                    op: f.op,
+                });
+            }
+        }
+        if jobs.is_empty() {
+            match blocked {
+                Some(why) => self.error(why),
+                None => self.info("not applicable to the selection (see details with Tab)"),
+            }
+            return vec![];
+        }
+        self.start_jobs(jobs)
     }
 
-    fn jobs_for(
-        &mut self,
-        scope: Scope,
-        op: impl Fn(&Entry) -> Option<Op>,
-        explain: bool,
-    ) -> Vec<Effect> {
+    fn jobs_for(&mut self, scope: Scope, op: impl Fn(&Entry) -> Option<Op>) -> Vec<Effect> {
         let idx = if scope == Scope::All {
             self.bulk_repos()
         } else {
@@ -1215,9 +1226,6 @@ impl App {
                     op,
                 });
             }
-        }
-        if jobs.is_empty() && explain {
-            self.info("not applicable to the selection (see details with Tab)");
         }
         self.start_jobs(jobs)
     }
@@ -1638,22 +1646,7 @@ impl App {
 }
 
 fn kinds_label(k: &[FixKind]) -> String {
-    k.iter()
-        .map(|k| serde_json_like(k))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn serde_json_like(k: &FixKind) -> &'static str {
-    match k {
-        FixKind::SwitchDefault => "switch-default",
-        FixKind::Push => "push",
-        FixKind::Publish => "publish",
-        FixKind::FastForward => "fast-forward",
-        FixKind::Pull => "pull",
-        FixKind::Stash => "stash",
-        FixKind::Commit => "commit",
-    }
+    k.iter().map(|k| k.name()).collect::<Vec<_>>().join(", ")
 }
 
 /// Run a user-configured command line through `sh -c` so quoting works.

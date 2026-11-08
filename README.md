@@ -149,10 +149,10 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `?` | help |
 | `F` | **Pull**: `p` selected, `a` all marked for pull, `c` clone new repos of tracked owners, then pull all marked |
 | `f` | **Fetch**: `f` selected, `a` all shown except hidden |
-| `P` | **Push**: `p` push, `u` publish (set upstream) |
+| `P` | **Push**: `p` push, `u` publish, `b` push other branches |
 | `z` | **Stash**: switches `u` include untracked, `k` keep index (from `[stash]`, for the session); `z` all, `i` staged only, `m` with a message, `f` files marked in the details |
 | `c` | **Commit** (prompts for message) |
-| `b` | **Branch**: `d` switch to default, `f` fast-forward stale branches |
+| `b` | **Branch**: `d` switch to default, `r` reattach detached HEAD, `f` fast-forward stale branches |
 | `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden |
 | `m` | **Mark**: `f` favourite, `p` pull, `i` ignore, `I` ignore the issue under the cursor (pinned to the branch, tag or commit), `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page |
@@ -239,13 +239,32 @@ behind upstream (on its own, not counted as needing attention: a pull fixes it).
 
 Fixes are planned from status and are never destructive. `switch-default`
 needs a clean tracked tree and nothing unpushed. `push` (a default auto-fix) is fast-forward only,
-and only to a same-named upstream branch. Nothing is offered during a conflict.
+and only to a same-named branch, never to a differently named upstream.
+Nothing is offered during a conflict.
+
+* **A branch that pulls from another** (`git switch -c feat --track
+  origin/main`) is pushed to its own name when `git push` would push it
+  there (`push.default = current`, say): `publish` creates `origin/feat`
+  while the upstream stays `origin/main`, then `push` keeps it up to date.
+  With `push.default` `simple` (git's default) or `upstream`, `git push`
+  would refuse or push to `main`, so argus offers neither.
+* **A gone upstream** (deleted on the remote, with work that's on no remote)
+  gets `publish`: push it again and set the upstream.
+* **`push-branches`** pushes other local branches to their existing remote
+  branches, as `push` would; it never creates one.
+* **`reattach`** switches a detached HEAD to the branch at the same commit
+  (the default branch if it's one of them; several others are left to you).
+  Not in submodules, where a detached HEAD is normal.
+
+Pushes that would need force (the branch was rewritten after pushing) are
+shown, with why, and never applied.
 Each auto-fix action applies **one** fix: the first kind in `[fix] auto`
 (or `-k`, in the order given) that the repo needs. An unpushed feature
 branch is pushed by one `x x` (or `argus fix`) and switched back to the
 default branch by the next. Or snooze it in between (`m z`).
 Kinds you don't list rank after the ones you do, in the default order:
-stash, commit, push, publish, switch-default, pull, fast-forward.
+stash, commit, push, publish, push-branches, switch-default, reattach, pull,
+fast-forward.
 
 `argus fix -n` shows, per repo, the fix this run would apply, then the
 chain later runs would continue with, then other fixes available now

@@ -628,3 +628,281 @@ fn default_order_switches_before_catching_up() {
     use FixKind::*;
     assert_chain_matches_reality(&r, &FixKind::ALL, &[SwitchDefault, Pull]);
 }
+
+fn st(p: &std::path::Path) -> argus_core::status::RepoStatus {
+    status(p, StatusOptions::default()).unwrap()
+}
+
+/// The fixes of `kind`, as (op label, blocked).
+fn of_kind(p: &std::path::Path, kind: FixKind) -> Vec<(String, Option<String>)> {
+    plan(&st(p), &StashConfig::default())
+        .into_iter()
+        .filter(|f| f.kind == kind)
+        .map(|f| (f.op.label(), f.blocked))
+        .collect()
+}
+
+/// The commit a branch of the forge repo `acme/w` points at.
+fn forge_tip(sb: &Sandbox, branch: &str) -> Option<String> {
+    let bare = sb.path("forge/acme/w.git");
+    argus_core::testkit::git_may_fail(&bare, &["rev-parse", "--verify", "-q", branch])
+        .then(|| git(&bare, &["rev-parse", branch]))
+}
+
+/// `feat`, pulling from `origin/main`, with one commit, `push.default` as given.
+fn feat_pulls_from_main(sb: &Sandbox, push_default: &str) -> std::path::PathBuf {
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    git(&r, &["config", "push.default", push_default]);
+    git(
+        &r,
+        &["switch", "-q", "-c", "feat", "--track", "origin/main"],
+    );
+    commit(&r, "feat");
+    r
+}
+
+#[test]
+fn a_branch_pulling_from_main_is_pushed_to_its_own_name() {
+    let sb = Sandbox::new();
+    let r = feat_pulls_from_main(&sb, "current");
+    let main_before = forge_tip(&sb, "main");
+    let own = st(&r).branches[0].own.clone().unwrap();
+    assert_eq!((own.name.as_str(), own.gone), ("origin/feat", true));
+    // not on the remote yet: publishing puts it there, upstream untouched
+    assert_eq!(
+        of_kind(&r, FixKind::Publish),
+        [("push feat to origin/feat".to_string(), None)]
+    );
+    assert!(of_kind(&r, FixKind::Push).is_empty());
+    // inverse: nothing of its own yet (all on main), nothing to publish
+    git(
+        &r,
+        &["switch", "-q", "-c", "fresh", "--track", "origin/main"],
+    );
+    assert!(st(&r).branches[0].own.as_ref().unwrap().gone);
+    assert!(of_kind(&r, FixKind::Publish).is_empty());
+    git(&r, &["switch", "-q", "feat"]);
+    let before = st(&r);
+    let a = apply_fix(&r, &[FixKind::Publish], &StashConfig::default())
+        .unwrap()
+        .unwrap();
+    assert!(a.outcome.success, "{}", a.outcome.output);
+    let predicted = argus_core::fix::simulate(&before, &a.fix);
+    assert_eq!(
+        predicted.branches,
+        st(&r).branches,
+        "the prediction matches"
+    );
+    assert_eq!(
+        forge_tip(&sb, "feat"),
+        Some(git(&r, &["rev-parse", "HEAD"]))
+    );
+    assert_eq!(forge_tip(&sb, "main"), main_before, "main untouched");
+    let s = st(&r);
+    assert_eq!(s.upstream.as_ref().unwrap().name, "origin/main");
+    assert_eq!(s.branches[0].unpushed, Some(0));
+    // more work: the default auto-fix pushes it there, never to main
+    commit(&r, "more");
+    assert_eq!(
+        of_kind(&r, FixKind::Push),
+        [("push feat to origin/feat".to_string(), None)]
+    );
+    let auto = argus_core::Config::default().fix.auto;
+    let a = apply_fix(&r, &auto, &StashConfig::default())
+        .unwrap()
+        .unwrap();
+    assert_eq!((a.fix.kind, a.outcome.success), (FixKind::Push, true));
+    assert_eq!(
+        forge_tip(&sb, "feat"),
+        Some(git(&r, &["rev-parse", "HEAD"]))
+    );
+    assert_eq!(forge_tip(&sb, "main"), main_before, "main untouched");
+    // rewritten after pushing: pushing would need force, so it's blocked
+    git(&r, &["reset", "-q", "--hard", "HEAD~1"]);
+    commit(&r, "rewritten");
+    let push = of_kind(&r, FixKind::Push);
+    assert!(
+        push[0].1.as_deref().is_some_and(|b| b.contains("force")),
+        "{push:?}"
+    );
+    assert!(choose(&st(&r), &auto, &StashConfig::default()).is_none());
+}
+
+#[test]
+fn nothing_is_pushed_where_git_push_would_go_to_main_or_refuse() {
+    for push_default in ["upstream", "simple"] {
+        let sb = Sandbox::new();
+        let r = feat_pulls_from_main(&sb, push_default);
+        assert_eq!(st(&r).branches[0].own, None, "{push_default}");
+        let k = kinds(&r);
+        assert!(
+            !k.contains(&FixKind::Push) && !k.contains(&FixKind::Publish),
+            "{push_default}: {k:?}"
+        );
+        git(&r, &["push", "-q", "origin", "feat"]);
+        commit(&r, "more");
+        let k = kinds(&r);
+        assert!(!k.contains(&FixKind::Push), "{push_default}: {k:?}");
+    }
+    // a push refspec sending it to another name: not its own name either
+    let sb = Sandbox::new();
+    let r = feat_pulls_from_main(&sb, "current");
+    git(
+        &r,
+        &[
+            "config",
+            "remote.origin.push",
+            "refs/heads/feat:refs/heads/other",
+        ],
+    );
+    git(&r, &["push", "-q", "origin"]);
+    assert_eq!(st(&r).branches[0].own, None);
+}
+
+#[test]
+fn chain_publish_to_own_name_then_switch() {
+    let sb = Sandbox::new();
+    let r = feat_pulls_from_main(&sb, "current");
+    use FixKind::*;
+    assert_chain_matches_reality(&r, &[Publish, SwitchDefault], &[Publish, SwitchDefault]);
+}
+
+#[test]
+fn a_gone_upstream_with_unpushed_work_is_published_again() {
+    let sb = Sandbox::new();
+    let r = pushed_feature(&sb);
+    git(&r, &["push", "-q", "origin", "--delete", "feat"]);
+    assert!(st(&r).upstream.unwrap().gone);
+    assert_eq!(
+        of_kind(&r, FixKind::Publish),
+        [("push -u origin feat".to_string(), None)]
+    );
+    use FixKind::*;
+    assert_chain_matches_reality(&r, &[Publish, SwitchDefault], &[Publish, SwitchDefault]);
+    assert!(!st(&r).upstream.unwrap().gone);
+    // inverse: merged before the branch was deleted, nothing to publish
+    let sb = Sandbox::new();
+    let r = pushed_feature(&sb);
+    git(&r, &["push", "-q", "origin", "feat:main"]);
+    git(&r, &["push", "-q", "origin", "--delete", "feat"]);
+    let k = kinds(&r);
+    assert!(!k.contains(&Publish), "{k:?}");
+    assert!(k.contains(&SwitchDefault), "{k:?}");
+}
+
+#[test]
+fn other_branches_are_pushed_to_their_remote_branches() {
+    let sb = Sandbox::new();
+    let r = pushed_feature(&sb);
+    commit(&r, "unpushed");
+    git(&r, &["switch", "-q", "main"]);
+    assert_eq!(
+        of_kind(&r, FixKind::PushBranches),
+        [("push feat to origin/feat".to_string(), None)]
+    );
+    assert!(
+        of_kind(&r, FixKind::Push).is_empty(),
+        "not the current branch"
+    );
+    let a = apply_fix(&r, &[FixKind::PushBranches], &StashConfig::default())
+        .unwrap()
+        .unwrap();
+    assert!(a.outcome.success, "{}", a.outcome.output);
+    assert_eq!(
+        forge_tip(&sb, "feat"),
+        Some(git(&r, &["rev-parse", "feat"]))
+    );
+    assert_eq!(head(&r), Head::Branch("main".into()));
+    assert!(of_kind(&r, FixKind::PushBranches).is_empty(), "done");
+    // inverse: a local-only branch isn't published
+    git(&r, &["branch", "local"]);
+    git(&r, &["switch", "-q", "local"]);
+    commit(&r, "local work");
+    git(&r, &["switch", "-q", "main"]);
+    assert!(of_kind(&r, FixKind::PushBranches).is_empty());
+    // inverse: rewritten after pushing, so blocked
+    git(&r, &["switch", "-q", "feat"]);
+    git(&r, &["reset", "-q", "--hard", "HEAD~1"]);
+    commit(&r, "rewritten");
+    git(&r, &["switch", "-q", "main"]);
+    let p = of_kind(&r, FixKind::PushBranches);
+    assert!(
+        p.len() == 1 && p[0].1.as_deref().is_some_and(|b| b.contains("force")),
+        "{p:?}"
+    );
+}
+
+#[test]
+fn other_branches_pulling_from_main_are_pushed_to_their_own_name_only() {
+    let sb = Sandbox::new();
+    let r = feat_pulls_from_main(&sb, "current");
+    git(&r, &["push", "-q", "origin", "feat"]);
+    commit(&r, "more");
+    git(&r, &["switch", "-q", "main"]);
+    let main_before = forge_tip(&sb, "main");
+    let a = apply_fix(&r, &[FixKind::PushBranches], &StashConfig::default())
+        .unwrap()
+        .unwrap();
+    assert!(a.outcome.success, "{}", a.outcome.output);
+    assert_eq!(
+        forge_tip(&sb, "feat"),
+        Some(git(&r, &["rev-parse", "feat"]))
+    );
+    assert_eq!(forge_tip(&sb, "main"), main_before);
+    // inverse: not on the remote yet, so not created
+    let sb = Sandbox::new();
+    let r = feat_pulls_from_main(&sb, "current");
+    git(&r, &["switch", "-q", "main"]);
+    assert!(of_kind(&r, FixKind::PushBranches).is_empty());
+    // inverse: git push would push it to main
+    let sb = Sandbox::new();
+    let r = feat_pulls_from_main(&sb, "upstream");
+    git(&r, &["push", "-q", "origin", "feat:feat"]);
+    commit(&r, "more");
+    git(&r, &["switch", "-q", "main"]);
+    assert!(of_kind(&r, FixKind::PushBranches).is_empty());
+}
+
+#[test]
+fn a_detached_head_at_a_branch_is_reattached() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    git(&r, &["switch", "-q", "--detach", "main"]);
+    write(&r, "README", "dirty: switching to the same commit is fine");
+    assert_eq!(st(&r).at_head, ["main"]);
+    assert_eq!(
+        of_kind(&r, FixKind::Reattach),
+        [("switch main".to_string(), None)]
+    );
+    use FixKind::*;
+    assert_chain_matches_reality(&r, &[Reattach], &[Reattach]);
+    assert_eq!(head(&r), Head::Branch("main".into()));
+    // several branches here: the default branch wins…
+    git(&r, &["branch", "a"]);
+    git(&r, &["switch", "-q", "--detach", "main"]);
+    assert_eq!(
+        of_kind(&r, FixKind::Reattach),
+        [("switch main".to_string(), None)]
+    );
+    // …else the user chooses
+    commit(&r, "past main");
+    git(&r, &["branch", "-f", "a"]);
+    git(&r, &["branch", "b"]);
+    git(&r, &["switch", "-q", "--detach", "a"]);
+    let re = of_kind(&r, FixKind::Reattach);
+    assert_eq!(re.len(), 2, "{re:?}");
+    assert!(
+        re.iter()
+            .all(|(_, b)| b.as_deref() == Some("2 branches are at HEAD: a, b"))
+    );
+    assert!(choose(&st(&r), &[Reattach], &StashConfig::default()).is_none());
+    // inverse: no branch at HEAD
+    commit(&r, "detached work");
+    assert!(st(&r).at_head.is_empty());
+    assert!(of_kind(&r, FixKind::Reattach).is_empty());
+    // inverse: on a branch, nothing at HEAD is reported
+    git(&r, &["switch", "-q", "a"]);
+    assert!(st(&r).at_head.is_empty());
+}

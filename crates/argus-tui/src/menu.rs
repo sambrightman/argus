@@ -111,8 +111,13 @@ impl MenuId {
             MenuId::Push => (
                 "Push",
                 vec![
-                    item('p', "push selected to upstream", Action::Push),
-                    item('u', "publish: push and set upstream", Action::Publish),
+                    item('p', "push to its remote branch", Action::Push),
+                    item(
+                        'u',
+                        "publish: put the branch on the remote",
+                        Action::Publish,
+                    ),
+                    item('b', "push other branches", Action::PushBranches),
                 ],
             ),
             MenuId::Stash => (
@@ -146,6 +151,11 @@ impl MenuId {
                 "Branch",
                 vec![
                     item('d', "switch to default branch", Action::SwitchDefault),
+                    item(
+                        'r',
+                        "reattach detached HEAD to its branch",
+                        Action::Reattach,
+                    ),
                     item(
                         'f',
                         "fast-forward stale local branches",
