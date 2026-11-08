@@ -768,15 +768,19 @@ fn an_ignored_issue_stops_counting_and_a_pin_to_another_value_doesnt() {
     git(&r, &["push", "-q", "-u", "origin", "feat"]);
     let entry = |extra: &str| ws(&sb, extra).entries[0].clone();
     let e = entry("");
-    assert!(e.issues.contains(&Issue::OffDefault) && e.needs_attention());
-    let e = entry("[ignore]\noff_default = ['acme/w@feat']");
-    assert!(!e.issues.contains(&Issue::OffDefault), "{:?}", e.issues);
-    assert_eq!(e.ignored_issues, [Issue::OffDefault]);
+    assert!(e.issues.contains(&Issue::NonDefaultBranch) && e.needs_attention());
+    let e = entry("[ignore]\nnon_default_branch = ['acme/w@feat']");
+    assert!(
+        !e.issues.contains(&Issue::NonDefaultBranch),
+        "{:?}",
+        e.issues
+    );
+    assert_eq!(e.ignored_issues, [Issue::NonDefaultBranch]);
     assert!(!e.needs_attention());
     assert!(!e.flags.hidden(), "still shown: only the issue is ignored");
     // pinned to another branch: this one is flagged
-    let e = entry("[ignore]\noff_default = ['acme/w@release']");
-    assert!(e.issues.contains(&Issue::OffDefault) && e.ignored_issues.is_empty());
+    let e = entry("[ignore]\nnon_default_branch = ['acme/w@release']");
+    assert!(e.issues.contains(&Issue::NonDefaultBranch) && e.ignored_issues.is_empty());
 }
 
 #[test]
@@ -787,7 +791,7 @@ fn fix_kinds_leave_out_those_undoing_an_ignored_state() {
     let r = sb.clone_as_github("acme", "w", "dev/w");
     git(&r, &["switch", "-q", "-c", "feat"]);
     let kinds = [FixKind::SwitchDefault, FixKind::Push];
-    let e = ws(&sb, "[ignore]\noff_default = ['acme/w']").entries[0].clone();
+    let e = ws(&sb, "[ignore]\nnon_default_branch = ['acme/w']").entries[0].clone();
     assert_eq!(e.fix_kinds(&kinds), [FixKind::Push]);
     let e = ws(&sb, "").entries[0].clone();
     assert_eq!(e.fix_kinds(&kinds), kinds);
@@ -801,14 +805,17 @@ fn ignoring_an_issue_through_the_workspace_pins_it_and_resolves_it() {
     let r = sb.clone_as_github("acme", "w", "dev/w");
     git(&r, &["switch", "-q", "-c", "feat"]);
     let mut w = ws(&sb, "");
-    w.set_issue_ignored(&[0], IssueList::OffDefault, true)
+    w.set_issue_ignored(&[0], IssueList::NonDefaultBranch, true)
         .unwrap();
-    assert_eq!(w.config.ignore.off_default, ["github.com/acme/w@feat"]);
-    assert_eq!(w.entries[0].ignored_issues, [Issue::OffDefault]);
-    w.set_issue_ignored(&[0], IssueList::OffDefault, false)
+    assert_eq!(
+        w.config.ignore.non_default_branch,
+        ["github.com/acme/w@feat"]
+    );
+    assert_eq!(w.entries[0].ignored_issues, [Issue::NonDefaultBranch]);
+    w.set_issue_ignored(&[0], IssueList::NonDefaultBranch, false)
         .unwrap();
-    assert!(w.config.ignore.off_default.is_empty());
-    assert!(w.entries[0].issues.contains(&Issue::OffDefault));
+    assert!(w.config.ignore.non_default_branch.is_empty());
+    assert!(w.entries[0].issues.contains(&Issue::NonDefaultBranch));
 }
 
 #[test]

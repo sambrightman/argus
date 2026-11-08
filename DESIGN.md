@@ -138,7 +138,7 @@ Two findings:
   or path; the last matching entry wins and `!` turns the mark off, as in
   gitignore. Names: `ignore.repos` hides a repo and leaves it out of
   pulls, clones and bulk actions; *hidden* is the wider set, ignored or
-  snoozed. The other `[ignore]` lists turn off one issue (off-default,
+  snoozed. The other `[ignore]` lists turn off one issue (non-default-branch,
   detached, no remote, no upstream, stashes, unpushed branches, behind):
   ignoring a whole repo is the special case of ignoring everything about
   it, so one section holds both. `repo@value` pins the branch, tag,

@@ -180,7 +180,7 @@ struct MarkArgs {
     #[arg(long)]
     unignore: bool,
     /// Ignore one issue for these repos (`[ignore] <issue>`), pinned to the
-    /// current branch, tag or commit where the list pins: off-default,
+    /// current branch, tag or commit where the list pins: non-default-branch,
     /// detached, no-remote, no-upstream, stashes, unpushed-branches, behind.
     #[arg(long, value_name = "ISSUE", value_parser = issue_list)]
     ignore_issue: Vec<IssueList>,
@@ -1224,7 +1224,7 @@ fn fix_cmd(
 
 // ---------- mark ----------
 
-/// An `[ignore]` issue list by name (`off-default` or `off_default`).
+/// An `[ignore]` issue list by name (`non-default-branch` or `non_default_branch`).
 fn issue_list(s: &str) -> std::result::Result<IssueList, String> {
     IssueList::from_name(s).ok_or_else(|| {
         let names: Vec<String> = IssueList::ALL

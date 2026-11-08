@@ -36,7 +36,10 @@ fn demo_covers_every_state() {
             "diverged",
             has(&|e| e.status().is_some_and(|s| s.integration.is_some())),
         ),
-        ("off default", issue(|i| matches!(i, Issue::OffDefault))),
+        (
+            "non-default branch",
+            issue(|i| matches!(i, Issue::NonDefaultBranch)),
+        ),
         ("no upstream", issue(|i| matches!(i, Issue::NoUpstream))),
         ("gone", issue(|i| matches!(i, Issue::UpstreamGone))),
         ("conflicts", issue(|i| matches!(i, Issue::Conflicts(_)))),

@@ -1327,7 +1327,11 @@ fn fix_leaves_an_ignored_state_alone() {
     let sb = Sandbox::new();
     three(&sb);
     let cfg = sb.path("cfg.toml");
-    std::fs::write(&cfg, "[ignore]\noff_default = ['acme/feature@feat']\n").unwrap();
+    std::fs::write(
+        &cfg,
+        "[ignore]\nnon_default_branch = ['acme/feature@feat']\n",
+    )
+    .unwrap();
     let fix = |args: &[&str]| {
         argus(&sb)
             .arg("--config")
@@ -1341,7 +1345,11 @@ fn fix_leaves_an_ignored_state_alone() {
     let branch = git(&sb.path("dev/feature"), &["branch", "--show-current"]);
     assert_eq!(branch.trim(), "feat");
     // inverse: pinned to another branch, it's fixed as before
-    std::fs::write(&cfg, "[ignore]\noff_default = ['acme/feature@other']\n").unwrap();
+    std::fs::write(
+        &cfg,
+        "[ignore]\nnon_default_branch = ['acme/feature@other']\n",
+    )
+    .unwrap();
     fix(&["fix"]).stdout(predicate::str::contains("switch main"));
 }
 
@@ -1360,12 +1368,15 @@ fn mark_ignores_and_unignores_an_issue() {
             .assert()
     };
     let read = || argus_core::Config::parse(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
-    mark(&["acme/feature", "--ignore-issue", "off-default"]).success();
-    assert_eq!(read().ignore.off_default, ["github.com/acme/feature@feat"]);
-    mark(&["acme/feature", "--unignore-issue", "off-default"]).success();
-    assert!(read().ignore.off_default.is_empty());
+    mark(&["acme/feature", "--ignore-issue", "non-default-branch"]).success();
+    assert_eq!(
+        read().ignore.non_default_branch,
+        ["github.com/acme/feature@feat"]
+    );
+    mark(&["acme/feature", "--unignore-issue", "non-default-branch"]).success();
+    assert!(read().ignore.non_default_branch.is_empty());
     // unknown or not ignorable: an error naming the ones that are
     mark(&["acme/dirty", "--ignore-issue", "dirty"])
         .failure()
-        .stderr(predicate::str::contains("off-default"));
+        .stderr(predicate::str::contains("non-default-branch"));
 }

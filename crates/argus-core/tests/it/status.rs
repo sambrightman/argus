@@ -196,7 +196,7 @@ fn feature_branch_pushed_vs_unpushed() {
     assert_eq!(s.upstream, None);
     let is = issues(&s);
     assert!(is.contains(&Issue::NoUpstream), "{is:?}");
-    assert!(is.contains(&Issue::OffDefault));
+    assert!(is.contains(&Issue::NonDefaultBranch));
     let feat = s.branches.iter().find(|b| b.name == "feat").unwrap();
     assert!(feat.is_head && !feat.merged && feat.is_unpushed());
     let main = s.branches.iter().find(|b| b.name == "main").unwrap();
@@ -208,7 +208,7 @@ fn feature_branch_pushed_vs_unpushed() {
     assert!(
         !is.contains(&Issue::NoUpstream) && !is.iter().any(|i| matches!(i, Issue::Unpushed(_)))
     );
-    assert!(is.contains(&Issue::OffDefault));
+    assert!(is.contains(&Issue::NonDefaultBranch));
 }
 
 #[test]
@@ -261,7 +261,7 @@ fn upstream_gone_but_merged_is_fine() {
     git(&r, &["fetch", "-q", "--prune"]);
     let is = issues(&st(&r));
     assert!(!is.contains(&Issue::UpstreamGone), "{is:?}");
-    assert!(is.contains(&Issue::OffDefault));
+    assert!(is.contains(&Issue::NonDefaultBranch));
 }
 
 #[test]
@@ -507,7 +507,7 @@ fn ahead_of_upstream_but_on_another_remote_is_not_unpushed() {
         !is.iter().any(|i| matches!(i, Issue::Unpushed(_))),
         "{is:?}"
     );
-    assert!(is.contains(&Issue::OffDefault));
+    assert!(is.contains(&Issue::NonDefaultBranch));
 }
 
 #[test]

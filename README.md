@@ -55,7 +55,7 @@ pull = ["someone/dotfiles", "my-org/*", "!my-org/huge-monorepo"]   # by `argus p
 
 [ignore]                         # what not to flag; same kind of entries
 repos = ["~/dev/scratch/**"]     # hidden, and left out of pulls, clones and bulk actions
-off_default = ["my-org/legacy@release-*"]  # normally on that branch: another is flagged
+non_default_branch = ["my-org/legacy@release-*"]  # normally on that branch: another is flagged
 detached = ["my-org/pinned@v1.2.0"]        # a tag, its describe, or the commit
 stashes = ["my-org/big"]         # also no_remote, no_upstream, unpushed_branches, behind
 

@@ -228,8 +228,9 @@ fn auto_fix_applies_and_refreshes() {
 
 #[test]
 fn a_fix_asked_for_an_ignored_state_still_leaves_it_alone() {
-    let (_sb, mut app, mut rt) =
-        setup("[fix]\nauto = ['switch-default']\n[ignore]\noff_default = ['acme/feature@feat']");
+    let (_sb, mut app, mut rt) = setup(
+        "[fix]\nauto = ['switch-default']\n[ignore]\nnon_default_branch = ['acme/feature@feat']",
+    );
     let feature = path(&app, "acme/feature");
     // as a stale selection might: the runtime checks for itself
     let fx = vec![Effect::Fix {

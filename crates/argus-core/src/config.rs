@@ -220,7 +220,7 @@ pub struct Ignore {
     /// Repos normally on a branch other than the default. `repo@branch`
     /// ignores only that branch (glob allowed), so another is flagged.
     #[schemars(example = vec!["acme/legacy@release-*"])]
-    pub off_default: Vec<String>,
+    pub non_default_branch: Vec<String>,
     /// Repos normally on a detached HEAD. `repo@value` ignores only that:
     /// a tag on HEAD, its describe (`v1.2-3-g1a2b3c4`) or its commit id
     /// (7 characters or all of it); glob allowed.
@@ -229,7 +229,7 @@ pub struct Ignore {
     /// Repos with no remote.
     pub no_remote: Vec<String>,
     /// Repos whose branch has no upstream. `repo@branch` as for
-    /// `off_default`.
+    /// `non_default_branch`.
     pub no_upstream: Vec<String>,
     /// Repos with stashes.
     pub stashes: Vec<String>,
@@ -893,10 +893,14 @@ mod tests {
             "sync = ['a/b']",
             "extend_sync = ['a/b']",
             "[[track]]\nowner = 'acme'\nsync = false",
+            "[ignore]\noff_default = ['a/b']",
+            "[ignore]\nextend_off_default = ['a/b']",
         ] {
             assert!(Config::parse(old).is_err(), "{old}");
         }
         // inverse: the new names
+        let c = Config::parse("[ignore]\nnon_default_branch = ['a/b']").unwrap();
+        assert_eq!(c.ignore.non_default_branch, ["a/b"]);
         let c = Config::parse(
             "exclude_paths = ['x']\nignore.repos = ['a/b']\n[concurrency]\ndisk = 2\nnetwork = 5",
         )

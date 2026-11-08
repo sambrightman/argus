@@ -85,7 +85,7 @@ impl Mark {
 /// detached HEAD holds can't be: they risk losing work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IssueList {
-    OffDefault,
+    NonDefaultBranch,
     Detached,
     NoRemote,
     NoUpstream,
@@ -96,7 +96,7 @@ pub enum IssueList {
 
 impl IssueList {
     pub const ALL: [IssueList; 7] = [
-        IssueList::OffDefault,
+        IssueList::NonDefaultBranch,
         IssueList::Detached,
         IssueList::NoRemote,
         IssueList::NoUpstream,
@@ -108,7 +108,7 @@ impl IssueList {
     /// The key in `[ignore]`.
     pub fn name(self) -> &'static str {
         match self {
-            IssueList::OffDefault => "off_default",
+            IssueList::NonDefaultBranch => "non_default_branch",
             IssueList::Detached => "detached",
             IssueList::NoRemote => "no_remote",
             IssueList::NoUpstream => "no_upstream",
@@ -127,7 +127,7 @@ impl IssueList {
     /// The list that can ignore `issue`, if any.
     pub fn of(issue: Issue) -> Option<Self> {
         Some(match issue {
-            Issue::OffDefault => IssueList::OffDefault,
+            Issue::NonDefaultBranch => IssueList::NonDefaultBranch,
             Issue::Detached => IssueList::Detached,
             Issue::NoRemote => IssueList::NoRemote,
             Issue::NoUpstream => IssueList::NoUpstream,
@@ -142,7 +142,7 @@ impl IssueList {
     pub fn pins(self) -> bool {
         matches!(
             self,
-            IssueList::OffDefault | IssueList::Detached | IssueList::NoUpstream
+            IssueList::NonDefaultBranch | IssueList::Detached | IssueList::NoUpstream
         )
     }
 
@@ -150,7 +150,7 @@ impl IssueList {
     /// pinning writes. Empty for lists that don't pin.
     pub fn values(self, s: &RepoStatus) -> Vec<String> {
         match self {
-            IssueList::OffDefault | IssueList::NoUpstream => {
+            IssueList::NonDefaultBranch | IssueList::NoUpstream => {
                 s.head.branch().map(String::from).into_iter().collect()
             }
             IssueList::Detached => {
@@ -172,7 +172,7 @@ impl IssueList {
     pub fn list(self, c: &Config) -> &Vec<String> {
         let i = &c.ignore;
         match self {
-            IssueList::OffDefault => &i.off_default,
+            IssueList::NonDefaultBranch => &i.non_default_branch,
             IssueList::Detached => &i.detached,
             IssueList::NoRemote => &i.no_remote,
             IssueList::NoUpstream => &i.no_upstream,
@@ -185,7 +185,7 @@ impl IssueList {
     pub fn list_mut(self, c: &mut Config) -> &mut Vec<String> {
         let i = &mut c.ignore;
         match self {
-            IssueList::OffDefault => &mut i.off_default,
+            IssueList::NonDefaultBranch => &mut i.non_default_branch,
             IssueList::Detached => &mut i.detached,
             IssueList::NoRemote => &mut i.no_remote,
             IssueList::NoUpstream => &mut i.no_upstream,
@@ -577,30 +577,30 @@ mod tests {
 
     #[test]
     fn issue_lists_pin_values_and_take_globs() {
-        let off = IssueList::OffDefault;
+        let off = IssueList::NonDefaultBranch;
         assert!(ignores(
-            "[ignore]\noff_default = ['acme/widget']",
+            "[ignore]\nnon_default_branch = ['acme/widget']",
             off,
             &["any"]
         ));
         assert!(ignores(
-            "[ignore]\noff_default = ['acme/widget@release-2']",
+            "[ignore]\nnon_default_branch = ['acme/widget@release-2']",
             off,
             &["release-2"]
         ));
         assert!(ignores(
-            "[ignore]\noff_default = ['acme/*@release-*']",
+            "[ignore]\nnon_default_branch = ['acme/*@release-*']",
             off,
             &["release-3"]
         ));
         // inverse: another value, another repo, or no list at all
         assert!(!ignores(
-            "[ignore]\noff_default = ['acme/widget@release-2']",
+            "[ignore]\nnon_default_branch = ['acme/widget@release-2']",
             off,
             &["main"]
         ));
         assert!(!ignores(
-            "[ignore]\noff_default = ['acme/other']",
+            "[ignore]\nnon_default_branch = ['acme/other']",
             off,
             &["x"]
         ));
@@ -639,12 +639,12 @@ mod tests {
     #[test]
     fn issue_lists_by_name_and_by_issue() {
         assert_eq!(
-            IssueList::from_name("off-default"),
-            Some(IssueList::OffDefault)
+            IssueList::from_name("non-default-branch"),
+            Some(IssueList::NonDefaultBranch)
         );
         assert_eq!(
-            IssueList::from_name("off_default"),
-            Some(IssueList::OffDefault)
+            IssueList::from_name("non_default_branch"),
+            Some(IssueList::NonDefaultBranch)
         );
         assert_eq!(
             IssueList::from_name("unpushed-branches"),
@@ -655,7 +655,7 @@ mod tests {
             assert_eq!(IssueList::from_name(l.name()), Some(l));
         }
         for (issue, list) in [
-            (Issue::OffDefault, IssueList::OffDefault),
+            (Issue::NonDefaultBranch, IssueList::NonDefaultBranch),
             (Issue::Detached, IssueList::Detached),
             (Issue::NoRemote, IssueList::NoRemote),
             (Issue::NoUpstream, IssueList::NoUpstream),
@@ -681,9 +681,9 @@ mod tests {
         for (cfg, ok) in [
             ("[ignore]\nstashes = ['acme/widget@2']", false),
             ("[ignore]\nbehind = ['acme/widget@x']", false),
-            ("[ignore]\noff_default = ['acme/widget@']", false),
+            ("[ignore]\nnon_default_branch = ['acme/widget@']", false),
             ("[ignore]\nno_upstream = ['acme/widget@feat']", true),
-            ("[ignore]\noff_default = ['acme/widget@feat']", true),
+            ("[ignore]\nnon_default_branch = ['acme/widget@feat']", true),
         ] {
             let c = Config::parse(cfg).unwrap();
             assert_eq!(RuleSet::new(&c).is_ok(), ok, "{cfg}");
@@ -699,7 +699,7 @@ mod tests {
         let set = |c: &mut Config, on| {
             set_issue_ignored(
                 c,
-                IssueList::OffDefault,
+                IssueList::NonDefaultBranch,
                 id.as_ref(),
                 path,
                 "acme/widget",
@@ -709,15 +709,19 @@ mod tests {
             .unwrap()
         };
         set(&mut c, true);
-        assert_eq!(c.ignore.off_default, ["acme/widget@release-2"]);
+        assert_eq!(c.ignore.non_default_branch, ["acme/widget@release-2"]);
         set(&mut c, true);
-        assert_eq!(c.ignore.off_default, ["acme/widget@release-2"], "once");
+        assert_eq!(
+            c.ignore.non_default_branch,
+            ["acme/widget@release-2"],
+            "once"
+        );
         set(&mut c, false);
-        assert!(c.ignore.off_default.is_empty());
+        assert!(c.ignore.non_default_branch.is_empty());
         // a pattern ignores it: unignoring adds `!`
-        c.ignore.off_default = vec!["acme/*".into()];
+        c.ignore.non_default_branch = vec!["acme/*".into()];
         set(&mut c, false);
-        assert_eq!(c.ignore.off_default, ["acme/*", "!acme/widget"]);
+        assert_eq!(c.ignore.non_default_branch, ["acme/*", "!acme/widget"]);
         // lists without values aren't pinned
         let mut c = Config::default();
         set_issue_ignored(

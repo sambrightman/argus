@@ -22,7 +22,7 @@ pub enum Issue {
     Detached,
     /// Detached HEAD with commits no ref holds.
     DetachedCommits(usize),
-    OffDefault,
+    NonDefaultBranch,
     Stashes(usize),
     Behind(usize),
     NoRemote,
@@ -40,7 +40,7 @@ impl Issue {
             Issue::NoUpstream => 35,
             Issue::UnpushedBranches(_) => 30,
             Issue::Detached => 25,
-            Issue::OffDefault => 20,
+            Issue::NonDefaultBranch => 20,
             Issue::Stashes(_) => 10,
             Issue::NoRemote => 8,
             Issue::Behind(_) => 5,
@@ -96,7 +96,7 @@ pub fn issues(s: &RepoStatus) -> Vec<Issue> {
             }
         }
         Head::Branch(_) if s.default_branch.is_some() && !s.on_default() => {
-            v.push(Issue::OffDefault)
+            v.push(Issue::NonDefaultBranch)
         }
         _ => {}
     }

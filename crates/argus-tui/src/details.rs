@@ -274,7 +274,7 @@ fn describe(i: &Issue, default: Option<&str>) -> (Role, String) {
             format!("{n} other local branch(es) with unpushed work"),
         ),
         Issue::Detached => (Role::Detached, "detached HEAD".into()),
-        Issue::OffDefault => (
+        Issue::NonDefaultBranch => (
             Role::Branch,
             format!(
                 "not on default branch{}",

@@ -435,7 +435,7 @@ fn auto_fix_all_leaves_hidden_repos_alone_even_when_shown() {
 #[test]
 fn auto_fix_leaves_an_ignored_state_alone() {
     // feature's only fix switches it to main; its branch is ignored
-    let (_sb, mut app) = setup("[ignore]\noff_default = ['acme/feature@feat']");
+    let (_sb, mut app) = setup("[ignore]\nnon_default_branch = ['acme/feature@feat']");
     assert!(app.act(Action::AutoFix(Scope::All)).is_empty());
     let texts: Vec<String> = {
         app.cursor = app
@@ -486,7 +486,7 @@ fn an_issue_under_the_cursor_can_be_ignored_and_unignored() {
     let fx = app.act(Action::ToggleIgnoreIssue);
     assert!(matches!(fx.as_slice(), [Effect::SaveMarks(_)]), "{fx:?}");
     assert_eq!(
-        app.ws.config.ignore.off_default,
+        app.ws.config.ignore.non_default_branch,
         ["github.com/acme/feature@feat"]
     );
     let texts = detail_texts(&app);
@@ -499,7 +499,7 @@ fn an_issue_under_the_cursor_can_be_ignored_and_unignored() {
     // and back
     cursor_on_detail(&mut app, "feature", "issue     not on default branch");
     app.act(Action::ToggleIgnoreIssue);
-    assert!(app.ws.config.ignore.off_default.is_empty());
+    assert!(app.ws.config.ignore.non_default_branch.is_empty());
     assert!(!detail_texts(&app).iter().any(|t| t.ends_with("(ignored)")));
 }
 
