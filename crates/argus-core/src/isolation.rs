@@ -2,7 +2,8 @@
 //!
 //! When set, `git` subprocesses get the given environment (e.g. a private
 //! `GIT_CONFIG_GLOBAL`) and gix opens repositories ignoring global/system
-//! config. Production code never sets this.
+//! config (but following includes, as in production). Production code never
+//! sets this.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -21,7 +22,12 @@ pub(crate) fn git_env() -> &'static [(OsString, OsString)] {
 
 pub(crate) fn open(path: &Path) -> gix::Result<gix::Repository> {
     if GIT_ENV.get().is_some() {
-        gix::open_opts(path, gix::open::Options::isolated())
+        let mut permissions = gix::open::Permissions::isolated();
+        permissions.config.includes = true;
+        gix::open_opts(
+            path,
+            gix::open::Options::isolated().permissions(permissions),
+        )
     } else {
         gix::open(path)
     }

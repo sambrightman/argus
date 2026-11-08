@@ -7,6 +7,7 @@ mod demo;
 mod diff;
 mod fix;
 mod icons;
+mod kept;
 mod literals;
 mod properties;
 mod pull;

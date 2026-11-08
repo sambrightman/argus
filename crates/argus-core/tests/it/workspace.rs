@@ -869,3 +869,72 @@ fn refreshing_one_repo_rereads_its_status() {
     w.refresh(&r);
     assert!(dirty(&w), "{:?}", w.entries[0].issues);
 }
+
+fn kept_ws(sb: &Sandbox) -> Workspace {
+    let cfg = format!("roots = ['{}']\n", sb.path("dev").display());
+    let mut w = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    w.keep_repos_open();
+    w.scan();
+    w
+}
+
+fn url_of(w: &Workspace, p: &std::path::Path) -> Option<String> {
+    w.get(p)
+        .and_then(|e| e.status())
+        .and_then(|s| s.remote_url.clone())
+}
+
+#[test]
+fn a_workspace_reads_afresh_unless_told_to_keep_repos_open() {
+    let sb = Sandbox::new();
+    sb.init("dev/a");
+    let mut w = ws(&sb, "");
+    w.refresh_all();
+    assert_eq!(w.kept_opens(), None);
+    let mut w = kept_ws(&sb);
+    w.refresh_all();
+    assert_eq!(w.kept_opens(), Some(1), "scan and refresh_all share it");
+    git(
+        &sb.path("dev/a"),
+        &["remote", "add", "origin", "https://a/x"],
+    );
+    w.refresh(&sb.path("dev/a"));
+    assert_eq!(w.kept_opens(), Some(2), "refresh goes through it too");
+}
+
+#[test]
+fn a_workspace_keeping_repos_open_still_sees_config_and_work_change() {
+    let sb = Sandbox::new();
+    let a = sb.init("dev/a");
+    let mut w = kept_ws(&sb);
+    assert_eq!(url_of(&w, &a), None);
+    git(&a, &["remote", "add", "origin", "https://a/x"]);
+    write(&a, "new", "1");
+    w.refresh_all();
+    assert_eq!(url_of(&w, &a).as_deref(), Some("https://a/x"));
+    assert_eq!(w.get(&a).unwrap().status().unwrap().changes.total(), 1);
+}
+
+#[test]
+fn clones_of_a_workspace_share_its_kept_repos() {
+    let sb = Sandbox::new();
+    let a = sb.init("dev/a");
+    let w = kept_ws(&sb);
+    w.clone().status_reader().read(&a).unwrap();
+    assert_eq!(w.kept_opens(), Some(1));
+}
+
+#[test]
+fn a_rescan_forgets_kept_repos_that_are_gone() {
+    let sb = Sandbox::new();
+    let (a, b) = (sb.init("dev/a"), sb.init("dev/b"));
+    let mut w = kept_ws(&sb);
+    std::fs::rename(&b, sb.path("elsewhere")).unwrap();
+    w.scan();
+    assert_eq!(w.kept_opens(), Some(2));
+    std::fs::rename(sb.path("elsewhere"), &b).unwrap();
+    w.status_reader().read(&b).unwrap();
+    assert_eq!(w.kept_opens(), Some(3), "b was forgotten, so reopened");
+    w.status_reader().read(&a).unwrap();
+    assert_eq!(w.kept_opens(), Some(3), "a still kept");
+}

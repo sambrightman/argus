@@ -240,6 +240,151 @@ pub fn status(path: &Path, opts: StatusOptions) -> Result<RepoStatus, StatusErro
         .map_err(|e| StatusError(without_path(&e.0, path)))
 }
 
+/// Repos kept open between status reads (the TUI's refreshes). Opening is
+/// mostly reading config files, so a repo is reused until one of the files
+/// its config came from changes. Everything else (refs, index, packs) gix
+/// re-reads as needed. Missed: an included file that didn't exist at open.
+#[derive(Default)]
+pub struct KeptRepos {
+    kept: std::sync::Mutex<HashMap<PathBuf, Kept>>,
+    opens: std::sync::atomic::AtomicUsize,
+}
+
+struct Kept {
+    repo: gix::ThreadSafeRepository,
+    stamps: Vec<(PathBuf, Option<Stamp>)>,
+}
+
+/// What changes when a file is rewritten (git writes a new file and renames
+/// it over the old one, so the inode changes even within a second).
+#[derive(PartialEq, Eq)]
+struct Stamp {
+    ino: u64,
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+fn stamp(p: &Path) -> Option<Stamp> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::metadata(p).ok()?;
+    Some(Stamp {
+        ino: m.ino(),
+        modified: m.modified().ok(),
+        len: m.len(),
+    })
+}
+
+/// What a kept repo is checked against before reuse: the files its config
+/// was read from, and the places config could appear that didn't exist yet;
+/// HEAD when a section depends on the branch (`includeIf "onbranch:…"`);
+/// the index, which gix re-reads only when its time is newer (a same-time
+/// rewrite on a file system with coarse times would be missed, but git
+/// always replaces it, so the inode changes); and the pack directory, so
+/// packs a fetch or gc replaced are let go of rather than kept mapped.
+fn stamps(repo: &gix::Repository) -> Vec<(PathBuf, Option<Stamp>)> {
+    let config = repo.config_snapshot();
+    let config = config.plumbing();
+    let mut files: Vec<PathBuf> = config
+        .sections()
+        .filter_map(|s| s.meta().path.clone())
+        .collect();
+    files.extend(config_candidates(&mut |k| std::env::var_os(k)));
+    let on_branch = config.sections().any(|s| {
+        s.header().name() == "includeIf"
+            && s.header()
+                .subsection_name()
+                .is_some_and(|n| n.starts_with(b"onbranch:"))
+    });
+    if on_branch {
+        files.push(repo.git_dir().join("HEAD"));
+    }
+    files.push(repo.index_path());
+    files.push(repo.common_dir().join("objects/pack"));
+    files.sort();
+    files.dedup();
+    files
+        .into_iter()
+        .map(|f| {
+            let s = stamp(&f);
+            (f, s)
+        })
+        .collect()
+}
+
+/// Where repository-independent config is read from, whether or not it
+/// exists yet, given the environment `env`.
+fn config_candidates(env: &mut dyn FnMut(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    use gix::config::Source;
+    [
+        Source::GitInstallation,
+        Source::System,
+        Source::Git,
+        Source::User,
+    ]
+    .into_iter()
+    .filter_map(|s| s.storage_location(env))
+    .collect()
+}
+
+impl KeptRepos {
+    pub fn status(&self, path: &Path, opts: StatusOptions) -> Result<RepoStatus, StatusError> {
+        self.open(path)
+            .map_err(err)
+            .and_then(|repo| status_of(&repo, opts))
+            .map_err(|e| StatusError(without_path(&e.0, path)))
+    }
+
+    fn open(&self, path: &Path) -> gix::Result<gix::Repository> {
+        let kept = self.kept.lock().unwrap().get(path).map(|k| {
+            let current = k.stamps.iter().all(|(f, s)| stamp(f) == *s);
+            (current, k.repo.to_thread_local())
+        });
+        if let Some((true, repo)) = kept {
+            return Ok(repo);
+        }
+        self.opens
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let repo = crate::isolation::open(path);
+        let mut map = self.kept.lock().unwrap();
+        match &repo {
+            Ok(r) => {
+                let k = Kept {
+                    repo: r.clone().into_sync(),
+                    stamps: stamps(r),
+                };
+                map.insert(path.to_path_buf(), k);
+            }
+            Err(_) => {
+                map.remove(path);
+            }
+        }
+        repo
+    }
+
+    /// Forget the repos not matching `keep` (e.g. no longer in the workspace).
+    pub fn retain(&self, keep: impl Fn(&Path) -> bool) {
+        self.kept.lock().unwrap().retain(|p, _| keep(p));
+    }
+
+    /// The files a kept repo is checked against, for tests.
+    #[doc(hidden)]
+    pub fn checked(&self, path: &Path) -> Vec<PathBuf> {
+        self.kept
+            .lock()
+            .unwrap()
+            .get(path)
+            .map_or_else(Vec::new, |k| {
+                k.stamps.iter().map(|(f, _)| f.clone()).collect()
+            })
+    }
+
+    /// How many times a repo was opened (rather than reused), for tests.
+    #[doc(hidden)]
+    pub fn opens(&self) -> usize {
+        self.opens.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
 /// `msg` without mentions of `path` (quoted or not, with a following
 /// `: `), unless nothing would be left.
 fn without_path(msg: &str, path: &Path) -> String {
@@ -1040,6 +1185,34 @@ fn mtime(p: &Path) -> Option<Timestamp> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_candidates_include_files_that_dont_exist_yet() {
+        let mut env = |k: &str| match k {
+            "HOME" => Some("/nohome".into()),
+            "XDG_CONFIG_HOME" => Some("/noxdg".into()),
+            "GIT_CONFIG_SYSTEM" => Some("/nosystem".into()),
+            _ => None,
+        };
+        let c = config_candidates(&mut env);
+        assert!(c.contains(&PathBuf::from("/nosystem")), "{c:?}");
+        assert!(c.contains(&PathBuf::from("/nohome/.gitconfig")), "{c:?}");
+        assert!(c.contains(&PathBuf::from("/noxdg/git/config")), "{c:?}");
+    }
+
+    #[test]
+    fn config_candidates_follow_git_config_global() {
+        let mut env = |k: &str| match k {
+            "HOME" => Some("/nohome".into()),
+            "GIT_CONFIG_GLOBAL" => Some("/elsewhere".into()),
+            _ => None,
+        };
+        let c = config_candidates(&mut env);
+        assert!(c.contains(&PathBuf::from("/elsewhere")), "{c:?}");
+        assert!(!c.contains(&PathBuf::from("/nohome/.gitconfig")), "{c:?}");
+        #[cfg(unix)]
+        assert!(c.contains(&PathBuf::from("/etc/gitconfig")), "{c:?}");
+    }
 
     #[test]
     fn errors_drop_the_repo_path_only() {

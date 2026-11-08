@@ -60,7 +60,9 @@ pub fn check_terminal() -> Result<(), Error> {
     }
 }
 
-pub fn run(ws: Workspace, opts: Options) -> Result<(), Error> {
+pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
+    // refreshes reuse repos rather than reopening them each time
+    ws.keep_repos_open();
     check_terminal()?;
     let (mut theme, warnings) = theme::Theme::build(&ws.config.ui.theme, &ws.config.ui.colors);
     let mut theme_name = ws.config.ui.theme.clone();
@@ -248,12 +250,12 @@ impl Runtime {
             }
             Effect::Refresh(paths) => {
                 let n = app.ws.config.disk_jobs();
-                let opts = app.ws.config.status_options();
+                let reader = app.ws.status_reader();
                 self.spawn(move |tx| {
                     argus_core::workspace::in_pool(n, || {
                         use rayon::prelude::*;
                         paths.into_par_iter().for_each(|p| {
-                            let r = status::status(&p, opts).map_err(|e| e.to_string());
+                            let r = reader.read(&p);
                             let _ = tx.send(Msg::Status(p, Box::new(r)));
                         });
                     })

@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use jiff::Timestamp;
 use rayon::prelude::*;
@@ -139,6 +140,26 @@ pub struct Workspace {
     pub entries: Vec<Entry>,
     /// Directories the last scan didn't enter because of `max_depth`.
     pub truncated: Vec<PathBuf>,
+    /// Repos kept open between status reads, if wanted (shared by clones).
+    kept: Option<Arc<status::KeptRepos>>,
+}
+
+/// Reads repos' status the way the workspace does: through its kept repos,
+/// if any, with its config's options. Cheap to clone and send to workers.
+#[derive(Clone)]
+pub struct StatusReader {
+    kept: Option<Arc<status::KeptRepos>>,
+    opts: status::StatusOptions,
+}
+
+impl StatusReader {
+    pub fn read(&self, path: &Path) -> Result<RepoStatus, String> {
+        match &self.kept {
+            Some(k) => k.status(path, self.opts),
+            None => status::status(path, self.opts),
+        }
+        .map_err(|e| e.to_string())
+    }
 }
 
 impl Workspace {
@@ -152,7 +173,27 @@ impl Workspace {
             rules,
             entries: vec![],
             truncated: vec![],
+            kept: None,
         })
+    }
+
+    /// Keep repos open between status reads (see [`status::KeptRepos`]),
+    /// for front-ends that refresh again and again.
+    pub fn keep_repos_open(&mut self) {
+        self.kept = Some(Arc::default());
+    }
+
+    /// How many times kept repos were opened (rather than reused), for tests.
+    #[doc(hidden)]
+    pub fn kept_opens(&self) -> Option<usize> {
+        self.kept.as_ref().map(|k| k.opens())
+    }
+
+    pub fn status_reader(&self) -> StatusReader {
+        StatusReader {
+            kept: self.kept.clone(),
+            opts: self.config.status_options(),
+        }
     }
 
     pub fn rules(&self) -> &RuleSet {
@@ -217,6 +258,11 @@ impl Workspace {
             })
             .collect();
         self.refresh_all();
+        if let Some(k) = &self.kept {
+            let found: std::collections::HashSet<&Path> =
+                self.entries.iter().map(|e| e.path.as_path()).collect();
+            k.retain(|p| found.contains(p));
+        }
     }
 
     /// The entry naming a repo in the mark lists: its identity, or its path
@@ -303,7 +349,7 @@ impl Workspace {
     }
 
     pub fn refresh_all(&mut self) {
-        let results = statuses(&self.config, self.entries.iter().map(|e| e.path.as_path()));
+        let results = self.statuses(self.entries.iter().map(|e| e.path.as_path()));
         for (e, r) in self.entries.iter_mut().zip(results) {
             e.set_status(r);
         }
@@ -314,7 +360,7 @@ impl Workspace {
 
     /// Re-read one repo's status (after an operation on it).
     pub fn refresh(&mut self, path: &Path) {
-        let r = status::status(path, self.config.status_options()).map_err(|e| e.to_string());
+        let r = self.status_reader().read(path);
         self.update_status(path, r);
     }
 
@@ -367,7 +413,7 @@ impl Workspace {
         if extra.is_empty() {
             return;
         }
-        let results = statuses(&self.config, extra.iter().map(|e| e.path.as_path()));
+        let results = self.statuses(extra.iter().map(|e| e.path.as_path()));
         for (mut e, r) in extra.into_iter().zip(results) {
             e.set_status(r);
             self.entries.push(e);
@@ -556,17 +602,16 @@ pub fn in_pool<R: Send>(n: usize, f: impl FnOnce() -> R + Send) -> R {
     }
 }
 
-/// The status of each of `paths`, in order, [`Config::disk_jobs`] at a time.
-fn statuses<'a>(
-    config: &Config,
-    paths: impl Iterator<Item = &'a Path>,
-) -> Vec<Result<RepoStatus, String>> {
-    let paths: Vec<&Path> = paths.collect();
-    let opts = config.status_options();
-    in_pool(config.disk_jobs(), || {
-        paths
-            .par_iter()
-            .map(|p| status::status(p, opts).map_err(|e| e.to_string()))
-            .collect()
-    })
+impl Workspace {
+    /// The status of each of `paths`, in order, [`Config::disk_jobs`] at a time.
+    fn statuses<'a>(
+        &self,
+        paths: impl Iterator<Item = &'a Path>,
+    ) -> Vec<Result<RepoStatus, String>> {
+        let paths: Vec<&Path> = paths.collect();
+        let reader = self.status_reader();
+        in_pool(self.config.disk_jobs(), || {
+            paths.par_iter().map(|p| reader.read(p)).collect()
+        })
+    }
 }

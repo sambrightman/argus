@@ -101,6 +101,24 @@ Two findings:
   calls the API, not the command), else half the CPUs. gix starts two threads per repo's status
   (HEAD vs index, index vs worktree), plus up to one per CPU to check files
   in large repos; limiting those made no difference on small repos.
+- Opening a repo was 29% of CPU: mostly reading config files (each
+  repo's own `.git/config`, plus the global ones again for every repo),
+  then checking the path is a repo and looking up the current directory.
+  The global config made no measurable difference to wall time. The TUI
+  keeps repos open between refreshes (`KeptRepos`): 58 → 36 ms per refresh
+  of 200 repos, 295 → 184 ms for 1,000, with no files left open. gix reads
+  config once per open by design, and re-checks refs, the index and packs
+  itself. Before reuse, a kept repo's files are compared with what they
+  were at open (inode, size and time: a stat each, not OS watches, so no
+  limits): the files its config came from, the places global and system
+  config could appear, HEAD when a section depends on the branch, the index
+  (gix re-reads it only when its time is newer, which a same-second
+  rewrite on a coarse-time file system would beat) and the pack directory
+  (gix rescans packs only when an object is missing, which is correct as
+  objects never change, but keeps packs a gc deleted mapped). The checks
+  cost about 1 ms per refresh of 200 repos. Missed: an included file that
+  didn't exist at open. The CLI opens each repo once anyway and doesn't
+  keep them.
 
 ## 5. Concepts
 
