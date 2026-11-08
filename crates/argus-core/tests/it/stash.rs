@@ -164,6 +164,32 @@ fn the_stash_fix_follows_the_config_defaults() {
         (2, 0, 1),
         "counts follow the files"
     );
+    // a staged-only or paths-only stash: only the stash is predicted
+    for (staged, paths) in [(true, vec![]), (false, vec!["README".to_string()])] {
+        let Op::Stash {
+            message,
+            untracked,
+            keep_index,
+            ..
+        } = fix.op.clone()
+        else {
+            unreachable!()
+        };
+        let partial = argus_core::fix::Fix {
+            op: Op::Stash {
+                message,
+                untracked,
+                keep_index,
+                staged,
+                paths: paths.clone(),
+            },
+            ..fix.clone()
+        };
+        let s = st(&r);
+        let after = simulate(&s, &partial);
+        assert_eq!(after.changes, s.changes, "staged {staged} paths {paths:?}");
+        assert_eq!(after.stashes.len(), s.stashes.len() + 1);
+    }
     // the predicted stash is the one the fix will really make
     assert!(ops::run(&r, &fix.op).success);
     assert_eq!(after.stashes, st(&r).stashes);

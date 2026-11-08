@@ -196,6 +196,52 @@ impl Sandbox {
     }
 }
 
+/// A small disk image mounted at `at` (below the sandbox), detached on
+/// drop: another filesystem to test against. macOS lets an ordinary user
+/// attach one, so this needs no root.
+#[cfg(target_os = "macos")]
+pub struct Mounted(pub PathBuf);
+
+#[cfg(target_os = "macos")]
+impl Mounted {
+    pub fn new(sb: &Sandbox, at: &str) -> Self {
+        let image = sb.path(&format!("{}.dmg", at.replace('/', "-")));
+        let dir = sb.path(at);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let o = std::process::Command::new("hdiutil")
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "hdiutil {args:?}: {o:?}");
+        };
+        let image_s = image.to_str().unwrap();
+        run(&[
+            "create", "-quiet", "-size", "2m", "-fs", "HFS+", "-layout", "NONE", image_s,
+        ]);
+        run(&[
+            "attach",
+            "-quiet",
+            "-nobrowse",
+            "-noautoopen",
+            "-mountpoint",
+            dir.to_str().unwrap(),
+            image_s,
+        ]);
+        Mounted(dir)
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Mounted {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("hdiutil")
+            .args(["detach", "-quiet", "-force"])
+            .arg(&self.0)
+            .status();
+    }
+}
+
 /// Environment for running argus/git as a subprocess in isolation: private
 /// git config, and `HOME`/XDG dirs inside `home`.
 pub fn subprocess_env(home: &Path) -> Vec<(String, String)> {

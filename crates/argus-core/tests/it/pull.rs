@@ -93,12 +93,12 @@ fn predicted_counts_after_a_pull_match_reality() {
         assert_eq!(actual.ahead(), ahead, "pull.rebase={rebase}");
         assert_eq!(predicted.ahead(), actual.ahead(), "pull.rebase={rebase}");
         assert_eq!(predicted.behind(), actual.behind(), "pull.rebase={rebase}");
-        let unpushed = |s: &RepoStatus| s.branches.iter().find(|b| b.is_head).unwrap().unpushed;
-        assert_eq!(
-            unpushed(&predicted),
-            unpushed(&actual),
-            "pull.rebase={rebase}"
-        );
+        let head = |s: &RepoStatus| {
+            let b = s.branches.iter().find(|b| b.is_head).unwrap();
+            let t = b.upstream.as_ref().unwrap();
+            (b.unpushed, t.ahead, t.behind)
+        };
+        assert_eq!(head(&predicted), head(&actual), "pull.rebase={rebase}");
     }
 }
 

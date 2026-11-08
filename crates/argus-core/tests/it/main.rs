@@ -5,6 +5,7 @@ mod badges;
 mod config;
 mod demo;
 mod diff;
+mod discover;
 mod fix;
 mod icons;
 mod kept;

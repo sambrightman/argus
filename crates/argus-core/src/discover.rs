@@ -355,15 +355,20 @@ struct Walk<'s> {
     device: Option<u64>,
 }
 
-#[cfg(unix)]
+/// The filesystem `path` is on; `None` off Unix, where std has no stable
+/// equivalent (so `one_file_system` does nothing). One function rather
+/// than one per platform, so what tests exercise is all of it.
 fn device(path: &Path) -> Option<u64> {
-    use std::os::unix::fs::MetadataExt;
-    fs::symlink_metadata(path).ok().map(|m| m.dev())
-}
-
-#[cfg(not(unix))]
-fn device(_: &Path) -> Option<u64> {
-    None
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        fs::symlink_metadata(path).ok().map(|m| m.dev())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
 }
 
 fn visit<'s>(s: &rayon::Scope<'s>, dir: PathBuf, depth: usize, walk: Walk<'s>, links: Links) {

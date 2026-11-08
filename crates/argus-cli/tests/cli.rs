@@ -691,58 +691,13 @@ fn follow_symlinks_flag_and_config() {
     assert!(status(&["--config", cfg.to_str().unwrap()]).contains("1 repos, 1 need attention"));
 }
 
-/// A small disk image mounted at `at`, detached on drop. macOS lets an
-/// ordinary user attach one, so this needs no root.
-#[cfg(target_os = "macos")]
-struct Mounted(std::path::PathBuf);
-
-#[cfg(target_os = "macos")]
-impl Mounted {
-    fn new(sb: &Sandbox, at: &str) -> Self {
-        let image = sb.path("volume.dmg");
-        let dir = sb.path(at);
-        std::fs::create_dir_all(&dir).unwrap();
-        let run = |args: &[&str]| {
-            let o = std::process::Command::new("hdiutil")
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(o.status.success(), "hdiutil {args:?}: {o:?}");
-        };
-        let image_s = image.to_str().unwrap();
-        run(&[
-            "create", "-quiet", "-size", "2m", "-fs", "HFS+", "-layout", "NONE", image_s,
-        ]);
-        run(&[
-            "attach",
-            "-quiet",
-            "-nobrowse",
-            "-noautoopen",
-            "-mountpoint",
-            dir.to_str().unwrap(),
-            image_s,
-        ]);
-        Mounted(dir)
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl Drop for Mounted {
-    fn drop(&mut self) {
-        let _ = std::process::Command::new("hdiutil")
-            .args(["detach", "-quiet", "-force"])
-            .arg(&self.0)
-            .status();
-    }
-}
-
 #[cfg(target_os = "macos")]
 #[test]
 fn one_file_system_stays_off_other_mounts() {
     let sb = Sandbox::new();
     sb.init("dev/here");
     sb.init("dev/deeper/also-here");
-    let mounted = Mounted::new(&sb, "dev/mnt");
+    let mounted = argus_core::testkit::Mounted::new(&sb, "dev/mnt");
     sb.init("dev/mnt/elsewhere");
     sb.init("outside/linked");
     let symlink =

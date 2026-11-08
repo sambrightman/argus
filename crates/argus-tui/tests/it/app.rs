@@ -1627,3 +1627,29 @@ fn the_other_key_ignores_a_branch_unpinned() {
         ["github.com/acme/feature"]
     );
 }
+
+#[test]
+fn the_stash_list_says_how_many_are_ignored_and_stops_after_ten() {
+    for (n, extra, first, more) in [
+        (10, "[ignore]\nstashes = []", "stashes   10", None),
+        (11, "", "stashes   11 (11 ignored)", Some("… 1 more")),
+    ] {
+        let (_sb, mut app) = setup_with(extra, |sb| {
+            let r = sb.path("dev/clean");
+            for i in 0..n {
+                write(&r, "README", &format!("{i}\n"));
+                git(&r, &["stash", "push", "-q", "-m", &format!("s{i}")]);
+            }
+        });
+        cursor_on_detail(&mut app, "clean", "stashes");
+        let texts = detail_texts(&app);
+        let at = texts.iter().position(|t| t.starts_with("stashes")).unwrap();
+        assert_eq!(texts[at], first, "{n}");
+        let listed = texts[at + 1..]
+            .iter()
+            .take_while(|t| t.trim_start().starts_with("stash@"))
+            .count();
+        assert_eq!(listed, 10, "{n}");
+        assert_eq!(texts.get(at + 11).map(|t| t.trim()), more, "{n}: {texts:?}");
+    }
+}

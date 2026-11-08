@@ -1025,6 +1025,12 @@ fn ignoring_stashes_is_unpinned_unless_asked_and_pins_each_message_literally() {
     let r = sb.clone_as_github("acme", "w", "dev/w");
     stash(&r, Some("fix [x] *"));
     stash(&r, Some("experiment"));
+    // all already ignored (the default covers both): nothing to add
+    let mut w = ws(&sb, "");
+    let before = w.config.ignore.stashes.clone();
+    w.set_issue_ignored(&[0], IssueList::Stashes, true, Some(true))
+        .unwrap();
+    assert_eq!(w.config.ignore.stashes, before);
     // one stash already covered by a pattern's pin: ignoring adds the rest
     let mut w = ws(&sb, "[ignore]\nstashes = ['acme/*@experiment']");
     w.set_issue_ignored(&[0], IssueList::Stashes, true, None)
@@ -1086,4 +1092,18 @@ fn ignoring_a_branch_is_pinned_unless_asked_not_to() {
         w.config.ignore.non_default_branch,
         ["github.com/acme/w@feat"]
     );
+}
+
+#[test]
+fn pinning_a_detached_head_writes_one_of_its_names() {
+    use argus_core::rules::IssueList;
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "dev/w");
+    git(&r, &["tag", "v1"]);
+    git(&r, &["switch", "-q", "--detach"]);
+    let mut w = ws(&sb, "");
+    w.set_issue_ignored(&[0], IssueList::Detached, true, None)
+        .unwrap();
+    assert_eq!(w.config.ignore.detached, ["github.com/acme/w@v1"]);
 }

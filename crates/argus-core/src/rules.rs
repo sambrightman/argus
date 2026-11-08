@@ -794,20 +794,22 @@ mod tests {
         c.ignore.non_default_branch = vec!["acme/*".into()];
         set(&mut c, false);
         assert_eq!(c.ignore.non_default_branch, ["acme/*", "!acme/widget"]);
-        // lists without values aren't pinned
-        let mut c = Config::default();
-        set_issue_ignored(
-            &mut c,
-            IssueList::Behind,
-            id.as_ref(),
-            path,
-            "acme/widget",
-            &[],
-            true,
-            true,
-        )
-        .unwrap();
-        assert_eq!(c.ignore.behind, ["acme/widget"]);
+        // lists without values, or without one now, aren't pinned
+        for list in [IssueList::Behind, IssueList::NonDefaultBranch] {
+            let mut c = Config::default();
+            set_issue_ignored(
+                &mut c,
+                list,
+                id.as_ref(),
+                path,
+                "acme/widget",
+                &[],
+                true,
+                true,
+            )
+            .unwrap();
+            assert_eq!(list.list(&c), &["acme/widget"], "{list:?}");
+        }
     }
 
     #[test]
