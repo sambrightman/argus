@@ -72,7 +72,7 @@ clone = "auto"                   # or "notify": only report new repos
 # include_forks = true
 
 [fix]
-auto = ["push", "switch-default"]  # kinds `x x` / `argus fix` apply without asking
+auto = ["push", "push-branches", "switch-default", "reattach"]  # kinds `x x` / `argus fix` apply without asking
 
 [tools]
 git_ui = "lazygit"               # or "emacsclient -t -e '(magit-status)'"
@@ -269,6 +269,8 @@ Nothing is offered during a conflict.
   cherry-pick, revert or am in progress (or ends a bisect), losing what it
   did so far; `b x` deletes branches merged into the default branch whose
   upstream is gone or that have none (`git branch -d`, so git double-checks).
+  In the CLI, `argus fix -k abort` or `-k delete-branches` lists every one
+  it finds, then asks (`--yes` to skip asking; refused without a terminal).
 
 Pushes that would need force (the branch was rewritten after pushing) are
 shown, with why, and never applied.

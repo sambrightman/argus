@@ -589,7 +589,7 @@ fn chain_stash_push_switch() {
 
 #[test]
 fn chain_stops_where_the_allowed_kinds_run_out() {
-    // default auto (push, switch-default): the dirty tree blocks the switch
+    // push, switch-default: the dirty tree blocks the switch
     let sb = Sandbox::new();
     let r = ahead_and_dirty(&sb);
     use FixKind::*;
@@ -1161,4 +1161,17 @@ fn a_stash_is_dropped_only_if_it_is_still_the_one_asked_about() {
     let out = argus_core::ops::run(&r, &drop);
     assert!(out.success, "{}", out.output);
     assert_eq!(st(&r).stashes, ["new"]);
+}
+
+#[test]
+fn default_auto_fixes_push_other_branches_and_reattach() {
+    let auto = argus_core::Config::default().fix.auto;
+    let sb = Sandbox::new();
+    let r = pushed_feature(&sb);
+    commit(&r, "unpushed");
+    git(&r, &["switch", "-q", "--detach", "main"]);
+    use FixKind::*;
+    // the branch's commits first, then back onto main
+    assert_chain_matches_reality(&r, &auto, &[PushBranches, Reattach]);
+    assert_eq!(head(&r), Head::Branch("main".into()));
 }

@@ -300,7 +300,9 @@ Two findings:
   * `add-remote`: no remote → `git remote add -- origin <url>`, the URL
     asked for (TUI `P r`, one repo at a time).
   * `abort`: an operation in progress → `git <op> --abort` (`git bisect
-    reset`). The only fix offered then. Confirmed first.
+    reset`). The only fix offered then. Confirmed first: in the TUI, and in
+    the CLI (`argus fix -k abort`) after listing, or with `--yes`. Unlike
+    the one-per-run auto-fixes, the CLI applies every one listed.
   * `delete-branches`: other branches merged into the default branch,
     upstream gone or none → `git branch -d`, which refuses what it doesn't
     see as merged. Confirmed first.
@@ -421,8 +423,9 @@ rendering is snapshot-tested via `TestBackend`.
 
 * **One fix per auto-fix action.** No chaining (push *then* switch is two
   actions); the user can snooze or tolerate in between. A future
-  "auto-fix all" may chain. Defaults: `push` (fast-forward, same-named
-  upstream only) and `switch-default`.
+  "auto-fix all" may chain. Defaults: `push` (fast-forward, to the
+  branch's own name only), `push-branches` (the same for other branches,
+  existing remote branches only), `switch-default` and `reattach`.
 * **The order of `[fix] auto` (or `-k`) is the priority.** Each action
   applies the first listed kind the repo needs; unlisted kinds rank after,
   in `FixKind::ALL` order: clean up uncommitted work (stash, commit), share

@@ -1,7 +1,7 @@
 //! End-to-end CLI tests: the real binary against sandbox repositories.
 
 use argus_core::icons::{ASCII, NERD, UNICODE};
-use argus_core::testkit::{Sandbox, commit, git, subprocess_env, write};
+use argus_core::testkit::{Sandbox, commit, git, git_may_fail, subprocess_env, write};
 use assert_cmd::Command;
 use predicates::prelude::*;
 
@@ -582,7 +582,8 @@ fn dry_run_shows_the_fix_the_chain_and_alternatives() {
         assert!(o.status.success());
         String::from_utf8(o.stdout).unwrap()
     };
-    // default [fix] auto = push, switch-default: stash is only an alternative
+    // default [fix] auto = push, push-branches, switch-default, reattach:
+    // stash is only an alternative
     let s = out(&["fix", "-n", "acme/feature", "acme/dirty"]);
     assert_eq!(
         s,
@@ -1399,4 +1400,59 @@ fn mark_ignores_and_unignores_an_issue() {
     mark(&["acme/dirty", "--ignore-issue", "dirty"])
         .failure()
         .stderr(predicate::str::contains("non-default-branch"));
+}
+
+#[test]
+fn destructive_fixes_are_listed_and_need_yes() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let c = sb.path("dev/clean");
+    git(&c, &["branch", "done"]);
+    let has_done = || git_may_fail(&c, &["rev-parse", "--verify", "-q", "refs/heads/done"]);
+    argus(&sb)
+        .args(["fix", "-n", "-k", "delete-branches", "acme/clean"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "acme/clean: would delete branch done (done is merged into main), after asking",
+        ));
+    // without a terminal or --yes: refused, nothing deleted
+    argus(&sb)
+        .args(["fix", "-k", "delete-branches", "acme/clean"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("  acme/clean: delete branch done"))
+        .stderr(predicate::str::contains("needs confirmation; pass --yes"));
+    assert!(has_done());
+    argus(&sb)
+        .args(["fix", "-y", "-k", "delete-branches", "acme/clean"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("acme/clean: ")
+                .and(predicate::str::contains("delete branch done")),
+        );
+    assert!(!has_done());
+    // abort, alongside a safe kind that applies elsewhere
+    git(&c, &["switch", "-q", "-c", "o"]);
+    write(&c, "README", "o\n");
+    commit(&c, "o");
+    git(&c, &["switch", "-q", "main"]);
+    write(&c, "README", "m\n");
+    commit(&c, "m");
+    assert!(!git_may_fail(&c, &["merge", "o"]));
+    write(&sb.path("dev/dirty"), "README", "changed again\n");
+    argus(&sb)
+        .args(["fix", "--yes", "-k", "abort,stash"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("abort merge"))
+        .stdout(predicate::str::contains("acme/dirty: ").and(predicate::str::contains("stash")));
+    assert!(!c.join(".git/MERGE_HEAD").exists());
+    // nothing left to do
+    argus(&sb)
+        .args(["fix", "-y", "-k", "abort"])
+        .assert()
+        .success()
+        .stdout("nothing to fix\n");
 }

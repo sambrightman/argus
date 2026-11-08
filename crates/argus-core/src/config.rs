@@ -325,7 +325,7 @@ impl FixConfig {
         }
         vec![format!(
             "[fix] auto lists {}, which need input or confirmation, so are never automatic: \
-             they're left out (use their keys in the TUI)",
+             they're left out (choose them from the TUI's menus, or `argus fix -k` for abort and delete-branches)",
             manual.join(", ")
         )]
     }
@@ -334,7 +334,12 @@ impl FixConfig {
 impl Default for FixConfig {
     fn default() -> Self {
         Self {
-            auto: vec![FixKind::Push, FixKind::SwitchDefault],
+            auto: vec![
+                FixKind::Push,
+                FixKind::PushBranches,
+                FixKind::SwitchDefault,
+                FixKind::Reattach,
+            ],
         }
     }
 }

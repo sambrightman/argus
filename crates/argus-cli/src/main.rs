@@ -77,7 +77,9 @@ enum Cmd {
         #[arg(add = repo_completer())]
         patterns: Vec<String>,
     },
-    /// Apply safe fixes (default: those in `[fix] auto`).
+    /// Apply safe fixes (default: those in `[fix] auto`), one per repo per
+    /// run. `-k abort` and `-k delete-branches` apply every one they find,
+    /// after asking (or with --yes).
     Fix {
         /// Fix kinds to apply instead of `[fix] auto`; comma-separated,
         /// repeatable.
@@ -252,6 +254,8 @@ enum FixArg {
     Pull,
     Stash,
     StashPop,
+    Abort,
+    DeleteBranches,
 }
 
 impl From<FixArg> for FixKind {
@@ -266,6 +270,8 @@ impl From<FixArg> for FixKind {
             FixArg::Pull => FixKind::Pull,
             FixArg::Stash => FixKind::Stash,
             FixArg::StashPop => FixKind::StashPop,
+            FixArg::Abort => FixKind::Abort,
+            FixArg::DeleteBranches => FixKind::DeleteBranches,
         }
     }
 }
@@ -412,7 +418,7 @@ fn run() -> Result<()> {
             if fetch {
                 fetch_selected(&mut ws, &patterns);
             }
-            fix_cmd(&mut ws, &kinds, dry_run, &patterns, json)?;
+            fix_cmd(&mut ws, &kinds, dry_run, &patterns, json, cli.yes)?;
         }
         Cmd::Mark(m) => {
             scan(&mut ws);
@@ -1134,26 +1140,109 @@ fn fetch_selected(ws: &mut Workspace, patterns: &[String]) {
     }
 }
 
+fn fix_json(f: &fix::Fix) -> serde_json::Value {
+    serde_json::json!({
+        "kind": f.kind.name(),
+        "op": f.op.label(),
+        "reason": f.reason,
+        "blocked": f.blocked,
+    })
+}
+
+/// Every fix of the destructive `kinds` in the selected repos: listed, then
+/// applied once confirmed (`yes`, or asked). Returns whether there were
+/// any, and the JSON records.
+fn destructive_fixes(
+    ws: &Workspace,
+    kinds: &[FixKind],
+    dry_run: bool,
+    patterns: &[String],
+    json: bool,
+    yes: bool,
+) -> Result<(bool, Vec<serde_json::Value>)> {
+    let p = Paint::detect();
+    let ic = icons(ws);
+    let mut found = vec![];
+    for i in ws.select(patterns, ViewFilter::default()) {
+        let e = &ws.entries[i];
+        let Some(s) = e.status() else { continue };
+        for f in fix::plan(s, &ws.config.stash) {
+            if kinds.contains(&f.kind) && f.blocked.is_none() {
+                found.push((e.display_name(), e.path.clone(), f));
+            }
+        }
+    }
+    if found.is_empty() {
+        return Ok((false, vec![]));
+    }
+    if dry_run {
+        let mut records = vec![];
+        for (name, path, f) in &found {
+            if json {
+                records.push(serde_json::json!({
+                    "repo": name, "path": path, "planned": fix_json(f), "asks": true,
+                }));
+            } else {
+                println!(
+                    "{name}: would {} ({}), after asking",
+                    f.op.label(),
+                    f.reason
+                );
+            }
+        }
+        return Ok((true, records));
+    }
+    if !yes {
+        for (name, _, f) in &found {
+            eprintln!("  {name}: {} ({})", f.op.label(), f.reason);
+        }
+    }
+    confirm(&format!("run the {} fix(es) above", found.len()), yes)?;
+    let mut records = vec![];
+    for (name, path, f) in found {
+        let out = argus_core::ops::run(&path, &f.op);
+        if json {
+            records.push(serde_json::json!({
+                "repo": name, "path": path, "applied": fix_json(&f),
+                "ok": out.success, "output": out.output,
+            }));
+        } else if out.success {
+            println!(
+                "{name}: {} {}",
+                p.role(Role::Ahead, ic.ok.trim_end()),
+                f.op.label()
+            );
+        } else {
+            println!(
+                "{name}: {} {}\n{}",
+                p.role(Role::Error, ic.failed.trim_end()),
+                f.op.label(),
+                indent(&out.output)
+            );
+        }
+    }
+    Ok((true, records))
+}
+
 fn fix_cmd(
     ws: &mut Workspace,
     kinds: &[FixKind],
     dry_run: bool,
     patterns: &[String],
     json: bool,
+    yes: bool,
 ) -> Result<()> {
     let p = Paint::detect();
     let ic = icons(ws);
     let stash = ws.config.stash;
-    let sel = ws.select(patterns, ViewFilter::default());
-    let mut any = false;
-    let mut records = vec![];
-    let fix_json = |f: &fix::Fix| {
-        serde_json::json!({
-            "kind": f.kind.name(),
-            "op": f.op.label(),
-            "reason": f.reason,
-            "blocked": f.blocked,
-        })
+    let (destructive, kinds): (Vec<FixKind>, Vec<FixKind>) =
+        kinds.iter().partition(|k| k.needs_confirmation());
+    let (mut any, mut records) = destructive_fixes(ws, &destructive, dry_run, patterns, json, yes)?;
+    let kinds = kinds.as_slice();
+    let sel = if kinds.is_empty() {
+        vec![]
+    } else {
+        ws.select(patterns, ViewFilter::default())
     };
     for i in sel {
         let e = &ws.entries[i];
