@@ -208,6 +208,7 @@ impl Workspace {
             scan_inside_repos: false,
             skip_hidden: self.config.skip_hidden,
             follow_symlinks: self.config.follow_symlinks,
+            one_file_system: self.config.one_file_system,
             tuning: Default::default(),
         }
     }

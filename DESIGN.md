@@ -424,6 +424,14 @@ rendering is snapshot-tested via `TestBackend`.
 * **`max_depth` is reported**, not silent: a scan names a directory it
   didn't enter. `max_depth = 0` means no limit (0 as "the root only" had no
   use: the walk stops at a repo anyway).
+* **`one_file_system` (`-x`) is off by default and not reported.** Each
+  root's own filesystem is the boundary (as `find -xdev`), for
+  directories and link targets alike. It costs an `lstat` per
+  subdirectory, only when on. Unlike `max_depth`'s cut-off, skipping a
+  mount is the point of turning it on, so nothing is warned about. Unix
+  only (std has no stable volume id on Windows). Tested on macOS with a
+  disk image attached as an ordinary user; Linux would need a user
+  namespace to mount, so it has no test yet.
 * **Automatic network concurrency** (`concurrency.network = 0`, the default): git's
   `fetch.parallel` when set above 0 (git's own 0 also means "pick a
   default"), else the CPU count capped at 8. The work is network-bound,

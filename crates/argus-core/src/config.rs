@@ -46,6 +46,10 @@ pub struct Config {
     /// Follow symlinks to directories (`-L`). Cycles are cut and a repo
     /// reachable by several paths is listed once.
     pub follow_symlinks: bool,
+    /// Stay on each root's filesystem (`-x`): don't enter other mounts
+    /// (network shares, external disks) below a root, or follow links to
+    /// them. Unix only.
+    pub one_file_system: bool,
     /// How much runs at once.
     pub concurrency: Concurrency,
     /// How many commits back to look for a tag to describe a detached HEAD
@@ -110,6 +114,7 @@ impl Default for Config {
             max_depth: 6,
             skip_hidden: true,
             follow_symlinks: false,
+            one_file_system: false,
             concurrency: Concurrency::default(),
             describe_limit: DESCRIBE_LIMIT,
             clone_protocol: None,

@@ -39,6 +39,10 @@ struct Cli {
     /// several paths is listed once).
     #[arg(long, short = 'L', global = true)]
     follow_symlinks: bool,
+    /// Stay on each root's filesystem: don't enter other mounts below a
+    /// root, or follow links to them.
+    #[arg(long, short = 'x', global = true)]
+    one_file_system: bool,
     /// Print one JSON document on stdout instead of text (messages and
     /// progress still go to stderr). Not for the TUI or completions.
     #[arg(long, global = true)]
@@ -344,6 +348,9 @@ fn run() -> Result<()> {
     let (mut ws, notices) = load(&ctx, &cli.roots, cli.max_depth)?;
     if cli.follow_symlinks {
         ws.config.follow_symlinks = true;
+    }
+    if cli.one_file_system {
+        ws.config.one_file_system = true;
     }
     let tui = matches!(cli.cmd, None | Some(Cmd::Tui));
     if !tui {

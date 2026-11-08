@@ -3,7 +3,8 @@
 //! This is pure filesystem work (no git parsing beyond reading a `.git` file),
 //! parallelised with rayon. Each directory costs one `lstat` of `.git` and,
 //! unless that settles it, one listing (which also detects bare repos).
-//! Symlinks are only followed when asked, with cycle detection.
+//! Symlinks are only followed when asked, with cycle detection. With
+//! `one_file_system`, each subdirectory costs an `lstat` as well.
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashSet};
@@ -49,6 +50,9 @@ pub struct DiscoverOptions {
     /// by several paths is reported once: by its real path if that was
     /// walked, else by the first path in sort order.
     pub follow_symlinks: bool,
+    /// Don't enter directories (or follow links to them) on a different
+    /// filesystem from their root's, like `find -xdev`. Unix only.
+    pub one_file_system: bool,
     #[doc(hidden)]
     pub tuning: Tuning,
 }
@@ -86,6 +90,7 @@ impl Default for DiscoverOptions {
             scan_inside_repos: false,
             skip_hidden: true,
             follow_symlinks: false,
+            one_file_system: false,
             tuning: Tuning::default(),
         }
     }
@@ -255,7 +260,12 @@ pub fn discover_all(roots: &[PathBuf], opts: &DiscoverOptions) -> Discovery {
     rayon::scope(|s| {
         for root in &real_roots {
             let sink = &sink;
-            s.spawn(move |s| visit(s, root.clone(), 0, opts, sink, Arc::default()));
+            let walk = Walk {
+                opts,
+                sink,
+                device: opts.one_file_system.then(|| device(root)).flatten(),
+            };
+            s.spawn(move |s| visit(s, root.clone(), 0, walk, Arc::default()));
         }
     });
     let mut found = sink.found.into_inner().unwrap();
@@ -335,14 +345,29 @@ fn join(base: &Path, rest: &Path) -> PathBuf {
     }
 }
 
-fn visit<'s>(
-    s: &rayon::Scope<'s>,
-    dir: PathBuf,
-    depth: usize,
+/// What every directory under one root is walked with.
+#[derive(Clone, Copy)]
+struct Walk<'s> {
     opts: &'s DiscoverOptions,
     sink: &'s Sink,
-    links: Links,
-) {
+    /// The root's filesystem, with `one_file_system`: directories on any
+    /// other aren't entered.
+    device: Option<u64>,
+}
+
+#[cfg(unix)]
+fn device(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    fs::symlink_metadata(path).ok().map(|m| m.dev())
+}
+
+#[cfg(not(unix))]
+fn device(_: &Path) -> Option<u64> {
+    None
+}
+
+fn visit<'s>(s: &rayon::Scope<'s>, dir: PathBuf, depth: usize, walk: Walk<'s>, links: Links) {
+    let Walk { opts, sink, .. } = walk;
     let real =
         || (opts.follow_symlinks && opts.tuning.real_from_links).then(|| real_path(&dir, &links));
     let mut kind = classify_dotgit(&dir);
@@ -371,7 +396,7 @@ fn visit<'s>(
             return;
         }
     }
-    let subdirs = subdirs(&dir, depth, entries, opts, &links, sink);
+    let subdirs = subdirs(&dir, depth, entries, walk, &links);
     if opts.max_depth != 0 && depth >= opts.max_depth {
         if !subdirs.is_empty() {
             sink.truncated.lock().unwrap().push(dir);
@@ -379,7 +404,7 @@ fn visit<'s>(
         return;
     }
     for (path, links) in subdirs {
-        s.spawn(move |s| visit(s, path, depth + 1, opts, sink, links));
+        s.spawn(move |s| visit(s, path, depth + 1, walk, links));
     }
 }
 
@@ -411,10 +436,11 @@ fn subdirs(
     dir: &Path,
     depth: usize,
     entries: Vec<DirEntry>,
-    opts: &DiscoverOptions,
+    walk: Walk,
     links: &Links,
-    sink: &Sink,
 ) -> Vec<(PathBuf, Links)> {
+    let Walk { opts, sink, .. } = walk;
+    let elsewhere = |dir: &Path| walk.device.is_some_and(|d| device(dir) != Some(d));
     let mut real_dir = None;
     let skipped = |real: PathBuf| {
         if opts.follow_symlinks {
@@ -444,13 +470,16 @@ fn subdirs(
                     skipped(real);
                     return None;
                 }
+                if elsewhere(&e.path) {
+                    return None;
+                }
                 return Some((e.path, links.clone()));
             }
             if !(opts.follow_symlinks && e.ty.is_symlink()) {
                 return None;
             }
             let target = fs::canonicalize(&e.path).ok()?;
-            if !target.is_dir() {
+            if !target.is_dir() || elsewhere(&target) {
                 return None;
             }
             let target_name = target.file_name().map(|n| n.to_string_lossy());
@@ -1192,6 +1221,7 @@ mod tests {
                 scan_inside_repos: next(5) == 0,
                 skip_hidden: next(4) != 0,
                 follow_symlinks: true,
+                one_file_system: false,
                 tuning: Tuning::default(),
             };
             let ctx = format!(

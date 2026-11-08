@@ -691,6 +691,115 @@ fn follow_symlinks_flag_and_config() {
     assert!(status(&["--config", cfg.to_str().unwrap()]).contains("1 repos, 1 need attention"));
 }
 
+/// A small disk image mounted at `at`, detached on drop. macOS lets an
+/// ordinary user attach one, so this needs no root.
+#[cfg(target_os = "macos")]
+struct Mounted(std::path::PathBuf);
+
+#[cfg(target_os = "macos")]
+impl Mounted {
+    fn new(sb: &Sandbox, at: &str) -> Self {
+        let image = sb.path("volume.dmg");
+        let dir = sb.path(at);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let o = std::process::Command::new("hdiutil")
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "hdiutil {args:?}: {o:?}");
+        };
+        let image_s = image.to_str().unwrap();
+        run(&[
+            "create", "-quiet", "-size", "2m", "-fs", "HFS+", "-layout", "NONE", image_s,
+        ]);
+        run(&[
+            "attach",
+            "-quiet",
+            "-nobrowse",
+            "-noautoopen",
+            "-mountpoint",
+            dir.to_str().unwrap(),
+            image_s,
+        ]);
+        Mounted(dir)
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Mounted {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("hdiutil")
+            .args(["detach", "-quiet", "-force"])
+            .arg(&self.0)
+            .status();
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn one_file_system_stays_off_other_mounts() {
+    let sb = Sandbox::new();
+    sb.init("dev/here");
+    sb.init("dev/deeper/also-here");
+    let mounted = Mounted::new(&sb, "dev/mnt");
+    sb.init("dev/mnt/elsewhere");
+    sb.init("outside/linked");
+    let symlink =
+        |to: &std::path::Path, at: &str| std::os::unix::fs::symlink(to, sb.path(at)).unwrap();
+    symlink(&mounted.0.join("elsewhere"), "dev/onto-mount");
+    symlink(&sb.path("outside"), "dev/same-fs");
+    let names = |args: &[&str]| {
+        let mut args = args.to_vec();
+        args.extend(["status", "--all"]);
+        let mut names: Vec<String> = json(&sb, &args)
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                r["path"]
+                    .as_str()
+                    .unwrap()
+                    .rsplit('/')
+                    .next()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        names.sort();
+        names
+    };
+    // inverse: by default the walk crosses into the mount
+    assert_eq!(names(&[]), ["also-here", "elsewhere", "here"]);
+    for flag in ["-x", "--one-file-system"] {
+        assert_eq!(names(&[flag]), ["also-here", "here"], "{flag}");
+    }
+    // a link onto another filesystem isn't followed; one on the same is
+    assert_eq!(names(&["-L"]), ["also-here", "elsewhere", "here", "linked"]);
+    assert_eq!(names(&["-L", "-x"]), ["also-here", "here", "linked"]);
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "one_file_system = true\n").unwrap();
+    assert_eq!(
+        names(&["--config", cfg.to_str().unwrap()]),
+        ["also-here", "here"]
+    );
+    // a root on the other filesystem is scanned: the boundary is each root's own
+    let mount = mounted.0.to_str().unwrap().to_string();
+    assert_eq!(
+        names(&["-x", "--root", &mount]),
+        ["also-here", "elsewhere", "here"],
+        "with two roots, each keeps to its own"
+    );
+    let o = argus_in(&sb, &sb.root())
+        .arg("--root")
+        .arg(&mounted.0)
+        .args(["-x", "status"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.contains("1 repos"), "{o:?}");
+}
+
 #[test]
 fn tui_without_a_terminal_explains_instead_of_panicking() {
     let sb = Sandbox::new();

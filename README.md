@@ -189,8 +189,10 @@ line isn't seen while completing.
 Every command takes `--config FILE` / `--state FILE`, or the environment
 variables `ARGUS_CONFIG` / `ARGUS_STATE`, and `--root DIR` (repeatable)
 to scan other directories just this once; `--max-depth N` overrides
-`max_depth` for one run (0: no limit), and `-L` / `--follow-symlinks` follows symlinked
-directories (or set `follow_symlinks = true`).
+`max_depth` for one run (0: no limit), `-L` / `--follow-symlinks` follows symlinked
+directories (or set `follow_symlinks = true`), and `-x` /
+`--one-file-system` keeps each root's scan off other mounts, such as
+network shares and external disks (or set `one_file_system = true`).
 
 Anything that permanently loses data asks first: in the TUI a `y/n` in the
 status line, in the CLI a prompt on the terminal. `-y` / `--yes` proceeds

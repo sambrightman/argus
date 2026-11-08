@@ -1,13 +1,13 @@
 //! Time discovery alone (no status), for performance work:
 //!
 //! ```sh
-//! cargo run --release -p argus-core --example discover -- [-L] [--skip PATTERN]… [-n RUNS] [-j THREADS] ROOT…
+//! cargo run --release -p argus-core --example discover -- [-L] [-x] [--skip PATTERN]… [-n RUNS] [-j THREADS] ROOT…
 //! ```
 //!
 //! Runs on as many threads as argus would (`[concurrency] disk`'s default),
 //! unless `-j` says otherwise.
 //!
-//! `--no-real` and `--no-prune` turn off the `-L` optimizations, to compare;
+//! `-x` stays on each root's filesystem. `--no-real` and `--no-prune` turn off the `-L` optimizations, to compare;
 //! `--list` prints what was found (repos, then truncated directories).
 //!
 //! Prints the repos found and the median and fastest of the runs.
@@ -23,6 +23,7 @@ fn main() {
     let mut roots = vec![];
     let mut skip = vec![];
     let mut follow = false;
+    let mut one_fs = false;
     let mut runs = 10;
     let mut tuning = Tuning::default();
     let mut list = false;
@@ -31,6 +32,7 @@ fn main() {
     while let Some(a) = args.next() {
         match a.as_str() {
             "-L" => follow = true,
+            "-x" => one_fs = true,
             "--no-real" => tuning.real_from_links = false,
             "--no-prune" => tuning.prune_covered_links = false,
             "--list" => list = true,
@@ -48,6 +50,7 @@ fn main() {
     let opts = DiscoverOptions {
         skip: Skip::new(&skip, &roots).expect("skip patterns"),
         follow_symlinks: follow,
+        one_file_system: one_fs,
         max_depth: 0,
         tuning,
         ..Default::default()
