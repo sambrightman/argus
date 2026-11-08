@@ -144,6 +144,13 @@ fn a_kept_repo_is_checked_against_the_files_that_matter() {
         assert!(checked.contains(&want), "{want:?} in {checked:?}");
     }
     assert!(!checked.contains(&r.join(".git/HEAD")), "no branch config");
+    git(&r, &["config", "includeIf.gitdir:/elsewhere/.path", "x"]);
+    kept(&k, &r);
+    let checked = k.checked(&r);
+    assert!(
+        !checked.contains(&r.join(".git/HEAD")),
+        "an include that doesn't depend on the branch"
+    );
     if std::env::var_os("GIT_CONFIG_GLOBAL").is_none()
         && let Some(home) = std::env::var_os("HOME")
     {
@@ -215,10 +222,12 @@ fn switching_onto_a_branch_with_its_own_config_reopens_the_repo() {
     git(&r, &["branch", "feat"]);
     let k = KeptRepos::default();
     assert_eq!(url(&k, &r), None, "no remote on main");
-    git(&r, &["switch", "-q", "feat"]);
+    // moving HEAD alone (`git switch` also rewrites the index, which
+    // reopens the repo anyway)
+    git(&r, &["symbolic-ref", "HEAD", "refs/heads/feat"]);
     assert_eq!(url(&k, &r).as_deref(), Some("https://a/feat"));
     assert_eq!(kept(&k, &r), fresh(&r));
-    git(&r, &["switch", "-q", "main"]);
+    git(&r, &["symbolic-ref", "HEAD", "refs/heads/main"]);
     assert_eq!(url(&k, &r), None, "and back");
 }
 
