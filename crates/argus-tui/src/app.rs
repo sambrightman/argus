@@ -70,6 +70,13 @@ pub enum Action {
     /// Ask for a URL, then add it as `origin` to the current repo, if it
     /// has no remote.
     AddRemote,
+    /// Abort the operation in progress in the selected repos, once confirmed.
+    AbortOperation,
+    /// Delete the selected repos' merged branches, once confirmed.
+    DeleteMergedBranches,
+    PopStash,
+    /// Drop the stash under the cursor in the details, once confirmed.
+    DropStash,
     FastForward,
     AutoFix(Scope),
     PullAndClone,
@@ -135,6 +142,7 @@ fn diff_rows(
         diff: Some(DiffRef { side, hunk, line }),
         issue: None,
         ignored: false,
+        stash: None,
     };
     let mut v = vec![];
     for (side, _, title) in sides.into_iter().filter(|s| s.1) {
@@ -316,6 +324,8 @@ pub enum Confirmed {
     ClearMarks(Vec<String>),
     /// Files to discard, by repo path.
     Discard(Vec<(PathBuf, Vec<String>)>),
+    /// Operations to run, by repo path.
+    Ops(Vec<(PathBuf, Op)>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -927,6 +937,76 @@ impl App {
                     };
                 }
             }
+            AbortOperation => {
+                let ops = self.planned_ops(FixKind::Abort);
+                let question = match ops.as_slice() {
+                    [] => return self.not_applicable("nothing in progress"),
+                    [(p, op)] => format!(
+                        "{} in {}? What it did so far (resolved conflicts, commits) is lost.",
+                        capitalised(&op.label()),
+                        self.name_of(p)
+                    ),
+                    _ => format!(
+                        "Abort what's in progress in {} repos? What each did so far is lost.",
+                        ops.len()
+                    ),
+                };
+                self.mode = Mode::Confirm {
+                    question,
+                    then: Confirmed::Ops(ops),
+                };
+            }
+            DeleteMergedBranches => {
+                let ops = self.planned_ops(FixKind::DeleteBranches);
+                if ops.is_empty() {
+                    return self.not_applicable("no merged branches to delete");
+                }
+                let names: Vec<String> = ops
+                    .iter()
+                    .filter_map(|(_, op)| match op {
+                        Op::DeleteBranch { branch } => Some(branch.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                let mut shown = names[..names.len().min(3)].join(", ");
+                if names.len() > 3 {
+                    shown.push_str(&format!(" and {} more", names.len() - 3));
+                }
+                self.mode = Mode::Confirm {
+                    question: format!("Delete {} merged branch(es): {shown}?", names.len()),
+                    then: Confirmed::Ops(ops),
+                };
+            }
+            PopStash => return self.fix_ops(FixKind::StashPop),
+            DropStash => {
+                let Some(Row::Detail {
+                    repo,
+                    line: DetailLine { stash: Some(n), .. },
+                }) = self.rows.get(self.cursor)
+                else {
+                    self.info("put the cursor on a stash in the details (Tab)");
+                    return vec![];
+                };
+                let (i, n) = (*repo, *n);
+                let e = &self.ws.entries[i];
+                let Some(s) = e.status() else { return vec![] };
+                let (Some(message), Some(id)) = (s.stashes.get(n), s.stash_ids.get(n)) else {
+                    return vec![];
+                };
+                self.mode = Mode::Confirm {
+                    question: format!(
+                        "Drop stash@{{{n}}} ({message}) of {}? It can't be recovered.",
+                        e.display_name()
+                    ),
+                    then: Confirmed::Ops(vec![(
+                        e.path.clone(),
+                        Op::StashDrop {
+                            index: n,
+                            id: id.clone(),
+                        },
+                    )]),
+                };
+            }
             AddRemote => match self.applicable(FixKind::AddRemote).as_slice() {
                 [] => self.info("the selection has remotes"),
                 [one] => {
@@ -1181,6 +1261,13 @@ impl App {
                 let jobs = self.file_jobs(targets, ops::discard_ops);
                 self.start_jobs(jobs)
             }
+            Confirmed::Ops(ops) => {
+                let jobs = ops
+                    .into_iter()
+                    .filter_map(|(p, op)| self.job(&p, op))
+                    .collect();
+                self.start_jobs(jobs)
+            }
             Confirmed::ClearMarks(keys) => {
                 // by key: a scan may have arrived while asking
                 let indices: Vec<usize> = (0..self.ws.entries.len())
@@ -1205,6 +1292,33 @@ impl App {
         self.ws.resolve_flags();
         self.rebuild();
         vec![Effect::SaveState]
+    }
+
+    /// Every fix of `kind` for the selected repos, as (repo path, op).
+    fn planned_ops(&self, kind: FixKind) -> Vec<(PathBuf, Op)> {
+        let stash = self.ws.config.stash;
+        let mut v = vec![];
+        for i in self.selected() {
+            let e = &self.ws.entries[i];
+            let Some(s) = e.status() else { continue };
+            for f in fix::plan(s, &stash) {
+                if f.kind == kind && f.blocked.is_none() {
+                    v.push((e.path.clone(), f.op));
+                }
+            }
+        }
+        v
+    }
+
+    fn not_applicable(&mut self, why: &str) -> Vec<Effect> {
+        self.info(why.to_string());
+        vec![]
+    }
+
+    fn name_of(&self, path: &std::path::Path) -> String {
+        self.ws
+            .get(path)
+            .map_or_else(|| path.display().to_string(), |e| e.display_name())
     }
 
     /// The selected repos a fix of `kind` applies to.
@@ -1717,6 +1831,13 @@ impl App {
             self.log.drain(..100);
         }
     }
+}
+
+/// `abort merge` -> `Abort merge`
+fn capitalised(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
 }
 
 fn kinds_label(k: &[FixKind]) -> String {

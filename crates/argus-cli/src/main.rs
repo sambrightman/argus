@@ -251,6 +251,7 @@ enum FixArg {
     FastForward,
     Pull,
     Stash,
+    StashPop,
 }
 
 impl From<FixArg> for FixKind {
@@ -264,6 +265,7 @@ impl From<FixArg> for FixKind {
             FixArg::FastForward => FixKind::FastForward,
             FixArg::Pull => FixKind::Pull,
             FixArg::Stash => FixKind::Stash,
+            FixArg::StashPop => FixKind::StashPop,
         }
     }
 }

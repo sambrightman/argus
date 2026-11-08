@@ -150,9 +150,9 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `F` | **Pull**: `p` selected, `a` all marked for pull, `c` clone new repos of tracked owners, then pull all marked |
 | `f` | **Fetch**: `f` selected, `a` all shown except hidden |
 | `P` | **Push**: `p` push, `u` publish, `b` push other branches, `r` add a remote… |
-| `z` | **Stash**: switches `u` include untracked, `k` keep index (from `[stash]`, for the session); `z` all, `i` staged only, `m` with a message, `f` files marked in the details |
+| `z` | **Stash**: switches `u` include untracked, `k` keep index (from `[stash]`, for the session); `z` all, `i` staged only, `m` with a message, `f` files marked in the details, `p` pop the newest, `d` drop the one under the cursor… |
 | `c` | **Commit** (prompts for message) |
-| `b` | **Branch**: `d` switch to default, `r` reattach detached HEAD, `c` create a branch at detached HEAD…, `f` fast-forward stale branches |
+| `b` | **Branch**: `d` switch to default, `r` reattach detached HEAD, `c` create a branch at detached HEAD…, `x` delete merged branches…, `f` fast-forward stale branches |
 | `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden |
 | `m` | **Mark**: `f` favourite, `p` pull, `i` ignore, `I` ignore the issue under the cursor (pinned to the branch, tag or commit), `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page |
@@ -237,7 +237,8 @@ deleted with unmerged work › unpublished branch › other local branches with
 unpushed work › detached HEAD › not on default branch › stashes › no remote ›
 behind upstream (on its own, not counted as needing attention: a pull fixes it).
 
-Fixes are planned from status and are never destructive. `switch-default`
+Fixes are planned from status. Automatic ones are never destructive; the
+few that are ask first (below) and are never automatic. `switch-default`
 needs a clean tracked tree and nothing unpushed. `push` (a default auto-fix) is fast-forward only,
 and only to a same-named branch, never to a differently named upstream.
 Nothing is offered during a conflict.
@@ -259,6 +260,15 @@ Nothing is offered during a conflict.
   branch there, by the name you give. **No remote** gets `P r`: the URL
   you give, added as `origin`. Like `commit`, they need input, so they're
   never automatic.
+* **`stash-pop`** pops the newest stash into a work tree with no tracked
+  changes, after a trial merge (`git merge-tree`) says it applies without
+  conflicts (`z p`; automatic only if listed, and not while any stash is
+  ignored). `z d` drops the stash under the cursor in the details, after
+  asking, and only if it's still the stash you looked at.
+* **Asked first, never automatic:** `x A` aborts the merge, rebase,
+  cherry-pick, revert or am in progress (or ends a bisect), losing what it
+  did so far; `b x` deletes branches merged into the default branch whose
+  upstream is gone or that have none (`git branch -d`, so git double-checks).
 
 Pushes that would need force (the branch was rewritten after pushing) are
 shown, with why, and never applied.
@@ -267,8 +277,8 @@ Each auto-fix action applies **one** fix: the first kind in `[fix] auto`
 branch is pushed by one `x x` (or `argus fix`) and switched back to the
 default branch by the next. Or snooze it in between (`m z`).
 Kinds you don't list rank after the ones you do, in the default order:
-stash, commit, branch, push, publish, add-remote, push-branches,
-switch-default, reattach, pull, fast-forward.
+abort, stash, commit, branch, push, publish, add-remote, push-branches,
+switch-default, reattach, pull, fast-forward, delete-branches, stash-pop.
 
 `argus fix -n` shows, per repo, the fix this run would apply, then the
 chain later runs would continue with, then other fixes available now

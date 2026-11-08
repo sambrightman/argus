@@ -26,6 +26,9 @@ use crate::status::{
 )]
 #[serde(rename_all = "kebab-case")]
 pub enum FixKind {
+    /// End the merge, rebase, cherry-pick, revert, am or bisect in
+    /// progress, losing its progress (never automatic: confirmed first).
+    Abort,
     /// Stash staged, unstaged and untracked changes (not ignored files).
     Stash,
     /// Commit everything (never automatic: needs a message).
@@ -55,12 +58,19 @@ pub enum FixKind {
     Pull,
     /// Fast-forward local branches that aren't checked out.
     FastForward,
+    /// Delete branches merged into the default branch whose upstream is
+    /// gone or that have none (never automatic: confirmed first).
+    DeleteBranches,
+    /// Pop the newest stash into a work tree with no tracked changes, if it
+    /// applies without conflicts.
+    StashPop,
 }
 
 impl FixKind {
     /// Default priority: clean up uncommitted work, share commits, leave
     /// the branch, then catch up (on the branch you end up on).
-    pub const ALL: [FixKind; 11] = [
+    pub const ALL: [FixKind; 14] = [
+        FixKind::Abort,
         FixKind::Stash,
         FixKind::Commit,
         FixKind::Branch,
@@ -72,11 +82,23 @@ impl FixKind {
         FixKind::Reattach,
         FixKind::Pull,
         FixKind::FastForward,
+        FixKind::DeleteBranches,
+        FixKind::StashPop,
     ];
 
     /// Requires a message, name or URL from the user.
     pub fn needs_input(self) -> bool {
         matches!(self, FixKind::Commit | FixKind::Branch | FixKind::AddRemote)
+    }
+
+    /// Permanently destructive: asked about first, never automatic.
+    pub fn needs_confirmation(self) -> bool {
+        matches!(self, FixKind::Abort | FixKind::DeleteBranches)
+    }
+
+    /// Something a fix of this kind can't do alone: never automatic.
+    fn manual(self) -> bool {
+        self.needs_input() || self.needs_confirmation()
     }
 
     /// The name used in config and on the command line.
@@ -93,6 +115,9 @@ impl FixKind {
             FixKind::Commit => "commit",
             FixKind::Branch => "branch",
             FixKind::AddRemote => "add-remote",
+            FixKind::Abort => "abort",
+            FixKind::DeleteBranches => "delete-branches",
+            FixKind::StashPop => "stash-pop",
         }
     }
 }
@@ -114,8 +139,9 @@ pub struct Fix {
 /// Fixes that would undo a state `[ignore]` says is normal: switching to
 /// the default branch for an ignored non-default-branch branch,
 /// reattaching an ignored detached HEAD, publishing for an ignored missing
-/// or gone upstream, pulling for ignored "behind". Auto-fix leaves them
-/// out; choosing one explicitly still works.
+/// or gone upstream, pulling for ignored "behind", popping when any stash
+/// is ignored. Auto-fix leaves them out; choosing one explicitly still
+/// works.
 pub fn turned_off_by(ignored: &[crate::attention::Issue]) -> Vec<FixKind> {
     use crate::attention::Issue;
     let mut v = vec![];
@@ -125,6 +151,7 @@ pub fn turned_off_by(ignored: &[crate::attention::Issue]) -> Vec<FixKind> {
             Issue::Detached => FixKind::Reattach,
             Issue::NoUpstream | Issue::UpstreamGone => FixKind::Publish,
             Issue::Behind(_) => FixKind::Pull,
+            Issue::Stashes(_) => FixKind::StashPop,
             _ => continue,
         });
     }
@@ -133,7 +160,18 @@ pub fn turned_off_by(ignored: &[crate::attention::Issue]) -> Vec<FixKind> {
 
 pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
     let mut v = vec![];
-    if s.bare || s.in_progress.is_some() || s.changes.conflicted > 0 {
+    if s.bare {
+        return v;
+    }
+    if let Some(p) = s.in_progress {
+        v.push(Fix {
+            blocked: None,
+            kind: FixKind::Abort,
+            op: Op::Abort { what: p },
+            reason: format!("{} in progress", p.label()),
+        });
+    }
+    if s.in_progress.is_some() || s.changes.conflicted > 0 {
         return v;
     }
     let tracked_dirty = s.changes.staged + s.changes.unstaged > 0;
@@ -358,6 +396,46 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
         }
     }
 
+    if let Some(default) = &s.default_branch {
+        for b in s
+            .branches
+            .iter()
+            .filter(|b| !b.is_head && b.merged && b.name != *default)
+        {
+            let gone = match &b.upstream {
+                None => false,
+                Some(t) if t.gone => true,
+                Some(_) => continue,
+            };
+            v.push(Fix {
+                blocked: None,
+                kind: FixKind::DeleteBranches,
+                op: Op::DeleteBranch {
+                    branch: b.name.clone(),
+                },
+                reason: format!(
+                    "{} is merged into {default}{}",
+                    b.name,
+                    if gone {
+                        " and its upstream is gone"
+                    } else {
+                        ""
+                    }
+                ),
+            });
+        }
+    }
+    if let Some(message) = s.stashes.first()
+        && !tracked_dirty
+    {
+        v.push(Fix {
+            blocked: None,
+            kind: FixKind::StashPop,
+            op: Op::StashPop,
+            reason: format!("stash@{{0}}: {message}"),
+        });
+    }
+
     // what a stash would take: untracked files only when asked
     let stashable = s.changes.staged
         + s.changes.unstaged
@@ -434,11 +512,11 @@ pub fn ranked(s: &RepoStatus, priority: &[FixKind], stash: &StashConfig) -> Vec<
 }
 
 /// The fix an auto-fix action applies: the highest-priority one in `allowed`
-/// that needs no input and isn't blocked.
+/// that needs no input or confirmation and isn't blocked.
 pub fn choose(s: &RepoStatus, allowed: &[FixKind], stash: &StashConfig) -> Option<Fix> {
     ranked(s, allowed, stash)
         .into_iter()
-        .find(|f| allowed.contains(&f.kind) && !f.kind.needs_input() && f.blocked.is_none())
+        .find(|f| allowed.contains(&f.kind) && !f.kind.manual() && f.blocked.is_none())
 }
 
 /// The fixes successive auto-fix actions would apply, starting with
@@ -466,7 +544,8 @@ pub struct Preview {
     /// (see [`chain`]).
     pub chain: Vec<Fix>,
     /// Other fixes available now that the chain doesn't include, in
-    /// priority order; possibly not allowed. Never ones needing input.
+    /// priority order; possibly not allowed. Never ones needing input or
+    /// confirmation.
     pub alternatives: Vec<Fix>,
 }
 
@@ -480,7 +559,7 @@ pub fn preview(s: &RepoStatus, allowed: &[FixKind], stash: &StashConfig) -> Prev
     };
     let alternatives = ranked(s, allowed, stash)
         .into_iter()
-        .filter(|f| !f.kind.needs_input() && !in_chain(f))
+        .filter(|f| !f.kind.manual() && !in_chain(f))
         .collect();
     Preview {
         chain,
@@ -502,6 +581,7 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
             paths,
         } => {
             s.stashes.insert(0, message.clone());
+            s.stash_ids.insert(0, String::new()); // not known until made
             // only the plain stash the fix makes is simulated in detail
             if *staged || !paths.is_empty() {
                 return s;
@@ -618,6 +698,20 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
             s.remote = Some(name.clone());
             s.remote_url = Some(url.clone());
         }
+        Op::Abort { .. } => {
+            s.in_progress = None;
+        }
+        Op::DeleteBranch { branch } => s.branches.retain(|b| &b.name != branch),
+        Op::StashPop => {
+            s.stashes.remove(0);
+            s.stash_ids.remove(0);
+            // its changes, whatever they are
+            s.changes.unstaged = s.changes.unstaged.max(1);
+        }
+        Op::StashDrop { index, .. } => {
+            s.stashes.remove(*index);
+            s.stash_ids.remove(*index);
+        }
         Op::FastForward { branch, .. } => {
             if let Some(b) = s.branches.iter_mut().find(|b| &b.name == branch)
                 && let Some(t) = &mut b.upstream
@@ -706,13 +800,10 @@ mod tests {
         assert_eq!(turned_off_by(&[Issue::Detached]), [FixKind::Reattach]);
         assert_eq!(turned_off_by(&[Issue::NoUpstream]), [FixKind::Publish]);
         assert_eq!(turned_off_by(&[Issue::UpstreamGone]), [FixKind::Publish]);
+        assert_eq!(turned_off_by(&[Issue::Stashes(1)]), [FixKind::StashPop]);
         assert_eq!(turned_off_by(&[Issue::Behind(3)]), [FixKind::Pull]);
         // inverse: issues with no fix to undo them
-        for i in [
-            Issue::Stashes(1),
-            Issue::NoRemote,
-            Issue::UnpushedBranches(2),
-        ] {
+        for i in [Issue::NoRemote, Issue::UnpushedBranches(2)] {
             assert!(turned_off_by(&[i]).is_empty(), "{i:?}");
         }
     }

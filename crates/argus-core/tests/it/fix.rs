@@ -116,9 +116,8 @@ fn push_not_offered_when_diverged() {
     assert!(k.contains(&FixKind::Pull));
 }
 
-#[test]
-fn no_fixes_during_conflict() {
-    let sb = Sandbox::new();
+/// A repo where `o` and `main` both changed README, on `main`.
+fn conflicting(sb: &Sandbox) -> std::path::PathBuf {
     let r = sb.init("r");
     git(&r, &["switch", "-q", "-c", "o"]);
     write(&r, "README", "o");
@@ -126,11 +125,44 @@ fn no_fixes_during_conflict() {
     git(&r, &["switch", "-q", "main"]);
     write(&r, "README", "m");
     commit(&r, "m");
-    let _ = std::process::Command::new("git")
-        .current_dir(&r)
-        .args(["merge", "o"])
-        .output();
-    assert_eq!(kinds(&r), vec![]);
+    r
+}
+
+#[test]
+fn only_abort_during_an_operation_and_never_automatically() {
+    use argus_core::status::InProgress;
+    for (what, args) in [
+        (InProgress::Merge, ["merge", "o"].as_slice()),
+        (InProgress::Rebase, &["rebase", "o"]),
+        (InProgress::CherryPick, &["cherry-pick", "o"]),
+        (InProgress::Revert, &["revert", "--no-edit", "HEAD~1"]),
+        (InProgress::Bisect, &["bisect", "start"]),
+    ] {
+        let sb = Sandbox::new();
+        let r = conflicting(&sb);
+        // so that reverting `m` conflicts too
+        write(&r, "README", "later");
+        commit(&r, "later");
+        let head_before = git(&r, &["rev-parse", "HEAD"]);
+        argus_core::testkit::git_may_fail(&r, args);
+        let before = st(&r);
+        assert_eq!(before.in_progress, Some(what));
+        assert_eq!(kinds(&r), [FixKind::Abort], "{what:?}");
+        assert!(choose(&before, &FixKind::ALL, &StashConfig::default()).is_none());
+        assert!(
+            argus_core::fix::preview(&before, &FixKind::ALL, &StashConfig::default())
+                .alternatives
+                .is_empty(),
+            "not offered as an alternative either"
+        );
+        let out = argus_core::ops::run(&r, &Op::Abort { what });
+        assert!(out.success, "{what:?}: {}", out.output);
+        let after = st(&r);
+        assert_eq!(after.in_progress, None, "{what:?}");
+        assert!(after.changes.is_clean(), "{what:?}");
+        assert_eq!(git(&r, &["rev-parse", "HEAD"]), head_before, "{what:?}");
+        assert_eq!(after.head, Head::Branch("main".into()));
+    }
 }
 
 #[test]
@@ -974,4 +1006,159 @@ fn a_repo_without_a_remote_gets_one_by_url_never_automatically() {
     // inverse: a clone has one
     let c = sb.clone_as_github("acme", "w", "c");
     assert!(of_kind(&c, FixKind::AddRemote).is_empty());
+}
+
+#[test]
+fn merged_branches_without_a_live_upstream_can_be_deleted_never_automatically() {
+    let sb = Sandbox::new();
+    let r = pushed_feature(&sb);
+    git(&r, &["push", "-q", "origin", "feat:main"]);
+    git(&r, &["switch", "-q", "main"]);
+    git(&r, &["pull", "-q"]);
+    git(&r, &["branch", "local-done"]);
+    git(&r, &["branch", "local-wip"]);
+    git(&r, &["switch", "-q", "local-wip"]);
+    commit(&r, "wip");
+    git(&r, &["switch", "-q", "main"]);
+    // inverse: feat's upstream is still there, local-wip isn't merged
+    assert_eq!(
+        of_kind(&r, FixKind::DeleteBranches),
+        [("delete branch local-done".to_string(), None)]
+    );
+    git(&r, &["push", "-q", "origin", "--delete", "feat"]);
+    let s = st(&r);
+    let fixes: Vec<_> = plan(&s, &StashConfig::default())
+        .into_iter()
+        .filter(|f| f.kind == FixKind::DeleteBranches)
+        .map(|f| f.reason)
+        .collect();
+    assert_eq!(
+        fixes,
+        [
+            "feat is merged into main and its upstream is gone",
+            "local-done is merged into main"
+        ]
+    );
+    assert!(
+        choose(&s, &FixKind::ALL, &StashConfig::default())
+            .is_none_or(|f| f.kind != FixKind::DeleteBranches)
+    );
+    for f in plan(&s, &StashConfig::default())
+        .into_iter()
+        .filter(|f| f.kind == FixKind::DeleteBranches)
+    {
+        let predicted = argus_core::fix::simulate(&st(&r), &f);
+        let out = argus_core::ops::run(&r, &f.op);
+        assert!(out.success, "{}", out.output);
+        assert_eq!(predicted.branches, st(&r).branches);
+    }
+    let names: Vec<String> = st(&r).branches.into_iter().map(|b| b.name).collect();
+    assert_eq!(names, ["main", "local-wip"]);
+    // inverse: never the current or the default branch
+    git(&r, &["switch", "-q", "-c", "here"]);
+    git(&r, &["branch", "--unset-upstream", "main"]);
+    let k = of_kind(&r, FixKind::DeleteBranches);
+    assert!(k.is_empty(), "{k:?}");
+}
+
+#[test]
+fn stash_ids_are_the_stash_commits() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    for n in ["one", "two"] {
+        write(&r, "README", n);
+        git(&r, &["stash", "push", "-q", "-m", n]);
+    }
+    let s = st(&r);
+    assert_eq!(s.stashes, ["two", "one"]);
+    assert_eq!(
+        s.stash_ids,
+        [
+            git(&r, &["rev-parse", "stash@{0}"]).trim(),
+            git(&r, &["rev-parse", "stash@{1}"]).trim()
+        ]
+    );
+}
+
+#[test]
+fn the_newest_stash_is_popped_only_when_it_applies_cleanly() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "README", "staged");
+    git(&r, &["add", "README"]);
+    write(&r, "new", "untracked");
+    git(&r, &["stash", "push", "-q", "-u", "-m", "mine"]);
+    let before = st(&r);
+    assert_eq!(
+        of_kind(&r, FixKind::StashPop),
+        [("pop stash".to_string(), None)]
+    );
+    // it can be automatic, if asked for
+    let a = apply_fix(&r, &[FixKind::StashPop], &StashConfig::default())
+        .unwrap()
+        .unwrap();
+    assert!(a.outcome.success, "{}", a.outcome.output);
+    let after = st(&r);
+    assert!(after.stashes.is_empty());
+    assert_eq!(changes_of(&after), ["M  README", "?? new"], "index kept");
+    let predicted = argus_core::fix::simulate(&before, &a.fix);
+    assert_eq!(predicted.stashes, after.stashes);
+    assert!(!predicted.changes.is_clean(), "predicted dirty");
+    // inverse: tracked changes in the way
+    git(&r, &["stash", "push", "-q", "-u"]);
+    write(&r, "README", "in the way");
+    assert!(of_kind(&r, FixKind::StashPop).is_empty());
+    // inverse: HEAD moved on and would conflict: refused, nothing changed
+    commit(&r, "moved on");
+    let out = argus_core::ops::run(&r, &Op::StashPop);
+    assert!(!out.success);
+    assert!(
+        out.output.contains("would conflict in README"),
+        "{}",
+        out.output
+    );
+    let s = st(&r);
+    assert_eq!(s.stashes.len(), 1);
+    assert!(s.changes.is_clean(), "{:?}", s.changes);
+}
+
+fn changes_of(s: &argus_core::status::RepoStatus) -> Vec<String> {
+    s.changes
+        .files
+        .iter()
+        .map(|f| format!("{}{} {}", f.index, f.worktree, f.path))
+        .collect()
+}
+
+#[test]
+fn a_stash_is_dropped_only_if_it_is_still_the_one_asked_about() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "README", "old");
+    git(&r, &["stash", "push", "-q", "-m", "old"]);
+    let s = st(&r);
+    let drop = Op::StashDrop {
+        index: 0,
+        id: s.stash_ids[0].clone(),
+    };
+    // another stash arrived since: stash@{0} is that one now
+    write(&r, "README", "new");
+    git(&r, &["stash", "push", "-q", "-m", "new"]);
+    let out = argus_core::ops::run(&r, &drop);
+    assert!(!out.success);
+    assert!(
+        out.output.contains("isn't the stash it was"),
+        "{}",
+        out.output
+    );
+    assert_eq!(st(&r).stashes, ["new", "old"]);
+    // as listed now: dropped
+    let s = st(&r);
+    let drop = Op::StashDrop {
+        index: 1,
+        id: s.stash_ids[1].clone(),
+    };
+    let out = argus_core::ops::run(&r, &drop);
+    assert!(out.success, "{}", out.output);
+    assert_eq!(st(&r).stashes, ["new"]);
 }

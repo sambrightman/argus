@@ -142,6 +142,8 @@ impl MenuId {
                         "stash files marked in details",
                         Action::Stash(StashKind::MarkedFiles),
                     ),
+                    item('p', "pop the newest stash", Action::PopStash),
+                    item('d', "drop the stash under the cursor…", Action::DropStash),
                 ],
             ),
             MenuId::Commit => (
@@ -163,6 +165,11 @@ impl MenuId {
                         Action::CreateBranch,
                     ),
                     item(
+                        'x',
+                        "delete merged branches (upstream gone or none)…",
+                        Action::DeleteMergedBranches,
+                    ),
+                    item(
                         'f',
                         "fast-forward stale local branches",
                         Action::FastForward,
@@ -177,6 +184,11 @@ impl MenuId {
                         'a',
                         "auto-fix all shown, except hidden",
                         Action::AutoFix(Scope::All),
+                    ),
+                    item(
+                        'A',
+                        "abort the merge, rebase… in progress…",
+                        Action::AbortOperation,
                     ),
                 ],
             ),

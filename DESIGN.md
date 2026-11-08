@@ -251,7 +251,9 @@ Two findings:
   branch, detached HEAD, stashes, a gone upstream, or no upstream for the
   current branch. Sort order: needing attention before clean, then
   favourites, then severity, then amount of change, then name.
-* **Auto-fixes** (planned and shown first, then executed; never destructive):
+* **Auto-fixes** (planned and shown first, then executed; never destructive:
+  the destructive kinds, `abort` and `delete-branches`, are confirmed
+  first in the TUI and never chosen automatically):
   * `switch-default`: on a non-default branch, worktree clean, branch fully
     pushed (or merged into default) → `git switch <default>`.
   * `push`: ahead of upstream, nothing behind → `git push`. When `git
@@ -297,6 +299,17 @@ Two findings:
     <name>`, the name asked for (TUI `b c`).
   * `add-remote`: no remote → `git remote add -- origin <url>`, the URL
     asked for (TUI `P r`, one repo at a time).
+  * `abort`: an operation in progress → `git <op> --abort` (`git bisect
+    reset`). The only fix offered then. Confirmed first.
+  * `delete-branches`: other branches merged into the default branch,
+    upstream gone or none → `git branch -d`, which refuses what it doesn't
+    see as merged. Confirmed first.
+  * `stash-pop`: stashes, no tracked changes → `git stash pop --index`,
+    after `git merge-tree` of the stash into HEAD finds no conflicts
+    (checked when it runs). Turned off for auto-fix while any stash is
+    ignored. Dropping a stash isn't a fix (nothing in status says which):
+    the TUI drops the one under the cursor, confirmed, and only if
+    `stash@{n}` still has the id status read (`stash_ids`).
   * `pull` / `fetch`: plain `git pull` / `git fetch`, so your config decides.
 
 ## 6. TUI

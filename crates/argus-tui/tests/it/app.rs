@@ -1772,3 +1772,95 @@ fn branch_and_remote_prompts_ask_then_run() {
             .contains("one repo at a time")
     );
 }
+
+/// The ops a confirmation runs after `y`, or `None` if it didn't ask.
+fn confirm(app: &mut App, a: Action, answer: char) -> Option<Vec<Op>> {
+    app.act(a);
+    if !matches!(app.mode, Mode::Confirm { .. }) {
+        return None;
+    }
+    let fx = app.on_key(key(answer));
+    assert!(matches!(app.mode, Mode::Normal));
+    Some(match fx.as_slice() {
+        [Effect::Jobs(jobs)] => jobs.iter().map(|j| j.op.clone()).collect(),
+        _ => vec![],
+    })
+}
+
+#[test]
+fn destructive_fixes_ask_first_and_do_nothing_unless_told_yes() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let d = sb.path("dev/dirty");
+        git(&d, &["stash", "push", "-q", "-m", "older"]);
+        write(&d, "README", "changed again\n");
+        git(&d, &["stash", "push", "-q", "-m", "newer"]);
+        git(&d, &["branch", "done"]);
+        // a merge stopped on a conflict in clean
+        let c = sb.path("dev/clean");
+        git(&c, &["switch", "-q", "-c", "o"]);
+        write(&c, "README", "o");
+        commit(&c, "o");
+        git(&c, &["switch", "-q", "main"]);
+        write(&c, "README", "m");
+        commit(&c, "m");
+        argus_core::testkit::git_may_fail(&c, &["merge", "o"]);
+    });
+    let go = |app: &mut App, name: &str| {
+        app.act(Action::Top);
+        for _ in 0..app.ws.entries.len() {
+            if app.current().unwrap().path == sb.path(name) {
+                return;
+            }
+            app.act(Action::Down);
+        }
+        panic!("{name} not listed");
+    };
+    use argus_core::status::InProgress;
+    go(&mut app, "dev/clean");
+    assert_eq!(confirm(&mut app, Action::AbortOperation, 'n'), Some(vec![]));
+    assert_eq!(
+        confirm(&mut app, Action::AbortOperation, 'y'),
+        Some(vec![Op::Abort {
+            what: InProgress::Merge
+        }])
+    );
+    app.running.clear();
+    go(&mut app, "dev/dirty");
+    assert_eq!(
+        confirm(&mut app, Action::AbortOperation, 'y'),
+        None,
+        "nothing in progress"
+    );
+    assert_eq!(
+        confirm(&mut app, Action::DeleteMergedBranches, 'n'),
+        Some(vec![])
+    );
+    assert_eq!(
+        confirm(&mut app, Action::DeleteMergedBranches, 'y'),
+        Some(vec![Op::DeleteBranch {
+            branch: "done".into()
+        }])
+    );
+    app.running.clear();
+    // drop: only with the cursor on a stash line
+    assert_eq!(confirm(&mut app, Action::DropStash, 'y'), None);
+    app.act(Action::ToggleExpand);
+    for _ in 0..app.rows.len() {
+        if matches!(
+            app.rows.get(app.cursor),
+            Some(Row::Detail { line, .. }) if line.stash == Some(1)
+        ) {
+            break;
+        }
+        app.act(Action::Down);
+    }
+    let id = git(&sb.path("dev/dirty"), &["rev-parse", "stash@{1}"]);
+    assert_eq!(confirm(&mut app, Action::DropStash, 'n'), Some(vec![]));
+    assert_eq!(
+        confirm(&mut app, Action::DropStash, 'y'),
+        Some(vec![Op::StashDrop {
+            index: 1,
+            id: id.trim().to_string()
+        }])
+    );
+}

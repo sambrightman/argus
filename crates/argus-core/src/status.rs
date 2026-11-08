@@ -158,6 +158,9 @@ pub struct RepoStatus {
     /// Each stash's message, newest (`stash@{0}`) first, without git's
     /// `On <branch>: ` or `WIP on <branch>: ` prefix.
     pub stashes: Vec<String>,
+    /// Each stash's commit id, in the same order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stash_ids: Vec<String>,
     /// Detached HEAD only: commits reachable from HEAD but from no branch,
     /// tag or remote ref (lost to gc once HEAD moves).
     pub detached_orphans: usize,
@@ -567,6 +570,7 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         _ => vec![],
     };
 
+    let (stash_ids, stashes) = stash_entries(repo.common_dir()).into_iter().unzip();
     let tags = head_tags(repo, &refs, head_id);
     let (describe, describe_gave_up) = match (&head, head_id) {
         (Head::Detached(_), Some(id)) if tags.is_empty() => {
@@ -585,7 +589,8 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         remote_url,
         upstream,
         changes,
-        stashes: stash_messages(repo.common_dir()),
+        stashes,
+        stash_ids,
         detached_orphans,
         at_head,
         in_progress: repo.state().map(map_state),
@@ -1207,17 +1212,19 @@ fn detached_orphans(
 
 /// From the stash's reflog: one line per stash, oldest first, the message
 /// after a tab.
-fn stash_messages(common_dir: &Path) -> Vec<String> {
+fn stash_entries(common_dir: &Path) -> Vec<(String, String)> {
     let Ok(log) = std::fs::read(common_dir.join("logs/refs/stash")) else {
         return vec![];
     };
-    let mut v: Vec<String> = log
+    // `<old id> <new id> <who> <when>\t<message>`
+    let mut v: Vec<(String, String)> = log
         .lines()
         .filter(|l| !l.is_empty())
         .map(|l| {
             let l = String::from_utf8_lossy(l);
-            let message = l.split_once('\t').map_or("", |(_, m)| m);
-            stash_message(message).to_string()
+            let (head, message) = l.split_once('\t').unwrap_or((&l, ""));
+            let id = head.split(' ').nth(1).unwrap_or("").to_string();
+            (id, stash_message(message).to_string())
         })
         .collect();
     v.reverse();

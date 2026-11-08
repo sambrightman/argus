@@ -22,6 +22,8 @@ pub struct DetailLine {
     /// That issue is ignored: toggling stops ignoring it. (A repo can show
     /// stashes both ways, with the same count.)
     pub ignored: bool,
+    /// The stash this line shows (`stash@{n}`), for dropping it.
+    pub stash: Option<usize>,
 }
 
 /// A diff row under a file's line: a side's heading, a hunk header, or one
@@ -45,6 +47,7 @@ fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
         diff: None,
         issue: None,
         ignored: false,
+        stash: None,
     }
 }
 
@@ -261,11 +264,14 @@ pub fn details(
         v.push(line(parts));
         for (n, message) in s.stashes.iter().enumerate().take(MAX_STASHES) {
             let label = format!("          stash@{{{n}}} {message}");
-            v.push(line(vec![if e.stash_ignored.get(n) == Some(&true) {
-                styled(Role::Dim, format!("{label}  (ignored)"))
-            } else {
-                plain(label)
-            }]));
+            v.push(DetailLine {
+                stash: Some(n),
+                ..line(vec![if e.stash_ignored.get(n) == Some(&true) {
+                    styled(Role::Dim, format!("{label}  (ignored)"))
+                } else {
+                    plain(label)
+                }])
+            });
         }
         let more = s.stashes.len().saturating_sub(MAX_STASHES);
         if more > 0 {

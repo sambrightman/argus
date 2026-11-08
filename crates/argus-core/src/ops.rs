@@ -44,6 +44,25 @@ pub enum Op {
         name: String,
         url: String,
     },
+    /// End the operation in progress (`git merge --abort`, `git bisect
+    /// reset`…), losing its progress. Permanently destructive: callers
+    /// confirm first.
+    Abort {
+        what: InProgress,
+    },
+    /// `git branch -d`: delete a branch git agrees is merged.
+    DeleteBranch {
+        branch: String,
+    },
+    /// `git stash pop --index`, only when a trial merge says it applies
+    /// without conflicts.
+    StashPop,
+    /// `git stash drop`, only if `stash@{index}` is still the stash `id`.
+    /// Permanently destructive: callers confirm first.
+    StashDrop {
+        index: usize,
+        id: String,
+    },
     /// `git stash push`. `staged` stashes only staged changes (untracked
     /// files never, as git refuses the pair); `paths` limits it to those.
     Stash {
@@ -120,6 +139,15 @@ impl Op {
                 vec!["push".into(), remote.clone(), format!("{r}:{r}")]
             }
             Op::Switch { branch } => v(&["switch", branch]),
+            Op::Abort { what } => match what {
+                InProgress::Bisect => v(&["bisect", "reset"]),
+                w => v(&[w.label(), "--abort"]),
+            },
+            Op::DeleteBranch { branch } => v(&["branch", "-d", "--", branch]),
+            Op::StashPop => v(&["stash", "pop", "--index"]),
+            Op::StashDrop { index, .. } => {
+                vec!["stash".into(), "drop".into(), format!("stash@{{{index}}}")]
+            }
             Op::CreateBranch { name } => v(&["switch", "-c", name]),
             Op::AddRemote { name, url } => v(&["remote", "add", "--", name, url]),
             Op::Stash {
@@ -208,6 +236,13 @@ impl Op {
             Op::PushSetUpstream { remote, branch } => format!("push -u {remote} {branch}"),
             Op::PushTo { remote, branch } => format!("push {branch} to {remote}/{branch}"),
             Op::Switch { branch } => format!("switch {branch}"),
+            Op::Abort {
+                what: InProgress::Bisect,
+            } => "end bisect".into(),
+            Op::Abort { what } => format!("abort {}", what.label()),
+            Op::DeleteBranch { branch } => format!("delete branch {branch}"),
+            Op::StashPop => "pop stash".into(),
+            Op::StashDrop { index, .. } => format!("drop stash@{{{index}}}"),
             Op::CreateBranch { name } => format!("create branch {name}"),
             Op::AddRemote { name, url } => format!("add remote {name} {url}"),
             Op::Stash {
@@ -503,8 +538,34 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
         }
         _ => dir.to_path_buf(),
     };
-    if let Op::Pull = op {
-        return pull(&cwd, started);
+    match op {
+        Op::Pull => return pull(&cwd, started),
+        Op::StashPop => {
+            if let Some(why) = pop_problem(&cwd) {
+                return refused(format!("not popping: {why}"), started);
+            }
+        }
+        Op::StashDrop { index, id } => {
+            let at = git(
+                &cwd,
+                &[
+                    "rev-parse".into(),
+                    "-q".into(),
+                    "--verify".into(),
+                    format!("stash@{{{index}}}"),
+                ],
+                started,
+            );
+            if !at.success || at.output != *id {
+                return refused(
+                    format!(
+                        "not dropping: stash@{{{index}}} isn't the stash it was (refresh and try again)"
+                    ),
+                    started,
+                );
+            }
+        }
+        _ => {}
     }
     if let Op::CommitAll { .. } = op {
         let add = git(&cwd, &["add".into(), "--all".into()], started);
@@ -513,6 +574,43 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
         }
     }
     git(&cwd, &op.args(), started)
+}
+
+fn refused(output: String, started: Instant) -> OpOutcome {
+    OpOutcome {
+        success: false,
+        code: None,
+        output,
+        duration: started.elapsed(),
+    }
+}
+
+/// Why popping `stash@{0}` would stop with conflicts, if it would: a trial
+/// merge (`git merge-tree`) of the stash into HEAD, changing nothing. Their
+/// merge base is the commit the stash was made on, as for `git stash pop`.
+fn pop_problem(cwd: &Path) -> Option<String> {
+    let o = git_in(
+        cwd,
+        &[
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "--no-messages",
+            "HEAD",
+            "stash@{0}",
+        ],
+    );
+    match o.code {
+        Some(0) => None,
+        Some(1) => {
+            let files: Vec<&str> = o.output.lines().skip(1).filter(|l| !l.is_empty()).collect();
+            Some(format!("it would conflict in {}", files.join(", ")))
+        }
+        _ => Some(format!(
+            "can't check it for conflicts: {}",
+            o.output.lines().next().unwrap_or("git failed")
+        )),
+    }
 }
 
 fn in_progress(dir: &Path) -> Option<InProgress> {
