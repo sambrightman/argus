@@ -279,11 +279,11 @@ impl Workspace {
     pub fn set_mark(&mut self, indices: &[usize], m: Mark, on: bool) -> Result<(), ConfigError> {
         for &i in indices {
             let e = &self.entries[i];
-            let base = m == Mark::Sync
+            let base = m == Mark::Pull
                 && e.id
                     .as_ref()
                     .and_then(|id| rules::track_for(&self.config, &self.state, id))
-                    .is_some_and(|t| t.sync);
+                    .is_some_and(|t| t.pull);
             let (id, path, name) = (e.id.clone(), e.path.clone(), Self::mark_name(e));
             rules::set_mark(&mut self.config, m, id.as_ref(), &path, &name, base, on)?;
         }

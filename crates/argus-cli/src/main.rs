@@ -8,9 +8,9 @@ use anyhow::{Context, Result, bail};
 use argus_core::badges::{self, Badge, Role};
 use argus_core::fix::{self, FixKind};
 use argus_core::icons::{self, Icons};
+use argus_core::pull;
 use argus_core::rules::{IssueList, Mark};
 use argus_core::runner::{self, Event};
-use argus_core::sync;
 use argus_core::{Config, State, ViewFilter, Workspace, configfile, paths};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use unicode_width::UnicodeWidthStr;
@@ -19,7 +19,7 @@ use unicode_width::UnicodeWidthStr;
 #[command(
     name = "argus",
     version,
-    about = "Overview, clean up and sync many git clones"
+    about = "Overview, clean up and pull many git clones"
 )]
 struct Cli {
     /// Config file [default: $XDG_CONFIG_HOME/argus/config.toml]
@@ -60,14 +60,15 @@ enum Cmd {
         #[command(flatten)]
         view: View,
     },
-    /// Pull syncable repos; list tracked owners and clone new repos.
-    Sync {
+    /// Pull the repos marked for pull; list tracked owners and clone their
+    /// new repos.
+    Pull {
         /// Show what would happen.
         #[arg(long, short = 'n')]
         dry_run: bool,
         /// Don't query forges or clone; only pull.
         #[arg(long)]
-        no_forge: bool,
+        no_clone: bool,
         /// Only these repos (glob on name/key/path).
         #[arg(add = repo_completer())]
         patterns: Vec<String>,
@@ -89,7 +90,7 @@ enum Cmd {
         #[arg(add = repo_completer())]
         patterns: Vec<String>,
     },
-    /// Set favourite / sync / ignore (edits those lists in config), or
+    /// Set favourite / pull / ignore (edits those lists in config), or
     /// snooze repos.
     Mark(MarkArgs),
     /// Acknowledge "new" repos (all, or matching patterns).
@@ -162,13 +163,13 @@ struct MarkArgs {
     /// Not a favourite, whatever patterns in config say.
     #[arg(long)]
     no_favourite: bool,
-    /// Pull on sync.
-    #[arg(long, overrides_with = "no_sync")]
-    sync: bool,
-    /// Don't pull on sync, whatever patterns in config say.
+    /// Pull with `argus pull`.
+    #[arg(long, overrides_with = "no_pull")]
+    pull: bool,
+    /// Don't pull with `argus pull`, whatever patterns in config say.
     #[arg(long)]
-    no_sync: bool,
-    /// Hide, and leave out of sync, clones and bulk operations.
+    no_pull: bool,
+    /// Hide, and leave out of pulls, clones and bulk operations.
     #[arg(long, overrides_with = "unignore")]
     ignore: bool,
     /// Not ignored, whatever patterns in config say.
@@ -188,7 +189,7 @@ struct MarkArgs {
     /// End a snooze early.
     #[arg(long)]
     unsnooze: bool,
-    /// Remove the repos' own entries from the favourite, sync and ignore
+    /// Remove the repos' own entries from the favourite, pull and ignore
     /// lists (patterns decide again) and end any snooze.
     #[arg(long)]
     clear: bool,
@@ -365,13 +366,13 @@ fn run() -> Result<()> {
             scan(&mut ws);
             status(&ws, view.into(), json)?;
         }
-        Cmd::Sync {
+        Cmd::Pull {
             dry_run,
-            no_forge,
+            no_clone,
             patterns,
         } => {
             scan(&mut ws);
-            sync_cmd(&mut ws, &ctx, dry_run, no_forge, &patterns, json)?;
+            pull_cmd(&mut ws, &ctx, dry_run, no_clone, &patterns, json)?;
         }
         Cmd::Fix {
             kinds,
@@ -645,7 +646,7 @@ fn root_cmd(ctx: &Ctx, cmd: RootCmd, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn forge_factory() -> sync::ForgeFactory<'static> {
+fn forge_factory() -> pull::ForgeFactory<'static> {
     &|kind, host| argus_forge::for_track(kind, host)
 }
 
@@ -791,28 +792,28 @@ fn status_summary(ws: &Workspace, filter: ViewFilter) -> String {
     s
 }
 
-// ---------- sync ----------
+// ---------- pull ----------
 
-fn sync_cmd(
+fn pull_cmd(
     ws: &mut Workspace,
     ctx: &Ctx,
     dry_run: bool,
-    no_forge: bool,
+    no_clone: bool,
     patterns: &[String],
     json: bool,
 ) -> Result<()> {
     let p = Paint::detect();
     let mut jobs = vec![];
-    let mut tracks = sync::SyncPlan::default();
-    if !no_forge && !ws.config.tracks.is_empty() {
-        let listings = sync::list_tracks(ws, forge_factory());
+    let mut tracks = pull::PullPlan::default();
+    if !no_clone && !ws.config.tracks.is_empty() {
+        let listings = pull::list_tracks(ws, forge_factory());
         for (k, e) in &listings.errors {
             eprintln!("{} {k}: {e}", p.role(Role::Error, "forge error"));
         }
-        tracks = sync::plan_tracks(ws, &listings.repos, listings.protocol);
+        tracks = pull::plan_tracks(ws, &listings.repos, listings.protocol);
         jobs.extend(tracks.jobs.iter().cloned());
     }
-    let mut updates = sync::plan_updates(ws);
+    let mut updates = pull::plan_updates(ws);
     if !patterns.is_empty() {
         let sel: Vec<PathBuf> = ws
             .select(patterns, ViewFilter::default())
@@ -829,7 +830,7 @@ fn sync_cmd(
         .iter()
         .map(|o| paths::contract_tilde(o))
         .collect();
-    let job_json = |j: &sync::Job, outcome: &str, output: Option<&str>| {
+    let job_json = |j: &pull::Job, outcome: &str, output: Option<&str>| {
         serde_json::json!({
             "label": j.label,
             "path": j.path,
@@ -891,7 +892,7 @@ fn sync_cmd(
     if tty {
         eprint!("\r\x1b[K");
     }
-    let added = sync::record_clones(ws, &jobs, &results);
+    let added = pull::record_clones(ws, &jobs, &results);
     for a in added.iter().filter(|_| !json) {
         println!(
             "{} {}",
@@ -933,7 +934,7 @@ fn sync_cmd(
             total - failed - skipped
         );
     }
-    ws.state.last_sync = Some(jiff::Timestamp::now());
+    ws.state.last_pull = Some(jiff::Timestamp::now());
     save_state(ws, ctx)?;
     if failed > 0 {
         std::process::exit(2);
@@ -1078,7 +1079,7 @@ fn demo_glyphs(ctx: &Ctx, json: bool) -> Result<()> {
 fn fetch_selected(ws: &mut Workspace, patterns: &[String]) {
     let p = Paint::detect();
     let sel = ws.select(patterns, ViewFilter::default());
-    let jobs = sync::plan_fetches(ws, &sel);
+    let jobs = pull::plan_fetches(ws, &sel);
     let tty = std::io::stderr().is_terminal();
     let done = std::sync::atomic::AtomicUsize::new(0);
     runner::run_jobs(
@@ -1261,7 +1262,7 @@ fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> R
     }
     for (mark, on, off) in [
         (Mark::Favourite, m.favourite, m.no_favourite),
-        (Mark::Sync, m.sync, m.no_sync),
+        (Mark::Pull, m.pull, m.no_pull),
         (Mark::Ignore, m.ignore, m.unignore),
     ] {
         if on || off {
@@ -1290,7 +1291,7 @@ fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> R
                 "key": key,
                 "marks": {
                     "favourite": f.favourite,
-                    "sync": f.sync,
+                    "pull": f.pull,
                     "ignore": f.ignored,
                 },
                 "ignored_issues": ws.entries[i].ignored_issues.iter()

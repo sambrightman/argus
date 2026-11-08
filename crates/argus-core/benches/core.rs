@@ -179,7 +179,7 @@ fn config(c: &mut Criterion) {
 fn rules(c: &mut Criterion) {
     let config = Config {
         favourite: (0..20).map(|i| format!("org{i}/*")).collect(),
-        sync: (0..20).map(|i| format!("!org{i}/legacy-*")).collect(),
+        pull: (0..20).map(|i| format!("!org{i}/legacy-*")).collect(),
         ..Config::default()
     };
     let rs = RuleSet::new(&config).unwrap();

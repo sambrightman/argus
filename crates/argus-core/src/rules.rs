@@ -1,4 +1,4 @@
-//! Resolution of per-repo flags from tracked owners, the `favourite`, `sync`
+//! Resolution of per-repo flags from tracked owners, the `favourite`, `pull`
 //! and `ignore.repos` lists in config, and state (snoozes, "new"); and which
 //! issues the other `[ignore]` lists turn off.
 
@@ -18,7 +18,7 @@ use crate::status::{Head, RepoStatus};
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Flags {
     pub favourite: bool,
-    pub sync: bool,
+    pub pull: bool,
     pub ignored: bool,
     pub snoozed: bool,
     /// Recently cloned/discovered by argus and not acknowledged.
@@ -34,23 +34,23 @@ impl Flags {
     }
 }
 
-/// The per-repo settings kept as lists in config: `favourite`, `sync`,
+/// The per-repo settings kept as lists in config: `favourite`, `pull`,
 /// `ignore.repos`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Mark {
     Favourite,
-    Sync,
+    Pull,
     Ignore,
 }
 
 impl Mark {
-    pub const ALL: [Mark; 3] = [Mark::Favourite, Mark::Sync, Mark::Ignore];
+    pub const ALL: [Mark; 3] = [Mark::Favourite, Mark::Pull, Mark::Ignore];
 
     /// The config key, dotted.
     pub fn path(self) -> &'static str {
         match self {
             Mark::Favourite => "favourite",
-            Mark::Sync => "sync",
+            Mark::Pull => "pull",
             Mark::Ignore => "ignore.repos",
         }
     }
@@ -58,7 +58,7 @@ impl Mark {
     pub fn list(self, c: &Config) -> &Vec<String> {
         match self {
             Mark::Favourite => &c.favourite,
-            Mark::Sync => &c.sync,
+            Mark::Pull => &c.pull,
             Mark::Ignore => &c.ignore.repos,
         }
     }
@@ -66,7 +66,7 @@ impl Mark {
     pub fn list_mut(self, c: &mut Config) -> &mut Vec<String> {
         match self {
             Mark::Favourite => &mut c.favourite,
-            Mark::Sync => &mut c.sync,
+            Mark::Pull => &mut c.pull,
             Mark::Ignore => &mut c.ignore.repos,
         }
     }
@@ -74,7 +74,7 @@ impl Mark {
     pub fn of(self, f: &Flags) -> bool {
         match self {
             Mark::Favourite => f.favourite,
-            Mark::Sync => f.sync,
+            Mark::Pull => f.pull,
             Mark::Ignore => f.ignored,
         }
     }
@@ -318,7 +318,7 @@ impl IssueEntry {
     }
 }
 
-/// The `favourite`, `sync` and `ignore` lists, compiled.
+/// The `favourite`, `pull` and `ignore` lists, compiled.
 #[derive(Clone)]
 pub struct RuleSet {
     lists: [Vec<Entry>; 3],
@@ -342,7 +342,7 @@ impl RuleSet {
         Ok(Self {
             lists: [
                 compile(Mark::Favourite)?,
-                compile(Mark::Sync)?,
+                compile(Mark::Pull)?,
                 compile(Mark::Ignore)?,
             ],
             issues,
@@ -486,7 +486,7 @@ pub fn track_for<'a>(config: &'a Config, state: &State, id: &RepoId) -> Option<&
     })
 }
 
-/// Precedence (lowest to highest): track membership (sync), then each list's
+/// Precedence (lowest to highest): track membership (pull), then each list's
 /// last matching entry. Snoozes and "new" come from state.
 pub fn resolve(
     config: &Config,
@@ -499,14 +499,14 @@ pub fn resolve(
 ) -> Flags {
     let mut f = Flags::default();
     if let Some(t) = id.and_then(|id| track_for(config, state, id)) {
-        f.sync = t.sync;
+        f.pull = t.pull;
         f.tracked = Some(t.key());
     }
     for m in Mark::ALL {
         if let Some(v) = rules.decide(m, id, path) {
             match m {
                 Mark::Favourite => f.favourite = v,
-                Mark::Sync => f.sync = v,
+                Mark::Pull => f.pull = v,
                 Mark::Ignore => f.ignored = v,
             }
         }
@@ -735,8 +735,8 @@ mod tests {
 
     #[test]
     fn later_entries_win_and_bang_turns_off() {
-        let cfg = "sync = ['acme/*', '!acme/widget']";
-        assert!(!flags(cfg, &State::default(), URL, "/x").sync);
+        let cfg = "pull = ['acme/*', '!acme/widget']";
+        assert!(!flags(cfg, &State::default(), URL, "/x").pull);
         assert!(
             flags(
                 cfg,
@@ -744,7 +744,7 @@ mod tests {
                 "git@github.com:acme/other.git",
                 "/x"
             )
-            .sync
+            .pull
         );
         // order matters: a later pattern turns it back on
         assert!(fav("favourite = ['!acme/widget', 'acme/*']", URL, "/x"));
@@ -755,24 +755,24 @@ mod tests {
             URL,
             "/x",
         );
-        assert!(f.favourite && !f.ignored && !f.sync);
+        assert!(f.favourite && !f.ignored && !f.pull);
     }
 
     #[test]
-    fn tracked_owner_implies_sync_unless_overridden() {
+    fn tracked_owner_implies_pull_unless_overridden() {
         let s = State::default();
         let f = flags("[[track]]\nowner='acme'", &s, URL, "/x");
-        assert!(f.sync);
+        assert!(f.pull);
         assert_eq!(f.tracked.as_deref(), Some("github.com/acme"));
-        assert!(!flags("[[track]]\nowner='acme'\nsync=false", &s, URL, "/x").sync);
+        assert!(!flags("[[track]]\nowner='acme'\npull=false", &s, URL, "/x").pull);
         assert!(
             !flags(
-                "sync = ['!acme/widget']\n[[track]]\nowner='acme'",
+                "pull = ['!acme/widget']\n[[track]]\nowner='acme'",
                 &s,
                 URL,
                 "/x"
             )
-            .sync
+            .pull
         );
         assert_eq!(
             flags("[[track]]\nowner='other'", &s, URL, "/x").tracked,
@@ -800,8 +800,8 @@ mod tests {
                 listed_at: None,
             },
         );
-        assert!(flags(cfg, &s, URL, "/x").sync);
-        assert!(!flags(cfg, &s, "git@github.com:acme/notinteam.git", "/x").sync);
+        assert!(flags(cfg, &s, URL, "/x").pull);
+        assert!(!flags(cfg, &s, "git@github.com:acme/notinteam.git", "/x").pull);
     }
 
     #[test]
@@ -834,21 +834,21 @@ mod tests {
 
     #[test]
     fn each_mark_reads_its_own_flag() {
-        let f = |favourite, sync, ignored| Flags {
+        let f = |favourite, pull, ignored| Flags {
             favourite,
-            sync,
+            pull,
             ignored,
             ..Flags::default()
         };
         assert!(Mark::Favourite.of(&f(true, false, false)));
-        assert!(Mark::Sync.of(&f(false, true, false)));
+        assert!(Mark::Pull.of(&f(false, true, false)));
         assert!(Mark::Ignore.of(&f(false, false, true)));
         // inverse: not the others'
         for m in Mark::ALL {
             assert!(!m.of(&f(false, false, false)), "{m:?}");
         }
         assert!(!Mark::Favourite.of(&f(false, true, true)));
-        assert!(!Mark::Sync.of(&f(true, false, true)));
+        assert!(!Mark::Pull.of(&f(true, false, true)));
         assert!(!Mark::Ignore.of(&f(true, true, false)));
     }
 
@@ -924,7 +924,7 @@ mod tests {
         let p = Path::new("/r/widget");
         set_mark(
             &mut c,
-            Mark::Sync,
+            Mark::Pull,
             Some(&id),
             p,
             "github.com/acme/widget",
@@ -932,10 +932,10 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(c.sync, ["!github.com/acme/widget"]);
+        assert_eq!(c.pull, ["!github.com/acme/widget"]);
         set_mark(
             &mut c,
-            Mark::Sync,
+            Mark::Pull,
             Some(&id),
             p,
             "github.com/acme/widget",
@@ -943,10 +943,10 @@ mod tests {
             true,
         )
         .unwrap();
-        assert!(c.sync.is_empty());
+        assert!(c.pull.is_empty());
         // clearing drops its own entries only
-        c.sync = vec!["acme/*".into(), "!acme/widget".into()];
-        clear_mark(&mut c, Mark::Sync, Some(&id), p).unwrap();
-        assert_eq!(c.sync, ["acme/*"]);
+        c.pull = vec!["acme/*".into(), "!acme/widget".into()];
+        clear_mark(&mut c, Mark::Pull, Some(&id), p).unwrap();
+        assert_eq!(c.pull, ["acme/*"]);
     }
 }

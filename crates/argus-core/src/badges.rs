@@ -40,7 +40,7 @@ pub struct Badge {
     pub text: String,
 }
 
-/// Flag badges (favourite, new, hidden, sync), shown before the name.
+/// Flag badges (favourite, new, hidden, pull), shown before the name.
 pub fn flags(e: &Entry, i: &Icons) -> Vec<Badge> {
     let mut v = vec![];
     let b = |role, text: &str| Badge {

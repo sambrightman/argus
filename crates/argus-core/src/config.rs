@@ -63,14 +63,14 @@ pub struct Config {
     /// edits these lists.
     #[schemars(example = vec!["acme/app", "~/dev/mine/*"])]
     pub favourite: Vec<String>,
-    /// Repos pulled on sync; entries as for `favourite`. Tracked owners'
-    /// repos are synced unless an entry here turns them off (`!`).
+    /// Repos pulled by `argus pull`; entries as for `favourite`. Tracked
+    /// owners' repos are pulled unless an entry here turns them off (`!`).
     #[schemars(example = vec!["acme/*", "!acme/huge-monorepo"])]
-    pub sync: Vec<String>,
+    pub pull: Vec<String>,
     /// What not to flag: whole repos, or particular issues in some repos.
     pub ignore: Ignore,
     /// Forge owners (orgs/users/teams) whose repos should all be cloned and
-    /// synced. Their repos are syncable unless `sync` turns them off.
+    /// pulled. Their repos are pulled unless `pull` turns them off.
     #[serde(rename = "track")]
     pub tracks: Vec<Track>,
     /// Auto-fix behaviour.
@@ -114,7 +114,7 @@ impl Default for Config {
             describe_limit: DESCRIBE_LIMIT,
             clone_protocol: None,
             favourite: vec![],
-            sync: vec![],
+            pull: vec![],
             ignore: Ignore::default(),
             tracks: vec![],
             fix: FixConfig::default(),
@@ -130,7 +130,7 @@ impl Default for Config {
 )]
 #[serde(rename_all = "lowercase")]
 pub enum CloneMode {
-    /// Clone repos missing locally during sync (they are flagged as new).
+    /// Clone repos missing locally during `argus pull` (flagged as new).
     #[default]
     Auto,
     /// Only report repos missing locally.
@@ -158,12 +158,12 @@ pub struct Track {
     /// Where new clones go; unset means `<first root>/<owner>`.
     #[schemars(example = &"~/dev/my-org")]
     pub into: Option<PathBuf>,
-    /// What sync does with repos missing locally.
+    /// What `argus pull` does with repos missing locally.
     #[serde(default)]
     pub clone: CloneMode,
-    /// Pull this owner's repos on sync.
+    /// Pull this owner's repos with `argus pull`.
     #[serde(default = "yes")]
-    pub sync: bool,
+    pub pull: bool,
     /// Also clone archived repos.
     #[serde(default)]
     pub include_archived: bool,
@@ -209,7 +209,7 @@ fn example_colors() -> BTreeMap<&'static str, &'static str> {
     expecting = "a table: [ignore] with repos and issue lists"
 )]
 pub struct Ignore {
-    /// Repos hidden, and left out of sync, clones and bulk operations.
+    /// Repos hidden, and left out of pulls, clones and bulk operations.
     #[schemars(example = vec!["~/dev/archive/**"])]
     pub repos: Vec<String>,
     /// Repos normally on a branch other than the default. `repo@branch`
@@ -333,7 +333,7 @@ pub struct UiConfig {
     /// Per-icon overrides on top of the set, by name: favourite, new,
     /// ignored, snoozed, branch, detached, detached_commits, ahead, behind, staged, unstaged,
     /// untracked, conflict, stash, in_progress, gone, no_upstream, branches,
-    /// error, sync, worktree, submodule; and in the interface: spinner (one
+    /// error, pull, worktree, submodule; and in the interface: spinner (one
     /// frame per character), marked, ok, failed, celebrate.
     #[schemars(example = example_icon_overrides())]
     pub icon_overrides: BTreeMap<String, String>,
@@ -757,14 +757,14 @@ mod tests {
 
     #[test]
     fn track_defaults_and_key() {
-        let c = Config::parse("roots=['/r']\n[[track]]\nowner='acme'\n[[track]]\nowner='acme'\nteam='core'\nclone='notify'\nsync=false").unwrap();
+        let c = Config::parse("roots=['/r']\n[[track]]\nowner='acme'\n[[track]]\nowner='acme'\nteam='core'\nclone='notify'\npull=false").unwrap();
         assert_eq!(c.tracks[0].host, "github.com");
         assert_eq!(c.tracks[0].clone, CloneMode::Auto);
-        assert!(c.tracks[0].sync);
+        assert!(c.tracks[0].pull);
         assert_eq!(c.tracks[0].key(), "github.com/acme");
         assert_eq!(c.tracks[1].key(), "github.com/acme#core");
         assert_eq!(c.tracks[1].clone, CloneMode::Notify);
-        assert!(!c.tracks[1].sync);
+        assert!(!c.tracks[1].pull);
         assert_eq!(c.clone_dir(&c.tracks[0]), Some(PathBuf::from("/r/acme")));
     }
 
@@ -885,6 +885,9 @@ mod tests {
             "concurrency = 3",
             "status_concurrency = 3",
             "include = ['x.toml']",
+            "sync = ['a/b']",
+            "extend_sync = ['a/b']",
+            "[[track]]\nowner = 'acme'\nsync = false",
         ] {
             assert!(Config::parse(old).is_err(), "{old}");
         }
@@ -904,6 +907,12 @@ mod tests {
                 network: 5
             }
         );
+        let c = Config::parse(
+            "pull = ['a/b']\nextend_pull = ['c/d']\n[[track]]\nowner = 'acme'\npull = false",
+        )
+        .unwrap();
+        assert_eq!(c.pull, ["a/b", "c/d"]);
+        assert!(!c.tracks[0].pull);
     }
 
     #[test]

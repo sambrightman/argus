@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::ops::{self, OpOutcome};
-use crate::sync::Job;
+use crate::pull::Job;
 
 #[derive(Debug, Clone)]
 pub enum Event {

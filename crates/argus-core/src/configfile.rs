@@ -711,7 +711,7 @@ pub fn remove_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsRemoved, EditE
     Ok(out)
 }
 
-/// Write the `favourite`, `sync` and `ignore` changes from `before` to
+/// Write the `favourite`, `pull` and `ignore` changes from `before` to
 /// `after` into the config at `path` (created from the example if needed)
 /// and the files it extends, leaving the rest of each file as written. An
 /// entry gone from a list is removed from every file that lists it; new
@@ -805,7 +805,7 @@ mod tests {
         assert_eq!(c.fix, d.fix);
         assert_eq!(c.ui.theme, d.ui.theme);
         assert!(c.roots.is_empty(), "roots are never guessed");
-        assert!(c.favourite.is_empty() && c.sync.is_empty() && c.ignore.repos.is_empty());
+        assert!(c.favourite.is_empty() && c.pull.is_empty() && c.ignore.repos.is_empty());
         assert_eq!(c.tracks.len(), 1);
         assert_eq!(
             c.tracks[0].host, "github.com",
@@ -836,7 +836,7 @@ mod tests {
                 "tools",
                 "ui",
                 "favourite",
-                "sync",
+                "pull",
                 "ignore",
                 "track",
                 "owner",
@@ -1020,7 +1020,7 @@ mod tests {
         let c = Config::parse(&out).unwrap();
         assert_eq!(c.favourite, ["b/*", "c/y"]);
         assert_eq!(c.ignore.repos, ["!d/z"], "created when missing");
-        assert!(c.sync.is_empty());
+        assert!(c.pull.is_empty());
         // the rest of the file is as written
         assert!(
             out.starts_with("# my config\nroots = [\"~/dev\"]\n"),
@@ -1039,12 +1039,12 @@ mod tests {
         let p = d.path().join("new/config.toml");
         let before = Config::default();
         let after = Config {
-            sync: vec!["acme/*".into()],
+            pull: vec!["acme/*".into()],
             ..Config::default()
         };
         update_mark_lists(&p, &before, &after).unwrap();
         let c = Config::parse(&std::fs::read_to_string(&p).unwrap()).unwrap();
-        assert_eq!(c.sync, ["acme/*"]);
+        assert_eq!(c.pull, ["acme/*"]);
         assert_eq!(c.max_depth, Config::default().max_depth);
     }
 }

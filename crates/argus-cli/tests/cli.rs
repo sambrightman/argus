@@ -411,16 +411,16 @@ fn mark_snooze_and_ack_roundtrip_through_state() {
 }
 
 #[test]
-fn sync_pulls_syncable_and_reports_failures_with_exit_code() {
+fn pull_pulls_marked_repos_and_reports_failures_with_exit_code() {
     let sb = Sandbox::new();
     three(&sb);
     sb.advance_remote("acme", "clean", "upstream-file");
     let cfg = sb.path("cfg.toml");
-    std::fs::write(&cfg, "sync = ['acme/clean']\n").unwrap();
+    std::fs::write(&cfg, "pull = ['acme/clean']\n").unwrap();
     argus(&sb)
         .arg("--config")
         .arg(&cfg)
-        .args(["sync", "--dry-run"])
+        .args(["pull", "--dry-run"])
         .assert()
         .success()
         .stdout(predicate::str::contains("would pull acme/clean"));
@@ -428,7 +428,7 @@ fn sync_pulls_syncable_and_reports_failures_with_exit_code() {
     argus(&sb)
         .arg("--config")
         .arg(&cfg)
-        .arg("sync")
+        .arg("pull")
         .assert()
         .success()
         .stdout(predicate::str::contains("1 jobs: 1 ok"));
@@ -455,7 +455,7 @@ fn sync_pulls_syncable_and_reports_failures_with_exit_code() {
     argus(&sb)
         .arg("--config")
         .arg(&cfg)
-        .arg("sync")
+        .arg("pull")
         .assert()
         .code(2)
         .stderr(predicate::str::contains("failed: pull acme/clean"));
@@ -501,7 +501,7 @@ fn help_documents_every_flag_and_repeatable_options() {
     let sb = Sandbox::new();
     for cmd in [
         &["status"][..],
-        &["sync"],
+        &["pull"],
         &["fix"],
         &["mark"],
         &["ack"],
@@ -869,12 +869,12 @@ fn every_command_prints_json() {
     assert_eq!(v[0]["exists"], true, "{v}");
     assert!(v[0]["path"].is_string());
 
-    let v = run(&["mark", "--sync", "acme/clean"]);
+    let v = run(&["mark", "--pull", "acme/clean"]);
     assert_eq!(v[0]["repo"], "acme/clean", "{v}");
-    assert_eq!(v[0]["marks"]["sync"], true, "{v}");
+    assert_eq!(v[0]["marks"]["pull"], true, "{v}");
     assert!(v[0]["key"].is_string());
 
-    let v = run(&["sync", "--no-forge", "--dry-run"]);
+    let v = run(&["pull", "--no-clone", "--dry-run"]);
     assert_eq!(v["dry_run"], true);
     let jobs = v["jobs"].as_array().unwrap();
     assert!(jobs.iter().all(|j| j["outcome"] == "planned"), "{v}");
@@ -883,7 +883,7 @@ fn every_command_prints_json() {
             .any(|j| j["label"].as_str().unwrap().contains("acme/clean")),
         "{v}"
     );
-    let v = run(&["sync", "--no-forge"]);
+    let v = run(&["pull", "--no-clone"]);
     assert!(
         v["jobs"]
             .as_array()
@@ -983,7 +983,7 @@ fn clearing_marks_of_several_repos_needs_confirmation() {
     assert_eq!(favourites(&sb), 0);
     // repos with nothing to lose don't count
     argus(&sb)
-        .args(["mark", "acme/dirty", "--sync"])
+        .args(["mark", "acme/dirty", "--pull"])
         .assert()
         .success();
     argus(&sb)
@@ -997,7 +997,7 @@ fn marks_are_written_to_the_config_lists() {
     let sb = Sandbox::new();
     three(&sb);
     let cfg = sb.path("cfg.toml");
-    std::fs::write(&cfg, "# mine\nsync = ['acme/*']\n").unwrap();
+    std::fs::write(&cfg, "# mine\npull = ['acme/*']\n").unwrap();
     let mark = |args: &[&str]| {
         argus(&sb)
             .arg("--config")
@@ -1008,18 +1008,18 @@ fn marks_are_written_to_the_config_lists() {
             .success();
     };
     mark(&["acme/clean", "--favourite"]);
-    mark(&["acme/dirty", "--no-sync"]);
+    mark(&["acme/dirty", "--no-pull"]);
     mark(&["acme/feature", "--ignore"]);
     let text = std::fs::read_to_string(&cfg).unwrap();
     let c = argus_core::Config::parse(&text).unwrap();
     assert_eq!(c.favourite, ["github.com/acme/clean"]);
-    assert_eq!(c.sync, ["acme/*", "!github.com/acme/dirty"]);
+    assert_eq!(c.pull, ["acme/*", "!github.com/acme/dirty"]);
     assert_eq!(c.ignore.repos, ["github.com/acme/feature"]);
     assert!(text.starts_with("# mine\n"), "{text}");
     // --clear: the repo's own entries go, patterns decide again
     mark(&["acme/dirty", "--clear"]);
     let c = argus_core::Config::parse(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
-    assert_eq!(c.sync, ["acme/*"]);
+    assert_eq!(c.pull, ["acme/*"]);
 }
 
 #[test]
@@ -1137,10 +1137,10 @@ fn completion_offers_commands_options_and_repo_names() {
     sb.init("dev/local/thing");
     let cfg = sb.path("cfg.toml");
     std::fs::write(&cfg, format!("roots = ['{}']\n", sb.path("dev").display())).unwrap();
-    assert!(complete(&sb, &cfg, &["sy"]).contains(&"sync".to_string()));
+    assert!(complete(&sb, &cfg, &["pu"]).contains(&"pull".to_string()));
     assert!(complete(&sb, &cfg, &["mark", "--fav"]).contains(&"--favourite".to_string()));
     // repo names, by owner/name or path, for every command taking patterns
-    for cmd in ["mark", "sync", "fix", "ack"] {
+    for cmd in ["mark", "pull", "fix", "ack"] {
         assert_eq!(
             complete(&sb, &cfg, &[cmd, "acme/c"]),
             ["acme/clean"],

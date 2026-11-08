@@ -8,7 +8,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// Marks as older versions of argus kept them, per repo key. They now live
-/// in config (`favourite`, `sync`, `ignore`); see
+/// in config (`favourite`, `pull`, `ignore`); see
 /// [`State::old_marks_as_config`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -41,7 +41,9 @@ pub struct State {
     /// Repos (by key) cloned or discovered by argus and not yet acknowledged.
     pub new: BTreeSet<String>,
     pub tracks: BTreeMap<String, TrackState>,
-    pub last_sync: Option<Timestamp>,
+    /// When `argus pull` last ran (`last_sync` before it was renamed).
+    #[serde(alias = "last_sync")]
+    pub last_pull: Option<Timestamp>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -118,7 +120,7 @@ impl State {
         };
         let lines = [
             ("favourite", list(|m| m.favourite)),
-            ("sync", list(|m| m.sync)),
+            ("pull", list(|m| m.sync)),
             ("ignore.repos", list(|m| m.exclude)),
         ]
         .into_iter()
@@ -167,6 +169,21 @@ mod tests {
     }
 
     #[test]
+    fn the_last_pull_time_is_read_from_its_old_name_and_saved_under_the_new() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("state.toml");
+        std::fs::write(&p, "last_sync = \"2026-01-01T00:00:00Z\"\n").unwrap();
+        let s = State::load(&p).unwrap();
+        assert!(s.last_pull.is_some());
+        s.save(&p).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            text.contains("last_pull") && !text.contains("last_sync"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn old_marks_are_kept_and_shown_as_config() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("state.toml");
@@ -180,7 +197,7 @@ mod tests {
         let s = State::load(&p).unwrap();
         assert_eq!(
             s.old_marks_as_config().unwrap(),
-            "favourite = [\"github.com/a/b\"]\nsync = [\"!github.com/a/b\"]\nignore.repos = [\"/home/me/x\"]"
+            "favourite = [\"github.com/a/b\"]\npull = [\"!github.com/a/b\"]\nignore.repos = [\"/home/me/x\"]"
         );
         // saving keeps them (never lost without asking); the old clocks go
         s.save(&p).unwrap();

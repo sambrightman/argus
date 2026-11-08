@@ -47,7 +47,7 @@ fn runtime(
     sb: &Sandbox,
     config: &Path,
     opener: &str,
-    forge: argus_core::sync::ForgeFactory<'static>,
+    forge: argus_core::pull::ForgeFactory<'static>,
 ) -> Runtime {
     Runtime::new(Options {
         state_path: sb.path("state.toml"),
@@ -199,7 +199,7 @@ fn a_failing_job_is_logged_and_reported() {
     select(&mut app, "acme/clean");
     let clean = path(&app, "acme/clean");
     // a job that fails: switching to a branch that doesn't exist
-    let fx = vec![Effect::Jobs(vec![argus_core::sync::Job {
+    let fx = vec![Effect::Jobs(vec![argus_core::pull::Job {
         path: clean.clone(),
         family: clean.clone(),
         label: "switch nowhere".into(),
@@ -281,7 +281,7 @@ fn opening_details_describes_a_head_past_the_limit_and_the_badge_follows() {
 }
 
 #[test]
-fn a_sync_lists_the_forge_and_clones_new_repos() {
+fn pull_and_clone_lists_the_forge_and_clones_new_repos() {
     let sb = Sandbox::new();
     sb.remote("acme", "fresh");
     let into = sb.path("dev/acme");
@@ -307,7 +307,7 @@ fn a_sync_lists_the_forge_and_clones_new_repos() {
             Ok(self.0.clone())
         }
     }
-    let factory: argus_core::sync::ForgeFactory<'static> = Box::leak(Box::new(
+    let factory: argus_core::pull::ForgeFactory<'static> = Box::leak(Box::new(
         move |_: &str, _: &str| -> Result<Box<dyn Forge>, ForgeError> {
             Ok(Box::new(Fake(listed.clone())))
         },
@@ -322,7 +322,7 @@ fn a_sync_lists_the_forge_and_clones_new_repos() {
     ws.scan();
     let mut app = App::new(ws);
     let mut rt = runtime(&sb, &sb.path("config.toml"), "true", factory);
-    let fx = app.act(Action::Sync);
+    let fx = app.act(Action::PullAndClone);
     run(&mut app, &mut rt, fx);
     assert!(into.join("fresh/.git").is_dir(), "cloned");
     // listed (by path: its remote is a local path, not a forge URL)
@@ -335,7 +335,7 @@ fn a_sync_lists_the_forge_and_clones_new_repos() {
     // recorded as new, and saved
     let state = State::load(&sb.path("state.toml")).unwrap();
     assert_eq!(state.new.len(), 1, "{state:?}");
-    assert!(state.last_sync.is_some());
+    assert!(state.last_pull.is_some());
 }
 
 #[test]
@@ -349,7 +349,7 @@ fn a_failed_forge_listing_is_reported() {
     let ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
     let mut app = App::new(ws);
     let mut rt = runtime(&sb, &sb.path("config.toml"), "true", &no_forge);
-    let fx = app.act(Action::Sync);
+    let fx = app.act(Action::PullAndClone);
     run(&mut app, &mut rt, fx);
     let (msg, is_error) = app.message.clone().unwrap();
     assert!(is_error && msg.contains("forge listing"), "{msg}");

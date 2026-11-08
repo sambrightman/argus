@@ -31,7 +31,7 @@ pub struct Icons {
     pub no_upstream: Cow<'static, str>,
     pub branches: Cow<'static, str>,
     pub error: Cow<'static, str>,
-    pub sync: Cow<'static, str>,
+    pub pull: Cow<'static, str>,
     pub worktree: Cow<'static, str>,
     pub submodule: Cow<'static, str>,
     /// Spinner frames, one character each, for scans and running jobs.
@@ -91,7 +91,7 @@ icon_names!(
     no_upstream,
     branches,
     error,
-    sync,
+    pull,
     worktree,
     submodule,
     spinner,
@@ -154,7 +154,7 @@ pub const UNICODE: Icons = Icons {
     no_upstream: s("↑?"),
     branches: s("»"),
     error: s("!!"),
-    sync: s("~"),
+    pull: s("~"),
     worktree: s("├"),
     submodule: s("§"),
     spinner: s("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
@@ -186,7 +186,7 @@ pub const NERD: Icons = Icons {
     no_upstream: s("\u{ead0} "),      // cod-debug_disconnect
     branches: s("\u{ea63} "),         // cod-repo_forked
     error: s("\u{ea87} "),            // cod-error
-    sync: s("\u{ea77} "),             // cod-sync
+    pull: s("\u{ea77} "),             // cod-sync
     worktree: s("├"),
     submodule: s("\u{eaec} "), // cod-file_submodule
     spinner: s("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
@@ -227,7 +227,7 @@ pub const ASCII: Icons = Icons {
     no_upstream: s("-u"),
     branches: s("b"),
     error: s("ERR"),
-    sync: s("~"),
+    pull: s("~"),
     worktree: s("|"),
     submodule: s("[]"),
     spinner: s("|/-\\"),

@@ -89,11 +89,11 @@ impl MenuId {
                 "Pull",
                 vec![
                     item('p', "pull selected", Action::Pull(Scope::Selected)),
-                    item('a', "pull all syncable", Action::Pull(Scope::All)),
+                    item('a', "pull all marked for pull", Action::Pull(Scope::All)),
                     item(
-                        's',
-                        "sync: list forges, clone new, pull syncable",
-                        Action::Sync,
+                        'c',
+                        "clone new repos of tracked owners, then pull all marked",
+                        Action::PullAndClone,
                     ),
                 ],
             ),
@@ -168,7 +168,7 @@ impl MenuId {
                 "Mark",
                 vec![
                     item('f', "toggle favourite", Action::ToggleFavourite),
-                    item('s', "toggle syncable", Action::ToggleSync),
+                    item('p', "toggle pull", Action::TogglePull),
                     item('i', "toggle ignored", Action::ToggleIgnore),
                     item(
                         'I',

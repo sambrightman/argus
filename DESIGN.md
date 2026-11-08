@@ -64,10 +64,10 @@ If a job does need interaction, drop into a shell for that repo.
 ```
 crates/
   argus-core   library: config, state, discovery, status (gix), ops (git CLI),
-               fix planning, sync orchestration, sorting/attention. No UI, no network to forges.
+               fix planning, pull orchestration, sorting/attention. No UI, no network to forges.
   argus-forge  library: Forge trait + GitHub implementation. Pluggable: GitLab/Gitea later.
   argus-tui    library: ratatui app (state machine separate from rendering, so it's testable).
-  argus-cli    binary `argus`: clap subcommands (status, sync, fix, forge, tui). Default = TUI.
+  argus-cli    binary `argus`: clap subcommands (status, pull, fix, forge, tui). Default = TUI.
 ```
 A future `argus-server` (axum + JSON) would depend on core + forge only.
 
@@ -133,11 +133,11 @@ Two findings:
   `node_modules`, `target`, `.git` internals and configurable globs.
 * **Identity.** `host/owner/name` parsed from the `origin` remote URL (or the
   first remote).
-* **Marks: `favourite`, `sync`, `ignore.repos`** are lists in config, one per
+* **Marks: `favourite`, `pull`, `ignore.repos`** are lists in config, one per
   kind. An entry is a repo or a glob, matched against identity, `owner/name`
   or path; the last matching entry wins and `!` turns the mark off, as in
   gitignore. Names: `ignore.repos` hides a repo and leaves it out of
-  sync, clones and bulk actions; *hidden* is the wider set, ignored or
+  pulls, clones and bulk actions; *hidden* is the wider set, ignored or
   snoozed. The other `[ignore]` lists turn off one issue (off-default,
   detached, no remote, no upstream, stashes, unpushed branches, behind):
   ignoring a whole repo is the special case of ignoring everything about
@@ -150,7 +150,7 @@ Two findings:
   only a detached HEAD holds can't be ignored: they risk losing work.
   `exclude_paths` is the other kind of exclusion: directories discovery
   never enters, matched by name or path, as rsync's and ripgrep's
-  `--exclude` mean it. Tracked owners' repos sync unless `sync` says `!`. Marking
+  `--exclude` mean it. Tracked owners' repos are pulled unless `pull` says `!`. Marking
   from the TUI or CLI drops the repo's own (glob-free) entries, then adds
   its name, or `!name`, only if the patterns left don't already give the
   wanted value; clearing drops its own entries. Changes are written as
@@ -223,9 +223,9 @@ Two findings:
   are removed, as they end by design. Marks an older version kept in state
   are left there and shown as config lines to copy.
 * **Tracked owners.** `[[track]] forge="github" owner="acme" [team="platform"] into="~/dev/acme" clone="auto"|"notify"`.
-  Sync lists the forge, diffs it against local clones, and clones missing repos
+  `argus pull` lists the forge, diffs it against local clones, and clones missing repos
   (`auto`) or flags them as *new on forge* (`notify`). Newly cloned repos are
-  marked + new until acknowledged. Tracked owners are implicitly syncable.
+  marked + new until acknowledged. Tracked owners' repos are pulled by default.
 * **Attention.** A repo needs attention if it has any of: conflicts or an
   in-progress operation, uncommitted changes, unpushed commits, a non-default
   branch, detached HEAD, stashes, a gone upstream, or no upstream for the
@@ -295,7 +295,7 @@ Two findings:
   seen, not computed from font tables.
 * Two input styles at once:
   * arrows/Enter plus menus you can navigate with the cursor;
-  * transient-style prefix keys: `f` fix, `s` sync, `m` mark, `o` open, `?` help.
+  * transient-style prefix keys: `f` fix, `F` pull, `m` mark, `o` open, `?` help.
     One more key executes. `C-g`/Esc cancels.
   * emacs (`C-n C-p C-v M-v M-< M->`, `C-s` search) and vi (`j k g G /`) motions.
 * `!` drops to `$SHELL` in the repo (TUI suspended), and `o g` opens the
@@ -325,8 +325,8 @@ rendering is snapshot-tested via `TestBackend`.
 * **Coverage** (cargo-llvm-cov, region and line): about 93% overall.
   Effects are carried out by `Runtime`, separate from the terminal loop,
   so tests drive it (`settle` waits for background work): saving marks
-  and state and reporting failures, scans, refreshes, jobs, fixes, a sync
-  against a fake forge cloning for real, the URL opener (configurable, a
+  and state and reporting failures, scans, refreshes, jobs, fixes, a pull
+  and clone against a fake forge cloning for real, the URL opener (configurable, a
   recording script in tests), and running suspended programs. What's left
   uncovered in `argus-tui/src/lib.rs` is the terminal loop itself. Branch
   coverage needs a nightly toolchain.
@@ -345,7 +345,7 @@ rendering is snapshot-tested via `TestBackend`.
   such operation is tested declined, refused and confirmed. Recoverable
   operations (stash, commit, switch, fast-forward, pull, push) don't ask.
   Clearing marks asks when more than one repo has entries of its own in
-  the favourite/sync/ignore.repos lists; snoozes and "new" flags don't count. `root remove` doesn't ask.
+  the favourite/pull/ignore.repos lists; snoozes and "new" flags don't count. `root remove` doesn't ask.
 
 * **"Unpushed" means "on no remote-tracking ref"**, not "ahead of upstream".
   On real data, a fork branch that tracked `upstream/master` but was pushed
@@ -376,7 +376,7 @@ rendering is snapshot-tested via `TestBackend`.
   commits (push, publish), leave the branch (switch-default), then catch
   up (pull, fast-forward) on the branch you end up on. "Behind" comes from
   the remote-tracking refs as of the last fetch: status never fetches
-  (`f`/`F` in the TUI, `argus sync` or cron do).
+  (`f`/`F` in the TUI, `argus pull` or cron do).
 * **Shell completion** uses clap_complete's dynamic engine (the
   `unstable-dynamic` feature): the shell code asks `argus` for candidates
   (`COMPLETE=<shell> argus -- <words>`), so repo patterns complete with
@@ -390,7 +390,7 @@ rendering is snapshot-tested via `TestBackend`.
     pull fix is shown but *blocked* (never chosen) when it would conflict
     or be refused, or when tracked files are dirty (autostash's re-apply can
     itself conflict).
-  * `sync` fetches instead of pulling such repos, and repos mid-operation.
+  * `argus pull` fetches instead of pulling such repos, and repos mid-operation.
   * `Op::Pull` refuses to start during an operation in progress, and
     aborts (`git merge|rebase --abort`) a pull that stops with conflicts,
     which also restores any autostash: an automatic pull completes or
@@ -477,6 +477,11 @@ rendering is snapshot-tested via `TestBackend`.
   left out. `--json` uses the same filter. The TUI starts the same way
   (`[ui] attention_only = true`); the header says how many repos there are
   in all and that `a` shows them.
+* **`sync` is now `pull`** (command, `pull` list and `[[track]] pull`,
+  `mark --pull`, the `pull` icon): it pulls, and clones new repos of
+  tracked owners, but never pushes, which "sync" suggested. Cloning stays
+  part of it (`--no-clone` to skip), so one command serves cron. Old names
+  are errors, except the state file's `last_sync`, read as `last_pull`.
 * **`fix --fetch`** fetches only the selected repos (once per family, as
   worktrees share refs), then refreshes their status before planning.
   Fetch failures are reported and planning continues with what is known.
@@ -542,7 +547,7 @@ speed.
 * GitLab/Gitea forges (implement `argus_core::forge::Forge`); jj backend.
 * `argus-server` (axum, JSON over the same `Workspace`).
 * Filesystem watching for live refresh. Today: `g`, and after each operation.
-* Stable machine-readable output. `--json` works for every command; sync,
+* Stable machine-readable output. `--json` works for every command; pull,
   fix, mark, ack, root and paths build their documents explicitly in the
   CLI, but `status` and `forge list` still serialise internal structs
   (`Entry`, `RemoteRepo`), which isn't a stable contract. Consider a

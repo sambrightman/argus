@@ -1,4 +1,4 @@
-//! Sync planning: which repos to pull/fetch and which forge repos to clone.
+//! Pull planning: which repos to pull/fetch and which forge repos to clone.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
@@ -22,7 +22,7 @@ pub struct Job {
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
-pub struct SyncPlan {
+pub struct PullPlan {
     pub jobs: Vec<Job>,
     /// Forge repos not cloned locally, for tracks with `clone = "notify"`.
     pub missing: Vec<RemoteRepo>,
@@ -31,7 +31,7 @@ pub struct SyncPlan {
     pub orphans: Vec<PathBuf>,
 }
 
-impl SyncPlan {
+impl PullPlan {
     pub fn clones(&self) -> impl Iterator<Item = &Job> {
         self.jobs
             .iter()
@@ -39,11 +39,11 @@ impl SyncPlan {
     }
 }
 
-/// Pull/fetch every syncable, visible repo.
+/// Pull/fetch every visible repo marked for pull.
 pub fn plan_updates(ws: &Workspace) -> Vec<Job> {
     let mut jobs = vec![];
     for e in &ws.entries {
-        if !e.flags.sync || e.flags.hidden() {
+        if !e.flags.pull || e.flags.hidden() {
             continue;
         }
         let Some(s) = e.status() else { continue };
@@ -106,8 +106,8 @@ pub fn plan_tracks(
     ws: &Workspace,
     listings: &BTreeMap<String, Vec<RemoteRepo>>,
     protocol: Protocol,
-) -> SyncPlan {
-    let mut plan = SyncPlan::default();
+) -> PullPlan {
+    let mut plan = PullPlan::default();
     let local: HashSet<String> = ws
         .entries
         .iter()

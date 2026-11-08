@@ -48,7 +48,7 @@ impl Issue {
     }
 
     /// Issues that merely mean "a pull would help" rather than "look at me".
-    pub fn is_sync_only(self) -> bool {
+    pub fn is_pull_only(self) -> bool {
         matches!(self, Issue::Behind(_))
     }
 }
@@ -122,5 +122,5 @@ pub fn score(issues: &[Issue]) -> u32 {
 }
 
 pub fn needs_attention(issues: &[Issue]) -> bool {
-    issues.iter().any(|i| !i.is_sync_only())
+    issues.iter().any(|i| !i.is_pull_only())
 }

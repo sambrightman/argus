@@ -18,9 +18,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use argus_core::Workspace;
+use argus_core::pull::{self, ForgeFactory};
 use argus_core::runner::{self, Event as RunEvent};
 use argus_core::status;
-use argus_core::sync::{self, ForgeFactory};
 use argus_core::{configfile, fix};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use crossterm::event::{self, Event, KeyEventKind};
@@ -29,7 +29,7 @@ use app::{App, Effect, Msg};
 
 pub struct Options {
     pub state_path: PathBuf,
-    /// Where marks (favourite, sync, ignore) are saved.
+    /// Where marks (favourite, pull, ignore) are saved.
     pub config_path: PathBuf,
     pub forge_factory: ForgeFactory<'static>,
     /// Startup notices (e.g. the current-directory fallback), shown after scans.
@@ -153,7 +153,7 @@ pub fn run_suspended(program: &str, args: &[String], cwd: &Path) -> Result<(), S
 
 /// Carries out the app's effects, except suspending the terminal: saving
 /// marks and state, opening URLs, and background work (scans, refreshes,
-/// jobs, fixes, planning a sync) whose results come back as messages.
+/// jobs, fixes, planning pulls and clones) whose results come back as messages.
 pub struct Runtime {
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -311,13 +311,13 @@ impl Runtime {
                 status::describe_fully(&path);
                 let _ = tx.send(Msg::Described(path));
             }),
-            Effect::PlanSync => {
+            Effect::PlanPullAndClone => {
                 let mut ws = app.ws.clone();
                 let factory = self.opts.forge_factory;
                 self.spawn(move |tx| {
-                    let listings = sync::list_tracks(&mut ws, factory);
-                    let plan = sync::plan_tracks(&ws, &listings.repos, listings.protocol);
-                    let _ = tx.send(Msg::SyncPlanned {
+                    let listings = pull::list_tracks(&mut ws, factory);
+                    let plan = pull::plan_tracks(&ws, &listings.repos, listings.protocol);
+                    let _ = tx.send(Msg::PullPlanned {
                         tracks: ws.state,
                         plan,
                         errors: listings.errors,

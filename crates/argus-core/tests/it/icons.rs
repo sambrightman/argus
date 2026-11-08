@@ -24,7 +24,7 @@ fn icons(set: &Icons) -> Vec<(&'static str, &str)> {
         ("no_upstream", &*set.no_upstream),
         ("branches", &*set.branches),
         ("error", &*set.error),
-        ("sync", &*set.sync),
+        ("pull", &*set.pull),
         ("worktree", &*set.worktree),
         ("submodule", &*set.submodule),
         ("spinner", &*set.spinner),
@@ -186,4 +186,13 @@ fn the_config_example_names_every_icon() {
             "{name} missing from: {doc}"
         );
     }
+}
+
+#[test]
+fn the_pull_icon_is_overridden_by_its_new_name_only() {
+    let (i, warnings) = ASCII.with_overrides(&[("pull".to_string(), "P".to_string())].into());
+    assert_eq!((i.pull.as_ref(), warnings.len()), ("P", 0));
+    let (i, warnings) = ASCII.with_overrides(&[("sync".to_string(), "S".to_string())].into());
+    assert_eq!(i.pull, ASCII.pull);
+    assert!(warnings[0].contains("unknown icon"), "{warnings:?}");
 }

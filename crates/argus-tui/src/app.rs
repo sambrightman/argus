@@ -9,9 +9,9 @@ use argus_core::config::StashConfig;
 use argus_core::diff::{self, FileDiff, LineKind, Side};
 use argus_core::fix::{self, Applied, FixKind};
 use argus_core::ops::{self, Op, OpOutcome};
+use argus_core::pull::{self, Job, PullPlan};
 use argus_core::rules::{IssueList, Mark};
 use argus_core::status::RepoStatus;
-use argus_core::sync::{self, Job, SyncPlan};
 use argus_core::{Entry, ViewFilter, Workspace, paths};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -23,7 +23,7 @@ use crate::menu::{Menu, MenuId};
 pub enum Scope {
     /// Marked repos, or the repo under the cursor if none are marked.
     Selected,
-    /// Every visible repo (for pull: every syncable one).
+    /// Every visible repo (for pull: every one marked for pull).
     All,
 }
 
@@ -64,9 +64,9 @@ pub enum Action {
     SwitchDefault,
     FastForward,
     AutoFix(Scope),
-    Sync,
+    PullAndClone,
     ToggleFavourite,
-    ToggleSync,
+    TogglePull,
     ToggleIgnore,
     /// Ignore (or stop ignoring) the issue on the details line under the
     /// cursor, for that repo.
@@ -216,8 +216,8 @@ pub enum Effect {
     Scan,
     /// Re-status these repos.
     Refresh(Vec<PathBuf>),
-    /// List forges and plan clones/pulls; answer with [`Msg::SyncPlanned`].
-    PlanSync,
+    /// List forges and plan clones/pulls; answer with [`Msg::PullPlanned`].
+    PlanPullAndClone,
     /// Describe a detached HEAD however far back its tag is; answer with
     /// [`Msg::Described`].
     Describe(PathBuf),
@@ -259,9 +259,9 @@ pub enum Msg {
         path: PathBuf,
         applied: Result<Option<Applied>, String>,
     },
-    SyncPlanned {
+    PullPlanned {
         tracks: argus_core::State,
-        plan: SyncPlan,
+        plan: PullPlan,
         errors: Vec<(String, String)>,
     },
     Suspended(Result<(), String>),
@@ -884,7 +884,7 @@ impl App {
             }
             Fetch(scope) => return self.jobs_for(scope, |_| Some(Op::Fetch), false),
             Pull(Scope::All) => {
-                let jobs = sync::plan_updates(&self.ws);
+                let jobs = pull::plan_updates(&self.ws);
                 return self.start_jobs(jobs);
             }
             Pull(Scope::Selected) => {
@@ -949,12 +949,12 @@ impl App {
                 }
                 return vec![Effect::Fix { paths, kinds }];
             }
-            Sync => {
+            PullAndClone => {
                 self.info("listing forges…");
-                return vec![Effect::PlanSync];
+                return vec![Effect::PlanPullAndClone];
             }
             ToggleFavourite => return self.toggle_mark(Mark::Favourite),
-            ToggleSync => return self.toggle_mark(Mark::Sync),
+            TogglePull => return self.toggle_mark(Mark::Pull),
             ToggleIgnore => return self.toggle_mark(Mark::Ignore),
             ToggleIgnoreIssue => return self.toggle_ignore_issue(),
             ClearMarks => {
@@ -1519,7 +1519,7 @@ impl App {
                             family: path.clone(),
                             label,
                         }];
-                        sync::record_clones(&mut self.ws, &jobs, &[Some(outcome)]);
+                        pull::record_clones(&mut self.ws, &jobs, &[Some(outcome)]);
                         self.rebuild();
                         return vec![Effect::SaveState];
                     }
@@ -1557,7 +1557,7 @@ impl App {
                 }
                 return vec![Effect::Refresh(vec![path])];
             }
-            Msg::SyncPlanned {
+            Msg::PullPlanned {
                 tracks,
                 plan,
                 errors,
@@ -1579,8 +1579,8 @@ impl App {
                     self.push_log(o, "no longer listed by forge".into(), false, String::new());
                 }
                 let mut jobs = plan.jobs;
-                jobs.extend(sync::plan_updates(&self.ws));
-                self.ws.state.last_sync = Some(jiff::Timestamp::now());
+                jobs.extend(pull::plan_updates(&self.ws));
+                self.ws.state.last_pull = Some(jiff::Timestamp::now());
                 let mut fx = self.start_jobs(jobs);
                 if !errors.is_empty() {
                     self.error(format!(

@@ -51,10 +51,10 @@ max_depth = 6                    # levels below each root; 0: no limit
 # repos or globs on github.com/org/repo, org/repo or path; later entries
 # win, ! turns off; marking in the TUI or `argus mark` edits these lists
 favourite = ["my-org/core-*"]
-sync = ["someone/dotfiles", "my-org/*", "!my-org/huge-monorepo"]
+pull = ["someone/dotfiles", "my-org/*", "!my-org/huge-monorepo"]   # by `argus pull`
 
 [ignore]                         # what not to flag; same kind of entries
-repos = ["~/dev/scratch/**"]     # hidden, and left out of sync, clones and bulk actions
+repos = ["~/dev/scratch/**"]     # hidden, and left out of pulls, clones and bulk actions
 off_default = ["my-org/legacy@release-*"]  # normally on that branch: another is flagged
 detached = ["my-org/pinned@v1.2.0"]        # a tag, its describe, or the commit
 stashes = ["my-org/big"]         # also no_remote, no_upstream, unpushed_branches, behind
@@ -110,7 +110,7 @@ the repo's details looks all the way back, in the background, and the
 answer then replaces the commit id. Details list the commit, its tags and
 the describe line.
 
-Favourite, sync and ignore live in config: marking a repo in the TUI or
+Favourite, pull and ignore live in config: marking a repo in the TUI or
 with `argus mark` adds its name to the list (or `!name` to turn off what a
 pattern says) and saves the change, keeping the rest of the file as
 written; clearing removes the repo's own entries, so patterns decide
@@ -147,14 +147,14 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `!` | shell in repo (TUI suspends; `exit` returns) |
 | `$` | process log |
 | `?` | help |
-| `F` | **Pull**: `p` selected, `a` all syncable, `s` sync (forges + clone new + pull) |
+| `F` | **Pull**: `p` selected, `a` all marked for pull, `c` clone new repos of tracked owners, then pull all marked |
 | `f` | **Fetch**: `f` selected, `a` all shown except hidden |
 | `P` | **Push**: `p` push, `u` publish (set upstream) |
 | `z` | **Stash**: switches `u` include untracked, `k` keep index (from `[stash]`, for the session); `z` all, `i` staged only, `m` with a message, `f` files marked in the details |
 | `c` | **Commit** (prompts for message) |
 | `b` | **Branch**: `d` switch to default, `f` fast-forward stale branches |
 | `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden |
-| `m` | **Mark**: `f` favourite, `s` sync, `i` ignore, `I` ignore the issue under the cursor (pinned to the branch, tag or commit), `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
+| `m` | **Mark**: `f` favourite, `p` pull, `i` ignore, `I` ignore the issue under the cursor (pinned to the branch, tag or commit), `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page |
 | `v` | **View**: toggles, expand/collapse all, log |
 
@@ -162,9 +162,9 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 
 ```sh
 argus status [-a|--all] [--hidden]     # repos needing attention; -a: clean too
-argus sync [-n] [--no-forge] [PATTERNS…]
+argus pull [-n] [--no-clone] [PATTERNS…]
 argus fix [-n] [-F] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine; -F fetches first
-argus mark PATTERNS… [--favourite|--no-favourite] [--sync|--no-sync] [--ignore|--unignore] [--ignore-issue ISSUE|--unignore-issue ISSUE] [--snooze 3d|--unsnooze] [--clear]
+argus mark PATTERNS… [--favourite|--no-favourite] [--pull|--no-pull] [--ignore|--unignore] [--ignore-issue ISSUE|--unignore-issue ISSUE] [--snooze 3d|--unsnooze] [--clear]
 argus ack [PATTERNS…]
 argus forge list ORG [--team T]
 argus root add [DIRS…] | remove DIRS… | list
@@ -175,7 +175,7 @@ argus completions bash|zsh|fish|elvish|powershell
 Every command except the TUI and completions takes `--json`: one JSON
 document on stdout (messages and progress stay on stderr). For example
 `argus --json fix -n` lists each repo with its `planned` fix, `then`, and
-`alternatives`; `argus --json sync` lists each job's `outcome` (`ok`,
+`alternatives`; `argus --json pull` lists each job's `outcome` (`ok`,
 `failed`, `skipped`) and a `summary`.
 
 Completions cover commands, options and your repos' names (`argus mark
@@ -218,10 +218,10 @@ detached HEAD holds can't be ignored.
 A daily crontab entry:
 
 ```cron
-0 8 * * 1-5  ~/.cargo/bin/argus sync >> ~/.local/state/argus/sync.log 2>&1
+0 8 * * 1-5  ~/.cargo/bin/argus pull >> ~/.local/state/argus/pull.log 2>&1
 ```
 
-`sync` exits 2 if any job failed.
+`pull` exits 2 if any job failed.
 
 ## What counts as needing attention
 
@@ -233,7 +233,7 @@ ref › **unpushed** work (on *no* remote, so a fork branch pushed to `origin`
 while tracking `upstream/main` is fine) › uncommitted changes › upstream
 deleted with unmerged work › unpublished branch › other local branches with
 unpushed work › detached HEAD › not on default branch › stashes › no remote ›
-behind upstream (sync-only).
+behind upstream (on its own, not counted as needing attention: a pull fixes it).
 
 Fixes are planned from status and are never destructive. `switch-default`
 needs a clean tracked tree and nothing unpushed. `push` (a default auto-fix) is fast-forward only,
@@ -258,15 +258,15 @@ acme/feature: would stash (1 uncommitted path(s))
 
 The chain is predicted from status, assuming each step succeeds. The TUI
 details show the same (`auto-fix`, `then`, `fix`). Status never fetches,
-so "behind" is as of the last fetch (`sync`, `f` in the TUI, cron);
+so "behind" is as of the last fetch (`argus pull`, `f` in the TUI, cron);
 `fix --fetch` (`-F`) fetches the selected repos first, with `-n` too.
 
-`pull` on a branch that has diverged from its upstream (commits on both
+The `pull` fix on a branch that has diverged from its upstream (commits on both
 sides) is only automatic when a trial merge (`git merge-tree`) predicts
 no conflicts and your config says whether to merge or rebase
 (`pull.rebase`, or `pull.ff`); otherwise `fix -n` says why
-(`not automatic: would conflict in README`). `sync` fetches such repos
-instead of pulling them. Any pull argus runs that still stops with
+(`not automatic: would conflict in README`). `argus pull` fetches such
+repos instead of pulling them. Any pull argus runs that still stops with
 conflicts is aborted, leaving the repo as it was, autostash included.
 `pull` isn't in the default `[fix] auto`.
 

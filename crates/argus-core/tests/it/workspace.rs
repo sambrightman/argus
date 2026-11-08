@@ -1,4 +1,4 @@
-//! Workspace: discovery + status + flags + ordering, and sync end-to-end
+//! Workspace: discovery + status + flags + ordering, and pull end-to-end
 //! against local bare "forge" repositories.
 
 use std::collections::BTreeMap;
@@ -11,9 +11,9 @@ use argus_core::discover::RepoKind;
 use argus_core::forge::{Protocol, RemoteRepo};
 use argus_core::identity::RepoId;
 use argus_core::ops::Op;
+use argus_core::pull::{plan_tracks, plan_updates};
 use argus_core::runner::{Event, run_jobs};
 use argus_core::state::State;
-use argus_core::sync::{plan_tracks, plan_updates};
 use argus_core::testkit::{Sandbox, commit, git, write};
 use argus_core::{ViewFilter, Workspace};
 
@@ -232,9 +232,9 @@ fn errors_are_entries_not_failures() {
 }
 
 #[test]
-fn sync_pulls_only_syncable_visible_repos() {
+fn pull_pulls_only_visible_repos_marked_for_pull() {
     let sb = Sandbox::new();
-    for n in ["s1", "s2", "nosync", "excl"] {
+    for n in ["s1", "s2", "nopull", "excl"] {
         sb.remote("acme", n);
         sb.clone_as_github("acme", n, &format!("dev/{n}"));
         sb.advance_remote("acme", n, "new");
@@ -242,7 +242,7 @@ fn sync_pulls_only_syncable_visible_repos() {
     sb.init("dev/local");
     let w = ws(
         &sb,
-        "sync = ['acme/*', '!acme/nosync', '**/local']\nignore.repos = ['acme/excl']",
+        "pull = ['acme/*', '!acme/nopull', '**/local']\nignore.repos = ['acme/excl']",
     );
     let jobs = plan_updates(&w);
     let mut labels: Vec<_> = jobs.iter().map(|j| j.label.clone()).collect();
@@ -271,17 +271,17 @@ fn sync_pulls_only_syncable_visible_repos() {
         2
     );
     assert!(sb.path("dev/s1/new").exists());
-    assert!(!sb.path("dev/nosync/new").exists());
+    assert!(!sb.path("dev/nopull/new").exists());
     assert!(!sb.path("dev/excl/new").exists());
 }
 
 #[test]
-fn sync_uses_fetch_when_pull_is_impossible() {
+fn pull_uses_fetch_when_pull_is_impossible() {
     let sb = Sandbox::new();
     sb.remote("acme", "d");
     let r = sb.clone_as_github("acme", "d", "dev/d");
     git(&r, &["checkout", "-q", "--detach"]);
-    let w = ws(&sb, "sync = ['acme/*']");
+    let w = ws(&sb, "pull = ['acme/*']");
     assert_eq!(plan_updates(&w)[0].op, Op::Fetch);
 }
 
@@ -428,13 +428,13 @@ fn runner_serialises_a_family_and_stops_it_on_failure() {
     sb.remote("acme", "a");
     let a = sb.clone_as_github("acme", "a", "dev/a");
     let jobs = vec![
-        argus_core::sync::Job {
+        argus_core::pull::Job {
             path: sb.path("nowhere"),
             op: Op::Fetch,
             family: a.clone(),
             label: "bad".into(),
         },
-        argus_core::sync::Job {
+        argus_core::pull::Job {
             path: a.clone(),
             op: Op::Fetch,
             family: a.clone(),
@@ -450,7 +450,7 @@ fn runner_serialises_a_family_and_stops_it_on_failure() {
 fn runner_cancel_prevents_new_jobs() {
     let sb = Sandbox::new();
     let a = sb.init("dev/a");
-    let jobs = vec![argus_core::sync::Job {
+    let jobs = vec![argus_core::pull::Job {
         path: a.clone(),
         op: Op::Fetch,
         family: a,
@@ -483,7 +483,7 @@ impl argus_core::forge::Forge for FakeForge {
 }
 
 #[test]
-fn full_track_sync_flags_new_clones_and_team_membership() {
+fn full_track_pull_flags_new_clones_and_team_membership() {
     let sb = Sandbox::new();
     sb.remote("acme", "fresh");
     sb.remote("acme", "have");
@@ -495,7 +495,7 @@ fn full_track_sync_flags_new_clones_and_team_membership() {
     );
     let have = w.entries[0].path.clone();
     assert!(
-        !w.get(&have).unwrap().flags.sync,
+        !w.get(&have).unwrap().flags.pull,
         "team membership unknown before listing"
     );
 
@@ -510,14 +510,14 @@ fn full_track_sync_flags_new_clones_and_team_membership() {
         Box<dyn argus_core::forge::Forge>,
         argus_core::forge::ForgeError,
     > { Ok(Box::new(FakeForge(list.clone(), false))) };
-    let listings = argus_core::sync::list_tracks(&mut w, &factory);
+    let listings = argus_core::pull::list_tracks(&mut w, &factory);
     assert!(listings.errors.is_empty());
-    assert!(w.get(&have).unwrap().flags.sync, "membership now known");
+    assert!(w.get(&have).unwrap().flags.pull, "membership now known");
     assert!(w.state.tracks["github.com/acme#core"].listed_at.is_some());
 
     let plan = plan_tracks(&w, &listings.repos, listings.protocol);
     let res = run_jobs(&plan.jobs, 2, &AtomicBool::new(false), &|_| {});
-    let added = argus_core::sync::record_clones(&mut w, &plan.jobs, &res);
+    let added = argus_core::pull::record_clones(&mut w, &plan.jobs, &res);
     assert_eq!(added, vec![sb.path("dev/acme/fresh")]);
     let fresh = w.get(&added[0]).unwrap();
     assert!(fresh.flags.new, "fresh clones are highlighted");
@@ -545,7 +545,7 @@ fn failed_listing_is_reported_and_keeps_old_membership() {
      -> Result<Box<dyn argus_core::forge::Forge>, argus_core::forge::ForgeError> {
         Ok(Box::new(FakeForge(vec![], true)))
     };
-    let l = argus_core::sync::list_tracks(&mut w, &factory);
+    let l = argus_core::pull::list_tracks(&mut w, &factory);
     assert_eq!(l.errors.len(), 1);
     assert!(l.errors[0].1.contains("nope"));
     assert_eq!(
@@ -556,7 +556,7 @@ fn failed_listing_is_reported_and_keeps_old_membership() {
 }
 
 #[test]
-fn sync_fetches_instead_of_pulling_when_a_pull_would_not_be_clean() {
+fn pull_fetches_instead_when_a_pull_would_not_be_clean() {
     let sb = Sandbox::new();
     for (n, conflict) in [("clean", false), ("conflict", true), ("busy", true)] {
         let r = sb.diverged("acme", n, &format!("dev/{n}"), conflict);
@@ -568,7 +568,7 @@ fn sync_fetches_instead_of_pulling_when_a_pull_would_not_be_clean() {
         .envs(argus_core::testkit::subprocess_env(&sb.root()))
         .output()
         .unwrap();
-    let w = ws(&sb, "sync = ['acme/*']");
+    let w = ws(&sb, "pull = ['acme/*']");
     let mut labels: Vec<_> = plan_updates(&w).into_iter().map(|j| j.label).collect();
     labels.sort();
     assert_eq!(
@@ -586,7 +586,7 @@ fn marking_edits_the_config_lists() {
         sb.clone_as_github("acme", n, &format!("dev/{n}"));
     }
     sb.init("dev/local");
-    let mut w = ws(&sb, "sync = ['acme/*']");
+    let mut w = ws(&sb, "pull = ['acme/*']");
     let at = |w: &Workspace, name: &str| {
         w.entries
             .iter()
@@ -609,33 +609,33 @@ fn marking_edits_the_config_lists() {
     );
     assert!(w.entries[local].flags.ignored);
     // off against a pattern: a `!` entry
-    w.set_mark(&[big], Mark::Sync, false).unwrap();
-    assert_eq!(w.config.sync, ["acme/*", "!github.com/acme/big"]);
-    assert!(!w.entries[big].flags.sync && w.entries[app].flags.sync);
+    w.set_mark(&[big], Mark::Pull, false).unwrap();
+    assert_eq!(w.config.pull, ["acme/*", "!github.com/acme/big"]);
+    assert!(!w.entries[big].flags.pull && w.entries[app].flags.pull);
     // marked: repos with entries of their own (patterns don't count)
     assert_eq!(w.marked_count(&[app, lib, big, local]), 4);
     assert_eq!(w.marked_count(&[app]), 1);
     // clearing: own entries go, patterns decide again
     w.clear_marks(&[app, big]).unwrap();
     assert_eq!(w.config.favourite, ["github.com/acme/lib"]);
-    assert_eq!(w.config.sync, ["acme/*"]);
-    assert!(w.entries[big].flags.sync && !w.entries[app].flags.favourite);
+    assert_eq!(w.config.pull, ["acme/*"]);
+    assert!(w.entries[big].flags.pull && !w.entries[app].flags.favourite);
     assert_eq!(w.marked_count(&[app, big]), 0);
 }
 
 #[test]
-fn unmarking_a_tracked_repo_for_sync_writes_a_bang() {
+fn unmarking_a_tracked_repo_for_pull_writes_a_bang() {
     use argus_core::rules::Mark;
     let sb = Sandbox::new();
     sb.remote("acme", "app");
     sb.clone_as_github("acme", "app", "dev/app");
     let mut w = ws(&sb, "[[track]]\nowner='acme'");
-    assert!(w.entries[0].flags.sync, "tracked: synced by default");
-    w.set_mark(&[0], Mark::Sync, false).unwrap();
-    assert_eq!(w.config.sync, ["!github.com/acme/app"]);
-    assert!(!w.entries[0].flags.sync);
-    w.set_mark(&[0], Mark::Sync, true).unwrap();
-    assert!(w.config.sync.is_empty() && w.entries[0].flags.sync);
+    assert!(w.entries[0].flags.pull, "tracked: pulled by default");
+    w.set_mark(&[0], Mark::Pull, false).unwrap();
+    assert_eq!(w.config.pull, ["!github.com/acme/app"]);
+    assert!(!w.entries[0].flags.pull);
+    w.set_mark(&[0], Mark::Pull, true).unwrap();
+    assert!(w.config.pull.is_empty() && w.entries[0].flags.pull);
 }
 
 #[test]

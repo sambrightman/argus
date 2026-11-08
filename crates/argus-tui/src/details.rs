@@ -126,7 +126,7 @@ pub fn details(
     }
     let flags = [
         (e.flags.favourite, "favourite"),
-        (e.flags.sync, "syncable"),
+        (e.flags.pull, "pulled"),
         (e.flags.ignored, "ignored"),
         (e.flags.snoozed, "snoozed"),
         (e.flags.new, "new"),

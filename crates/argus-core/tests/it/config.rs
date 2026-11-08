@@ -204,34 +204,34 @@ fn in_a_file_with_both_keys_an_unmark_goes_last_so_it_wins() {
     let main = write(
         t.path(),
         "config.toml",
-        "sync = []\nextend_sync = ['acme/*']\n",
+        "pull = []\nextend_pull = ['acme/*']\n",
     );
     let before = Config::load(&main).unwrap();
     let mut after = before.clone();
-    after.sync.push("!acme/big".into());
+    after.pull.push("!acme/big".into());
     update_mark_lists(&main, &before, &after).unwrap();
-    // extend_sync applies after sync, so the ! entry belongs there
-    assert_eq!(Config::load(&main).unwrap().sync, ["acme/*", "!acme/big"]);
+    // extend_pull applies after pull, so the ! entry belongs there
+    assert_eq!(Config::load(&main).unwrap().pull, ["acme/*", "!acme/big"]);
 }
 
 #[test]
 fn marks_are_added_to_the_main_files_own_list_when_it_has_one() {
     let t = tempfile::tempdir().unwrap();
     let d = t.path();
-    write(d, "marks.toml", "sync = ['acme/*']\n");
+    write(d, "marks.toml", "pull = ['acme/*']\n");
     let main = write(
         d,
         "config.toml",
-        "extend = ['marks.toml']\nextend_sync = ['x/y']\n",
+        "extend = ['marks.toml']\nextend_pull = ['x/y']\n",
     );
     let before = Config::load(&main).unwrap();
     let mut after = before.clone();
-    after.sync.push("!acme/big".into());
+    after.pull.push("!acme/big".into());
     update_mark_lists(&main, &before, &after).unwrap();
     let c = Config::load(&main).unwrap();
-    assert_eq!(c.sync, ["acme/*", "x/y", "!acme/big"]);
+    assert_eq!(c.pull, ["acme/*", "x/y", "!acme/big"]);
     let text = std::fs::read_to_string(&main).unwrap();
-    assert!(!text.contains("\nsync ="), "{text}");
+    assert!(!text.contains("\npull ="), "{text}");
 }
 
 #[test]
