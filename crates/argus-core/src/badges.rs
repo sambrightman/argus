@@ -88,6 +88,11 @@ pub fn branch(e: &Entry, i: &Icons) -> Option<Badge> {
 }
 
 /// State badges after the branch: ahead/behind, changes, stashes, problems.
+///
+/// A badge stating a fact about the repo (a count, where HEAD is) shows
+/// whether or not its issue is ignored: it's still true. One that exists
+/// only to warn (no upstream, unpushed branches) comes from the issues
+/// still counted, so ignoring it removes it.
 pub fn state(e: &Entry, i: &Icons) -> Vec<Badge> {
     let mut v = vec![];
     if let Some(err) = e.error() {
@@ -141,8 +146,8 @@ pub fn state(e: &Entry, i: &Icons) -> Vec<Badge> {
             format!("{}{}", i.untracked, s.changes.untracked),
         );
     }
-    if s.stashes > 0 {
-        push(Role::Stash, format!("{}{}", i.stash, s.stashes));
+    if !s.stashes.is_empty() {
+        push(Role::Stash, format!("{}{}", i.stash, s.stashes.len()));
     }
     for issue in &e.issues {
         match issue {

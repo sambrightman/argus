@@ -805,14 +805,14 @@ fn ignoring_an_issue_through_the_workspace_pins_it_and_resolves_it() {
     let r = sb.clone_as_github("acme", "w", "dev/w");
     git(&r, &["switch", "-q", "-c", "feat"]);
     let mut w = ws(&sb, "");
-    w.set_issue_ignored(&[0], IssueList::NonDefaultBranch, true)
+    w.set_issue_ignored(&[0], IssueList::NonDefaultBranch, true, None)
         .unwrap();
     assert_eq!(
         w.config.ignore.non_default_branch,
         ["github.com/acme/w@feat"]
     );
     assert_eq!(w.entries[0].ignored_issues, [Issue::NonDefaultBranch]);
-    w.set_issue_ignored(&[0], IssueList::NonDefaultBranch, false)
+    w.set_issue_ignored(&[0], IssueList::NonDefaultBranch, false, None)
         .unwrap();
     assert!(w.config.ignore.non_default_branch.is_empty());
     assert!(w.entries[0].issues.contains(&Issue::NonDefaultBranch));
@@ -944,4 +944,146 @@ fn a_rescan_forgets_kept_repos_that_are_gone() {
     assert_eq!(w.kept_opens(), Some(3), "b was forgotten, so reopened");
     w.status_reader().read(&a).unwrap();
     assert_eq!(w.kept_opens(), Some(3), "a still kept");
+}
+
+/// Stash a change to README with `message` (git's own without one).
+fn stash(r: &std::path::Path, message: Option<&str>) {
+    write(r, "README", &format!("{message:?}\n"));
+    match message {
+        Some(m) => git(r, &["stash", "push", "-q", "-m", m]),
+        None => git(r, &["stash", "push", "-q"]),
+    };
+}
+
+fn stash_issues(e: &argus_core::workspace::Entry) -> (Vec<Issue>, Vec<Issue>) {
+    let only = |v: &[Issue]| -> Vec<Issue> {
+        v.iter()
+            .filter(|i| matches!(i, Issue::Stashes(_)))
+            .copied()
+            .collect()
+    };
+    (only(&e.issues), only(&e.ignored_issues))
+}
+
+#[test]
+fn own_stashes_are_ignored_by_default_and_argus_stashes_are_not() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "dev/w");
+    stash(&r, Some("experiment"));
+    stash(&r, None);
+    let e = ws(&sb, "").entries[0].clone();
+    assert_eq!(stash_issues(&e), (vec![], vec![Issue::Stashes(2)]));
+    assert!(!e.needs_attention(), "{:?}", e.issues);
+    stash(&r, Some("argus 2026-11-08 12:00"));
+    let e = ws(&sb, "").entries[0].clone();
+    assert_eq!(
+        stash_issues(&e),
+        (vec![Issue::Stashes(1)], vec![Issue::Stashes(2)])
+    );
+    assert!(e.needs_attention());
+    // inverse: an empty list ignores none
+    let e = ws(&sb, "[ignore]\nstashes = []").entries[0].clone();
+    assert_eq!(stash_issues(&e), (vec![Issue::Stashes(3)], vec![]));
+}
+
+#[test]
+fn a_pinned_stash_ignore_covers_only_matching_messages() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "dev/w");
+    stash(&r, Some("experiment"));
+    stash(&r, Some("mail me@host"));
+    let issues =
+        |list: &str| stash_issues(&ws(&sb, &format!("[ignore]\nstashes = {list}")).entries[0]);
+    assert_eq!(
+        issues("['acme/w@experiment']"),
+        (vec![Issue::Stashes(1)], vec![Issue::Stashes(1)])
+    );
+    assert_eq!(
+        issues("['acme/w@exp*', 'acme/w@mail me@host']"),
+        (vec![], vec![Issue::Stashes(2)]),
+        "a glob, and an @ in the message"
+    );
+    assert_eq!(
+        issues("['acme/w', '!acme/w@mail*']"),
+        (vec![Issue::Stashes(1)], vec![Issue::Stashes(1)]),
+        "the last matching entry decides, stash by stash"
+    );
+    assert_eq!(
+        issues("['acme/w@other']"),
+        (vec![Issue::Stashes(2)], vec![]),
+        "pinned to another message"
+    );
+}
+
+#[test]
+fn ignoring_stashes_is_unpinned_unless_asked_and_pins_each_message_literally() {
+    use argus_core::rules::IssueList;
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "dev/w");
+    stash(&r, Some("fix [x] *"));
+    stash(&r, Some("experiment"));
+    // one stash already covered by a pattern's pin: ignoring adds the rest
+    let mut w = ws(&sb, "[ignore]\nstashes = ['acme/*@experiment']");
+    w.set_issue_ignored(&[0], IssueList::Stashes, true, None)
+        .unwrap();
+    assert_eq!(
+        w.config.ignore.stashes,
+        ["acme/*@experiment", "github.com/acme/w"]
+    );
+    let mut w = ws(&sb, "[ignore]\nstashes = []");
+    w.set_issue_ignored(&[0], IssueList::Stashes, true, None)
+        .unwrap();
+    assert_eq!(w.config.ignore.stashes, ["github.com/acme/w"]);
+    assert_eq!(
+        stash_issues(&w.entries[0]),
+        (vec![], vec![Issue::Stashes(2)])
+    );
+    w.set_issue_ignored(&[0], IssueList::Stashes, false, None)
+        .unwrap();
+    assert!(w.config.ignore.stashes.is_empty());
+    w.set_issue_ignored(&[0], IssueList::Stashes, true, Some(true))
+        .unwrap();
+    assert_eq!(
+        w.config.ignore.stashes.len(),
+        2,
+        "{:?}",
+        w.config.ignore.stashes
+    );
+    assert_eq!(
+        stash_issues(&w.entries[0]),
+        (vec![], vec![Issue::Stashes(2)])
+    );
+    // a new stash isn't covered, not even one the pinned glob characters
+    // would have matched
+    stash(&r, Some("fix x anything"));
+    let cfg = toml::to_string(&w.config.ignore).unwrap();
+    let e = ws(&sb, &format!("[ignore]\n{cfg}")).entries[0].clone();
+    assert_eq!(
+        stash_issues(&e),
+        (vec![Issue::Stashes(1)], vec![Issue::Stashes(2)])
+    );
+}
+
+#[test]
+fn ignoring_a_branch_is_pinned_unless_asked_not_to() {
+    use argus_core::rules::IssueList;
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "dev/w");
+    git(&r, &["switch", "-q", "-c", "feat"]);
+    let mut w = ws(&sb, "");
+    w.set_issue_ignored(&[0], IssueList::NonDefaultBranch, true, Some(false))
+        .unwrap();
+    assert_eq!(w.config.ignore.non_default_branch, ["github.com/acme/w"]);
+    w.set_issue_ignored(&[0], IssueList::NonDefaultBranch, false, None)
+        .unwrap();
+    w.set_issue_ignored(&[0], IssueList::NonDefaultBranch, true, None)
+        .unwrap();
+    assert_eq!(
+        w.config.ignore.non_default_branch,
+        ["github.com/acme/w@feat"]
+    );
 }

@@ -57,7 +57,7 @@ pull = ["someone/dotfiles", "my-org/*", "!my-org/huge-monorepo"]   # by `argus p
 repos = ["~/dev/scratch/**"]     # hidden, and left out of pulls, clones and bulk actions
 non_default_branch = ["my-org/legacy@release-*"]  # normally on that branch: another is flagged
 detached = ["my-org/pinned@v1.2.0"]        # a tag, its describe, or the commit
-stashes = ["my-org/big"]         # also no_remote, no_upstream, unpushed_branches, behind
+behind = ["my-org/big"]          # also no_remote, no_upstream, unpushed_branches, stashes
 
 [concurrency]                    # 0: automatic
 disk = 0                         # threads for discovery and status
@@ -164,7 +164,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 argus status [-a|--all] [--hidden]     # repos needing attention; -a: clean too
 argus pull [-n] [--no-clone] [PATTERNS…]
 argus fix [-n] [-F] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine; -F fetches first
-argus mark PATTERNS… [--favourite|--no-favourite] [--pull|--no-pull] [--ignore|--unignore] [--ignore-issue ISSUE|--unignore-issue ISSUE] [--snooze 3d|--unsnooze] [--clear]
+argus mark PATTERNS… [--favourite|--no-favourite] [--pull|--no-pull] [--ignore|--unignore] [--ignore-issue ISSUE [--pin|--no-pin]|--unignore-issue ISSUE] [--snooze 3d|--unsnooze] [--clear]
 argus ack [PATTERNS…]
 argus forge list ORG [--team T]
 argus root add [DIRS…] | remove DIRS… | list
@@ -276,6 +276,22 @@ conflicts is aborted, leaving the repo as it was, autostash included.
 `git stash pop --index` puts them back as they were. `[stash] untracked =
 false` leaves untracked files alone, and `keep_index = true` leaves staged
 changes in the index after stashing them.
+
+Stashes are judged one by one. By default `[ignore] stashes = ["**",
+"!**@argus *"]`: your own stashes don't need attention, while those the
+stash fix made (`argus <date>`) do until you pop or drop them. An entry
+`repo@message` covers the stashes whose message (after git's
+`On <branch>: `) matches, glob allowed. Set `stashes = []` to flag every
+stash, and use `extend_stashes` to add to the default rather than replace
+it (the TUI and `argus mark` do). Ignoring stashes from the TUI (`I`) or
+with `argus mark --ignore-issue stashes` covers all of the repo's stashes,
+now and later; `P` or `--pin` pins each current message instead, so a new
+stash is flagged again. For branch and HEAD issues it's the other way
+round: pinned by default, `P` or `--no-pin` for unpinned.
+
+Ignoring an issue never hides a fact: the row still shows how far behind
+a repo is, how many stashes it has and where HEAD is. Badges that only
+warn (no upstream, unpushed branches) go when their issue is ignored.
 
 ## Development
 

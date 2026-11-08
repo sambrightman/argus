@@ -69,8 +69,11 @@ pub enum Action {
     TogglePull,
     ToggleIgnore,
     /// Ignore (or stop ignoring) the issue on the details line under the
-    /// cursor, for that repo.
+    /// cursor, for that repo, pinned as the list pins by default.
     ToggleIgnoreIssue,
+    /// The same, pinning the other way: stashes to their messages, where
+    /// HEAD is not at all.
+    ToggleIgnoreIssueOtherPin,
     Snooze,
     Unsnooze,
     Ack,
@@ -123,6 +126,7 @@ fn diff_rows(
         file: Some(file.to_string()),
         diff: Some(DiffRef { side, hunk, line }),
         issue: None,
+        ignored: false,
     };
     let mut v = vec![];
     for (side, _, title) in sides.into_iter().filter(|s| s.1) {
@@ -956,7 +960,8 @@ impl App {
             ToggleFavourite => return self.toggle_mark(Mark::Favourite),
             TogglePull => return self.toggle_mark(Mark::Pull),
             ToggleIgnore => return self.toggle_mark(Mark::Ignore),
-            ToggleIgnoreIssue => return self.toggle_ignore_issue(),
+            ToggleIgnoreIssue => return self.toggle_ignore_issue(false),
+            ToggleIgnoreIssueOtherPin => return self.toggle_ignore_issue(true),
             ClearMarks => {
                 let keys = self.selected_keys();
                 let n = self.ws.marked_count(&self.selected());
@@ -1096,33 +1101,42 @@ impl App {
             .collect()
     }
 
-    fn toggle_ignore_issue(&mut self) -> Vec<Effect> {
+    /// `other_pin`: pin the other way from the list's default.
+    fn toggle_ignore_issue(&mut self, other_pin: bool) -> Vec<Effect> {
         let Some(Row::Detail {
             repo,
-            line: DetailLine {
-                issue: Some(issue), ..
-            },
+            line:
+                DetailLine {
+                    issue: Some(issue),
+                    ignored,
+                    ..
+                },
         }) = self.rows.get(self.cursor)
         else {
             self.info("no issue under the cursor");
             return vec![];
         };
-        let (i, issue) = (*repo, *issue);
+        let (i, issue, on) = (*repo, *issue, !*ignored);
         let Some(list) = IssueList::of(issue) else {
             self.info("this issue can't be ignored: it risks losing work");
             return vec![];
         };
-        let on = !self.ws.entries[i].ignored_issues.contains(&issue);
+        let pin = list.pins_by_default() != other_pin;
         let before = self.ws.config.clone();
-        if let Err(e) = self.ws.set_issue_ignored(&[i], list, on) {
+        if let Err(e) = self.ws.set_issue_ignored(&[i], list, on, Some(pin)) {
             self.error(e.to_string());
             return vec![];
         }
         self.rebuild();
         self.info(format!(
-            "{} [ignore] {}",
+            "{} [ignore] {}{}",
             if on { "added to" } else { "removed from" },
-            list.name()
+            list.name(),
+            if on && pin && list.pins() {
+                ", pinned"
+            } else {
+                ""
+            }
         ));
         vec![Effect::SaveMarks(Box::new(before))]
     }

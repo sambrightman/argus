@@ -1373,6 +1373,37 @@ fn mark_ignores_and_unignores_an_issue() {
         read().ignore.non_default_branch,
         ["github.com/acme/feature@feat"]
     );
+    // --no-pin and --pin choose the other way from the list's default
+    mark(&["acme/feature", "--unignore-issue", "non-default-branch"]).success();
+    mark(&[
+        "acme/feature",
+        "--ignore-issue",
+        "non-default-branch",
+        "--no-pin",
+    ])
+    .success();
+    assert_eq!(
+        read().ignore.non_default_branch,
+        ["github.com/acme/feature"]
+    );
+    mark(&["acme/feature", "--unignore-issue", "non-default-branch"]).success();
+    let r = sb.path("dev/clean");
+    write(&r, "README", "x\n");
+    git(&r, &["stash", "push", "-q", "-m", "argus 2026-01-02 09:30"]);
+    let mut stashes = read().ignore.stashes;
+    mark(&["acme/clean", "--ignore-issue", "stashes"]).success();
+    stashes.push("github.com/acme/clean".into());
+    assert_eq!(read().ignore.stashes, stashes);
+    assert!(
+        std::fs::read_to_string(&cfg)
+            .unwrap()
+            .contains("extend_stashes"),
+        "the default list is kept"
+    );
+    mark(&["acme/clean", "--unignore-issue", "stashes"]).success();
+    mark(&["acme/clean", "--ignore-issue", "stashes", "--pin"]).success();
+    *stashes.last_mut().unwrap() = "github.com/acme/clean@argus 2026-01-02 09:30".into();
+    assert_eq!(read().ignore.stashes, stashes);
     mark(&["acme/feature", "--unignore-issue", "non-default-branch"]).success();
     assert!(read().ignore.non_default_branch.is_empty());
     // unknown or not ignorable: an error naming the ones that are

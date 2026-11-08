@@ -207,7 +207,7 @@ fn example_colors() -> BTreeMap<&'static str, &'static str> {
 /// `[ignore]`: entries as for `favourite` (a repo or a pattern, matched
 /// against identity, `owner/name` or path; the last match wins, `!` turns
 /// it off).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(
     default,
     deny_unknown_fields,
@@ -231,12 +231,29 @@ pub struct Ignore {
     /// Repos whose branch has no upstream. `repo@branch` as for
     /// `non_default_branch`.
     pub no_upstream: Vec<String>,
-    /// Repos with stashes.
+    /// Repos with stashes, stash by stash: `repo@message` covers stashes
+    /// whose message (after git's `On <branch>: `) matches (glob allowed).
+    /// By default, every stash but those argus's stash fix made.
     pub stashes: Vec<String>,
     /// Repos with other local branches holding unpushed commits.
     pub unpushed_branches: Vec<String>,
     /// Repos behind their upstream.
     pub behind: Vec<String>,
+}
+
+impl Default for Ignore {
+    fn default() -> Self {
+        Self {
+            repos: vec![],
+            non_default_branch: vec![],
+            detached: vec![],
+            no_remote: vec![],
+            no_upstream: vec![],
+            stashes: vec!["**".into(), format!("!**@{} *", crate::ops::STASH_PREFIX)],
+            unpushed_branches: vec![],
+            behind: vec![],
+        }
+    }
 }
 
 #[derive(

@@ -142,14 +142,32 @@ impl IssueList {
     pub fn pins(self) -> bool {
         matches!(
             self,
-            IssueList::NonDefaultBranch | IssueList::Detached | IssueList::NoUpstream
+            IssueList::NonDefaultBranch
+                | IssueList::Detached
+                | IssueList::NoUpstream
+                | IssueList::Stashes
         )
     }
 
-    /// What a pin is matched against in this state; the first is what
-    /// pinning writes. Empty for lists that don't pin.
+    /// Whether ignoring from the TUI or `argus mark` pins by default: where
+    /// HEAD is, yes (a repo that moves is flagged again); stashes, no.
+    pub fn pins_by_default(self) -> bool {
+        self.pins() && !self.separate_values()
+    }
+
+    /// Whether each value is a thing of its own, ignored or not by itself
+    /// (stashes), rather than another name for one thing (a detached HEAD's
+    /// tags, describe and commit).
+    pub fn separate_values(self) -> bool {
+        self == IssueList::Stashes
+    }
+
+    /// What a pin is matched against in this state; pinning writes the
+    /// first, or each of [`separate_values`](Self::separate_values). Empty
+    /// for lists that don't pin.
     pub fn values(self, s: &RepoStatus) -> Vec<String> {
         match self {
+            IssueList::Stashes => s.stashes.clone(),
             IssueList::NonDefaultBranch | IssueList::NoUpstream => {
                 s.head.branch().map(String::from).into_iter().collect()
             }
@@ -286,7 +304,8 @@ impl IssueEntry {
             entry: text.to_string(),
             reason,
         };
-        let (repo, value) = match text.rsplit_once('@') {
+        // at the first `@`: a value (a stash message) may hold another
+        let (repo, value) = match text.split_once('@') {
             Some(_) if !list.pins() => return Err(bad("this list doesn't take @value")),
             Some((repo, value)) => {
                 if value.is_empty() {
@@ -429,10 +448,45 @@ pub fn set_mark(
     Ok(())
 }
 
+impl RuleSet {
+    /// Which of `values` `list` ignores for the repo, each by itself, for
+    /// lists of [`IssueList::separate_values`].
+    pub fn ignored_values<'v>(
+        &self,
+        list: IssueList,
+        id: Option<&RepoId>,
+        path: &Path,
+        values: &'v [String],
+    ) -> impl Iterator<Item = &'v String> {
+        values
+            .iter()
+            .filter(move |v| self.ignores_issue(list, id, path, std::slice::from_ref(*v)))
+    }
+
+    /// Whether `list` ignores the issue for the repo in this state: for
+    /// separate values, every one of them.
+    fn ignores_all(
+        &self,
+        list: IssueList,
+        id: Option<&RepoId>,
+        path: &Path,
+        values: &[String],
+    ) -> bool {
+        if list.separate_values() {
+            self.ignored_values(list, id, path, values).count() == values.len()
+        } else {
+            self.ignores_issue(list, id, path, values)
+        }
+    }
+}
+
 /// Edit `list` in `config` so the issue is ignored (`on`) or not for the
-/// repo in its current state (`values`): drop the entries naming it, then
-/// add `name@value` (pinned, for lists that pin and when there's a value)
-/// or `!name` only if what's left doesn't already give `on`.
+/// repo in its current state (`values`): drop the entries naming it, then,
+/// only if what's left doesn't already give `on`, add `!name`, `name`, or
+/// with `pin` (for lists that pin) `name@value`: the first value, or one
+/// entry for each separate value not already ignored. Values are written as literals, glob
+/// characters escaped.
+#[allow(clippy::too_many_arguments)]
 pub fn set_issue_ignored(
     config: &mut Config,
     list: IssueList,
@@ -441,18 +495,32 @@ pub fn set_issue_ignored(
     name: &str,
     values: &[String],
     on: bool,
+    pin: bool,
 ) -> Result<(), ConfigError> {
     let own = RuleSet::new(config)?.own_issue_entries(list, id, path);
     list.list_mut(config).retain(|e| !own.contains(e));
-    let now = RuleSet::new(config)?.ignores_issue(list, id, path, values);
-    if now != on {
-        let entry = match (on, values.first()) {
-            (true, Some(v)) if list.pins() => format!("{name}@{v}"),
-            (true, _) => name.to_string(),
-            (false, _) => format!("!{name}"),
-        };
-        list.list_mut(config).push(entry);
+    let rules = RuleSet::new(config)?;
+    if rules.ignores_all(list, id, path, values) == on {
+        return Ok(());
     }
+    // separate values: pin those what's left doesn't ignore already
+    let uncovered: Vec<String> = values
+        .iter()
+        .filter(|v| !rules.ignores_issue(list, id, path, std::slice::from_ref(*v)))
+        .cloned()
+        .collect();
+    let pinned = |v: &String| format!("{name}@{}", globset::escape(v));
+    let entries: Vec<String> = match (on, pin && list.pins()) {
+        (false, _) => vec![format!("!{name}")],
+        (true, true) if list.separate_values() && !uncovered.is_empty() => {
+            uncovered.iter().map(pinned).collect()
+        }
+        (true, true) if !values.is_empty() => vec![pinned(&values[0])],
+        (true, _) => vec![name.to_string()],
+    };
+    let mut seen = std::collections::HashSet::new();
+    let entries = entries.into_iter().filter(|e| seen.insert(e.clone())); // stashes may share a message
+    list.list_mut(config).extend(entries);
     Ok(())
 }
 
@@ -679,8 +747,11 @@ mod tests {
     #[test]
     fn only_some_issue_lists_take_a_value() {
         for (cfg, ok) in [
-            ("[ignore]\nstashes = ['acme/widget@2']", false),
+            ("[ignore]\nstashes = ['acme/widget@wip']", true),
+            ("[ignore]\nstashes = ['acme/widget@']", false),
             ("[ignore]\nbehind = ['acme/widget@x']", false),
+            ("[ignore]\nunpushed_branches = ['acme/widget@x']", false),
+            ("[ignore]\nno_remote = ['acme/widget@x']", false),
             ("[ignore]\nnon_default_branch = ['acme/widget@']", false),
             ("[ignore]\nno_upstream = ['acme/widget@feat']", true),
             ("[ignore]\nnon_default_branch = ['acme/widget@feat']", true),
@@ -705,6 +776,7 @@ mod tests {
                 "acme/widget",
                 &values,
                 on,
+                true,
             )
             .unwrap()
         };
@@ -726,15 +798,16 @@ mod tests {
         let mut c = Config::default();
         set_issue_ignored(
             &mut c,
-            IssueList::Stashes,
+            IssueList::Behind,
             id.as_ref(),
             path,
             "acme/widget",
             &[],
             true,
+            true,
         )
         .unwrap();
-        assert_eq!(c.ignore.stashes, ["acme/widget"]);
+        assert_eq!(c.ignore.behind, ["acme/widget"]);
     }
 
     #[test]

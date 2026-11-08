@@ -55,6 +55,14 @@ fn demo_covers_every_state() {
         ),
         ("stashes", issue(|i| matches!(i, Issue::Stashes(_)))),
         (
+            "ignored stashes",
+            has(&|e| {
+                e.ignored_issues
+                    .iter()
+                    .any(|i| matches!(i, Issue::Stashes(_)))
+            }),
+        ),
+        (
             "other branches",
             issue(|i| matches!(i, Issue::UnpushedBranches(_))),
         ),

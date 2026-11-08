@@ -71,7 +71,7 @@ fn each_option_leaves_what_it_should() {
         let mut want: Vec<String> = want.iter().map(|s| s.to_string()).collect();
         want.sort();
         assert_eq!(got, want, "{name}");
-        assert_eq!(st(&r).stashes, 1, "{name}");
+        assert_eq!(st(&r).stashes.len(), 1, "{name}");
     };
     case("everything", true, false, false, &[], &[]);
     case("without untracked", false, false, false, &[], &["?? new"]);
@@ -163,6 +163,14 @@ fn the_stash_fix_follows_the_config_defaults() {
         ),
         (2, 0, 1),
         "counts follow the files"
+    );
+    // the predicted stash is the one the fix will really make
+    assert!(ops::run(&r, &fix.op).success);
+    assert_eq!(after.stashes, st(&r).stashes);
+    assert!(
+        after.stashes[0].starts_with("argus "),
+        "{:?}",
+        after.stashes
     );
     let counts = |cfg: StashConfig| {
         let s = st(&r);
@@ -302,7 +310,7 @@ fn the_staged_only_check_agrees_with_git() {
             out.output
         );
         // the check changed nothing
-        assert_eq!(st(&r).stashes, 0);
+        assert!(st(&r).stashes.is_empty());
         assert_eq!(changes(&r), ["MM f"]);
     }
 }

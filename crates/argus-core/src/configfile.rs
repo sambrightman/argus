@@ -473,6 +473,14 @@ fn split_path(path: &str) -> (Vec<&str>, &str) {
     (parts, last)
 }
 
+/// Whether the mark or issue list at dotted `key` is empty by default.
+fn default_is_empty(key: &str) -> bool {
+    let defaults = Config::default();
+    List::all()
+        .find(|l| l.path() == key)
+        .is_none_or(|l| l.get(&defaults).is_empty())
+}
+
 /// The `extend_` form of a dotted key: `ignore.repos` is
 /// `ignore.extend_repos`.
 fn extend_path(path: &str) -> String {
@@ -750,7 +758,13 @@ pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result
         if added.is_empty() {
             continue;
         }
-        let (i, target) = add_target(&docs, &key).unwrap_or((0, key.clone()));
+        // a new plain list would replace a default; `extend_` adds to it
+        let new_key = if default_is_empty(&key) {
+            key.clone()
+        } else {
+            extend_key.clone()
+        };
+        let (i, target) = add_target(&docs, &key).unwrap_or((0, new_key));
         let d = &mut docs[i];
         let not_a_list = || EditError::NotAList {
             path: d.path.clone(),

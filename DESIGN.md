@@ -146,7 +146,27 @@ Two findings:
   form, so a repo that moves is flagged again: an expectation, not
   silence. Ignored issues don't count towards attention, show dimmed in
   the details, and turn off the auto-fix that would undo them
-  (`fix::turned_off_by`). Conflicts, operations in progress and commits
+  (`fix::turned_off_by`).
+* **Stashes are ignored one by one, and argus's own aren't by default.**
+  A detached HEAD's tags, describe and commit are names for one thing, so
+  an entry matching any of them covers it; stashes are separate things, so
+  each is checked against the list by itself (last match wins, per stash)
+  and the issue counts those left. The default, `["**", "!**@argus *"]`,
+  is plain config rather than a special case: your own stashes are
+  deliberate, the stash fix's are work argus tucked away for you. A pin
+  matches the message after git's `On <branch>: ` (the part you wrote);
+  pins are written as literals (`globset::escape`) and only for stashes
+  not already covered. Ignoring from the TUI or CLI doesn't pin stashes by
+  default (new stashes stay ignored) but does pin where HEAD is; `P` /
+  `--pin` / `--no-pin` choose the other way. An entry splits at its first
+  `@`, as a message may hold another.
+* **A list with a default is added to with `extend_`.** When no file has
+  the list yet, the TUI and `argus mark` write `extend_<list>`, since a
+  plain list replaces the default.
+* **Ignoring hides warnings, never facts.** A badge stating a fact (the
+  behind count, the stash count, where HEAD is) shows whether or not its
+  issue is ignored; one that only warns (no upstream, unpushed branches)
+  comes from the issues still counted, so ignoring removes it. Conflicts, operations in progress and commits
   only a detached HEAD holds can't be ignored: they risk losing work.
   `exclude_paths` is the other kind of exclusion: directories discovery
   never enters, matched by name or path, as rsync's and ripgrep's

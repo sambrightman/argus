@@ -1570,3 +1570,60 @@ fn discarding_always_asks() {
         ]
     );
 }
+
+#[test]
+fn stashes_are_ignored_stash_by_stash_and_pinned_with_the_other_key() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let r = sb.path("dev/clean");
+        write(&r, "README", "mine\n");
+        git(&r, &["stash", "push", "-q", "-m", "mine"]);
+        write(&r, "README", "fix's\n");
+        git(&r, &["stash", "push", "-q", "-m", "argus 2026-01-02 09:30"]);
+    });
+    let defaults = argus_core::Config::default().ignore.stashes;
+    let stash_lines = |app: &App| -> Vec<String> {
+        detail_texts(app)
+            .into_iter()
+            .filter(|t| t.starts_with("stashes") || t.trim_start().starts_with("stash@"))
+            .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect()
+    };
+    // the fix's stash counts and yours doesn't: one line each, same count
+    cursor_on_detail(&mut app, "clean", "issue     1 stash(es)");
+    assert_eq!(
+        stash_lines(&app),
+        [
+            "stashes 2 (1 ignored)",
+            "stash@{0} argus 2026-01-02 09:30",
+            "stash@{1} mine (ignored)",
+        ]
+    );
+    // the counted line: ignoring it covers every stash, unpinned
+    app.act(Action::ToggleIgnoreIssue);
+    let mut expect = defaults.clone();
+    expect.push("github.com/acme/clean".into());
+    assert_eq!(app.ws.config.ignore.stashes, expect);
+    assert_eq!(stash_lines(&app)[0], "stashes 2 (2 ignored)");
+    // the ignored line: back to the defaults
+    cursor_on_detail(&mut app, "clean", "issue     2 stash(es)  (ignored)");
+    app.act(Action::ToggleIgnoreIssue);
+    assert_eq!(app.ws.config.ignore.stashes, defaults);
+    // the other key pins the counted stash's message
+    cursor_on_detail(&mut app, "clean", "issue     1 stash(es)");
+    app.act(Action::ToggleIgnoreIssueOtherPin);
+    let mut expect = defaults.clone();
+    expect.push("github.com/acme/clean@argus 2026-01-02 09:30".into());
+    assert_eq!(app.ws.config.ignore.stashes, expect);
+    assert_eq!(stash_lines(&app)[0], "stashes 2 (2 ignored)");
+}
+
+#[test]
+fn the_other_key_ignores_a_branch_unpinned() {
+    let (_sb, mut app) = setup("");
+    cursor_on_detail(&mut app, "feature", "issue     not on default branch");
+    app.act(Action::ToggleIgnoreIssueOtherPin);
+    assert_eq!(
+        app.ws.config.ignore.non_default_branch,
+        ["github.com/acme/feature"]
+    );
+}

@@ -107,11 +107,15 @@ pub fn build() -> Demo {
             commit(&r, "experiment");
         }),
         Box::new(|| {
+            // two of your own (ignored by default) and one the stash fix made
             let r = clone("stashed");
             for i in 1..=2 {
                 write(&r, "README", &format!("edit {i}\n"));
                 git(&r, &["stash", "-q"]);
             }
+            write(&r, "README", "edit 3\n");
+            let message = format!("{} 2026-01-02 09:30", crate::ops::STASH_PREFIX);
+            git(&r, &["stash", "push", "-q", "-m", &message]);
         }),
         Box::new(|| {
             let r = clone("branches");

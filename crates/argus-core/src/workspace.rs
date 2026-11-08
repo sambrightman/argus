@@ -33,6 +33,8 @@ pub struct Entry {
     pub issues: Vec<Issue>,
     /// Issues the status shows that `[ignore]` turns off for this repo.
     pub ignored_issues: Vec<Issue>,
+    /// For each of the status's stashes, whether `[ignore] stashes` covers it.
+    pub stash_ignored: Vec<bool>,
     /// Every issue of the status, before ignoring.
     all_issues: Vec<Issue>,
 }
@@ -50,6 +52,7 @@ impl Entry {
             status: None,
             issues: vec![],
             ignored_issues: vec![],
+            stash_ignored: vec![],
             all_issues: vec![],
         }
     }
@@ -122,6 +125,7 @@ impl Entry {
             self.issues.clear();
         }
         self.ignored_issues.clear();
+        self.stash_ignored.clear();
         self.status = Some(st);
     }
 }
@@ -294,12 +298,17 @@ impl Workspace {
     /// Ignore (`on`) or stop ignoring `list`'s issue for the repos at
     /// `indices`, pinned to each one's current state where the list pins
     /// (see [`rules::set_issue_ignored`]). Saving config is the caller's.
+    /// Ignore `list`'s issue (`on`) or not for the repos at `indices`,
+    /// pinned to its current value(s) or not: `pin` `None` is the list's
+    /// default ([`IssueList::pins_by_default`]).
     pub fn set_issue_ignored(
         &mut self,
         indices: &[usize],
         list: IssueList,
         on: bool,
+        pin: Option<bool>,
     ) -> Result<(), ConfigError> {
+        let pin = pin.unwrap_or(list.pins_by_default());
         for &i in indices {
             let e = &self.entries[i];
             let values = e.status().map(|s| list.values(s)).unwrap_or_default();
@@ -312,6 +321,7 @@ impl Workspace {
                 &name,
                 &values,
                 on,
+                pin,
             )?;
         }
         self.marks_changed()
@@ -458,13 +468,35 @@ impl Workspace {
             let Some(s) = e.status.as_ref().and_then(|s| s.as_ref().ok()) else {
                 continue;
             };
-            let ignored = |i: &Issue| {
-                IssueList::of(*i).is_some_and(|l| {
-                    self.rules
-                        .ignores_issue(l, e.id.as_ref(), &e.path, &l.values(s))
-                })
-            };
-            let (off, on): (Vec<Issue>, Vec<Issue>) = e.all_issues.iter().partition(|i| ignored(i));
+            let (id, path) = (e.id.as_ref(), &e.path);
+            let (mut on, mut off) = (vec![], vec![]);
+            e.stash_ignored.clear();
+            for &issue in &e.all_issues {
+                match (issue, IssueList::of(issue)) {
+                    // stash by stash: the counted ones and the ignored ones
+                    (Issue::Stashes(n), Some(l)) => {
+                        let values = l.values(s);
+                        e.stash_ignored = values
+                            .iter()
+                            .map(|v| {
+                                self.rules
+                                    .ignores_issue(l, id, path, std::slice::from_ref(v))
+                            })
+                            .collect();
+                        let ignored = e.stash_ignored.iter().filter(|&&i| i).count();
+                        if n > ignored {
+                            on.push(Issue::Stashes(n - ignored));
+                        }
+                        if ignored > 0 {
+                            off.push(Issue::Stashes(ignored));
+                        }
+                    }
+                    (_, Some(l)) if self.rules.ignores_issue(l, id, path, &l.values(s)) => {
+                        off.push(issue)
+                    }
+                    _ => on.push(issue),
+                }
+            }
             e.issues = on;
             e.ignored_issues = off;
         }

@@ -84,3 +84,51 @@ fn flag_badges_show_favourite_new_and_ignored_or_snoozed() {
         [UNICODE.ignored.to_string()]
     );
 }
+
+fn state_badges(r: &std::path::Path, extra: &str) -> Vec<String> {
+    let cfg = format!("roots = ['{}']\n{extra}", r.parent().unwrap().display());
+    let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    ws.scan();
+    badges::state(&ws.entries[0], &UNICODE)
+        .into_iter()
+        .map(|b| b.text)
+        .collect()
+}
+
+#[test]
+fn ignoring_keeps_badges_stating_facts_and_drops_warning_only_ones() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "dev/w");
+    sb.advance_remote("acme", "w", "new.txt");
+    git(&r, &["fetch", "-q"]);
+    argus_core::testkit::write(&r, "README", "stashed\n");
+    git(&r, &["stash", "push", "-q", "-m", "mine"]);
+    let facts = ["↓1", "$1"];
+    for extra in [
+        "[ignore]\nstashes = []",
+        "[ignore]\nbehind = ['**']\nstashes = ['**']",
+    ] {
+        let b = state_badges(&r, extra);
+        assert!(
+            facts.iter().all(|f| b.contains(&f.to_string())),
+            "{extra}: {b:?}"
+        );
+    }
+    // warnings: no upstream for this branch, and another unpushed branch
+    git(&r, &["switch", "-q", "-c", "other"]);
+    commit(&r, "other work");
+    git(&r, &["switch", "-q", "-c", "feat"]);
+    commit(&r, "feat work");
+    let warnings = ["↑?", "»1"];
+    let b = state_badges(&r, "");
+    assert!(warnings.iter().all(|w| b.contains(&w.to_string())), "{b:?}");
+    let b = state_badges(
+        &r,
+        "[ignore]\nno_upstream = ['**']\nunpushed_branches = ['**']",
+    );
+    assert!(
+        !warnings.iter().any(|w| b.contains(&w.to_string())),
+        "{b:?}"
+    );
+}

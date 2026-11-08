@@ -336,15 +336,15 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
     let head = s.head.branch().map(str::to_string);
     match &f.op {
         Op::Stash {
+            message,
             untracked,
             keep_index,
             staged,
             paths,
-            ..
         } => {
+            s.stashes.insert(0, message.clone());
             // only the plain stash the fix makes is simulated in detail
             if *staged || !paths.is_empty() {
-                s.stashes += 1;
                 return s;
             }
             let c = &mut s.changes;
@@ -365,7 +365,6 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
                 }
                 false
             });
-            s.stashes += 1;
         }
         Op::CommitAll { .. } => {
             s.changes = Default::default();

@@ -309,3 +309,36 @@ fn issue_lists_are_saved_into_ignore_by_the_same_rule() {
         "ignore.behind = ['acme/y']\n".replace("'acme/y'", "\"acme/y\"")
     );
 }
+
+#[test]
+fn stashes_default_to_ignoring_all_but_argus_own_and_a_list_replaces_that() {
+    let c = Config::default();
+    assert_eq!(c.ignore.stashes, ["**", "!**@argus *"]);
+    assert_eq!(Config::parse("").unwrap().ignore.stashes, c.ignore.stashes);
+    let c = Config::parse("[ignore]\nstashes = ['acme/a']").unwrap();
+    assert_eq!(c.ignore.stashes, ["acme/a"]);
+    let c = Config::parse("[ignore]\nextend_stashes = ['acme/a']").unwrap();
+    assert_eq!(c.ignore.stashes, ["**", "!**@argus *", "acme/a"]);
+}
+
+#[test]
+fn an_addition_to_a_list_with_a_default_extends_it_rather_than_replacing_it() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path();
+    let main = write(d, "config.toml", "# mine\n");
+    let before = Config::load(&main).unwrap();
+    let mut after = before.clone();
+    after.ignore.stashes.push("acme/a".into());
+    // inverse: a list without a default gets the plain key
+    after.ignore.behind.push("acme/b".into());
+    update_mark_lists(&main, &before, &after).unwrap();
+    let text = std::fs::read_to_string(&main).unwrap();
+    assert!(text.contains("extend_stashes = [\"acme/a\"]"), "{text}");
+    assert!(
+        text.contains("behind = [\"acme/b\"]") && !text.contains("extend_behind"),
+        "{text}"
+    );
+    let c = Config::load(&main).unwrap();
+    assert_eq!(c.ignore.stashes, ["**", "!**@argus *", "acme/a"]);
+    assert_eq!(c.ignore.behind, ["acme/b"]);
+}

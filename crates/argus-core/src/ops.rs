@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::status::InProgress;
 
+/// The first word of the stash fix's messages (`argus 2026-11-08 12:00`),
+/// which `[ignore] stashes` doesn't cover by default.
+pub const STASH_PREFIX: &str = "argus";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
 pub enum Op {
@@ -76,7 +80,7 @@ impl Op {
     pub fn stash(defaults: &crate::config::StashConfig) -> Op {
         Op::Stash {
             message: format!(
-                "argus {}",
+                "{STASH_PREFIX} {}",
                 jiff::Timestamp::now().strftime("%Y-%m-%d %H:%M")
             ),
             untracked: defaults.untracked,

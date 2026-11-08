@@ -190,7 +190,11 @@ fn jobs_run_and_their_results_are_applied() {
     );
     // the status was refreshed after the job
     let s = app.ws.get(&dirty).unwrap().status().unwrap();
-    assert!(s.changes.is_clean() && s.stashes == 1, "{:?}", s.changes);
+    assert!(
+        s.changes.is_clean() && s.stashes.len() == 1,
+        "{:?}",
+        s.changes
+    );
 }
 
 #[test]

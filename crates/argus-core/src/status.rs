@@ -147,7 +147,9 @@ pub struct RepoStatus {
     pub remote_url: Option<String>,
     pub upstream: Option<Tracking>,
     pub changes: Changes,
-    pub stashes: usize,
+    /// Each stash's message, newest (`stash@{0}`) first, without git's
+    /// `On <branch>: ` or `WIP on <branch>: ` prefix.
+    pub stashes: Vec<String>,
     /// Detached HEAD only: commits reachable from HEAD but from no branch,
     /// tag or remote ref (lost to gc once HEAD moves).
     pub detached_orphans: usize,
@@ -564,7 +566,7 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         remote_url,
         upstream,
         changes,
-        stashes: stash_count(repo.common_dir()),
+        stashes: stash_messages(repo.common_dir()),
         detached_orphans,
         in_progress: repo.state().map(map_state),
         branches,
@@ -1146,10 +1148,32 @@ fn detached_orphans(
     Ok(n)
 }
 
-fn stash_count(common_dir: &Path) -> usize {
-    std::fs::read(common_dir.join("logs/refs/stash"))
-        .map(|b| b.lines().filter(|l| !l.is_empty()).count())
-        .unwrap_or(0)
+/// From the stash's reflog: one line per stash, oldest first, the message
+/// after a tab.
+fn stash_messages(common_dir: &Path) -> Vec<String> {
+    let Ok(log) = std::fs::read(common_dir.join("logs/refs/stash")) else {
+        return vec![];
+    };
+    let mut v: Vec<String> = log
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            let l = String::from_utf8_lossy(l);
+            let message = l.split_once('\t').map_or("", |(_, m)| m);
+            stash_message(message).to_string()
+        })
+        .collect();
+    v.reverse();
+    v
+}
+
+/// A stash message without `On <branch>: ` or `WIP on <branch>: ` (branch
+/// names can't contain `:`).
+fn stash_message(full: &str) -> &str {
+    full.strip_prefix("On ")
+        .or_else(|| full.strip_prefix("WIP on "))
+        .and_then(|rest| rest.split_once(": "))
+        .map_or(full, |(_, message)| message)
 }
 
 pub(crate) fn map_state(s: gix::state::InProgress) -> InProgress {

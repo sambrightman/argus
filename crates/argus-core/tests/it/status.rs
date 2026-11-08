@@ -31,7 +31,7 @@ fn clean_clone_has_no_issues() {
         ("origin/main", 0, 0, false)
     );
     assert!(s.changes.is_clean());
-    assert_eq!(s.stashes, 0);
+    assert!(s.stashes.is_empty());
     assert_eq!(s.in_progress, None);
     assert!(s.last_commit.is_some());
     assert_eq!(issues(&s), vec![]);
@@ -317,17 +317,34 @@ fn default_branch_follows_remote_head() {
 }
 
 #[test]
-fn stashes_counted() {
+fn stashes_read_newest_first_by_message_without_the_branch() {
     let sb = Sandbox::new();
     let r = sb.init("r");
-    for i in 0..3 {
+    let wip = git(&r, &["log", "-1", "--format=%h %s"]);
+    for (i, args) in [
+        &["stash", "-q"][..],
+        &["stash", "push", "-q", "-m", "note: later"],
+        &["stash", "push", "-q", "-m", "mail me@host"],
+    ]
+    .into_iter()
+    .enumerate()
+    {
         write(&r, "README", &format!("{i}"));
-        git(&r, &["stash", "-q"]);
+        git(&r, args);
     }
+    git(&r, &["switch", "-q", "--detach"]);
+    write(&r, "README", "detached");
+    git(&r, &["stash", "push", "-q", "-m", "from nowhere"]);
     let s = st(&r);
-    assert_eq!(s.stashes, 3);
+    assert_eq!(
+        s.stashes,
+        ["from nowhere", "mail me@host", "note: later", wip.trim()]
+    );
     assert!(s.changes.is_clean());
-    assert_eq!(issues(&s), vec![Issue::Stashes(3), Issue::NoRemote]);
+    assert_eq!(
+        issues(&s),
+        vec![Issue::Detached, Issue::Stashes(4), Issue::NoRemote]
+    );
 }
 
 #[test]

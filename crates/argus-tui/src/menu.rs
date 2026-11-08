@@ -175,6 +175,11 @@ impl MenuId {
                         "ignore the issue under the cursor (or not)",
                         Action::ToggleIgnoreIssue,
                     ),
+                    item(
+                        'P',
+                        "the same, pinned the other way (stashes to their messages; branch or HEAD not)",
+                        Action::ToggleIgnoreIssueOtherPin,
+                    ),
                     item('z', "snooze for…", Action::Snooze),
                     item('u', "unsnooze", Action::Unsnooze),
                     item('a', "acknowledge new", Action::Ack),

@@ -19,6 +19,9 @@ pub struct DetailLine {
     pub diff: Option<DiffRef>,
     /// The issue this line shows, for ignoring it.
     pub issue: Option<Issue>,
+    /// That issue is ignored: toggling stops ignoring it. (A repo can show
+    /// stashes both ways, with the same count.)
+    pub ignored: bool,
 }
 
 /// A diff row under a file's line: a side's heading, a hunk header, or one
@@ -33,6 +36,7 @@ pub struct DiffRef {
 }
 
 const MAX_FILES: usize = 25;
+const MAX_STASHES: usize = 10;
 
 fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
     DetailLine {
@@ -40,6 +44,7 @@ fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
         file: None,
         diff: None,
         issue: None,
+        ignored: false,
     }
 }
 
@@ -156,6 +161,7 @@ pub fn details(
         let (_, text) = describe(issue, s.default_branch.as_deref());
         v.push(DetailLine {
             issue: Some(*issue),
+            ignored: true,
             ..line(vec![
                 styled(Role::Dim, "issue     "),
                 styled(Role::Dim, format!("{text}  (ignored)")),
@@ -243,11 +249,31 @@ pub fn details(
             v.push(line(vec![styled(Role::Dim, format!("    … {more} more"))]));
         }
     }
-    if s.stashes > 0 {
-        v.push(line(vec![
+    if !s.stashes.is_empty() {
+        let ignored = e.stash_ignored.iter().filter(|&&i| i).count();
+        let mut parts = vec![
             styled(Role::Dim, "stashes   "),
-            styled(Role::Stash, s.stashes.to_string()),
-        ]));
+            styled(Role::Stash, s.stashes.len().to_string()),
+        ];
+        if ignored > 0 {
+            parts.push(styled(Role::Dim, format!(" ({ignored} ignored)")));
+        }
+        v.push(line(parts));
+        for (n, message) in s.stashes.iter().enumerate().take(MAX_STASHES) {
+            let label = format!("          stash@{{{n}}} {message}");
+            v.push(line(vec![if e.stash_ignored.get(n) == Some(&true) {
+                styled(Role::Dim, format!("{label}  (ignored)"))
+            } else {
+                plain(label)
+            }]));
+        }
+        let more = s.stashes.len().saturating_sub(MAX_STASHES);
+        if more > 0 {
+            v.push(line(vec![styled(
+                Role::Dim,
+                format!("          … {more} more"),
+            )]));
+        }
     }
     v
 }

@@ -179,11 +179,21 @@ struct MarkArgs {
     /// Not ignored, whatever patterns in config say.
     #[arg(long)]
     unignore: bool,
-    /// Ignore one issue for these repos (`[ignore] <issue>`), pinned to the
-    /// current branch, tag or commit where the list pins: non-default-branch,
-    /// detached, no-remote, no-upstream, stashes, unpushed-branches, behind.
+    /// Ignore one issue for these repos (`[ignore] <issue>`):
+    /// non-default-branch, detached, no-remote, no-upstream, stashes,
+    /// unpushed-branches, behind. Pinned to the current branch, tag or
+    /// commit where the list pins those; stashes aren't pinned unless
+    /// `--pin` says so.
     #[arg(long, value_name = "ISSUE", value_parser = issue_list)]
     ignore_issue: Vec<IssueList>,
+    /// With `--ignore-issue`: pin to the current value(s), e.g. each
+    /// stash's message, so a new one is flagged again.
+    #[arg(long, overrides_with = "no_pin")]
+    pin: bool,
+    /// With `--ignore-issue`: don't pin, so the issue stays ignored
+    /// whatever the branch, HEAD or stashes become.
+    #[arg(long)]
+    no_pin: bool,
     /// Stop ignoring an issue for these repos.
     #[arg(long, value_name = "ISSUE", value_parser = issue_list)]
     unignore_issue: Vec<IssueList>,
@@ -1278,7 +1288,8 @@ fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> R
     }
     for (lists, on) in [(&m.ignore_issue, true), (&m.unignore_issue, false)] {
         for &l in lists {
-            ws.set_issue_ignored(&sel, l, on)?;
+            let pin = (m.pin || m.no_pin).then_some(m.pin);
+            ws.set_issue_ignored(&sel, l, on, pin)?;
         }
     }
     configfile::update_mark_lists(&ctx.config_path, &before, &ws.config)?;

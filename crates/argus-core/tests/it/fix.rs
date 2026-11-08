@@ -202,7 +202,7 @@ fn one_fix_per_action_stash_then_switch() {
         Head::Branch("feat".into()),
         "not switched in the same action"
     );
-    assert_eq!(s.stashes, 1);
+    assert_eq!(s.stashes.len(), 1);
     assert_eq!(
         apply_fix(&r, &allowed, &StashConfig::default())
             .unwrap()

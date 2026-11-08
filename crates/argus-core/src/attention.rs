@@ -100,8 +100,8 @@ pub fn issues(s: &RepoStatus) -> Vec<Issue> {
         }
         _ => {}
     }
-    if s.stashes > 0 {
-        v.push(Issue::Stashes(s.stashes));
+    if !s.stashes.is_empty() {
+        v.push(Issue::Stashes(s.stashes.len()));
     }
     if s.remote.is_none() && !s.bare {
         v.push(Issue::NoRemote);
