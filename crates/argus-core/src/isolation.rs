@@ -29,6 +29,11 @@ pub(crate) fn open(path: &Path) -> gix::Result<gix::Repository> {
             gix::open::Options::isolated().permissions(permissions),
         )
     } else {
-        gix::open(path)
+        // Ask git where its own installation config is, as git reads it
+        // (e.g. Homebrew's `/opt/homebrew/etc/gitconfig`); gix otherwise
+        // assumes `/etc/gitconfig`. One `git config -l` per process.
+        let mut options = gix::open::Options::default();
+        options.permissions.config.git_binary = true;
+        gix::open_opts(path, options)
     }
 }

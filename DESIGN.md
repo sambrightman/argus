@@ -119,6 +119,12 @@ Two findings:
   cost about 1 ms per refresh of 200 repos. Missed: an included file that
   didn't exist at open. The CLI opens each repo once anyway and doesn't
   keep them.
+- gix assumes the system config is `/etc/gitconfig` unless allowed to ask
+  git (`git_binary`), so it never read e.g. Homebrew's
+  `/opt/homebrew/etc/gitconfig`. argus now asks: one `git config -l` per
+  process, plus reading that file for each repo, costs 5.5 ms on 200 repos
+  (+9%) and 17 ms on 1,000 (+5%). Starting the query during discovery
+  didn't hide it.
 
 ## 5. Concepts
 
