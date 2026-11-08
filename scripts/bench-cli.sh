@@ -12,10 +12,12 @@
 #   scripts/bench-cli.sh --export out.json   # hyperfine's JSON, for comparing later
 #   ARGUS_BIN=/path/to/argus scripts/bench-cli.sh   # time another build
 #
-# Trees are cached under target/bench/ (keyed by size and the function that
-# builds them), so only the first run pays for building one; so are builds
-# for --compare, by commit. Sustained runs on macOS can swing between two
-# speeds (scheduler and power state): compare builds in one run (--compare).
+# Trees are cached under target/bench.noindex/ (keyed by size and the
+# function that builds them), so only the first run pays for building one;
+# so are builds for --compare, by commit. The `.noindex` suffix keeps
+# Spotlight out: indexing fresh trees slows every system call in the walk.
+# Sustained runs on macOS can swing between two speeds (scheduler and power
+# state): compare builds in one run (--compare).
 # --discovery with --compare is fair only back to the commit that made the
 # discover example use argus's thread count (before, it used every CPU).
 set -euo pipefail
@@ -32,7 +34,7 @@ while (($#)); do
         --discovery) discovery=true; shift ;;
         --compare) compare=$2; shift 2 ;;
         --export) export_to=$2; shift 2 ;;
-        -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,/^[^#]/p' "$0" | sed -n 's/^# \{0,1\}//p'; exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
     esac
 done
@@ -40,7 +42,7 @@ done
 command -v hyperfine >/dev/null || { echo "needs hyperfine: brew install hyperfine (or cargo install --locked hyperfine)" >&2; exit 1; }
 
 here=$(cd "$(dirname "$0")/.." && pwd)
-bench=$here/target/bench
+bench=$here/target/bench.noindex
 
 # `--export out.json` as hyperfine arguments, with `-suffix` before `.json`
 # when one run writes several files.
