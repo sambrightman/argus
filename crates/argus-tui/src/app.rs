@@ -970,14 +970,11 @@ impl App {
                         _ => None,
                     })
                     .collect();
-                let mut shown = names[..names.len().min(3)].join(", ");
-                if names.len() > 3 {
-                    shown.push_str(&format!(" and {} more", names.len() - 3));
-                }
                 self.mode = Mode::Confirm {
                     question: format!(
-                        "Delete {} merged branch(es): {shown}?{}",
+                        "Delete {} merged branch(es): {}?{}",
                         names.len(),
+                        fix::list(&names, 3),
                         p.note()
                     ),
                     then: Confirmed::Ops(ops),

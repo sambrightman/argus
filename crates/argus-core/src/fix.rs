@@ -358,12 +358,9 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
     }
 
     for b in s.branches.iter().filter(|b| !b.is_head) {
-        // where `push` would push it, if that exists
-        let target = match (&b.own, &b.upstream) {
-            (Some(o), _) => Some(o),
-            (None, Some(t)) if b.upstream_is_same_name() => Some(t),
-            _ => None,
-        };
+        // where `push` would push it, if that exists (`remote_of` leaves out
+        // a differently named upstream)
+        let target = b.own.as_ref().or(b.upstream.as_ref());
         if let Some(t) = target.filter(|t| !t.gone && t.ahead > 0)
             && let Some(remote) = remote_of(t, &b.name)
         {
@@ -485,7 +482,7 @@ fn diverged_from(t: &Tracking) -> Option<String> {
 }
 
 /// `a, b, c and 2 more`
-fn list(items: &[String], max: usize) -> String {
+pub fn list(items: &[String], max: usize) -> String {
     let mut s = items[..items.len().min(max)].join(", ");
     if items.len() > max {
         s.push_str(&format!(" and {} more", items.len() - max));
@@ -791,6 +788,14 @@ pub fn apply_fix(
 mod tests {
     use super::*;
     use crate::attention::Issue;
+
+    #[test]
+    fn lists_say_how_many_more() {
+        let items = |n: usize| (1..=n).map(|i| i.to_string()).collect::<Vec<_>>();
+        assert_eq!(list(&items(3), 3), "1, 2, 3");
+        assert_eq!(list(&items(4), 3), "1, 2, 3 and 1 more");
+        assert_eq!(list(&items(1), 3), "1");
+    }
 
     #[test]
     fn ignored_states_turn_off_the_fix_that_would_undo_them() {

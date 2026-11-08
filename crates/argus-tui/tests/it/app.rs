@@ -1928,3 +1928,55 @@ fn fix_actions_say_what_they_left_out() {
     assert!(app.act(Action::AutoFix(Scope::Selected)).is_empty());
     assert_eq!(msg(&app), "nothing started · 1 busy");
 }
+
+#[test]
+fn explanations_when_nothing_applies() {
+    let (sb, mut app) = setup("");
+    let msg = |app: &App| app.message.as_ref().unwrap().0.clone();
+    app.act(Action::Bottom);
+    assert_eq!(current(&app), "acme/clean");
+    assert!(app.act(Action::AutoFix(Scope::Selected)).is_empty());
+    assert_eq!(
+        msg(&app),
+        "no auto-fixes (push, push-branches, switch-default, reattach) apply"
+    );
+    assert!(app.act(Action::AbortOperation).is_empty());
+    assert_eq!(msg(&app), "nothing in progress");
+    assert!(app.act(Action::DeleteMergedBranches).is_empty());
+    assert_eq!(msg(&app), "no merged branches to delete");
+    assert!(app.act(Action::AddRemote).is_empty());
+    assert_eq!(msg(&app), "the selection has remotes");
+    assert!(matches!(app.mode, Mode::Normal));
+    // pulling a branch whose upstream is gone only fetches
+    let f = sb.path("dev/feature");
+    git(&f, &["push", "-q", "origin", "--delete", "feat"]);
+    app.ws.refresh(&f);
+    while current(&app) != "acme/feature" {
+        app.act(Action::Up);
+    }
+    match app.act(Action::Pull(Scope::Selected)).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(j[0].op, Op::Fetch),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn prompts_say_what_they_ask_for() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let c = sb.path("dev/clean");
+        git(&c, &["switch", "-q", "--detach", "main"]);
+        commit(&c, "adrift");
+    });
+    while current(&app) != "acme/clean" {
+        app.act(Action::Down);
+    }
+    app.act(Action::CreateBranch);
+    for c in "res".chars() {
+        app.on_key(key(c));
+    }
+    let screen = render(&mut app, 80, 10);
+    assert!(
+        screen.contains("new branch at HEAD (1 repo(s)): res"),
+        "{screen}"
+    );
+}

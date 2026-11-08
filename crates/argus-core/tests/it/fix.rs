@@ -714,6 +714,7 @@ fn a_branch_pulling_from_main_is_pushed_to_its_own_name() {
     );
     assert!(st(&r).branches[0].own.as_ref().unwrap().gone);
     assert!(of_kind(&r, FixKind::Publish).is_empty());
+    assert!(of_kind(&r, FixKind::Push).is_empty());
     git(&r, &["switch", "-q", "feat"]);
     let before = st(&r);
     let a = apply_fix(&r, &[FixKind::Publish], &StashConfig::default())
@@ -725,6 +726,10 @@ fn a_branch_pulling_from_main_is_pushed_to_its_own_name() {
         predicted.branches,
         st(&r).branches,
         "the prediction matches"
+    );
+    assert!(
+        of_kind(&r, FixKind::Push).is_empty(),
+        "nothing more to push"
     );
     assert_eq!(
         forge_tip(&sb, "feat"),
@@ -911,6 +916,15 @@ fn a_detached_head_at_a_branch_is_reattached() {
     use FixKind::*;
     assert_chain_matches_reality(&r, &[Reattach], &[Reattach]);
     assert_eq!(head(&r), Head::Branch("main".into()));
+    // a single other branch here: that one
+    git(&r, &["switch", "-q", "-c", "solo"]);
+    commit(&r, "solo");
+    git(&r, &["switch", "-q", "--detach", "solo"]);
+    assert_eq!(
+        of_kind(&r, FixKind::Reattach),
+        [("switch solo".to_string(), None)]
+    );
+    git(&r, &["switch", "-q", "main"]);
     // several branches here: the default branch wins…
     git(&r, &["branch", "a"]);
     git(&r, &["switch", "-q", "--detach", "main"]);
@@ -1230,4 +1244,31 @@ fn merged_only_into_a_local_main_is_not_pushed() {
             .iter()
             .any(|i| matches!(i, Issue::UnpushedBranches(_)))
     );
+}
+
+#[test]
+fn conflicts_with_nothing_in_progress_get_no_fixes() {
+    // a stash pop that conflicted: no operation to abort, a human resolves it
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "README", "stashed\n");
+    git(&r, &["stash", "push", "-q"]);
+    write(&r, "README", "committed\n");
+    commit(&r, "moved on");
+    assert!(!argus_core::testkit::git_may_fail(&r, &["stash", "pop"]));
+    let s = st(&r);
+    assert!(s.changes.conflicted > 0 && s.in_progress.is_none());
+    assert_eq!(kinds(&r), []);
+}
+
+#[test]
+fn alternatives_are_what_the_chain_leaves_out() {
+    let sb = Sandbox::new();
+    let r = switch_or_stash(&sb);
+    let s = st(&r);
+    let p = argus_core::fix::preview(&s, &[FixKind::SwitchDefault], &StashConfig::default());
+    let kinds_of = |v: &[argus_core::fix::Fix]| v.iter().map(|f| f.kind).collect::<Vec<_>>();
+    assert_eq!(kinds_of(&p.chain), [FixKind::SwitchDefault]);
+    // stash is there, switch-default isn't repeated, commit needs input
+    assert_eq!(kinds_of(&p.alternatives), [FixKind::Stash]);
 }
