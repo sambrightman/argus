@@ -84,7 +84,8 @@ pub fn issues(s: &RepoStatus) -> Vec<Issue> {
         .filter(|b| !b.is_head && b.is_unpushed())
         .count();
     // Branches are shared between worktrees; the main checkout reports them.
-    if others > 0 && !s.linked_worktree {
+    // Without a remote, nothing is pushed: `NoRemote` says it once.
+    if others > 0 && !s.linked_worktree && s.remote.is_some() {
         v.push(Issue::UnpushedBranches(others));
     }
     match &s.head {

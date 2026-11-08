@@ -255,7 +255,7 @@ Two findings:
   the destructive kinds, `abort` and `delete-branches`, are confirmed
   first in the TUI and never chosen automatically):
   * `switch-default`: on a non-default branch, worktree clean, branch fully
-    pushed (or merged into default) → `git switch <default>`.
+    pushed (or merged into default, if only locally) → `git switch <default>`.
   * `push`: ahead of upstream, nothing behind → `git push`. When `git
     push` would go to a branch other than the upstream and that's the
     same-named one (status's `own`: `push.default` `current` on a branch
@@ -407,6 +407,12 @@ rendering is snapshot-tested via `TestBackend`.
   to `origin/<branch>` was flagged as unpushed. Worse, a `push` fix was
   offered that would have pushed to the upstream owner's repo. `push` now
   requires a same-named upstream. `↑n` still shows git's ahead count.
+  Being merged into the default branch doesn't make work pushed: when the
+  remote has no default branch yet (just added, say), that's the local one,
+  and everything merged into it was counted as safe, the default branch
+  itself included. `switch-default` still accepts locally merged work, since
+  switching to the branch that holds it hides nothing. Without a remote,
+  other branches aren't flagged as unpushed: `no remote` says it once.
 * **Untracked collapsing is done by argus.** gix's collapsed directory walk
   reported a directory holding only ignored files and empty directories as
   untracked (seen in an Xcode project). We ask gix for individual files and

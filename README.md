@@ -232,14 +232,16 @@ favourites first, then by severity, then by amount of change:
 
 conflicts / in-progress merge or rebase › commits on a detached HEAD held by no
 ref › **unpushed** work (on *no* remote, so a fork branch pushed to `origin`
-while tracking `upstream/main` is fine) › uncommitted changes › upstream
+while tracking `upstream/main` is fine, and work merged into a `main` that
+isn't on the remote isn't) › uncommitted changes › upstream
 deleted with unmerged work › unpublished branch › other local branches with
 unpushed work › detached HEAD › not on default branch › stashes › no remote ›
 behind upstream (on its own, not counted as needing attention: a pull fixes it).
 
 Fixes are planned from status. Automatic ones are never destructive; the
 few that are ask first (below) and are never automatic. `switch-default`
-needs a clean tracked tree and nothing unpushed. `push` (a default auto-fix) is fast-forward only,
+needs a clean tracked tree and nothing unpushed (or the branch merged into the
+default branch). `push` (a default auto-fix) is fast-forward only,
 and only to a same-named branch, never to a differently named upstream.
 Nothing is offered during a conflict.
 

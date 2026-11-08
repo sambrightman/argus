@@ -60,15 +60,10 @@ pub struct BranchInfo {
 }
 
 impl BranchInfo {
-    /// Has commits that exist on no remote we know of (and aren't merged).
+    /// Has commits that exist on no remote we know of. (Being merged into
+    /// the default branch doesn't count: that may be only the local one.)
     pub fn is_unpushed(&self) -> bool {
-        if self.merged {
-            return false;
-        }
-        match self.unpushed {
-            Some(n) => n > 0,
-            None => true,
-        }
+        self.unpushed.is_none_or(|n| n > 0)
     }
 
     /// The upstream is the same-named branch on some remote, so a plain

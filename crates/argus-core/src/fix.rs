@@ -184,8 +184,9 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
 
     if let (Some(b), Some(default)) = (head_branch, &s.default_branch) {
         // Switching never loses commits, but it hides them; only do it when
-        // the work is merged or exists on a remote.
-        let safe = head_info.is_some_and(|h| !h.is_unpushed());
+        // the work is merged (if only locally, switching shows it) or exists
+        // on a remote.
+        let safe = head_info.is_some_and(|h| h.merged || !h.is_unpushed());
         if b != default && !tracked_dirty && safe {
             v.push(Fix {
                 blocked: None,

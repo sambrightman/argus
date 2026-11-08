@@ -1175,3 +1175,59 @@ fn default_auto_fixes_push_other_branches_and_reattach() {
     assert_chain_matches_reality(&r, &auto, &[PushBranches, Reattach]);
     assert_eq!(head(&r), Head::Branch("main".into()));
 }
+
+#[test]
+fn merged_only_into_a_local_main_is_not_pushed() {
+    use argus_core::attention::{Issue, issues};
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    git(&r, &["switch", "-q", "-c", "feat"]);
+    commit(&r, "feat");
+    git(&r, &["switch", "-q", "main"]);
+    git(&r, &["merge", "-q", "feat"]);
+    // no remote: nothing is pushed, and no_remote says it once
+    let is = issues(&st(&r));
+    assert!(is.contains(&Issue::NoRemote), "{is:?}");
+    assert!(
+        !is.iter().any(|i| matches!(i, Issue::UnpushedBranches(_))),
+        "{is:?}"
+    );
+    // a remote with nothing on it yet: main and feat are on no remote
+    let bare = sb.path("empty.git");
+    std::fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "-q", "--bare"]);
+    git(&r, &["remote", "add", "origin", bare.to_str().unwrap()]);
+    let s = st(&r);
+    assert!(
+        s.branches.iter().all(|b| b.merged && b.is_unpushed()),
+        "{:?}",
+        s.branches
+    );
+    let is = issues(&s);
+    assert!(is.contains(&Issue::NoUpstream), "{is:?}");
+    assert!(is.contains(&Issue::UnpushedBranches(1)), "{is:?}");
+    assert_eq!(
+        of_kind(&r, FixKind::Publish),
+        [("push -u origin main".to_string(), None)]
+    );
+    // leaving feat for main hides nothing: it's merged, if only locally
+    git(&r, &["switch", "-q", "feat"]);
+    let k = kinds(&r);
+    assert!(
+        k.contains(&FixKind::SwitchDefault) && k.contains(&FixKind::Publish),
+        "{k:?}"
+    );
+    // once main is pushed, feat's commits are on the remote too
+    git(&r, &["push", "-q", "origin", "main"]);
+    let s = st(&r);
+    assert!(
+        s.branches.iter().all(|b| !b.is_unpushed()),
+        "{:?}",
+        s.branches
+    );
+    assert!(
+        !issues(&s)
+            .iter()
+            .any(|i| matches!(i, Issue::UnpushedBranches(_)))
+    );
+}
