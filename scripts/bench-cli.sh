@@ -97,12 +97,6 @@ label_rev() {
     if [[ $sha == "$compare"* ]]; then echo "$sha"; else echo "$compare ($sha)"; fi
 }
 
-# git isolated from the user's config, with fixed identities and dates, so
-# trees are the same on every machine
-export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
-export GIT_AUTHOR_NAME=bench GIT_AUTHOR_EMAIL=bench@example.com
-export GIT_COMMITTER_NAME=bench GIT_COMMITTER_EMAIL=bench@example.com
-export GIT_AUTHOR_DATE=2026-01-01T00:00:00Z GIT_COMMITTER_DATE=2026-01-01T00:00:00Z
 
 key_of() { declare -f "$@" | git hash-object --stdin | cut -c1-8; }
 
@@ -113,7 +107,17 @@ cached_tree() {
         echo "building $dir ..." >&2
         rm -rf "$dir.tmp"
         mkdir -p "$dir.tmp"
-        "$make" "$dir.tmp" "$n"
+        # git isolated from the user's config, with fixed identities and
+        # dates, so trees are the same on every machine. Only while
+        # building: argus is timed with the user's own git config, as it
+        # runs for real.
+        (
+            export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+            export GIT_AUTHOR_NAME=bench GIT_AUTHOR_EMAIL=bench@example.com
+            export GIT_COMMITTER_NAME=bench GIT_COMMITTER_EMAIL=bench@example.com
+            export GIT_AUTHOR_DATE=2026-01-01T00:00:00Z GIT_COMMITTER_DATE=2026-01-01T00:00:00Z
+            "$make" "$dir.tmp" "$n"
+        )
         mv "$dir.tmp" "$dir"
     fi
 }
