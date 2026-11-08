@@ -778,3 +778,94 @@ fn an_ignored_issue_stops_counting_and_a_pin_to_another_value_doesnt() {
     let e = entry("[ignore]\noff_default = ['acme/w@release']");
     assert!(e.issues.contains(&Issue::OffDefault) && e.ignored_issues.is_empty());
 }
+
+#[test]
+fn fix_kinds_leave_out_those_undoing_an_ignored_state() {
+    use argus_core::fix::FixKind;
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "dev/w");
+    git(&r, &["switch", "-q", "-c", "feat"]);
+    let kinds = [FixKind::SwitchDefault, FixKind::Push];
+    let e = ws(&sb, "[ignore]\noff_default = ['acme/w']").entries[0].clone();
+    assert_eq!(e.fix_kinds(&kinds), [FixKind::Push]);
+    let e = ws(&sb, "").entries[0].clone();
+    assert_eq!(e.fix_kinds(&kinds), kinds);
+}
+
+#[test]
+fn ignoring_an_issue_through_the_workspace_pins_it_and_resolves_it() {
+    use argus_core::rules::IssueList;
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "dev/w");
+    git(&r, &["switch", "-q", "-c", "feat"]);
+    let mut w = ws(&sb, "");
+    w.set_issue_ignored(&[0], IssueList::OffDefault, true)
+        .unwrap();
+    assert_eq!(w.config.ignore.off_default, ["github.com/acme/w@feat"]);
+    assert_eq!(w.entries[0].ignored_issues, [Issue::OffDefault]);
+    w.set_issue_ignored(&[0], IssueList::OffDefault, false)
+        .unwrap();
+    assert!(w.config.ignore.off_default.is_empty());
+    assert!(w.entries[0].issues.contains(&Issue::OffDefault));
+}
+
+#[test]
+fn detached_values_are_its_tags_describe_and_commit() {
+    use argus_core::rules::IssueList;
+    let sb = Sandbox::new();
+    let r = sb.init("dev/r");
+    git(&r, &["tag", "v1"]);
+    git(&r, &["switch", "-q", "--detach"]);
+    let id = git(&r, &["rev-parse", "HEAD"]);
+    let id = id.trim();
+    let w = ws(&sb, "");
+    let v = IssueList::Detached.values(w.entries[0].status().unwrap());
+    assert_eq!(v, ["v1".to_string(), id[..7].to_string(), id.to_string()]);
+    // past the tag: the describe instead
+    commit(&r, "after");
+    git(&r, &["switch", "-q", "--detach"]);
+    let w = ws(&sb, "");
+    let s = w.entries[0].status().unwrap();
+    let v = IssueList::Detached.values(s);
+    assert_eq!(v[0], s.describe.clone().unwrap());
+    // inverse: on a branch there's nothing to pin
+    git(&r, &["switch", "-q", "main"]);
+    let w = ws(&sb, "");
+    assert!(
+        IssueList::Detached
+            .values(w.entries[0].status().unwrap())
+            .is_empty()
+    );
+}
+
+#[test]
+fn the_configured_describe_limit_reaches_status() {
+    let sb = Sandbox::new();
+    let r = sb.init("dev/r");
+    git(&r, &["tag", "v1"]);
+    commit(&r, "a");
+    commit(&r, "b");
+    git(&r, &["switch", "-q", "--detach"]);
+    let s = |cfg: &str| ws(&sb, cfg).entries[0].status().unwrap().clone();
+    assert!(s("describe_limit = 1").describe_gave_up);
+    assert!(s("describe_limit = 2").describe.is_some());
+}
+
+#[test]
+fn refreshing_one_repo_rereads_its_status() {
+    let sb = Sandbox::new();
+    let r = sb.init("dev/r");
+    let mut w = ws(&sb, "");
+    let dirty = |w: &Workspace| {
+        w.entries[0]
+            .issues
+            .iter()
+            .any(|i| matches!(i, Issue::Dirty(1)))
+    };
+    assert!(!dirty(&w));
+    write(&r, "README", "changed\n");
+    w.refresh(&r);
+    assert!(dirty(&w), "{:?}", w.entries[0].issues);
+}

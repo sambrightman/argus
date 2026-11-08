@@ -46,15 +46,6 @@ pub enum Mark {
 impl Mark {
     pub const ALL: [Mark; 3] = [Mark::Favourite, Mark::Sync, Mark::Ignore];
 
-    /// The name shown and used in messages.
-    pub fn name(self) -> &'static str {
-        match self {
-            Mark::Favourite => "favourite",
-            Mark::Sync => "sync",
-            Mark::Ignore => "ignore",
-        }
-    }
-
     /// The config key, dotted.
     pub fn path(self) -> &'static str {
         match self {
@@ -643,6 +634,46 @@ mod tests {
             IssueList::Stashes,
             &[]
         ));
+    }
+
+    #[test]
+    fn issue_lists_by_name_and_by_issue() {
+        assert_eq!(
+            IssueList::from_name("off-default"),
+            Some(IssueList::OffDefault)
+        );
+        assert_eq!(
+            IssueList::from_name("off_default"),
+            Some(IssueList::OffDefault)
+        );
+        assert_eq!(
+            IssueList::from_name("unpushed-branches"),
+            Some(IssueList::UnpushedBranches)
+        );
+        assert_eq!(IssueList::from_name("dirty"), None);
+        for l in IssueList::ALL {
+            assert_eq!(IssueList::from_name(l.name()), Some(l));
+        }
+        for (issue, list) in [
+            (Issue::OffDefault, IssueList::OffDefault),
+            (Issue::Detached, IssueList::Detached),
+            (Issue::NoRemote, IssueList::NoRemote),
+            (Issue::NoUpstream, IssueList::NoUpstream),
+            (Issue::Stashes(2), IssueList::Stashes),
+            (Issue::UnpushedBranches(1), IssueList::UnpushedBranches),
+            (Issue::Behind(4), IssueList::Behind),
+        ] {
+            assert_eq!(IssueList::of(issue), Some(list), "{issue:?}");
+        }
+        // inverse: issues that risk losing work
+        for i in [
+            Issue::Conflicts(1),
+            Issue::InProgress,
+            Issue::DetachedCommits(1),
+            Issue::Dirty(3),
+        ] {
+            assert_eq!(IssueList::of(i), None, "{i:?}");
+        }
     }
 
     #[test]

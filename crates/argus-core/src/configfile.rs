@@ -951,6 +951,8 @@ mod tests {
             r.added.is_empty() && r.already.len() == 1,
             "already present"
         );
+        let r = add_roots(&p, &[a.clone(), a.clone()]).unwrap();
+        assert_eq!(r.already.len(), 1, "reported once");
         assert_eq!(
             add_roots(&p, &[b.clone(), b.clone()]).unwrap().added.len(),
             1,

@@ -59,3 +59,28 @@ fn commits_only_on_a_detached_head_have_their_own_icon() {
     );
     assert_ne!(UNICODE.detached_commits, UNICODE.detached);
 }
+
+#[test]
+fn flag_badges_show_favourite_new_and_ignored_or_snoozed() {
+    let sb = Sandbox::new();
+    let r = sb.init("dev/r");
+    let cfg = |extra: &str| format!("roots = ['{}']\n{extra}", r.parent().unwrap().display());
+    let texts = |extra: &str| {
+        let mut ws = Workspace::new(Config::parse(&cfg(extra)).unwrap(), State::default()).unwrap();
+        ws.scan();
+        badges::flags(&ws.entries[0], &UNICODE)
+            .into_iter()
+            .map(|b| b.text)
+            .collect::<Vec<_>>()
+    };
+    assert!(texts("").is_empty());
+    let path = r.display().to_string();
+    assert_eq!(
+        texts(&format!("favourite = ['{path}']")),
+        [UNICODE.favourite.to_string()]
+    );
+    assert_eq!(
+        texts(&format!("ignore.repos = ['{path}']")),
+        [UNICODE.ignored.to_string()]
+    );
+}

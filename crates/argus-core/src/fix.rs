@@ -481,3 +481,28 @@ pub fn apply_fix(
     let outcome = ops::run(path, &fix.op);
     Ok(Some(Applied { fix, outcome }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attention::Issue;
+
+    #[test]
+    fn ignored_states_turn_off_the_fix_that_would_undo_them() {
+        assert_eq!(
+            turned_off_by(&[Issue::OffDefault]),
+            [FixKind::SwitchDefault]
+        );
+        assert_eq!(turned_off_by(&[Issue::Detached]), [FixKind::SwitchDefault]);
+        assert_eq!(turned_off_by(&[Issue::NoUpstream]), [FixKind::Publish]);
+        assert_eq!(turned_off_by(&[Issue::Behind(3)]), [FixKind::Pull]);
+        // inverse: issues with no fix to undo them
+        for i in [
+            Issue::Stashes(1),
+            Issue::NoRemote,
+            Issue::UnpushedBranches(2),
+        ] {
+            assert!(turned_off_by(&[i]).is_empty(), "{i:?}");
+        }
+    }
+}

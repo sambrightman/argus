@@ -810,6 +810,28 @@ fn running_out_of_history_before_the_limit_is_a_final_answer() {
 }
 
 #[test]
+fn a_history_exactly_the_limit_long_with_no_tag_is_a_final_answer() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    commit(&r, "b");
+    commit(&r, "c"); // 3 commits
+    git(&r, &["switch", "-q", "--orphan", "other"]);
+    commit(&r, "other");
+    git(&r, &["tag", "elsewhere"]);
+    git(&r, &["switch", "-q", "--detach", "main"]);
+    let s = st_limit(&r, 3);
+    assert_eq!((s.describe, s.describe_gave_up), (None, false));
+    // one short of the history: it might be further back
+    let r2 = sb.init("r2");
+    commit(&r2, "b");
+    commit(&r2, "c");
+    git(&r2, &["tag", "elsewhere", "HEAD~2"]);
+    git(&r2, &["switch", "-q", "--detach"]);
+    // the tag is 2 back: a limit of 1 gives up
+    assert!(st_limit(&r2, 1).describe_gave_up);
+}
+
+#[test]
 fn describing_fully_finds_a_tag_past_the_limit_and_is_remembered() {
     use argus_core::status::describe_fully;
     let sb = Sandbox::new();
