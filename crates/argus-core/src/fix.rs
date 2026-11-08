@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::StashConfig;
 use crate::ops::{self, Op, OpOutcome};
-use crate::status::{self, BranchInfo, Head, Integration, RepoStatus, StatusOptions, Tracking};
+use crate::status::{
+    self, BranchInfo, Head, Integration, PullBy, RepoStatus, StatusOptions, Tracking,
+};
 
 #[derive(
     Debug,
@@ -158,8 +160,12 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
                 Some("uncommitted changes".to_string())
             } else if diverged {
                 match &s.integration {
-                    Some(Integration::Clean) => {
-                        reason.push_str("; merges cleanly");
+                    Some(Integration::Clean(PullBy::Merge)) => {
+                        reason.push_str("; merges cleanly, adding a merge commit");
+                        None
+                    }
+                    Some(Integration::Clean(PullBy::Rebase)) => {
+                        reason.push_str("; rebases cleanly");
                         None
                     }
                     Some(Integration::Conflicts(paths)) => {
@@ -399,14 +405,21 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
             }
         }
         Op::Pull => {
-            s.integration = None;
+            // a diverged branch that merges gains the merge commit
+            let merge = matches!(
+                s.integration.take(),
+                Some(Integration::Clean(PullBy::Merge))
+            ) as usize;
             if let Some(t) = &mut s.upstream {
                 t.behind = 0;
+                t.ahead += merge;
             }
-            if let Some(b) = head_info(&mut s, head.as_deref())
-                && let Some(t) = &mut b.upstream
-            {
-                t.behind = 0;
+            if let Some(b) = head_info(&mut s, head.as_deref()) {
+                b.unpushed = b.unpushed.map(|n| n + merge);
+                if let Some(t) = &mut b.upstream {
+                    t.behind = 0;
+                    t.ahead += merge;
+                }
             }
         }
         Op::FastForward { branch, .. } => {

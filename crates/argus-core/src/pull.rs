@@ -57,7 +57,7 @@ pub fn plan_updates(ws: &Workspace) -> Vec<Job> {
             (Head::Branch(_), Some(t), _)
                 if !t.gone
                     && s.in_progress.is_none()
-                    && matches!(s.integration, None | Some(Integration::Clean)) =>
+                    && matches!(s.integration, None | Some(Integration::Clean(_))) =>
             {
                 Op::Pull
             }

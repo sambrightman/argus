@@ -174,13 +174,22 @@ pub struct RepoStatus {
 #[serde(tag = "result", content = "detail", rename_all = "kebab-case")]
 pub enum Integration {
     /// Merging the upstream applies without conflicts.
-    Clean,
+    Clean(PullBy),
     /// Paths that would conflict.
     Conflicts(Vec<String>),
     /// `git pull` would refuse, e.g. no `pull.rebase`/`pull.ff` setting.
     Refused(String),
     /// Prediction failed (e.g. git older than 2.38).
     Unknown(String),
+}
+
+/// How `git pull` reconciles a diverged branch: a merge adds a merge
+/// commit, a rebase replays the branch's commits on top.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PullBy {
+    Merge,
+    Rebase,
 }
 
 impl RepoStatus {
@@ -595,9 +604,10 @@ fn integration(
         return None;
     }
     let dir = repo.workdir()?;
-    if let Some(why) = pull_refusal(repo, branch) {
-        return Some(Integration::Refused(why));
-    }
+    let by = match pull_by(repo, branch) {
+        Ok(by) => by,
+        Err(why) => return Some(Integration::Refused(why)),
+    };
     let o = crate::ops::git_in(
         dir,
         &[
@@ -610,7 +620,7 @@ fn integration(
         ],
     );
     Some(match o.code {
-        Some(0) => Integration::Clean,
+        Some(0) => Integration::Clean(by),
         Some(1) => Integration::Conflicts(
             o.output
                 .lines()
@@ -623,26 +633,30 @@ fn integration(
     })
 }
 
-/// Why `git pull` would refuse to reconcile a diverged branch, if it would:
-/// without `branch.<b>.rebase`, `pull.rebase` or `pull.ff` it asks how to,
-/// and `pull.ff = only` refuses outright. (Conservative: `only` is treated as
-/// refusing even alongside a rebase setting.)
-fn pull_refusal(repo: &gix::Repository, branch: &str) -> Option<String> {
+/// How `git pull` would reconcile a diverged branch, or why it would
+/// refuse: without `branch.<b>.rebase`, `pull.rebase` or `pull.ff` it asks
+/// how to, and `pull.ff = only` refuses outright. (Conservative: `only` is
+/// treated as refusing even alongside a rebase setting.) The branch's
+/// setting wins over `pull.rebase`; any non-boolean value (`merges`,
+/// `interactive`) is a kind of rebase.
+fn pull_by(repo: &gix::Repository, branch: &str) -> Result<PullBy, String> {
     let cfg = repo.config_snapshot();
     let ff = cfg
         .string("pull.ff")
         .map(|v| v.to_str_lossy().to_lowercase());
     if ff.as_deref() == Some("only") {
-        return Some("pull.ff = only refuses diverged branches".into());
+        return Err("pull.ff = only refuses diverged branches".into());
     }
-    let rebase = cfg
-        .string(format!("branch.{branch}.rebase").as_str())
-        .is_some()
-        || cfg.string("pull.rebase").is_some();
-    if !rebase && ff.is_none() {
-        return Some("git pull would refuse: set pull.rebase (or pull.ff) to choose".into());
+    let rebase = |key: &str| {
+        cfg.string(key)
+            .map(|_| cfg.try_boolean(key).ok().flatten().unwrap_or(true))
+    };
+    match rebase(&format!("branch.{branch}.rebase")).or_else(|| rebase("pull.rebase")) {
+        Some(true) => Ok(PullBy::Rebase),
+        Some(false) => Ok(PullBy::Merge),
+        None if ff.is_some() => Ok(PullBy::Merge),
+        None => Err("git pull would refuse: set pull.rebase (or pull.ff) to choose".into()),
     }
-    None
 }
 
 fn head_of(head: &gix::Head<'_>) -> Head {

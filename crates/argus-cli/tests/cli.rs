@@ -597,8 +597,9 @@ fn dry_run_explains_why_a_pull_is_not_automatic() {
         .unwrap();
     assert_eq!(
         String::from_utf8(o.stdout).unwrap(),
-        "acme/w: would pull (diverged from origin/feat: 1 ahead, 1 behind; merges cleanly)\n  \
-         then: push (1 commit(s) ahead of origin/feat)\n"
+        "acme/w: would pull (diverged from origin/feat: 1 ahead, 1 behind; merges cleanly, \
+         adding a merge commit)\n  \
+         then: push (2 commit(s) ahead of origin/feat)\n"
     );
 }
 

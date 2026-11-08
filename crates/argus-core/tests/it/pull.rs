@@ -4,9 +4,9 @@
 use std::path::Path;
 
 use argus_core::config::StashConfig;
-use argus_core::fix::{Fix, FixKind, apply_fix, chain, choose, plan};
+use argus_core::fix::{Fix, FixKind, apply_fix, chain, choose, plan, simulate};
 use argus_core::ops::{self, Op};
-use argus_core::status::{InProgress, Integration, RepoStatus, StatusOptions, status};
+use argus_core::status::{InProgress, Integration, PullBy, RepoStatus, StatusOptions, status};
 use argus_core::testkit::{Sandbox, commit, git, write};
 
 fn st(r: &Path) -> RepoStatus {
@@ -28,10 +28,78 @@ fn predicts_a_clean_merge() {
     let sb = Sandbox::new();
     let r = sb.diverged("acme", "w", "w", false);
     git(&r, &["config", "pull.rebase", "false"]);
-    assert_eq!(st(&r).integration, Some(Integration::Clean));
+    assert_eq!(st(&r).integration, Some(Integration::Clean(PullBy::Merge)));
     let f = pull_fix(&r).unwrap();
     assert_eq!(f.blocked, None);
-    assert!(f.reason.contains("merges cleanly"), "{}", f.reason);
+    assert!(
+        f.reason.contains("merges cleanly, adding a merge commit"),
+        "{}",
+        f.reason
+    );
+    // inverse: a rebase adds no commit
+    git(&r, &["config", "pull.rebase", "true"]);
+    assert_eq!(st(&r).integration, Some(Integration::Clean(PullBy::Rebase)));
+    let f = pull_fix(&r).unwrap();
+    assert!(f.reason.contains("rebases cleanly"), "{}", f.reason);
+    assert!(!f.reason.contains("merge commit"), "{}", f.reason);
+}
+
+#[test]
+fn the_branch_setting_decides_merge_or_rebase_over_pull_rebase() {
+    let sb = Sandbox::new();
+    let r = sb.diverged("acme", "w", "w", false);
+    let by = |r: &Path| match st(r).integration {
+        Some(Integration::Clean(by)) => by,
+        other => panic!("{other:?}"),
+    };
+    for (pull, branch, expect) in [
+        ("true", "false", PullBy::Merge),
+        ("false", "true", PullBy::Rebase),
+        ("false", "merges", PullBy::Rebase),
+        ("false", "interactive", PullBy::Rebase),
+    ] {
+        git(&r, &["config", "pull.rebase", pull]);
+        git(&r, &["config", "branch.feat.rebase", branch]);
+        assert_eq!(
+            by(&r),
+            expect,
+            "pull.rebase={pull} branch.feat.rebase={branch}"
+        );
+    }
+    git(&r, &["config", "--unset", "branch.feat.rebase"]);
+    for (pull, expect) in [
+        ("merges", PullBy::Rebase),
+        ("true", PullBy::Rebase),
+        ("false", PullBy::Merge),
+    ] {
+        git(&r, &["config", "pull.rebase", pull]);
+        assert_eq!(by(&r), expect, "pull.rebase={pull}");
+    }
+    git(&r, &["config", "--unset", "pull.rebase"]);
+    git(&r, &["config", "pull.ff", "true"]);
+    assert_eq!(by(&r), PullBy::Merge, "pull.ff alone merges");
+}
+
+#[test]
+fn predicted_counts_after_a_pull_match_reality() {
+    for (rebase, ahead) in [("false", 2), ("true", 1)] {
+        let sb = Sandbox::new();
+        let r = sb.diverged("acme", "w", "w", false);
+        git(&r, &["config", "pull.rebase", rebase]);
+        let before = st(&r);
+        let predicted = simulate(&before, &pull_fix(&r).unwrap());
+        assert!(ops::run(&r, &Op::Pull).success);
+        let actual = st(&r);
+        assert_eq!(actual.ahead(), ahead, "pull.rebase={rebase}");
+        assert_eq!(predicted.ahead(), actual.ahead(), "pull.rebase={rebase}");
+        assert_eq!(predicted.behind(), actual.behind(), "pull.rebase={rebase}");
+        let unpushed = |s: &RepoStatus| s.branches.iter().find(|b| b.is_head).unwrap().unpushed;
+        assert_eq!(
+            unpushed(&predicted),
+            unpushed(&actual),
+            "pull.rebase={rebase}"
+        );
+    }
 }
 
 #[test]
@@ -91,7 +159,10 @@ fn diverged_without_pull_config_is_refused_as_git_would() {
         ("pull.ff", "true"),
     ] {
         git(&r, &["config", k, v]);
-        assert_eq!(st(&r).integration, Some(Integration::Clean), "{k}={v}");
+        assert!(
+            matches!(st(&r).integration, Some(Integration::Clean(_))),
+            "{k}={v}"
+        );
         git(&r, &["config", "--unset", k]);
     }
     git(&r, &["config", "pull.ff", "only"]);

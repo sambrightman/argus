@@ -400,6 +400,12 @@ rendering is snapshot-tested via `TestBackend`.
     set as well.
   * A clean trial merge doesn't guarantee a clean rebase; the abort covers
     that case.
+  * The prediction also says whether git would merge or rebase
+    (`branch.<b>.rebase` over `pull.rebase`; `merges` and `interactive`
+    count as rebase; `pull.ff` alone merges), so previews count the merge
+    commit a merging pull adds: the push that follows has one more commit.
+    A rebase is assumed to keep every commit (one already upstream would
+    be dropped; not predicted).
 * **Previews separate the chain from the alternatives.** `fix::simulate`
   predicts the status after a fix (pure, no git), and `fix::chain`
   repeats choose+simulate to give what successive auto-fix actions would
