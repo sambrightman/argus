@@ -32,6 +32,9 @@ fn icons(set: &Icons) -> Vec<(&'static str, &str)> {
         ("ok", &*set.ok),
         ("failed", &*set.failed),
         ("celebrate", &*set.celebrate),
+        ("issue_counted", &*set.issue_counted),
+        ("issue_pinned", &*set.issue_pinned),
+        ("issue_ignored", &*set.issue_ignored),
     ]
 }
 
@@ -108,7 +111,16 @@ fn nerd_icons_cover_everything_and_leave_room() {
         } else {
             assert!(
                 // these need no Nerd glyph: the Unicode one fits
-                ["worktree", "spinner", "marked", "celebrate"].contains(&name)
+                [
+                    "worktree",
+                    "spinner",
+                    "marked",
+                    "celebrate",
+                    "issue_counted",
+                    "issue_pinned",
+                    "issue_ignored"
+                ]
+                .contains(&name)
                     || nerd != uni
                     || uni.is_ascii(),
                 "{name}: not a Nerd glyph ({nerd:?})"

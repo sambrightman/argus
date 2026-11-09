@@ -382,7 +382,8 @@ pub struct UiConfig {
     /// ignored, snoozed, branch, detached, detached_commits, ahead, behind, staged, unstaged,
     /// untracked, conflict, stash, in_progress, gone, no_upstream, branches,
     /// error, pull, worktree, submodule; and in the interface: spinner (one
-    /// frame per character), marked, ok, failed, celebrate.
+    /// frame per character), marked, ok, failed, celebrate, and the ignore
+    /// menu's issue states issue_counted, issue_pinned, issue_ignored.
     #[schemars(example = example_icon_overrides())]
     pub icon_overrides: BTreeMap<String, String>,
     /// Show only repos needing attention at startup (`a` toggles).

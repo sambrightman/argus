@@ -327,6 +327,42 @@ impl Workspace {
         self.marks_changed()
     }
 
+    /// Where repo `i`'s `list` issue stands (see [`rules::IgnoreState`]).
+    pub fn issue_state(
+        &self,
+        i: usize,
+        list: IssueList,
+    ) -> Result<rules::IgnoreState, ConfigError> {
+        let e = &self.entries[i];
+        let values = e.status().map(|s| list.values(s)).unwrap_or_default();
+        Ok(RuleSet::new(&self.config)?.issue_state(list, e.id.as_ref(), &e.path, &values))
+    }
+
+    /// Put `list`'s issue in `state` for the repos at `indices` (see
+    /// [`rules::set_issue_state`]). Saving config is the caller's.
+    pub fn set_issue_state(
+        &mut self,
+        indices: &[usize],
+        list: IssueList,
+        state: rules::IgnoreState,
+    ) -> Result<(), ConfigError> {
+        for &i in indices {
+            let e = &self.entries[i];
+            let values = e.status().map(|s| list.values(s)).unwrap_or_default();
+            let (id, path, name) = (e.id.clone(), e.path.clone(), Self::mark_name(e));
+            rules::set_issue_state(
+                &mut self.config,
+                list,
+                id.as_ref(),
+                &path,
+                &name,
+                &values,
+                state,
+            )?;
+        }
+        self.marks_changed()
+    }
+
     /// Drop the entries naming the repos at `indices` from every mark list,
     /// so patterns decide again.
     pub fn clear_marks(&mut self, indices: &[usize]) -> Result<(), ConfigError> {

@@ -480,55 +480,6 @@ fn cursor_on_detail(app: &mut App, repo: &str, text: &str) {
 }
 
 #[test]
-fn an_issue_under_the_cursor_can_be_ignored_and_unignored() {
-    let (_sb, mut app) = setup("");
-    cursor_on_detail(&mut app, "feature", "issue     not on default branch");
-    let fx = app.act(Action::ToggleIgnoreIssue);
-    assert!(matches!(fx.as_slice(), [Effect::SaveMarks(_)]), "{fx:?}");
-    assert_eq!(
-        app.ws.config.ignore.non_default_branch,
-        ["github.com/acme/feature@feat"]
-    );
-    let texts = detail_texts(&app);
-    assert!(
-        texts
-            .iter()
-            .any(|t| t.starts_with("issue     not on default branch") && t.ends_with("(ignored)")),
-        "{texts:?}"
-    );
-    // and back
-    cursor_on_detail(&mut app, "feature", "issue     not on default branch");
-    app.act(Action::ToggleIgnoreIssue);
-    assert!(app.ws.config.ignore.non_default_branch.is_empty());
-    assert!(!detail_texts(&app).iter().any(|t| t.ends_with("(ignored)")));
-}
-
-#[test]
-fn only_an_issue_that_can_be_ignored_is() {
-    let (_sb, mut app) = setup("");
-    // a repo whose only issue can't be ignored, from its row
-    while current(&app) != "acme/dirty" {
-        app.act(Action::Down);
-    }
-    assert!(app.act(Action::ToggleIgnoreIssue).is_empty());
-    assert_eq!(
-        app.message.as_ref().unwrap().0,
-        "nothing here can be ignored"
-    );
-    // uncommitted changes risk losing work: not ignorable
-    cursor_on_detail(&mut app, "dirty", "issue     ");
-    assert!(app.act(Action::ToggleIgnoreIssue).is_empty());
-    assert!(
-        app.message
-            .as_ref()
-            .is_some_and(|(m, _)| m.contains("can't be ignored")),
-        "{:?}",
-        app.message
-    );
-    assert_eq!(app.ws.config.ignore, Default::default());
-}
-
-#[test]
 fn shell_and_quit_effects() {
     let (_sb, mut app) = setup("");
     let p = app.current().unwrap().path.clone();
@@ -579,7 +530,7 @@ fn render_menu_and_help_and_narrow_terminal() {
     app.on_key(key('m'));
     let out = render(&mut app, 80, 16);
     assert!(
-        out.contains("Mark · 1 repo") && out.contains("toggle favourite"),
+        out.contains("Mark · 1 repo") && out.contains("f  favourite"),
         "{out}"
     );
     app.on_key(code(KeyCode::Esc));
@@ -1603,63 +1554,6 @@ fn discarding_always_asks() {
 }
 
 #[test]
-fn stashes_are_ignored_stash_by_stash_and_pinned_with_the_other_key() {
-    let (_sb, mut app) = setup_with("", |sb| {
-        let r = sb.path("dev/clean");
-        write(&r, "README", "mine\n");
-        git(&r, &["stash", "push", "-q", "-m", "mine"]);
-        write(&r, "README", "fix's\n");
-        git(&r, &["stash", "push", "-q", "-m", "argus 2026-01-02 09:30"]);
-    });
-    let defaults = argus_core::Config::default().ignore.stashes;
-    let stash_lines = |app: &App| -> Vec<String> {
-        detail_texts(app)
-            .into_iter()
-            .filter(|t| t.starts_with("stashes") || t.trim_start().starts_with("stash@"))
-            .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
-            .collect()
-    };
-    // the fix's stash counts and yours doesn't: one line each, same count
-    cursor_on_detail(&mut app, "clean", "issue     1 stash(es)");
-    assert_eq!(
-        stash_lines(&app),
-        [
-            "stashes 2 (1 ignored)",
-            "stash@{0} argus 2026-01-02 09:30",
-            "stash@{1} mine (ignored)",
-        ]
-    );
-    // the counted line: ignoring it covers every stash, unpinned
-    app.act(Action::ToggleIgnoreIssue);
-    let mut expect = defaults.clone();
-    expect.push("github.com/acme/clean".into());
-    assert_eq!(app.ws.config.ignore.stashes, expect);
-    assert_eq!(stash_lines(&app)[0], "stashes 2 (2 ignored)");
-    // the ignored line: back to the defaults
-    cursor_on_detail(&mut app, "clean", "issue     2 stash(es)  (ignored)");
-    app.act(Action::ToggleIgnoreIssue);
-    assert_eq!(app.ws.config.ignore.stashes, defaults);
-    // the other key pins the counted stash's message
-    cursor_on_detail(&mut app, "clean", "issue     1 stash(es)");
-    app.act(Action::ToggleIgnoreIssueOtherPin);
-    let mut expect = defaults.clone();
-    expect.push("github.com/acme/clean@argus 2026-01-02 09:30".into());
-    assert_eq!(app.ws.config.ignore.stashes, expect);
-    assert_eq!(stash_lines(&app)[0], "stashes 2 (2 ignored)");
-}
-
-#[test]
-fn the_other_key_ignores_a_branch_unpinned() {
-    let (_sb, mut app) = setup("");
-    cursor_on_detail(&mut app, "feature", "issue     not on default branch");
-    app.act(Action::ToggleIgnoreIssueOtherPin);
-    assert_eq!(
-        app.ws.config.ignore.non_default_branch,
-        ["github.com/acme/feature"]
-    );
-}
-
-#[test]
 fn the_stash_list_says_how_many_are_ignored_and_stops_after_ten() {
     for (n, extra, first, more) in [
         (10, "[ignore]\nstashes = []", "stashes   10", None),
@@ -1991,93 +1885,6 @@ fn auto_fixing_several_repos_says_how_many_of_each() {
 }
 
 #[test]
-fn ignoring_from_a_repo_row_takes_its_only_issue_or_asks_which() {
-    let (sb, mut app) = setup("");
-    while current(&app) != "acme/feature" {
-        app.act(Action::Down);
-    }
-    // feature's one issue: not on the default branch
-    let fx = app.act(Action::ToggleIgnoreIssue);
-    assert!(matches!(fx.as_slice(), [Effect::SaveMarks(_)]), "{fx:?}");
-    assert_eq!(
-        app.ws.config.ignore.non_default_branch,
-        ["github.com/acme/feature@feat"]
-    );
-    app.act(Action::ToggleIgnoreIssue);
-    assert!(app.ws.config.ignore.non_default_branch.is_empty());
-    // with a stash too (ignored by default): two to choose from
-    let f = sb.path("dev/feature");
-    write(&f, "README", "wip\n");
-    git(&f, &["stash", "push", "-q"]);
-    app.ws.refresh(&f);
-    app.rebuild();
-    while current(&app) != "acme/feature" {
-        app.act(Action::Down);
-    }
-    assert!(app.act(Action::ToggleIgnoreIssue).is_empty());
-    let labels = |app: &App| match &app.mode {
-        Mode::Menu { menu, .. } => {
-            assert_eq!(menu.title, "Ignore issues · acme/feature");
-            menu.items
-                .iter()
-                .map(|i| format!("{} {}", i.key, i.label))
-                .collect::<Vec<_>>()
-        }
-        _ => panic!("no menu"),
-    };
-    let l = labels(&app);
-    assert_eq!(l.len(), 4, "{l:?}");
-    assert!(
-        l[0].starts_with("1 ignore: not on default branch")
-            && l[0].ends_with(", only while on feat"),
-        "{l:?}"
-    );
-    assert!(
-        l[1].starts_with("2 stop ignoring: "),
-        "stashes are by default: {l:?}"
-    );
-    assert_eq!(l[2], "a all: ignore the ones not ignored yet");
-    assert_eq!(l[3], "s swap pinned and unpinned (see above)");
-    assert_eq!(
-        app.ws.config.ignore,
-        Default::default(),
-        "nothing changed yet"
-    );
-    // the switch says what changes, and keeps the menu open
-    app.on_key(key('s'));
-    assert!(
-        labels(&app)[0].ends_with(", on any branch"),
-        "{:?}",
-        labels(&app)
-    );
-    app.on_key(key('1'));
-    assert!(matches!(app.mode, Mode::Normal));
-    assert_eq!(
-        app.ws.config.ignore.non_default_branch,
-        ["github.com/acme/feature"]
-    );
-    // all ignored now: `a` stops ignoring them all
-    app.act(Action::ToggleIgnoreIssue);
-    assert_eq!(labels(&app)[2], "a all: stop ignoring them");
-    app.on_key(key('a'));
-    assert!(app.ws.config.ignore.non_default_branch.is_empty());
-    let msg = app.message.as_ref().unwrap().0.clone();
-    assert!(
-        msg.starts_with("removed from [ignore] non_default_branch · "),
-        "{msg}"
-    );
-    // m P opens it with pinning swapped
-    app.act(Action::ToggleIgnoreIssueOtherPin);
-    assert!(
-        labels(&app)[0].ends_with(", on any branch"),
-        "{:?}",
-        labels(&app)
-    );
-    app.on_key(key('q'));
-    assert!(matches!(app.mode, Mode::Normal));
-}
-
-#[test]
 fn explanations_when_nothing_applies() {
     let (sb, mut app) = setup("");
     let msg = |app: &App| app.message.as_ref().unwrap().0.clone();
@@ -2155,4 +1962,185 @@ fn the_fix_menu_says_what_auto_fix_would_do() {
     app.on_key(key('q'));
     app.on_key(key('P'));
     assert!(!render(&mut app, 100, 20).contains("auto-fix"));
+}
+
+/// The open menu's items as `key label`.
+fn menu_items(app: &App) -> Vec<String> {
+    match &app.mode {
+        Mode::Menu { menu, .. } => menu
+            .items
+            .iter()
+            .map(|i| format!("{} {}", i.key, i.label))
+            .collect(),
+        _ => panic!("no menu open"),
+    }
+}
+
+#[test]
+fn the_ignore_menu_steps_an_issue_through_its_states() {
+    let (_sb, mut app) = setup("");
+    cursor_on_detail(&mut app, "feature", "issue     not on default branch");
+    assert!(app.act(Action::IgnoreIssues).is_empty());
+    match &app.mode {
+        Mode::Menu { menu, cursor, .. } => {
+            assert_eq!(menu.title, "Ignore issues · acme/feature");
+            assert_eq!(*cursor, 0, "on the issue under the cursor");
+        }
+        _ => panic!("no menu"),
+    }
+    let nd = |app: &App| app.ws.config.ignore.non_default_branch.clone();
+    assert_eq!(
+        menu_items(&app),
+        [
+            "1 · not on default branch (main)",
+            "a all: ignore 1 counted issue(s), each its default way"
+        ]
+    );
+    // counted, pinned (the default), ignored everywhere, counted; the menu stays
+    let fx = app.on_key(key('1'));
+    assert!(matches!(fx.as_slice(), [Effect::SaveMarks(_)]), "{fx:?}");
+    assert_eq!(nd(&app), ["github.com/acme/feature@feat"]);
+    assert_eq!(
+        menu_items(&app)[0],
+        "1 ○ not on default branch (main), ignored while on feat"
+    );
+    assert_eq!(menu_items(&app)[1], "a all: no counted issue to ignore");
+    app.on_key(key('1'));
+    assert_eq!(nd(&app), ["github.com/acme/feature"]);
+    assert_eq!(
+        menu_items(&app)[0],
+        "1 ● not on default branch (main), ignored on any branch"
+    );
+    app.on_key(key('1'));
+    assert!(nd(&app).is_empty());
+    assert_eq!(menu_items(&app)[0], "1 · not on default branch (main)");
+    app.on_key(ctrl('g'));
+    assert!(matches!(app.mode, Mode::Normal));
+}
+
+#[test]
+fn all_ignores_only_counted_issues_each_its_default_way() {
+    let (sb, mut app) = setup("");
+    let f = sb.path("dev/feature");
+    write(&f, "README", "wip\n");
+    git(&f, &["stash", "push", "-q", "-m", "wip"]);
+    app.ws.refresh(&f);
+    app.rebuild();
+    // from the stash's issue line: the menu opens on it
+    cursor_on_detail(&mut app, "feature", "issue     1 stash");
+    app.act(Action::IgnoreIssues);
+    assert!(matches!(app.mode, Mode::Menu { cursor: 1, .. }));
+    // the stash is ignored by the default patterns: not counted
+    assert_eq!(
+        menu_items(&app),
+        [
+            "1 · not on default branch (main)",
+            "2 ● 1 stash(es), ignored, later ones too",
+            "a all: ignore 1 counted issue(s), each its default way"
+        ]
+    );
+    let stashes = app.ws.config.ignore.stashes.clone();
+    app.on_key(key('a'));
+    assert_eq!(
+        app.ws.config.ignore.non_default_branch,
+        ["github.com/acme/feature@feat"]
+    );
+    assert_eq!(app.ws.config.ignore.stashes, stashes, "left as it was");
+    assert_eq!(menu_items(&app)[2], "a all: no counted issue to ignore");
+    // nothing counted: a changes nothing
+    assert!(app.on_key(key('a')).is_empty());
+}
+
+#[test]
+fn stashes_step_through_all_pinned_to_their_messages_and_counted() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let r = sb.path("dev/clean");
+        write(&r, "README", "mine\n");
+        git(&r, &["stash", "push", "-q", "-m", "mine"]);
+        write(&r, "README", "fix's\n");
+        git(&r, &["stash", "push", "-q", "-m", "argus 2026-01-02 09:30"]);
+    });
+    let defaults = argus_core::Config::default().ignore.stashes;
+    let own = |app: &App| app.ws.config.ignore.stashes[defaults.len()..].to_vec();
+    while current(&app) != "acme/clean" {
+        app.act(Action::Down);
+    }
+    app.act(Action::IgnoreIssues);
+    // yours is ignored by the patterns, the fix's isn't
+    assert_eq!(
+        menu_items(&app)[0],
+        "1 · 2 stash(es), 1 ignored by patterns"
+    );
+    app.on_key(key('1'));
+    assert_eq!(own(&app), ["github.com/acme/clean"]);
+    assert_eq!(
+        menu_items(&app)[0],
+        "1 ● 2 stash(es), ignored, later ones too"
+    );
+    app.on_key(key('1'));
+    assert_eq!(
+        own(&app),
+        [
+            "!github.com/acme/clean",
+            "github.com/acme/clean@argus 2026-01-02 09:30",
+            "github.com/acme/clean@mine"
+        ]
+    );
+    assert_eq!(
+        menu_items(&app)[0],
+        "1 ○ 2 stash(es), ignored for these messages"
+    );
+    app.on_key(key('1'));
+    assert_eq!(own(&app), ["!github.com/acme/clean"]);
+    assert_eq!(menu_items(&app)[0], "1 · 2 stash(es)");
+}
+
+#[test]
+fn a_repo_with_nothing_to_ignore_says_so() {
+    let (_sb, mut app) = setup("");
+    while current(&app) != "acme/dirty" {
+        app.act(Action::Down);
+    }
+    assert!(app.act(Action::IgnoreIssues).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "no issue of this repo can be ignored"
+    );
+}
+
+#[test]
+fn toggles_say_what_they_will_do() {
+    let (_sb, mut app) = setup("");
+    while current(&app) != "acme/feature" {
+        app.act(Action::Down);
+    }
+    let label = |app: &mut App, menu: char, key: char| {
+        app.on_key(self::key(menu));
+        let l = menu_items(app)
+            .into_iter()
+            .find(|l| l.starts_with(&format!("{key} ")))
+            .unwrap();
+        app.on_key(ctrl('g'));
+        l
+    };
+    assert_eq!(label(&mut app, 'm', 'f'), "f favourite");
+    assert_eq!(
+        label(&mut app, 'm', 'I'),
+        "I ignore repo: hidden, no pulls or bulk actions"
+    );
+    assert_eq!(label(&mut app, 'm', 'i'), "i ignore issues…");
+    app.act(Action::ToggleFavourite);
+    assert_eq!(label(&mut app, 'm', 'f'), "f unfavourite");
+    assert_eq!(
+        label(&mut app, 'v', 'a'),
+        "a show only repos needing attention"
+    );
+    assert_eq!(
+        label(&mut app, 'v', 'h'),
+        "h show ignored and snoozed repos"
+    );
+    assert_eq!(label(&mut app, 'v', 'l'), "l show process log");
+    app.act(Action::ToggleLog);
+    assert_eq!(label(&mut app, 'v', 'l'), "l hide process log");
 }

@@ -44,6 +44,13 @@ pub struct Icons {
     pub failed: Cow<'static, str>,
     /// Nothing needs attention.
     pub celebrate: Cow<'static, str>,
+    /// In the ignore menu: an issue that counts towards attention.
+    pub issue_counted: Cow<'static, str>,
+    /// In the ignore menu: an issue ignored only for its current value
+    /// (this branch, this HEAD, these stashes).
+    pub issue_pinned: Cow<'static, str>,
+    /// In the ignore menu: an issue ignored whatever the value.
+    pub issue_ignored: Cow<'static, str>,
 }
 
 /// `ICON_NAMES` and lookup by name, from one list of `Icons` fields.
@@ -99,6 +106,9 @@ icon_names!(
     ok,
     failed,
     celebrate,
+    issue_counted,
+    issue_pinned,
+    issue_ignored,
 );
 
 impl Icons {
@@ -162,6 +172,9 @@ pub const UNICODE: Icons = Icons {
     ok: s("✓"),
     failed: s("✗"),
     celebrate: s("🎉"),
+    issue_counted: s("·"),
+    issue_pinned: s("○"),
+    issue_ignored: s("●"),
 };
 
 /// Nerd Font glyphs (codicons, Powerline). Each is followed by a space:
@@ -194,6 +207,9 @@ pub const NERD: Icons = Icons {
     ok: s("\u{eab2} "),     // cod-check
     failed: s("\u{ea76} "), // cod-close
     celebrate: s("🎉"),
+    issue_counted: s("·"),
+    issue_pinned: s("○"),
+    issue_ignored: s("●"),
 };
 
 /// Names accepted by [`by_name`] (`[ui] icons`).
@@ -235,6 +251,9 @@ pub const ASCII: Icons = Icons {
     ok: s("ok"),
     failed: s("FAILED"),
     celebrate: s(""),
+    issue_counted: s("."),
+    issue_pinned: s("o"),
+    issue_ignored: s("*"),
 };
 
 /// Punctuation the interface uses as plain text, not as icons: in every

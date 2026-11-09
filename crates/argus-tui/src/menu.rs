@@ -25,6 +25,8 @@ pub struct Item {
     pub action: Action,
     /// A switch, shown as `[x]`/`[ ]`; choosing it keeps the menu open.
     pub switch: Option<Switch>,
+    /// Choosing it keeps the menu open, to show what changed.
+    pub stays: bool,
 }
 
 pub struct Menu {
@@ -39,6 +41,15 @@ pub fn item(key: char, label: impl Into<String>, action: Action) -> Item {
         label: label.into(),
         action,
         switch: None,
+        stays: false,
+    }
+}
+
+/// An item that changes something shown in the menu, which stays open.
+pub fn stepper(key: char, label: impl Into<String>, action: Action) -> Item {
+    Item {
+        stays: true,
+        ..item(key, label, action)
     }
 }
 
@@ -48,6 +59,7 @@ pub fn switch(key: char, label: impl Into<String>, s: Switch) -> Item {
         label: label.into(),
         action: Action::Toggle(s),
         switch: Some(s),
+        stays: true,
     }
 }
 
@@ -200,20 +212,11 @@ impl MenuId {
                 vec![
                     item('f', "toggle favourite", Action::ToggleFavourite),
                     item('p', "toggle pull", Action::TogglePull),
-                    item(
-                        'i',
-                        "ignore the whole repo: hidden, no pulls or bulk actions (or not)",
-                        Action::ToggleIgnore,
-                    ),
+                    item('i', "ignore issues…", Action::IgnoreIssues),
                     item(
                         'I',
-                        "ignore an issue: the one under the cursor, or choose…",
-                        Action::ToggleIgnoreIssue,
-                    ),
-                    item(
-                        'P',
-                        "the same, pinned and unpinned swapped…",
-                        Action::ToggleIgnoreIssueOtherPin,
+                        "toggle ignoring the repo: hidden, no pulls or bulk actions",
+                        Action::ToggleIgnore,
                     ),
                     item('z', "snooze for…", Action::Snooze),
                     item('u', "unsnooze", Action::Unsnooze),

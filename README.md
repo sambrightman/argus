@@ -154,7 +154,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `c` | **Commit** (prompts for message) |
 | `b` | **Branch**: `d` switch to default, `r` reattach detached HEAD, `c` create a branch at detached HEAD…, `x` delete merged branches…, `f` fast-forward stale branches |
 | `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden |
-| `m` | **Mark**: `f` favourite, `p` pull, `i` ignore the whole repo, `I` ignore an issue (the one under the cursor; elsewhere, a menu of the repo's issues, each saying exactly what it would ignore, `a` for all, `s` to swap pinned and unpinned), `P` the same with pinning swapped, `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
+| `m` | **Mark**: `f` favourite, `p` pull, `i` ignore issues (a menu of the repo's issues and their state), `I` ignore or unignore the repo, `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page |
 | `v` | **View**: toggles, expand/collapse all, log |
 
@@ -328,11 +328,17 @@ stash fix made (`argus <date>`) do until you pop or drop them. An entry
 `repo@message` covers the stashes whose message (after git's
 `On <branch>: `) matches, glob allowed. Set `stashes = []` to flag every
 stash, and use `extend_stashes` to add to the default rather than replace
-it (the TUI and `argus mark` do). Ignoring stashes from the TUI (`I`) or
-with `argus mark --ignore-issue stashes` covers all of the repo's stashes,
-now and later; `P` or `--pin` pins each current message instead, so a new
-stash is flagged again. For branch and HEAD issues it's the other way
-round: pinned by default, `P` or `--no-pin` for unpinned.
+it (the TUI and `argus mark` do).
+
+In the TUI, `m i` lists the repo's issues that can be ignored, each with
+its state: `·` counted, `○` ignored for its current value only (pinned:
+while on this branch, at this HEAD, for these stash messages), `●` ignored
+whatever the value. A digit moves its issue to the next state: counted,
+then the list's default way of ignoring, then the other, then counted
+again. Branch and HEAD issues pin by default; stashes don't, so ignoring
+them covers later stashes too. `a` ignores every counted issue its default
+way. The menu stays open to show the result; `q`, Esc or `C-g` closes it.
+`argus mark --ignore-issue` does the same, with `--pin`/`--no-pin`.
 
 Ignoring an issue never hides a fact: the row still shows how far behind
 a repo is, how many stashes it has and where HEAD is. Badges that only

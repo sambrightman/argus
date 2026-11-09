@@ -404,6 +404,29 @@ impl RuleSet {
 
     /// Entries of `list` naming this repo itself (not patterns), whatever
     /// value they pin, as written.
+    /// Where the repo's `list` issue stands for these values: ignored for
+    /// all of them, pinned (by entries of its own) or not; else counted.
+    pub fn issue_state(
+        &self,
+        list: IssueList,
+        id: Option<&RepoId>,
+        path: &Path,
+        values: &[String],
+    ) -> IgnoreState {
+        if !self.ignores_all(list, id, path, values) {
+            return IgnoreState::Counted;
+        }
+        let own = self.own_issue_entries(list, id, path);
+        let positive = |e: &&String| !e.starts_with('!');
+        let pinned = own.iter().filter(positive).any(|e| e.contains('@'));
+        let whole = own.iter().filter(positive).any(|e| !e.contains('@'));
+        if list.pins() && pinned && !whole {
+            IgnoreState::Pinned
+        } else {
+            IgnoreState::Ignored
+        }
+    }
+
     fn own_issue_entries(&self, list: IssueList, id: Option<&RepoId>, path: &Path) -> Vec<String> {
         self.issues[list as usize]
             .iter()
@@ -517,6 +540,95 @@ pub fn set_issue_ignored(
         }
         (true, true) if !values.is_empty() => vec![pinned(&values[0])],
         (true, _) => vec![name.to_string()],
+    };
+    let mut seen = std::collections::HashSet::new();
+    let entries = entries.into_iter().filter(|e| seen.insert(e.clone())); // stashes may share a message
+    list.list_mut(config).extend(entries);
+    Ok(())
+}
+
+/// Where a repo's issue stands in its `[ignore]` list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IgnoreState {
+    /// Not ignored: it counts towards attention.
+    Counted,
+    /// Ignored only for its current value(s): this branch, this HEAD,
+    /// these stashes.
+    Pinned,
+    /// Ignored whatever the value.
+    Ignored,
+}
+
+impl IgnoreState {
+    /// What ignoring `list`'s issue means unless asked otherwise.
+    pub fn default_for(list: IssueList) -> Self {
+        if list.pins() && list.pins_by_default() {
+            IgnoreState::Pinned
+        } else {
+            IgnoreState::Ignored
+        }
+    }
+
+    /// The next state round: counted, the list's default way of ignoring,
+    /// the other way (for lists that pin), counted again.
+    pub fn next(self, list: IssueList) -> Self {
+        let first = Self::default_for(list);
+        match self {
+            IgnoreState::Counted => first,
+            s if s == first && list.pins() => match first {
+                IgnoreState::Pinned => IgnoreState::Ignored,
+                _ => IgnoreState::Pinned,
+            },
+            _ => IgnoreState::Counted,
+        }
+    }
+}
+
+/// Put the repo's `list` issue in `state`: its own entries replaced by
+/// what that takes given the patterns. Counted: `!name` if patterns would
+/// ignore any value. Pinned: `name@value` for each (the first, for lists
+/// with one), after `!name` if patterns would ignore others too. Ignored:
+/// `name`, unless patterns already ignore it.
+#[allow(clippy::too_many_arguments)]
+pub fn set_issue_state(
+    config: &mut Config,
+    list: IssueList,
+    id: Option<&RepoId>,
+    path: &Path,
+    name: &str,
+    values: &[String],
+    state: IgnoreState,
+) -> Result<(), ConfigError> {
+    let own = RuleSet::new(config)?.own_issue_entries(list, id, path);
+    list.list_mut(config).retain(|e| !own.contains(e));
+    let rules = RuleSet::new(config)?;
+    let any_ignored = rules
+        .ignored_values(list, id, path, values)
+        .next()
+        .is_some()
+        || (values.is_empty() && rules.ignores_issue(list, id, path, values));
+    let pinned = |v: &String| format!("{name}@{}", globset::escape(v));
+    let state = match state {
+        IgnoreState::Pinned if !list.pins() || values.is_empty() => IgnoreState::Ignored,
+        s => s,
+    };
+    let entries: Vec<String> = match state {
+        IgnoreState::Counted if any_ignored => vec![format!("!{name}")],
+        IgnoreState::Counted => vec![],
+        IgnoreState::Ignored if rules.ignores_all(list, id, path, values) => vec![],
+        IgnoreState::Ignored => vec![name.to_string()],
+        IgnoreState::Pinned => {
+            let mut v = vec![];
+            if any_ignored {
+                v.push(format!("!{name}"));
+            }
+            if list.separate_values() {
+                v.extend(values.iter().map(pinned));
+            } else {
+                v.push(pinned(&values[0]));
+            }
+            v
+        }
     };
     let mut seen = std::collections::HashSet::new();
     let entries = entries.into_iter().filter(|e| seen.insert(e.clone())); // stashes may share a message
@@ -810,6 +922,83 @@ mod tests {
             .unwrap();
             assert_eq!(list.list(&c), &["acme/widget"], "{list:?}");
         }
+    }
+
+    #[test]
+    fn issue_states_round_trip_through_entries() {
+        use IgnoreState::*;
+        let id = RepoId::from_url(URL);
+        let path = Path::new("/r/widget");
+        let go = |c: &mut Config, list: IssueList, values: &[String], to| {
+            set_issue_state(c, list, id.as_ref(), path, "acme/widget", values, to).unwrap();
+            RuleSet::new(c)
+                .unwrap()
+                .issue_state(list, id.as_ref(), path, values)
+        };
+        // a branch issue: pinned to the branch, or any branch
+        let branch = vec!["feat".to_string()];
+        let mut c = Config::default();
+        let nd = IssueList::NonDefaultBranch;
+        assert_eq!(go(&mut c, nd, &branch, Pinned), Pinned);
+        assert_eq!(c.ignore.non_default_branch, ["acme/widget@feat"]);
+        assert_eq!(go(&mut c, nd, &branch, Ignored), Ignored);
+        assert_eq!(c.ignore.non_default_branch, ["acme/widget"]);
+        assert_eq!(go(&mut c, nd, &branch, Counted), Counted);
+        assert!(c.ignore.non_default_branch.is_empty());
+        // stashes, under the default patterns (all but argus's own)
+        let stashes = vec!["wip".to_string(), "argus 2026-01-01 10:00".to_string()];
+        let mut c = Config::default();
+        let st = IssueList::Stashes;
+        let defaults = c.ignore.stashes.clone();
+        assert_eq!(
+            RuleSet::new(&c)
+                .unwrap()
+                .issue_state(st, id.as_ref(), path, &stashes),
+            Counted,
+            "argus's stash still counts"
+        );
+        assert_eq!(go(&mut c, st, &stashes, Ignored), Ignored);
+        assert_eq!(c.ignore.stashes[defaults.len()..], ["acme/widget"]);
+        // pinned: these two only, so the patterns are overruled first
+        assert_eq!(go(&mut c, st, &stashes, Pinned), Pinned);
+        assert_eq!(
+            c.ignore.stashes[defaults.len()..],
+            [
+                "!acme/widget",
+                "acme/widget@wip",
+                "acme/widget@argus 2026-01-01 10:00"
+            ]
+        );
+        let later = ["wip".to_string(), "newer".to_string()];
+        assert!(
+            !RuleSet::new(&c)
+                .unwrap()
+                .ignores_issue(st, id.as_ref(), path, &later[1..])
+        );
+        // counted: overrules the patterns
+        assert_eq!(go(&mut c, st, &stashes, Counted), Counted);
+        assert_eq!(c.ignore.stashes[defaults.len()..], ["!acme/widget"]);
+        // a list that doesn't pin goes straight to ignored
+        let mut c = Config::default();
+        assert_eq!(go(&mut c, IssueList::Behind, &[], Pinned), Ignored);
+        assert_eq!(c.ignore.behind, ["acme/widget"]);
+    }
+
+    #[test]
+    fn the_state_cycle_starts_with_each_lists_default() {
+        use IgnoreState::*;
+        let nd = IssueList::NonDefaultBranch;
+        assert_eq!(Counted.next(nd), Pinned);
+        assert_eq!(Pinned.next(nd), Ignored);
+        assert_eq!(Ignored.next(nd), Counted);
+        let st = IssueList::Stashes;
+        assert_eq!(Counted.next(st), Ignored);
+        assert_eq!(Ignored.next(st), Pinned);
+        assert_eq!(Pinned.next(st), Counted);
+        // two states for a list that doesn't pin
+        let b = IssueList::Behind;
+        assert_eq!(Counted.next(b), Ignored);
+        assert_eq!(Ignored.next(b), Counted);
     }
 
     #[test]
