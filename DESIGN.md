@@ -620,8 +620,16 @@ speed.
 
 ## 9. Not done yet / next steps
 
-* Embedded terminal pane; per-file actions in the details view (stage,
-  discard, diff); deleting merged branches; worktree pruning.
+* Embedded terminal pane; worktree pruning.
+* Snoozing per issue (and per repo, as now): today a snooze hides the
+  whole repo until it expires.
+* Drilling down in the details: unpushed/unmerged commits under their
+  issue, a commit into its message and diff, an untracked directory into
+  its files, stashes into their diffs.
+* Adding untracked files to `.gitignore` (top-level, the directory's,
+  `.git/info/exclude`, global), anchored (`/build/`) by default.
+* Pull requests: fetched with the remote, shown per branch; a merged PR
+  makes a squash-merged branch safe to delete.
 * Orphans (local clones the forge no longer lists): reported only, no
   archive/move action.
 * GitLab/Gitea forges (implement `argus_core::forge::Forge`); jj backend.
@@ -633,9 +641,5 @@ speed.
   (`Entry`, `RemoteRepo`), which isn't a stable contract. Consider a
   versioned schema and/or a line-oriented `--porcelain` format (like
   `git status --porcelain=v2`).
-* Stash options: let the user choose whether untracked files are included
-  (git has no config for this). Today: staged + unstaged + untracked.
-* Path subsets for operations (stash/commit/discard selected files), e.g.
-  from the details view.
 * Python bindings to `argus-core` (pyo3/maturin), for scripting over the
   same workspace, status and fix planning.
