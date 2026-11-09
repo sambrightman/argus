@@ -246,6 +246,9 @@ pub enum Effect {
         program: String,
         args: Vec<String>,
         cwd: PathBuf,
+        /// An interactive shell, started as a login shell (see
+        /// [`crate::suspended_command`]).
+        login_shell: bool,
     },
     Open(String),
     SaveState,
@@ -1130,6 +1133,7 @@ impl App {
                         program: shell,
                         args: vec![],
                         cwd: e.path.clone(),
+                        login_shell: true,
                     }];
                 }
             }
@@ -1913,6 +1917,7 @@ fn shell_command(cmd: &str, cwd: PathBuf) -> Effect {
         program: "sh".into(),
         args: vec!["-c".into(), cmd.into()],
         cwd,
+        login_shell: false,
     }
 }
 

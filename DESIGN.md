@@ -353,7 +353,11 @@ Two findings:
   * transient-style prefix keys: `f` fix, `F` pull, `m` mark, `o` open, `?` help.
     One more key executes. `C-g`/Esc cancels.
   * emacs (`C-n C-p C-v M-v M-< M->`, `C-s` search) and vi (`j k g G /`) motions.
-* `!` drops to `$SHELL` in the repo (TUI suspended), and `o g` opens the
+* `!` drops to `$SHELL` (or `tools.shell`) in the repo (TUI suspended), as a
+  login shell, as terminals start one: `argv[0]` is `-bash` (for
+  `/opt/homebrew/bin/bash`), so it reads `~/.bash_profile`, `~/.zprofile`…
+  Without that it was an interactive non-login shell, reading only
+  `~/.bashrc`, and set-ups living in the profile looked broken. `o g` opens the
   configured git UI (lazygit/`emacsclient -e (magit-status)`). An embedded pty
   pane (tui-term) is planned.
 

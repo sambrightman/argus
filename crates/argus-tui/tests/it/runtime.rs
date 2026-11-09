@@ -409,13 +409,43 @@ fn suspending_comes_back_to_the_caller() {
 #[test]
 fn suspended_programs_report_failure_but_shells_dont() {
     let dir = std::env::temp_dir();
-    assert_eq!(run_suspended("true", &["x".into()], &dir), Ok(()));
-    let e = run_suspended("false", &["x".into()], &dir).unwrap_err();
+    assert_eq!(run_suspended("true", &["x".into()], &dir, false), Ok(()));
+    let e = run_suspended("false", &["x".into()], &dir, false).unwrap_err();
     assert!(e.contains("false exited"), "{e}");
-    // a shell (no args) exits with its last command's code: not an error
-    assert_eq!(run_suspended("false", &[], &dir), Ok(()));
-    let e = run_suspended("/no/such/program", &[], &dir).unwrap_err();
+    // a shell exits with its last command's code: not an error
+    assert_eq!(run_suspended("false", &[], &dir, true), Ok(()));
+    let e = run_suspended("/no/such/program", &[], &dir, true).unwrap_err();
     assert!(e.contains("/no/such/program"), "{e}");
+}
+
+#[test]
+fn the_shell_is_a_login_shell_as_in_a_terminal() {
+    let home = tempfile::tempdir().unwrap();
+    // read only by a login bash
+    std::fs::write(
+        home.path().join(".bash_profile"),
+        "echo \"$0 $SHELL\" > \"$HOME/started\"; exit 0\n",
+    )
+    .unwrap();
+    let started = home.path().join("started");
+    for login in [true, false] {
+        let _ = std::fs::remove_file(&started);
+        // `-i` for the terminal it would have: bash reads login files for a
+        // `-bash` only when interactive
+        let i = ["-i".to_string()];
+        let mut c = argus_tui::suspended_command("/bin/bash", &i, home.path(), login);
+        c.env("HOME", home.path())
+            .env("SHELL", "/my/shell")
+            .stdin(std::process::Stdio::null());
+        assert!(c.status().unwrap().success());
+        let got = std::fs::read_to_string(&started).ok();
+        if login {
+            // named -bash; $SHELL as it was
+            assert_eq!(got.as_deref(), Some("-bash /my/shell\n"));
+        } else {
+            assert_eq!(got, None, "interactive, but not a login shell");
+        }
+    }
 }
 
 #[test]

@@ -144,7 +144,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `/` `C-s` | filter (readline editing) |
 | `a` / `H` | show all / attention only (the default, `[ui] attention_only`); show hidden |
 | `g` `C-l` / `R` | refresh statuses / rescan roots |
-| `!` | shell in repo (TUI suspends; `exit` returns) |
+| `!` | shell in repo, a login shell as in a new terminal tab (TUI suspends; `exit` returns) |
 | `$` | process log |
 | `?` | help |
 | `F` | **Pull**: `p` selected, `a` all marked for pull, `c` clone new repos of tracked owners, then pull all marked |
@@ -311,7 +311,10 @@ no conflicts and your config says whether to merge or rebase
 (`pull.rebase`, or `pull.ff`); otherwise `fix -n` says why
 (`not automatic: would conflict in README`). `argus pull` fetches such
 repos instead of pulling them. Any pull argus runs that still stops with
-conflicts is aborted, leaving the repo as it was, autostash included.
+conflicts is aborted, leaving the repo as it was, autostash included. So is
+one git calls a success but whose autostash (`rebase.autoStash`,
+`merge.autoStash`) conflicted when re-applied: argus goes back to the commit
+from before the pull and re-applies your changes there.
 `pull` isn't in the default `[fix] auto`.
 
 `stash` saves staged, unstaged and untracked changes (not ignored files);

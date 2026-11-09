@@ -110,14 +110,20 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
             left.extend(rt.drain(&mut app));
             // only suspending is left: it needs the terminal
             while let Some(e) = left.pop() {
-                if let Effect::Suspend { program, args, cwd } = e {
+                if let Effect::Suspend {
+                    program,
+                    args,
+                    cwd,
+                    login_shell,
+                } = e
+                {
                     ratatui::restore();
                     println!(
                         "argus: {} in {} — exit to return",
                         program,
                         argus_core::paths::contract_tilde(&cwd)
                     );
-                    let r = run_suspended(&program, &args, &cwd);
+                    let r = run_suspended(&program, &args, &cwd, login_shell);
                     terminal = ratatui::init();
                     let _ = terminal.clear();
                     for e in app.on_msg(Msg::Suspended(r)) {
@@ -134,21 +140,47 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
 }
 
 /// Run `program` with the terminal handed over (shell, git UI, editor),
-/// waiting for it. A shell (no `args`) exits with its last command's code,
-/// which isn't an error.
-pub fn run_suspended(program: &str, args: &[String], cwd: &Path) -> Result<(), String> {
-    std::process::Command::new(program)
-        .args(args)
-        .current_dir(cwd)
+/// waiting for it. A login shell exits with its last command's code, which
+/// isn't an error.
+pub fn run_suspended(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    login_shell: bool,
+) -> Result<(), String> {
+    suspended_command(program, args, cwd, login_shell)
         .status()
         .map_err(|e| format!("{program}: {e}"))
         .and_then(|s| {
-            if s.success() || args.is_empty() {
+            if s.success() || login_shell {
                 Ok(())
             } else {
                 Err(format!("{program} exited with {s}"))
             }
         })
+}
+
+/// The command [`run_suspended`] runs. A login shell is started as a
+/// terminal starts one: named `-bash` (for `/opt/homebrew/bin/bash`), which
+/// tells any shell to read its login files (`~/.bash_profile`,
+/// `~/.zprofile`…). Nothing else changes, `$SHELL` included.
+pub fn suspended_command(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    login_shell: bool,
+) -> std::process::Command {
+    let mut c = std::process::Command::new(program);
+    c.args(args).current_dir(cwd);
+    #[cfg(unix)]
+    if login_shell {
+        use std::os::unix::process::CommandExt;
+        let name = Path::new(program)
+            .file_name()
+            .map_or(program.into(), |n| n.to_string_lossy());
+        c.arg0(format!("-{name}"));
+    }
+    c
 }
 
 /// Carries out the app's effects, except suspending the terminal: saving

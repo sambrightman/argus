@@ -534,7 +534,11 @@ fn shell_and_quit_effects() {
     let (_sb, mut app) = setup("");
     let p = app.current().unwrap().path.clone();
     match app.on_key(key('!')).as_slice() {
-        [Effect::Suspend { cwd, .. }] => assert_eq!(cwd, &p),
+        [
+            Effect::Suspend {
+                cwd, login_shell, ..
+            },
+        ] => assert!(cwd == &p && *login_shell),
         other => panic!("{other:?}"),
     }
     assert_eq!(app.on_key(key('q')), vec![Effect::SaveState, Effect::Quit]);
@@ -548,7 +552,7 @@ fn git_ui_requires_config() {
     assert!(app.message.as_ref().unwrap().1);
     let (_sb, mut app) = setup("[tools]\ngit_ui = 'lazygit'");
     assert!(
-        matches!(app.act(Action::GitUi).as_slice(), [Effect::Suspend { program, args, .. }] if program == "sh" && args[1] == "lazygit")
+        matches!(app.act(Action::GitUi).as_slice(), [Effect::Suspend { program, args, login_shell, .. }] if program == "sh" && args[1] == "lazygit" && !login_shell)
     );
 }
 
