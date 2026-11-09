@@ -736,8 +736,36 @@ fn starts_showing_only_repos_needing_attention() {
         out.lines()
             .next()
             .unwrap()
-            .contains("2 repos · 1 need attention"),
+            .contains("2 repos · 1 need attention · a: attention only"),
         "{out}"
+    );
+    assert!(!out.contains("H: "), "nothing hidden: {out}");
+    // hidden repos: H shows them, and hides them again
+    let clean = app
+        .ws
+        .entries
+        .iter()
+        .find(|e| e.display_name() == "acme/clean");
+    app.ws.state.snoozed.insert(
+        clean.unwrap().key.clone(),
+        jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
+    );
+    app.ws.resolve_flags();
+    app.rebuild();
+    let header = |app: &mut App| render(app, 100, 6).lines().next().unwrap().to_string();
+    assert!(
+        header(&mut app)
+            .ends_with("1 repos · 1 need attention · a: attention only · H: show 1 hidden"),
+        "{}",
+        header(&mut app)
+    );
+    app.act(Action::ToggleHidden);
+    assert!(
+        header(&mut app).contains(
+            "2 repos · 1 need attention · a: attention only · showing hidden · H: hide them"
+        ),
+        "{}",
+        header(&mut app)
     );
     // and the config can start with everything shown
     let cfg = format!(

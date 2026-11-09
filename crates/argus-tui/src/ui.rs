@@ -74,10 +74,15 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
                 .len();
             format!(" argus  {attn} of {total} repos need attention · a: show all")
         } else {
-            format!(" argus  {n} repos · {attn} need attention")
+            let mut s = format!(" argus  {n} repos · {attn} need attention · a: attention only");
+            let hidden = app.ws.entries.iter().filter(|e| e.flags.hidden()).count();
+            if !app.view.show_hidden && hidden > 0 {
+                s.push_str(&format!(" · H: show {hidden} hidden"));
+            }
+            s
         };
         if app.view.show_hidden {
-            s.push_str(" · showing hidden");
+            s.push_str(" · showing hidden · H: hide them");
         }
         if !app.filter.is_empty() {
             s.push_str(&format!(" · filter: {}", app.filter));
