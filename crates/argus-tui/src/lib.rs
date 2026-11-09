@@ -117,6 +117,9 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
                     login_shell,
                 } = e
                 {
+                    // restore() leaves the cursor hidden: only dropping the
+                    // terminal shows it again
+                    let _ = terminal.show_cursor();
                     ratatui::restore();
                     println!(
                         "argus: {} in {} — exit to return",
