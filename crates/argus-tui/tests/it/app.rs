@@ -506,15 +506,14 @@ fn an_issue_under_the_cursor_can_be_ignored_and_unignored() {
 #[test]
 fn only_an_issue_that_can_be_ignored_is() {
     let (_sb, mut app) = setup("");
-    // not an issue line
-    cursor_on_detail(&mut app, "feature", "commit    ");
+    // a repo whose only issue can't be ignored, from its row
+    while current(&app) != "acme/dirty" {
+        app.act(Action::Down);
+    }
     assert!(app.act(Action::ToggleIgnoreIssue).is_empty());
-    assert!(
-        app.message
-            .as_ref()
-            .is_some_and(|(m, _)| m.contains("no issue")),
-        "{:?}",
-        app.message
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "nothing here can be ignored"
     );
     // uncommitted changes risk losing work: not ignorable
     cursor_on_detail(&mut app, "dirty", "issue     ");
@@ -1927,10 +1926,85 @@ fn fix_actions_say_what_they_left_out() {
     assert!(!app.act(Action::AutoFix(Scope::Selected)).is_empty());
     assert_eq!(
         msg(&app),
-        "auto-fixing 1 repo(s)… · 2 with nothing to apply"
+        "auto-fix acme/feature: push… · 2 with nothing to apply"
     );
     assert!(app.act(Action::AutoFix(Scope::Selected)).is_empty());
     assert_eq!(msg(&app), "nothing started · 1 busy");
+    // when it's finished
+    app.on_msg(Msg::FixDone {
+        path: f.clone(),
+        applied: Ok(None),
+    });
+    assert_eq!(msg(&app), "auto-fix acme/feature: push: done");
+}
+
+#[test]
+fn auto_fixing_several_repos_says_how_many_of_each() {
+    let (sb, mut app) = setup_with("", |sb| {
+        for n in ["clean", "dirty"] {
+            let r = sb.path(&format!("dev/{n}"));
+            git(&r, &["checkout", "-q", "--", "."]);
+            git(&r, &["switch", "-q", "-c", "topic"]);
+            git(&r, &["push", "-q", "-u", "origin", "topic"]);
+        }
+    });
+    app.marked = app.ws.entries.iter().map(|e| e.path.clone()).collect();
+    assert!(!app.act(Action::AutoFix(Scope::Selected)).is_empty());
+    let msg = |app: &App| app.message.as_ref().unwrap().0.clone();
+    assert_eq!(msg(&app), "auto-fixing 3 repo(s): switch-default (3)…");
+    // "done" once all three are
+    for (i, n) in ["clean", "dirty", "feature"].iter().enumerate() {
+        app.on_msg(Msg::FixDone {
+            path: sb.path(&format!("dev/{n}")),
+            applied: Ok(None),
+        });
+        assert_eq!(msg(&app).ends_with(": done"), i == 2, "{}", msg(&app));
+    }
+}
+
+#[test]
+fn ignoring_from_a_repo_row_takes_its_only_issue_or_asks_which() {
+    let (sb, mut app) = setup("");
+    while current(&app) != "acme/feature" {
+        app.act(Action::Down);
+    }
+    // feature's one issue: not on the default branch
+    let fx = app.act(Action::ToggleIgnoreIssue);
+    assert!(matches!(fx.as_slice(), [Effect::SaveMarks(_)]), "{fx:?}");
+    assert_eq!(
+        app.ws.config.ignore.non_default_branch,
+        ["github.com/acme/feature@feat"]
+    );
+    app.act(Action::ToggleIgnoreIssue);
+    assert!(app.ws.config.ignore.non_default_branch.is_empty());
+    // with a stash too (ignored by default): two to choose from
+    let f = sb.path("dev/feature");
+    write(&f, "README", "wip\n");
+    git(&f, &["stash", "push", "-q"]);
+    app.ws.refresh(&f);
+    app.rebuild();
+    while current(&app) != "acme/feature" {
+        app.act(Action::Down);
+    }
+    assert!(app.act(Action::ToggleIgnoreIssue).is_empty());
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "2 issues here: put the cursor on one, then m I (or m P) again"
+    );
+    match app.rows.get(app.cursor) {
+        Some(Row::Detail { line, .. }) => {
+            assert_eq!(
+                line.issue,
+                Some(argus_core::attention::Issue::NonDefaultBranch)
+            )
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        app.ws.config.ignore,
+        Default::default(),
+        "nothing changed yet"
+    );
 }
 
 #[test]

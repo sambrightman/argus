@@ -371,6 +371,9 @@ pub struct App {
     /// The stash switches for this session.
     pub stash: StashConfig,
     pub running: HashMap<PathBuf, String>,
+    /// Auto-fixes still running from the last auto-fix action, and what
+    /// the first did, to say what's done.
+    auto_fixes: (usize, String),
     pub log: Vec<LogEntry>,
     pub show_log: bool,
     pub message: Option<(String, bool)>,
@@ -407,6 +410,7 @@ impl App {
             diffs: HashMap::new(),
             stash,
             running: HashMap::new(),
+            auto_fixes: (0, String::new()),
             log: vec![],
             show_log: false,
             message: None,
@@ -1071,10 +1075,38 @@ impl App {
                     }
                     return vec![];
                 }
+                let fixes: Vec<(String, fix::Fix)> = paths
+                    .iter()
+                    .filter_map(|p| {
+                        let e = self.ws.get(p)?;
+                        let f =
+                            fix::choose(e.status()?, &e.fix_kinds(&kinds), &self.ws.config.stash)?;
+                        Some((e.display_name(), f))
+                    })
+                    .collect();
+                let what = match fixes.as_slice() {
+                    [(name, f)] => format!("auto-fix {name}: {}", f.op.label()),
+                    _ => {
+                        // how many of each kind, in priority order
+                        let mut counts: Vec<(FixKind, usize)> = vec![];
+                        for (_, f) in &fixes {
+                            match counts.iter_mut().find(|c| c.0 == f.kind) {
+                                Some(c) => c.1 += 1,
+                                None => counts.push((f.kind, 1)),
+                            }
+                        }
+                        let tally: Vec<String> = counts
+                            .iter()
+                            .map(|(k, n)| format!("{} ({n})", k.name()))
+                            .collect();
+                        format!("auto-fixing {} repo(s): {}", paths.len(), tally.join(", "))
+                    }
+                };
                 for p in &paths {
                     self.running.insert(p.clone(), "fix".into());
                 }
-                self.info(format!("auto-fixing {} repo(s)…{none}{busy}", paths.len()));
+                self.auto_fixes = (paths.len(), what.clone());
+                self.info(format!("{what}…{none}{busy}"));
                 return vec![Effect::Fix { paths, kinds }];
             }
             PullAndClone => {
@@ -1228,20 +1260,35 @@ impl App {
 
     /// `other_pin`: pin the other way from the list's default.
     fn toggle_ignore_issue(&mut self, other_pin: bool) -> Vec<Effect> {
-        let Some(Row::Detail {
-            repo,
-            line:
-                DetailLine {
-                    issue: Some(issue),
-                    ignored,
-                    ..
-                },
-        }) = self.rows.get(self.cursor)
-        else {
-            self.info("no issue under the cursor");
-            return vec![];
+        let (i, issue, on) = match self.rows.get(self.cursor) {
+            Some(Row::Detail {
+                repo,
+                line:
+                    DetailLine {
+                        issue: Some(issue),
+                        ignored,
+                        ..
+                    },
+            }) => (*repo, *issue, !*ignored),
+            // elsewhere on a repo: its issue, if there's one to ignore
+            Some(Row::Repo(i) | Row::Detail { repo: i, .. }) => {
+                let i = *i;
+                let e = &self.ws.entries[i];
+                let can: Vec<(argus_core::attention::Issue, bool)> = e
+                    .issues
+                    .iter()
+                    .map(|&x| (x, false))
+                    .chain(e.ignored_issues.iter().map(|&x| (x, true)))
+                    .filter(|(x, _)| IssueList::of(*x).is_some())
+                    .collect();
+                match can.as_slice() {
+                    [] => return self.not_applicable("nothing here can be ignored"),
+                    [(x, ignored)] => (i, *x, !*ignored),
+                    _ => return self.choose_issue(i, can.len()),
+                }
+            }
+            None => return vec![],
         };
-        let (i, issue, on) = (*repo, *issue, !*ignored);
         let Some(list) = IssueList::of(issue) else {
             self.info("this issue can't be ignored: it risks losing work");
             return vec![];
@@ -1264,6 +1311,23 @@ impl App {
             }
         ));
         vec![Effect::SaveMarks(Box::new(before))]
+    }
+
+    /// Show repo `i`'s details with the cursor on its first issue that can
+    /// be ignored, to choose one of its `n`.
+    fn choose_issue(&mut self, i: usize, n: usize) -> Vec<Effect> {
+        self.expanded.insert(self.ws.entries[i].path.clone());
+        self.rebuild();
+        if let Some(at) = self.rows.iter().position(|r| {
+            matches!(r, Row::Detail { repo, line } if *repo == i
+                && line.issue.is_some_and(|x| IssueList::of(x).is_some()))
+        }) {
+            self.cursor = at;
+        }
+        self.info(format!(
+            "{n} issues here: put the cursor on one, then m I (or m P) again"
+        ));
+        vec![]
     }
 
     /// Carry out a confirmed (or harmless enough) destructive action.
@@ -1800,6 +1864,11 @@ impl App {
                         self.push_log(&path, "fix".into(), false, e.clone());
                         self.error(format!("{name}: {e}"));
                     }
+                }
+                self.auto_fixes.0 = self.auto_fixes.0.saturating_sub(1);
+                if self.auto_fixes.0 == 0 && self.message.as_ref().is_none_or(|m| !m.1) {
+                    let what = std::mem::take(&mut self.auto_fixes.1);
+                    self.info(format!("{what}: done"));
                 }
                 return vec![Effect::Refresh(vec![path])];
             }

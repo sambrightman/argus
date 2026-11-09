@@ -200,7 +200,7 @@ impl MenuId {
                     item('i', "toggle ignored", Action::ToggleIgnore),
                     item(
                         'I',
-                        "ignore the issue under the cursor (or not)",
+                        "ignore the issue under the cursor, or the repo's only one (or not)",
                         Action::ToggleIgnoreIssue,
                     ),
                     item(

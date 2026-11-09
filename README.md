@@ -154,7 +154,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `c` | **Commit** (prompts for message) |
 | `b` | **Branch**: `d` switch to default, `r` reattach detached HEAD, `c` create a branch at detached HEAD…, `x` delete merged branches…, `f` fast-forward stale branches |
 | `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden |
-| `m` | **Mark**: `f` favourite, `p` pull, `i` ignore, `I` ignore the issue under the cursor (pinned to the branch, tag or commit), `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
+| `m` | **Mark**: `f` favourite, `p` pull, `i` ignore, `I` ignore the issue under the cursor (pinned to the branch, tag or commit; on a repo row, its only issue, or a choice of them), `P` the same pinned the other way, `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page |
 | `v` | **View**: toggles, expand/collapse all, log |
 
