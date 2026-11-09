@@ -623,6 +623,11 @@ fn in_progress(dir: &Path) -> Option<InProgress> {
 /// `git pull`, but never started during an operation in progress, and never
 /// leaving one behind: a pull that stops with conflicts is aborted, which
 /// also restores anything `rebase.autoStash`/`merge.autoStash` stashed.
+/// A pull git calls a success can still leave conflicts: when re-applying
+/// the autostash conflicts, git keeps the changes in a stash (which it only
+/// does when it couldn't re-apply them) and leaves the conflicted files.
+/// That's undone too, back to the commit and changes from before the pull,
+/// and reported as a failure.
 fn pull(cwd: &Path, started: Instant) -> OpOutcome {
     if let Some(p) = in_progress(cwd) {
         return OpOutcome {
@@ -632,10 +637,26 @@ fn pull(cwd: &Path, started: Instant) -> OpOutcome {
             duration: started.elapsed(),
         };
     }
+    let rev = |r: &str| {
+        let o = git_in(cwd, &["rev-parse", "-q", "--verify", r]);
+        o.success.then_some(o.output)
+    };
+    let (head_before, stash_before) = (rev("HEAD"), rev("refs/stash"));
     let mut o = git(cwd, &Op::Pull.args(), started);
-    if !o.success
-        && let Some(p) = in_progress(cwd)
-    {
+    if o.success {
+        if let Some(head) = head_before
+            && rev("refs/stash") != stash_before
+            && git_in(cwd, &["log", "-g", "-1", "--format=%gs", "refs/stash"]).output == "autostash"
+        {
+            let conflicted = git_in(cwd, &["diff", "--name-only", "--diff-filter=U"]).output;
+            o.success = false;
+            o.output
+                .push_str(&undo_autostash_conflict(cwd, &head, &conflicted));
+        }
+        o.duration = started.elapsed();
+        return o;
+    }
+    if let Some(p) = in_progress(cwd) {
         let cmd = match p {
             InProgress::Merge => "merge",
             InProgress::Rebase => "rebase",
@@ -650,6 +671,30 @@ fn pull(cwd: &Path, started: Instant) -> OpOutcome {
         o.duration = started.elapsed();
     }
     o
+}
+
+/// Back to `head` with the autostash (`stash@{0}`) re-applied there, where
+/// it was made, so it applies cleanly. Says what happened.
+fn undo_autostash_conflict(cwd: &Path, head: &str, conflicted: &str) -> String {
+    let files = match conflicted.lines().collect::<Vec<_>>().join(", ") {
+        f if f.is_empty() => "files".to_string(),
+        f => f,
+    };
+    let reset = git_in(cwd, &["reset", "-q", "--hard", head]);
+    let pop = reset
+        .success
+        .then(|| git_in(cwd, &["stash", "pop", "-q", "--index"]));
+    match pop {
+        Some(p) if p.success => format!(
+            "\nargus: the pull conflicts with your uncommitted changes in {files}; \
+             undone, repo left as it was"
+        ),
+        _ => format!(
+            "\nargus: the pull conflicts with your uncommitted changes in {files}, and undoing \
+             it failed: your changes are in stash@{{0}} (autostash):\n{}",
+            pop.map_or(reset.output, |p| p.output)
+        ),
+    }
 }
 
 /// Run a read-only git command for status (no network, no prompts).

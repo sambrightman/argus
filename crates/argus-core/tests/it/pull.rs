@@ -299,3 +299,119 @@ fn a_merging_pull_never_waits_for_an_editor() {
     assert_eq!(parents.split_whitespace().count(), 3, "a merge commit");
     commit(&r, "still usable");
 }
+
+/// Each way a successful pull can re-apply an autostash: fast-forward
+/// (merge or rebase settings) and a real rebase of a diverged branch.
+fn autostash_cases(sb: &Sandbox) -> Vec<(&'static str, std::path::PathBuf)> {
+    let mut v = vec![];
+    for (name, rebase) in [("ff-merge", false), ("ff-rebase", true)] {
+        sb.remote("acme", name);
+        let r = sb.clone_as_github("acme", name, name);
+        sb.advance_remote("acme", name, "README");
+        git(&r, &["fetch", "-q"]);
+        git(&r, &["config", "pull.rebase", &rebase.to_string()]);
+        v.push((name, r));
+    }
+    let r = sb.diverged("acme", "div", "div", false);
+    // README changed on origin/feat too
+    let other = sb.clone_as_github("acme", "div", "div-other");
+    git(&other, &["switch", "-q", "feat"]);
+    write(&other, "README", "theirs\n");
+    commit(&other, "theirs README");
+    git(&other, &["push", "-q"]);
+    git(&r, &["fetch", "-q"]);
+    git(&r, &["config", "pull.rebase", "true"]);
+    v.push(("diverged-rebase", r));
+    for (_, r) in &v {
+        git(r, &["config", "rebase.autoStash", "true"]);
+        git(r, &["config", "merge.autoStash", "true"]);
+    }
+    v
+}
+
+#[test]
+fn a_pull_whose_autostash_conflicts_is_undone() {
+    let sb = Sandbox::new();
+    for (name, r) in autostash_cases(&sb) {
+        // a stash of the user's own, which must stay as it is
+        write(&r, "notes.txt", "kept\n");
+        git(&r, &["add", "notes.txt"]);
+        git(&r, &["stash", "push", "-q", "-m", "mine"]);
+        let mine = git(&r, &["rev-parse", "refs/stash"]);
+        let before = head(&r);
+        write(&r, "README", "staged edit\n");
+        git(&r, &["add", "README"]);
+        write(&r, "README", "unstaged edit\n");
+        let out = ops::run(&r, &Op::Pull);
+        assert!(!out.success, "{name}: {}", out.output);
+        assert!(
+            out.output
+                .contains("conflicts with your uncommitted changes in README; undone"),
+            "{name}: {}",
+            out.output
+        );
+        // as it was: same commit, same changes (staged ones staged), same stashes
+        assert_eq!(head(&r), before, "{name}");
+        assert_eq!(
+            std::fs::read_to_string(r.join("README")).unwrap(),
+            "unstaged edit\n",
+            "{name}"
+        );
+        assert_eq!(git(&r, &["show", ":README"]), "staged edit\n", "{name}");
+        let s = st(&r);
+        assert_eq!(s.changes.conflicted, 0, "{name}");
+        let codes: Vec<String> = s
+            .changes
+            .files
+            .iter()
+            .map(|f| format!("{}{} {}", f.index, f.worktree, f.path))
+            .collect();
+        assert_eq!(codes, ["MM README"], "{name}");
+        assert_eq!(s.stashes, ["mine"], "{name}");
+        assert_eq!(git(&r, &["rev-parse", "refs/stash"]), mine, "{name}");
+    }
+}
+
+#[test]
+fn a_pull_whose_autostash_applies_cleanly_stands() {
+    let sb = Sandbox::new();
+    for (name, r) in autostash_cases(&sb) {
+        // one git left behind after an earlier pull: not this pull's
+        write(&r, "README", "old edit\n");
+        let old = git(&r, &["stash", "create"]);
+        git(&r, &["stash", "store", "-m", "autostash", old.trim()]);
+        git(&r, &["checkout", "-q", "README"]);
+        let before = head(&r);
+        write(&r, "elsewhere.txt", "x\n");
+        git(&r, &["add", "elsewhere.txt"]);
+        let out = ops::run(&r, &Op::Pull);
+        assert!(out.success, "{name}: {}", out.output);
+        assert_ne!(head(&r), before, "{name}: pulled");
+        let s = st(&r);
+        assert_eq!(s.stashes, ["autostash"], "{name}: the old one, untouched");
+        assert_eq!(s.changes.staged, 1, "{name}: the change is back");
+    }
+}
+
+#[test]
+fn only_the_pulls_own_autostash_is_undone() {
+    // a hook stashing during the pull: not git's autostash, left alone
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    sb.advance_remote("acme", "w", "README");
+    let hook = r.join(".git/hooks/post-merge");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\necho x > hooked.txt && git add hooked.txt && git stash push -q -m hooked\n",
+    )
+    .unwrap();
+    let mut p = std::fs::metadata(&hook).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut p, 0o755);
+    std::fs::set_permissions(&hook, p).unwrap();
+    let before = head(&r);
+    let out = ops::run(&r, &Op::Pull);
+    assert!(out.success, "{}", out.output);
+    assert_ne!(head(&r), before, "pulled");
+    assert_eq!(st(&r).stashes, ["hooked"]);
+}
