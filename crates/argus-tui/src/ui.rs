@@ -442,12 +442,16 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) {
     };
     let t = v.theme;
     let targets = app.selected().len();
-    let title = format!(
-        " {} · {} repo{} ",
-        menu.title,
-        targets,
-        if targets == 1 { "" } else { "s" }
-    );
+    let title = match menu.id {
+        // names its repo
+        crate::menu::MenuId::Ignore => format!(" {} ", menu.title),
+        _ => format!(
+            " {} · {} repo{} ",
+            menu.title,
+            targets,
+            if targets == 1 { "" } else { "s" }
+        ),
+    };
     let mut lines: Vec<Line> = notes
         .iter()
         .map(|n| Line::from(Span::styled(format!(" {n}"), t.ui(Ui::Dim))))

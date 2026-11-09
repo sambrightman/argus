@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 
+use argus_core::attention::Issue;
 use argus_core::badges::Role;
 use argus_core::config::StashConfig;
 use argus_core::diff::{self, FileDiff, LineKind, Side};
@@ -15,9 +16,9 @@ use argus_core::status::RepoStatus;
 use argus_core::{Entry, ViewFilter, Workspace, paths};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::details::{DetailLine, DiffRef, details};
+use crate::details::{DetailLine, DiffRef, describe, details};
 use crate::input::{Edit, LineEditor};
-use crate::menu::{Menu, MenuId};
+use crate::menu::{self, Item, Menu, MenuId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
@@ -89,6 +90,8 @@ pub enum Action {
     /// The same, pinning the other way: stashes to their messages, where
     /// HEAD is not at all.
     ToggleIgnoreIssueOtherPin,
+    /// In the Ignore menu: toggle that issue (by its place), or all.
+    IgnoreChoice(Option<usize>),
     Snooze,
     Unsnooze,
     Ack,
@@ -222,6 +225,9 @@ pub enum Switch {
     Untracked,
     /// Leave staged changes in the index after stashing.
     KeepIndex,
+    /// In the Ignore menu: pin what each list doesn't pin by default, and
+    /// the other way round.
+    SwapPin,
 }
 
 /// Something for the runtime to do.
@@ -376,6 +382,8 @@ pub struct App {
     /// Auto-fixes still running from the last auto-fix action, and what
     /// the first did, to say what's done.
     auto_fixes: (usize, String),
+    /// What the open Ignore menu is for.
+    ignore_menu: Option<IgnoreMenu>,
     pub log: Vec<LogEntry>,
     pub show_log: bool,
     pub message: Option<(String, bool)>,
@@ -413,6 +421,7 @@ impl App {
             stash,
             running: HashMap::new(),
             auto_fixes: (0, String::new()),
+            ignore_menu: None,
             log: vec![],
             show_log: false,
             message: None,
@@ -831,6 +840,18 @@ impl App {
             }
             Toggle(Switch::Untracked) => self.stash.untracked = !self.stash.untracked,
             Toggle(Switch::KeepIndex) => self.stash.keep_index = !self.stash.keep_index,
+            Toggle(Switch::SwapPin) => {
+                if let Some(m) = &mut self.ignore_menu {
+                    m.swap = !m.swap;
+                }
+                // the labels say what each would do
+                if let (Some(menu), Mode::Menu { menu: open, .. }) =
+                    (self.ignore_menu_items(), &mut self.mode)
+                {
+                    *open = menu;
+                }
+            }
+            IgnoreChoice(which) => return self.ignore_choice(which),
             Stash(kind) => return self.stash_action(kind),
             StageFiles => return self.file_op(ops::stage_ops, "stage"),
             UnstageFiles => return self.file_op(ops::unstage_ops, "unstage"),
@@ -1252,7 +1273,7 @@ impl App {
             Some(Row::Repo(i) | Row::Detail { repo: i, .. }) => {
                 let i = *i;
                 let e = &self.ws.entries[i];
-                let can: Vec<(argus_core::attention::Issue, bool)> = e
+                let can: Vec<(Issue, bool)> = e
                     .issues
                     .iter()
                     .map(|&x| (x, false))
@@ -1262,7 +1283,21 @@ impl App {
                 match can.as_slice() {
                     [] => return self.not_applicable("nothing here can be ignored"),
                     [(x, ignored)] => (i, *x, !*ignored),
-                    _ => return self.choose_issue(i, can.len()),
+                    _ => {
+                        self.ignore_menu = Some(IgnoreMenu {
+                            path: e.path.clone(),
+                            issues: can,
+                            swap: other_pin,
+                        });
+                        if let Some(menu) = self.ignore_menu_items() {
+                            self.mode = Mode::Menu {
+                                menu,
+                                cursor: 0,
+                                notes: vec![],
+                            };
+                        }
+                        return vec![];
+                    }
                 }
             }
             None => return vec![],
@@ -1272,23 +1307,94 @@ impl App {
             return vec![];
         };
         let pin = list.pins_by_default() != other_pin;
+        self.set_ignored(i, &[(list, on, pin)])
+    }
+
+    /// Add repo `i` to, or remove it from, `[ignore]` lists: (list, on,
+    /// pinned). Saved, and said.
+    fn set_ignored(&mut self, i: usize, changes: &[(IssueList, bool, bool)]) -> Vec<Effect> {
         let before = self.ws.config.clone();
-        if let Err(e) = self.ws.set_issue_ignored(&[i], list, on, Some(pin)) {
-            self.error(e.to_string());
-            return vec![];
+        let mut said = vec![];
+        for &(list, on, pin) in changes {
+            if let Err(e) = self.ws.set_issue_ignored(&[i], list, on, Some(pin)) {
+                self.error(e.to_string());
+                return vec![];
+            }
+            said.push(format!(
+                "{} [ignore] {}{}",
+                if on { "added to" } else { "removed from" },
+                list.name(),
+                if on && pin && list.pins() {
+                    ", pinned"
+                } else {
+                    ""
+                }
+            ));
         }
         self.rebuild();
-        self.info(format!(
-            "{} [ignore] {}{}",
-            if on { "added to" } else { "removed from" },
-            list.name(),
-            if on && pin && list.pins() {
-                ", pinned"
-            } else {
-                ""
-            }
-        ));
+        self.info(said.join(" · "));
         vec![Effect::SaveMarks(Box::new(before))]
+    }
+
+    /// The Ignore menu for [`Self::ignore_menu`]: each issue, saying what
+    /// choosing it would do, then all of them and the pinning switch.
+    fn ignore_menu_items(&self) -> Option<Menu> {
+        let IgnoreMenu { path, issues, swap } = self.ignore_menu.as_ref()?;
+        let e = self.ws.get(path)?;
+        let s = e.status()?;
+        let mut items: Vec<Item> = issues
+            .iter()
+            .enumerate()
+            .map(|(n, &(issue, ignored))| {
+                let key = char::from_digit(n as u32 + 1, 10).unwrap_or('?');
+                let label = ignore_label(issue, ignored, *swap, s);
+                menu::item(key, label, Action::IgnoreChoice(Some(n)))
+            })
+            .collect();
+        let all_ignored = issues.iter().all(|i| i.1);
+        items.push(menu::item(
+            'a',
+            if all_ignored {
+                "all: stop ignoring them"
+            } else {
+                "all: ignore the ones not ignored yet"
+            },
+            Action::IgnoreChoice(None),
+        ));
+        items.push(menu::switch(
+            's',
+            "swap pinned and unpinned (see above)",
+            Switch::SwapPin,
+        ));
+        Some(Menu {
+            id: MenuId::Ignore,
+            title: format!("Ignore issues · {}", e.display_name()),
+            items,
+        })
+    }
+
+    /// Toggle the Ignore menu's issue `which`, or all.
+    fn ignore_choice(&mut self, which: Option<usize>) -> Vec<Effect> {
+        let Some(IgnoreMenu { path, issues, swap }) = self.ignore_menu.take() else {
+            return vec![];
+        };
+        let Some(i) = self.ws.index_of(&path) else {
+            return vec![];
+        };
+        let chosen: Vec<(Issue, bool)> = match which {
+            Some(n) => issues.get(n).copied().into_iter().collect(),
+            // all: stop ignoring if every one is, else ignore the rest
+            None if issues.iter().all(|x| x.1) => issues,
+            None => issues.into_iter().filter(|x| !x.1).collect(),
+        };
+        let changes: Vec<(IssueList, bool, bool)> = chosen
+            .into_iter()
+            .filter_map(|(issue, ignored)| {
+                let list = IssueList::of(issue)?;
+                Some((list, !ignored, list.pins_by_default() != swap))
+            })
+            .collect();
+        self.set_ignored(i, &changes)
     }
 
     /// What auto-fixing the repos at `paths` would do: `auto-fix acme/w:
@@ -1350,23 +1456,6 @@ impl App {
             format!("{key}: {what}")
         })
         .collect()
-    }
-
-    /// Show repo `i`'s details with the cursor on its first issue that can
-    /// be ignored, to choose one of its `n`.
-    fn choose_issue(&mut self, i: usize, n: usize) -> Vec<Effect> {
-        self.expanded.insert(self.ws.entries[i].path.clone());
-        self.rebuild();
-        if let Some(at) = self.rows.iter().position(|r| {
-            matches!(r, Row::Detail { repo, line } if *repo == i
-                && line.issue.is_some_and(|x| IssueList::of(x).is_some()))
-        }) {
-            self.cursor = at;
-        }
-        self.info(format!(
-            "{n} issues here: put the cursor on one, then m I (or m P) again"
-        ));
-        vec![]
     }
 
     /// Carry out a confirmed (or harmless enough) destructive action.
@@ -1605,6 +1694,7 @@ impl App {
         match s {
             Switch::Untracked => self.stash.untracked,
             Switch::KeepIndex => self.stash.keep_index,
+            Switch::SwapPin => self.ignore_menu.as_ref().is_some_and(|m| m.swap),
         }
     }
 
@@ -1975,6 +2065,42 @@ impl App {
             self.log.drain(..100);
         }
     }
+}
+
+/// The repo an Ignore menu is for, its issues that can be ignored (and
+/// whether each is), and whether pinning is swapped.
+struct IgnoreMenu {
+    path: PathBuf,
+    issues: Vec<(Issue, bool)>,
+    swap: bool,
+}
+
+/// What choosing `issue` in the Ignore menu would do, exactly: stop
+/// ignoring it, or ignore it pinned (only while on this branch, at this
+/// HEAD, for these stashes) or not (whatever they are), as its list pins by
+/// default unless `swap`.
+fn ignore_label(issue: Issue, ignored: bool, swap: bool, s: &RepoStatus) -> String {
+    let (_, text) = describe(&issue, s.default_branch.as_deref());
+    let Some(list) = IssueList::of(issue) else {
+        return text;
+    };
+    if ignored {
+        return format!("stop ignoring: {text}");
+    }
+    let pinned = list.pins() && list.pins_by_default() != swap;
+    let first = list.values(s).into_iter().next().unwrap_or_default();
+    let how = match (list, pinned) {
+        (IssueList::NonDefaultBranch | IssueList::NoUpstream, true) => {
+            format!("only while on {first}")
+        }
+        (IssueList::NonDefaultBranch | IssueList::NoUpstream, false) => "on any branch".into(),
+        (IssueList::Detached, true) => format!("only while at {first}"),
+        (IssueList::Detached, false) => "wherever HEAD is".into(),
+        (IssueList::Stashes, true) => "only these, by message".into(),
+        (IssueList::Stashes, false) => "any, now and later".into(),
+        _ => return format!("ignore: {text}"),
+    };
+    format!("ignore: {text}, {how}")
 }
 
 /// The fixes of one kind an action runs, and what it leaves out.

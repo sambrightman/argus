@@ -436,7 +436,8 @@ fn the_shell_is_a_login_shell_as_in_a_terminal() {
         let mut c = argus_tui::suspended_command("/bin/bash", &i, home.path(), login);
         c.env("HOME", home.path())
             .env("SHELL", "/my/shell")
-            .stdin(std::process::Stdio::null());
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null()); // "no job control"
         assert!(c.status().unwrap().success());
         let got = std::fs::read_to_string(&started).ok();
         if login {

@@ -284,7 +284,7 @@ pub fn details(
     v
 }
 
-fn describe(i: &Issue, default: Option<&str>) -> (Role, String) {
+pub fn describe(i: &Issue, default: Option<&str>) -> (Role, String) {
     match i {
         Issue::Conflicts(n) => (Role::Conflict, format!("{n} conflicted path(s)")),
         Issue::InProgress => (

@@ -15,11 +15,13 @@ pub enum MenuId {
     Mark,
     Open,
     View,
+    /// A repo's issues to ignore, built when opened (no prefix key).
+    Ignore,
 }
 
 pub struct Item {
     pub key: char,
-    pub label: &'static str,
+    pub label: String,
     pub action: Action,
     /// A switch, shown as `[x]`/`[ ]`; choosing it keeps the menu open.
     pub switch: Option<Switch>,
@@ -27,23 +29,23 @@ pub struct Item {
 
 pub struct Menu {
     pub id: MenuId,
-    pub title: &'static str,
+    pub title: String,
     pub items: Vec<Item>,
 }
 
-fn item(key: char, label: &'static str, action: Action) -> Item {
+pub fn item(key: char, label: impl Into<String>, action: Action) -> Item {
     Item {
         key,
-        label,
+        label: label.into(),
         action,
         switch: None,
     }
 }
 
-fn switch(key: char, label: &'static str, s: Switch) -> Item {
+pub fn switch(key: char, label: impl Into<String>, s: Switch) -> Item {
     Item {
         key,
-        label,
+        label: label.into(),
         action: Action::Toggle(s),
         switch: Some(s),
     }
@@ -63,6 +65,7 @@ impl MenuId {
             MenuId::Mark => 'm',
             MenuId::Open => 'o',
             MenuId::View => 'v',
+            MenuId::Ignore => 'I',
         }
     }
 
@@ -197,15 +200,19 @@ impl MenuId {
                 vec![
                     item('f', "toggle favourite", Action::ToggleFavourite),
                     item('p', "toggle pull", Action::TogglePull),
-                    item('i', "toggle ignored", Action::ToggleIgnore),
+                    item(
+                        'i',
+                        "ignore the whole repo: hidden, no pulls or bulk actions (or not)",
+                        Action::ToggleIgnore,
+                    ),
                     item(
                         'I',
-                        "ignore the issue under the cursor, or the repo's only one (or not)",
+                        "ignore an issue: the one under the cursor, or choose…",
                         Action::ToggleIgnoreIssue,
                     ),
                     item(
                         'P',
-                        "the same, pinned the other way (stashes to their messages; branch or HEAD not)",
+                        "the same, pinned and unpinned swapped…",
                         Action::ToggleIgnoreIssueOtherPin,
                     ),
                     item('z', "snooze for…", Action::Snooze),
@@ -223,6 +230,7 @@ impl MenuId {
                     item('w', "forge page in browser", Action::Browse),
                 ],
             ),
+            MenuId::Ignore => ("Ignore issues", vec![]),
             MenuId::View => (
                 "View",
                 vec![
@@ -240,7 +248,7 @@ impl MenuId {
         };
         Menu {
             id: self,
-            title,
+            title: title.into(),
             items,
         }
     }

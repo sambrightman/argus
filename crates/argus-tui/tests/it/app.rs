@@ -2015,24 +2015,66 @@ fn ignoring_from_a_repo_row_takes_its_only_issue_or_asks_which() {
         app.act(Action::Down);
     }
     assert!(app.act(Action::ToggleIgnoreIssue).is_empty());
-    assert_eq!(
-        app.message.as_ref().unwrap().0,
-        "2 issues here: put the cursor on one, then m I (or m P) again"
-    );
-    match app.rows.get(app.cursor) {
-        Some(Row::Detail { line, .. }) => {
-            assert_eq!(
-                line.issue,
-                Some(argus_core::attention::Issue::NonDefaultBranch)
-            )
+    let labels = |app: &App| match &app.mode {
+        Mode::Menu { menu, .. } => {
+            assert_eq!(menu.title, "Ignore issues · acme/feature");
+            menu.items
+                .iter()
+                .map(|i| format!("{} {}", i.key, i.label))
+                .collect::<Vec<_>>()
         }
-        other => panic!("{other:?}"),
-    }
+        _ => panic!("no menu"),
+    };
+    let l = labels(&app);
+    assert_eq!(l.len(), 4, "{l:?}");
+    assert!(
+        l[0].starts_with("1 ignore: not on default branch")
+            && l[0].ends_with(", only while on feat"),
+        "{l:?}"
+    );
+    assert!(
+        l[1].starts_with("2 stop ignoring: "),
+        "stashes are by default: {l:?}"
+    );
+    assert_eq!(l[2], "a all: ignore the ones not ignored yet");
+    assert_eq!(l[3], "s swap pinned and unpinned (see above)");
     assert_eq!(
         app.ws.config.ignore,
         Default::default(),
         "nothing changed yet"
     );
+    // the switch says what changes, and keeps the menu open
+    app.on_key(key('s'));
+    assert!(
+        labels(&app)[0].ends_with(", on any branch"),
+        "{:?}",
+        labels(&app)
+    );
+    app.on_key(key('1'));
+    assert!(matches!(app.mode, Mode::Normal));
+    assert_eq!(
+        app.ws.config.ignore.non_default_branch,
+        ["github.com/acme/feature"]
+    );
+    // all ignored now: `a` stops ignoring them all
+    app.act(Action::ToggleIgnoreIssue);
+    assert_eq!(labels(&app)[2], "a all: stop ignoring them");
+    app.on_key(key('a'));
+    assert!(app.ws.config.ignore.non_default_branch.is_empty());
+    let msg = app.message.as_ref().unwrap().0.clone();
+    assert!(
+        msg.starts_with("removed from [ignore] non_default_branch · "),
+        "{msg}"
+    );
+    // m P opens it with pinning swapped
+    app.act(Action::ToggleIgnoreIssueOtherPin);
+    assert!(
+        labels(&app)[0].ends_with(", on any branch"),
+        "{:?}",
+        labels(&app)
+    );
+    app.on_key(key('q'));
+    assert!(matches!(app.mode, Mode::Normal));
 }
 
 #[test]
