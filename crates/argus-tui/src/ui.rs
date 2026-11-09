@@ -427,7 +427,12 @@ fn popup(area: Rect, w: u16, h: u16) -> Rect {
 }
 
 fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) {
-    let Mode::Menu { menu, cursor } = &app.mode else {
+    let Mode::Menu {
+        menu,
+        cursor,
+        notes,
+    } = &app.mode
+    else {
         return;
     };
     let t = v.theme;
@@ -438,7 +443,13 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) {
         targets,
         if targets == 1 { "" } else { "s" }
     );
-    let mut lines = vec![];
+    let mut lines: Vec<Line> = notes
+        .iter()
+        .map(|n| Line::from(Span::styled(format!(" {n}"), t.ui(Ui::Dim))))
+        .collect();
+    if !notes.is_empty() {
+        lines.push(Line::from(""));
+    }
     for (n, it) in menu.items.iter().enumerate() {
         let label = match it.switch {
             Some(s) => format!(
@@ -465,6 +476,7 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) {
         .items
         .iter()
         .map(|i| i.label.len() as u16 + 12)
+        .chain(notes.iter().map(|n| n.chars().count() as u16 + 4))
         .max()
         .unwrap_or(20)
         .max(title.len() as u16 + 4);

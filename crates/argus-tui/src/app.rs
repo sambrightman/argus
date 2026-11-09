@@ -305,6 +305,8 @@ pub enum Mode {
     Menu {
         menu: Menu,
         cursor: usize,
+        /// What its actions would do, shown above them.
+        notes: Vec<String>,
     },
     Input {
         prompt: Prompt,
@@ -597,7 +599,7 @@ impl App {
                 }
                 vec![]
             }
-            Mode::Menu { menu, cursor } => {
+            Mode::Menu { menu, cursor, .. } => {
                 let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
                 let n = menu.items.len();
                 match k.code {
@@ -853,9 +855,11 @@ impl App {
                 };
             }
             OpenMenu(m) => {
+                let notes = self.menu_notes(m);
                 self.mode = Mode::Menu {
                     menu: m.menu(),
                     cursor: 0,
+                    notes,
                 }
             }
             StartFilter => {
@@ -1075,33 +1079,7 @@ impl App {
                     }
                     return vec![];
                 }
-                let fixes: Vec<(String, fix::Fix)> = paths
-                    .iter()
-                    .filter_map(|p| {
-                        let e = self.ws.get(p)?;
-                        let f =
-                            fix::choose(e.status()?, &e.fix_kinds(&kinds), &self.ws.config.stash)?;
-                        Some((e.display_name(), f))
-                    })
-                    .collect();
-                let what = match fixes.as_slice() {
-                    [(name, f)] => format!("auto-fix {name}: {}", f.op.label()),
-                    _ => {
-                        // how many of each kind, in priority order
-                        let mut counts: Vec<(FixKind, usize)> = vec![];
-                        for (_, f) in &fixes {
-                            match counts.iter_mut().find(|c| c.0 == f.kind) {
-                                Some(c) => c.1 += 1,
-                                None => counts.push((f.kind, 1)),
-                            }
-                        }
-                        let tally: Vec<String> = counts
-                            .iter()
-                            .map(|(k, n)| format!("{} ({n})", k.name()))
-                            .collect();
-                        format!("auto-fixing {} repo(s): {}", paths.len(), tally.join(", "))
-                    }
-                };
+                let what = self.auto_fix_summary(&paths).unwrap_or_default();
                 for p in &paths {
                     self.running.insert(p.clone(), "fix".into());
                 }
@@ -1311,6 +1289,67 @@ impl App {
             }
         ));
         vec![Effect::SaveMarks(Box::new(before))]
+    }
+
+    /// What auto-fixing the repos at `paths` would do: `auto-fix acme/w:
+    /// push`, or how many of each kind for several. `None` for nothing.
+    fn auto_fix_summary(&self, paths: &[PathBuf]) -> Option<String> {
+        let kinds = &self.ws.config.fix.auto;
+        let fixes: Vec<(String, fix::Fix)> = paths
+            .iter()
+            .filter_map(|p| {
+                let e = self.ws.get(p)?;
+                let f = fix::choose(e.status()?, &e.fix_kinds(kinds), &self.ws.config.stash)?;
+                Some((e.display_name(), f))
+            })
+            .collect();
+        match fixes.as_slice() {
+            [] => None,
+            [(name, f)] => Some(format!("auto-fix {name}: {}", f.op.label())),
+            _ => {
+                // how many of each kind, in priority order
+                let mut counts: Vec<(FixKind, usize)> = vec![];
+                for (_, f) in &fixes {
+                    match counts.iter_mut().find(|c| c.0 == f.kind) {
+                        Some(c) => c.1 += 1,
+                        None => counts.push((f.kind, 1)),
+                    }
+                }
+                let tally: Vec<String> = counts
+                    .iter()
+                    .map(|(k, n)| format!("{} ({n})", k.name()))
+                    .collect();
+                Some(format!(
+                    "auto-fixing {} repo(s): {}",
+                    fixes.len(),
+                    tally.join(", ")
+                ))
+            }
+        }
+    }
+
+    /// Lines for the top of menu `m`: for Fix, what `x` and `a` would do.
+    fn menu_notes(&self, m: MenuId) -> Vec<String> {
+        if m != MenuId::Fix {
+            return vec![];
+        }
+        let paths = |idx: Vec<usize>| -> Vec<PathBuf> {
+            idx.into_iter()
+                .map(|i| self.ws.entries[i].path.clone())
+                .collect()
+        };
+        [
+            ('x', paths(self.selected())),
+            ('a', paths(self.bulk_repos())),
+        ]
+        .into_iter()
+        .map(|(key, p)| {
+            let what = self
+                .auto_fix_summary(&p)
+                .unwrap_or_else(|| "nothing to auto-fix".into());
+            format!("{key}: {what}")
+        })
+        .collect()
     }
 
     /// Show repo `i`'s details with the cursor on its first issue that can

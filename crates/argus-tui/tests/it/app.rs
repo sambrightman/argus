@@ -2058,3 +2058,31 @@ fn prompts_say_what_they_ask_for() {
         "{screen}"
     );
 }
+
+#[test]
+fn the_fix_menu_says_what_auto_fix_would_do() {
+    let (_sb, mut app) = setup("");
+    while current(&app) != "acme/feature" {
+        app.act(Action::Down);
+    }
+    app.on_key(key('x'));
+    let screen = render(&mut app, 100, 20);
+    assert!(
+        screen.contains("x: auto-fix acme/feature: switch main"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("a: auto-fix acme/feature: switch main"),
+        "{screen}"
+    );
+    app.on_key(key('q'));
+    // inverse: nothing to do for the selection
+    app.act(Action::Bottom);
+    app.on_key(key('x'));
+    let screen = render(&mut app, 100, 20);
+    assert!(screen.contains("x: nothing to auto-fix"), "{screen}");
+    // other menus have no notes
+    app.on_key(key('q'));
+    app.on_key(key('P'));
+    assert!(!render(&mut app, 100, 20).contains("auto-fix"));
+}
