@@ -1993,7 +1993,7 @@ fn the_ignore_menu_steps_an_issue_through_its_states() {
         menu_items(&app),
         [
             "1 · not on default branch (main)",
-            "a all: ignore 1 counted issue(s), each its default way"
+            "a all: ignore 1 counted issue(s)"
         ]
     );
     // counted, pinned (the default), ignored everywhere, counted; the menu stays
@@ -2002,14 +2002,14 @@ fn the_ignore_menu_steps_an_issue_through_its_states() {
     assert_eq!(nd(&app), ["github.com/acme/feature@feat"]);
     assert_eq!(
         menu_items(&app)[0],
-        "1 ○ not on default branch (main), ignored while on feat"
+        "1 ○ not on default branch (main) [ignored@feat]"
     );
     assert_eq!(menu_items(&app)[1], "a all: no counted issue to ignore");
     app.on_key(key('1'));
     assert_eq!(nd(&app), ["github.com/acme/feature"]);
     assert_eq!(
         menu_items(&app)[0],
-        "1 ● not on default branch (main), ignored on any branch"
+        "1 ● not on default branch (main) [ignored]"
     );
     app.on_key(key('1'));
     assert!(nd(&app).is_empty());
@@ -2035,8 +2035,8 @@ fn all_ignores_only_counted_issues_each_its_default_way() {
         menu_items(&app),
         [
             "1 · not on default branch (main)",
-            "2 ● 1 stash(es), ignored, later ones too",
-            "a all: ignore 1 counted issue(s), each its default way"
+            "2 ● 1 stash(es) [ignored]",
+            "a all: ignore 1 counted issue(s)"
         ]
     );
     let stashes = app.ws.config.ignore.stashes.clone();
@@ -2073,10 +2073,7 @@ fn stashes_step_through_all_pinned_to_their_messages_and_counted() {
     );
     app.on_key(key('1'));
     assert_eq!(own(&app), ["github.com/acme/clean"]);
-    assert_eq!(
-        menu_items(&app)[0],
-        "1 ● 2 stash(es), ignored, later ones too"
-    );
+    assert_eq!(menu_items(&app)[0], "1 ● 2 stash(es) [ignored]");
     app.on_key(key('1'));
     assert_eq!(
         own(&app),
@@ -2086,10 +2083,7 @@ fn stashes_step_through_all_pinned_to_their_messages_and_counted() {
             "github.com/acme/clean@mine"
         ]
     );
-    assert_eq!(
-        menu_items(&app)[0],
-        "1 ○ 2 stash(es), ignored for these messages"
-    );
+    assert_eq!(menu_items(&app)[0], "1 ○ 2 stash(es) [ignored@2 messages]");
     app.on_key(key('1'));
     assert_eq!(own(&app), ["!github.com/acme/clean"]);
     assert_eq!(menu_items(&app)[0], "1 · 2 stash(es)");

@@ -1666,7 +1666,7 @@ impl App {
             'a',
             match counted {
                 0 => "all: no counted issue to ignore".to_string(),
-                n => format!("all: ignore {n} counted issue(s), each its default way"),
+                n => format!("all: ignore {n} counted issue(s)"),
             },
             Action::IgnoreStep(None),
         ));
@@ -2446,7 +2446,7 @@ struct GitignoreTargets {
 }
 
 /// An ignore menu item: the state's symbol, then the issue and, when
-/// ignored, how (`ignored while on feat`, `ignored on any branch`). For
+/// ignored, how: `[ignored]`, or `[ignored@feat]` for just this value. For
 /// counted stashes, how many config patterns ignore anyway (`partly`).
 fn state_label(
     issue: Issue,
@@ -2466,23 +2466,12 @@ fn state_label(
         IgnoreState::Counted => (&icons.issue_counted, String::new()),
         IgnoreState::Pinned => (
             &icons.issue_pinned,
-            match list {
-                IssueList::Detached => format!(", ignored while at {first}"),
-                IssueList::Stashes => ", ignored for these messages".into(),
-                _ => format!(", ignored while on {first}"),
+            match list.values(s).len() {
+                n if n > 1 => format!(" [ignored@{n} messages]"),
+                _ => format!(" [ignored@{first}]"),
             },
         ),
-        IgnoreState::Ignored => (
-            &icons.issue_ignored,
-            match list {
-                IssueList::NonDefaultBranch | IssueList::NoUpstream => {
-                    ", ignored on any branch".into()
-                }
-                IssueList::Detached => ", ignored wherever HEAD is".into(),
-                IssueList::Stashes => ", ignored, later ones too".into(),
-                _ => ", ignored".into(),
-            },
-        ),
+        IgnoreState::Ignored => (&icons.issue_ignored, " [ignored]".into()),
     };
     format!("{} {text}{how}", symbol.trim_end())
 }
