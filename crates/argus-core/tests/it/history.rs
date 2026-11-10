@@ -122,3 +122,23 @@ fn a_commit_in_full() {
     // inverse: no such commit
     assert!(commit_detail(&r, "0000000000000000000000000000000000000001").is_err());
 }
+
+#[test]
+fn a_branchs_history_newest_first() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    commit(&r, "second");
+    commit(&r, "third");
+    let range = Range::Ancestors { tip: "HEAD".into() };
+    assert_eq!(
+        summaries(&r, &range, 10),
+        (
+            vec!["third".into(), "second".into(), "initial".into()],
+            false
+        )
+    );
+    assert_eq!(
+        summaries(&r, &range, 2),
+        (vec!["third".into(), "second".into()], true)
+    );
+}

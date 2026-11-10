@@ -2,6 +2,7 @@
 //! action. Items can also be chosen with arrows + Enter.
 
 use crate::app::{Action, Scope, StashKind, Switch};
+use argus_core::ops::ResetMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuId {
@@ -19,6 +20,10 @@ pub enum MenuId {
     Ignore,
     /// Where to add ignore rules for untracked files, built when opened.
     Gitignore,
+    /// How to reset the current branch.
+    Reset,
+    /// Which commit to reset to, built when opened.
+    ResetTo,
 }
 
 pub struct Item {
@@ -81,10 +86,12 @@ impl MenuId {
             MenuId::View => 'v',
             MenuId::Ignore => 'I',
             MenuId::Gitignore => 'i',
+            MenuId::Reset => 'X',
+            MenuId::ResetTo => 'X',
         }
     }
 
-    pub const ALL: [MenuId; 10] = [
+    pub const ALL: [MenuId; 11] = [
         MenuId::Pull,
         MenuId::Fetch,
         MenuId::Push,
@@ -95,6 +102,7 @@ impl MenuId {
         MenuId::Mark,
         MenuId::Open,
         MenuId::View,
+        MenuId::Reset,
     ];
 
     pub fn from_key(c: char) -> Option<Self> {
@@ -241,6 +249,32 @@ impl MenuId {
             ),
             MenuId::Ignore => ("Ignore issues", vec![]),
             MenuId::Gitignore => ("Gitignore", vec![]),
+            MenuId::Reset => (
+                "Reset",
+                vec![
+                    item(
+                        's',
+                        "soft: keep the changes staged",
+                        Action::Reset(ResetMode::Soft),
+                    ),
+                    item(
+                        'm',
+                        "mixed: keep the changes, unstaged",
+                        Action::Reset(ResetMode::Mixed),
+                    ),
+                    item(
+                        'k',
+                        "keep: drop the commits' changes; refuse if uncommitted ones are in the way",
+                        Action::Reset(ResetMode::Keep),
+                    ),
+                    item(
+                        'h',
+                        "hard: drop the commits' changes and every uncommitted one…",
+                        Action::Reset(ResetMode::Hard),
+                    ),
+                ],
+            ),
+            MenuId::ResetTo => ("Reset", vec![]),
             MenuId::View => (
                 "View",
                 vec![

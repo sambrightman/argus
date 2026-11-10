@@ -448,7 +448,9 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) {
     let targets = app.selected().len();
     let title = match menu.id {
         // names its repo
-        crate::menu::MenuId::Ignore | crate::menu::MenuId::Gitignore => {
+        crate::menu::MenuId::Ignore
+        | crate::menu::MenuId::Gitignore
+        | crate::menu::MenuId::ResetTo => {
             format!(" {} ", menu.title)
         }
         _ => format!(

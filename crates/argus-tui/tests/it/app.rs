@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use argus_core::config::Config;
-use argus_core::ops::Op;
+use argus_core::ops::{Op, ResetMode};
 use argus_core::testkit::{Sandbox, commit, git, write};
 use argus_core::{State, Workspace};
 use argus_tui::app::{Action, App, Effect, Mode, Msg, Row, Scope, StashKind};
@@ -2608,4 +2608,143 @@ fn gitignore_on_a_repo_takes_all_its_untracked_files() {
         app.message.as_ref().unwrap().0,
         "nothing untracked to ignore"
     );
+}
+
+/// `clean` with two commits on no remote after the pushed "initial".
+fn two_local_commits(sb: &Sandbox) {
+    let c = sb.path("dev/clean");
+    for m in ["local one", "local two"] {
+        write(&c, "README", &format!("{m}\n"));
+        commit(&c, m);
+    }
+}
+
+fn rev(sb: &Sandbox, r: &str, spec: &str) -> String {
+    git(&sb.path(r), &["rev-parse", spec]).trim().to_string()
+}
+
+#[test]
+fn reset_picks_a_commit_starting_before_head() {
+    let (sb, mut app) = setup_with("", two_local_commits);
+    while current(&app) != "acme/clean" {
+        app.act(Action::Down);
+    }
+    app.on_key(key('X'));
+    assert_eq!(
+        menu_items(&app),
+        [
+            "s soft: keep the changes staged",
+            "m mixed: keep the changes, unstaged",
+            "k keep: drop the commits' changes; refuse if uncommitted ones are in the way",
+            "h hard: drop the commits' changes and every uncommitted one…",
+        ]
+    );
+    app.on_key(key('s'));
+    let short = |spec: &str| rev(&sb, "dev/clean", spec)[..7].to_string();
+    match &app.mode {
+        Mode::Menu { menu, cursor, .. } => {
+            assert_eq!(menu.title, "Reset --soft · acme/clean · to which commit?");
+            assert_eq!(*cursor, 1, "the commit before HEAD");
+        }
+        _ => panic!("no menu"),
+    }
+    assert_eq!(
+        menu_items(&app),
+        [
+            format!("1 {} local two (HEAD)", short("HEAD")),
+            format!("2 {} local one", short("HEAD~1")),
+            format!("3 {} initial · on a remote", short("HEAD~2")),
+        ]
+    );
+    match app.on_key(code(KeyCode::Enter)).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(
+            j[0].op,
+            Op::Reset {
+                mode: ResetMode::Soft,
+                commit: rev(&sb, "dev/clean", "HEAD~1")
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn reset_from_a_commit_starts_at_its_parent() {
+    let (sb, mut app) = setup_with("", two_local_commits);
+    cursor_on_detail(&mut app, "clean", "issue     2 unpushed commit");
+    app.on_key(code(KeyCode::Tab));
+    app.on_key(key('n'));
+    app.on_key(key('n'));
+    assert!(here(&app).contains(" local one "), "{}", here(&app));
+    app.on_key(key('X'));
+    app.on_key(key('m'));
+    assert!(matches!(app.mode, Mode::Menu { cursor: 2, .. }));
+    match app.on_key(code(KeyCode::Enter)).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(
+            j[0].op,
+            Op::Reset {
+                mode: ResetMode::Mixed,
+                commit: rev(&sb, "dev/clean", "HEAD~2")
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_hard_reset_asks_first() {
+    let (sb, mut app) = setup_with("", two_local_commits);
+    while current(&app) != "acme/clean" {
+        app.act(Action::Down);
+    }
+    app.on_key(key('X'));
+    app.on_key(key('h'));
+    assert!(app.on_key(key('2')).is_empty());
+    match &app.mode {
+        Mode::Confirm { question, .. } => assert_eq!(
+            question,
+            &format!(
+                "Reset acme/clean --hard to {} (local one)? Uncommitted changes are lost.",
+                &rev(&sb, "dev/clean", "HEAD~1")[..7]
+            )
+        ),
+        _ => panic!("not asked"),
+    }
+    assert!(app.on_key(key('n')).is_empty(), "no: nothing done");
+    app.on_key(key('X'));
+    app.on_key(key('h'));
+    app.on_key(key('2'));
+    match app.on_key(key('y')).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(
+            j[0].op,
+            Op::Reset {
+                mode: ResetMode::Hard,
+                commit: rev(&sb, "dev/clean", "HEAD~1")
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn reset_is_one_repo_at_a_time() {
+    let (_sb, mut app) = setup("");
+    app.act(Action::ToggleMark);
+    app.act(Action::ToggleMark);
+    app.on_key(key('X'));
+    assert!(app.on_key(key('s')).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
+    assert_eq!(app.message.as_ref().unwrap().0, "reset one repo at a time");
+}
+
+#[test]
+fn reset_with_one_commit_starts_on_it() {
+    let (_sb, mut app) = setup("");
+    while current(&app) != "acme/clean" {
+        app.act(Action::Down);
+    }
+    app.on_key(key('X'));
+    app.on_key(key('k'));
+    assert!(matches!(app.mode, Mode::Menu { cursor: 0, .. }));
+    assert_eq!(menu_items(&app).len(), 1);
 }

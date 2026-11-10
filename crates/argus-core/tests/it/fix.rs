@@ -347,6 +347,57 @@ fn untracked_files_offer_a_gitignore_fix_never_automatic() {
 }
 
 #[test]
+fn reset_moves_the_branch_each_way() {
+    use argus_core::ops::ResetMode;
+    // HEAD~1 "initial" has README "hello"; HEAD changes it and adds b.txt
+    let setup = || {
+        let sb = Sandbox::new();
+        let r = sb.init("r");
+        write(&r, "README", "changed\n");
+        write(&r, "b.txt", "b\n");
+        commit(&r, "second");
+        let target = git(&r, &["rev-parse", "HEAD~1"]).trim().to_string();
+        (sb, r, target)
+    };
+    let reset = |r: &std::path::Path, mode, commit: &str| {
+        argus_core::ops::run(
+            r,
+            &Op::Reset {
+                mode,
+                commit: commit.into(),
+            },
+        )
+    };
+    let codes = |r: &std::path::Path| {
+        let s = status(r, StatusOptions::default()).unwrap();
+        s.changes
+            .files
+            .iter()
+            .map(|f| format!("{}{} {}", f.index, f.worktree, f.path))
+            .collect::<Vec<_>>()
+    };
+    for (mode, expect) in [
+        (ResetMode::Soft, vec!["M  README", "A  b.txt"]),
+        (ResetMode::Mixed, vec![" M README", "?? b.txt"]),
+        (ResetMode::Hard, vec![]),
+        (ResetMode::Keep, vec![]),
+    ] {
+        let (_sb, r, target) = setup();
+        let o = reset(&r, mode, &target);
+        assert!(o.success, "{mode:?}: {}", o.output);
+        assert_eq!(git(&r, &["rev-parse", "HEAD"]).trim(), target, "{mode:?}");
+        assert_eq!(codes(&r), expect, "{mode:?}");
+    }
+    // keep refuses to touch uncommitted changes the reset would overwrite
+    let (_sb, r, target) = setup();
+    write(&r, "README", "mine\n");
+    let before = git(&r, &["rev-parse", "HEAD"]);
+    assert!(!reset(&r, ResetMode::Keep, &target).success);
+    assert_eq!(git(&r, &["rev-parse", "HEAD"]), before);
+    assert_eq!(std::fs::read_to_string(r.join("README")).unwrap(), "mine\n");
+}
+
+#[test]
 fn failed_fix_stops_the_chain() {
     let sb = Sandbox::new();
     let r = pushed_feature(&sb);

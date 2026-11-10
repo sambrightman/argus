@@ -19,6 +19,8 @@ pub enum Range {
     Missing { tip: String, from: String },
     /// Reachable from HEAD but from no branch, tag or remote ref.
     Orphans,
+    /// Everything reachable from `tip`: its history.
+    Ancestors { tip: String },
 }
 
 /// One commit, as a list shows it.
@@ -80,6 +82,7 @@ pub fn commits(
             id_of("HEAD")?,
             tips(&["refs/heads/", "refs/remotes/", "refs/tags/"])?,
         ),
+        Range::Ancestors { tip } => (id_of(tip)?, vec![]),
     };
     let walk = repo
         .rev_walk([tip])

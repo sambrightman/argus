@@ -10,7 +10,7 @@ use argus_core::config::StashConfig;
 use argus_core::diff::{self, FileDiff, LineKind, Side};
 use argus_core::fix::{self, Applied, FixKind};
 use argus_core::gitignore::IgnoreFile;
-use argus_core::ops::{self, Op, OpOutcome};
+use argus_core::ops::{self, Op, OpOutcome, ResetMode};
 use argus_core::pull::{self, Job, PullPlan};
 use argus_core::rules::{IgnoreState, IssueList, Mark};
 use argus_core::status::RepoStatus;
@@ -112,6 +112,10 @@ pub enum Action {
     /// Open the gitignore menu for the untracked files marked, or under
     /// the cursor.
     GitignoreMenu,
+    /// Offer the current repo's commits to reset to, this way.
+    Reset(ResetMode),
+    /// In the reset menu: reset to that commit (by its place).
+    ResetTo(usize),
     /// In the gitignore menu: add the rules to that file.
     Gitignore(IgnoreFile),
     Snooze,
@@ -602,6 +606,8 @@ pub struct App {
     /// The untracked files the open gitignore menu is for, by repo, and
     /// whether rules are anchored.
     gitignore: Option<GitignoreTargets>,
+    /// The repo, mode and commits the open reset menu offers.
+    reset: Option<ResetPick>,
     pub log: Vec<LogEntry>,
     pub show_log: bool,
     pub message: Option<(String, bool)>,
@@ -643,6 +649,7 @@ impl App {
             auto_fixes: (0, String::new()),
             ignore_menu: None,
             gitignore: None,
+            reset: None,
             log: vec![],
             show_log: false,
             message: None,
@@ -1122,6 +1129,8 @@ impl App {
                     .collect();
                 return self.start_jobs(jobs);
             }
+            Reset(mode) => return self.open_reset_menu(mode),
+            ResetTo(n) => return self.reset_to(n),
             Stash(kind) => return self.stash_action(kind),
             StageFiles => return self.file_op(ops::stage_ops, "stage"),
             UnstageFiles => return self.file_op(ops::unstage_ops, "unstage"),
@@ -1587,6 +1596,111 @@ impl App {
             );
         }
         self.show_gitignore_menu(targets)
+    }
+
+    /// The current repo's recent commits to reset to: HEAD first, each
+    /// marked when it's on a remote. The cursor starts on the commit before
+    /// HEAD, or before the commit under the cursor in the details.
+    fn open_reset_menu(&mut self, mode: ResetMode) -> Vec<Effect> {
+        use argus_core::history::{self, Range};
+        let [i] = self.selected()[..] else {
+            self.error("reset one repo at a time");
+            return vec![];
+        };
+        let e = &self.ws.entries[i];
+        let head = || Range::Ancestors { tip: "HEAD".into() };
+        let commits = match history::commits(&e.path, &head(), RESET_KEYS.len()) {
+            Ok((v, _)) if !v.is_empty() => v,
+            Ok(_) => return self.not_applicable("no commits to reset to"),
+            Err(err) => {
+                self.error(err);
+                return vec![];
+            }
+        };
+        let local = history::commits(
+            &e.path,
+            &Range::NotOnRemote { tip: "HEAD".into() },
+            RESET_KEYS.len(),
+        )
+        .map(|(v, _)| v.into_iter().map(|c| c.id).collect::<Vec<_>>())
+        .unwrap_or_default();
+        let under = match self.rows.get(self.cursor) {
+            Some(Row::Detail { line, .. }) => match &line.expand {
+                Some(Expand::Commit(id)) => commits.iter().position(|c| c.id == *id),
+                _ => None,
+            },
+            _ => None,
+        };
+        let cursor = under.map_or(1, |n| n + 1).min(commits.len() - 1);
+        let items = commits
+            .iter()
+            .zip(RESET_KEYS.chars())
+            .enumerate()
+            .map(|(n, (c, key))| {
+                let mut label = format!("{} {}", &c.id[..7], c.summary);
+                if n == 0 {
+                    label.push_str(" (HEAD)");
+                }
+                if !local.contains(&c.id) {
+                    label.push_str(" · on a remote");
+                }
+                menu::item(key, label, Action::ResetTo(n))
+            })
+            .collect();
+        let menu = Menu {
+            id: MenuId::ResetTo,
+            title: format!(
+                "Reset {} · {} · to which commit?",
+                mode.flag(),
+                e.display_name()
+            ),
+            items,
+        };
+        self.reset = Some(ResetPick {
+            path: e.path.clone(),
+            name: e.display_name(),
+            mode,
+            commits,
+        });
+        self.mode = Mode::Menu {
+            menu,
+            cursor,
+            notes: vec![],
+        };
+        vec![]
+    }
+
+    /// Reset to the reset menu's commit `n`; a hard reset asks first.
+    fn reset_to(&mut self, n: usize) -> Vec<Effect> {
+        let Some(ResetPick {
+            path,
+            name,
+            mode,
+            commits,
+        }) = self.reset.take()
+        else {
+            return vec![];
+        };
+        let Some(c) = commits.get(n) else {
+            return vec![];
+        };
+        let op = Op::Reset {
+            mode,
+            commit: c.id.clone(),
+        };
+        if mode == ResetMode::Hard {
+            self.mode = Mode::Confirm {
+                question: format!(
+                    "Reset {name} --hard to {} ({})? Uncommitted changes are lost.",
+                    &c.id[..7],
+                    c.summary
+                ),
+                then: Confirmed::Ops(vec![(path, op)]),
+            };
+            return vec![];
+        }
+        let jobs = self.job(&path, op).into_iter().collect();
+        self.start_jobs(jobs)
     }
 
     /// The gitignore menu for every untracked path of the selected repos
@@ -2536,6 +2650,17 @@ impl App {
         }
     }
 }
+
+/// What a reset menu offers: the repo, how, and its recent commits.
+struct ResetPick {
+    path: PathBuf,
+    name: String,
+    mode: ResetMode,
+    commits: Vec<argus_core::history::CommitLine>,
+}
+
+/// Keys for a reset menu's commits (not `q`, which closes menus).
+const RESET_KEYS: &str = "1234567890abcdefghijklmnoprstuvwxyz";
 
 /// The untracked files a gitignore menu is for, by repo, and whether its
 /// rules are anchored.

@@ -72,6 +72,11 @@ pub enum Op {
         staged: bool,
         paths: Vec<String>,
     },
+    /// Move the current branch to `commit`.
+    Reset {
+        mode: ResetMode,
+        commit: String,
+    },
     /// Commit what's staged.
     Commit {
         message: String,
@@ -117,6 +122,31 @@ pub enum Op {
         paths: Vec<String>,
         anchored: bool,
     },
+}
+
+/// How `git reset` treats the index and work tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResetMode {
+    /// Changes since the commit stay staged.
+    Soft,
+    /// They stay in the work tree, unstaged.
+    Mixed,
+    /// The work tree matches the commit; uncommitted changes the reset
+    /// would touch make it refuse.
+    Keep,
+    /// The work tree matches the commit; uncommitted changes are lost.
+    Hard,
+}
+
+impl ResetMode {
+    pub fn flag(self) -> &'static str {
+        match self {
+            ResetMode::Soft => "--soft",
+            ResetMode::Mixed => "--mixed",
+            ResetMode::Keep => "--keep",
+            ResetMode::Hard => "--hard",
+        }
+    }
 }
 
 impl Op {
@@ -187,6 +217,9 @@ impl Op {
                     a.extend(paths.iter().cloned());
                 }
                 a
+            }
+            Op::Reset { mode, commit } => {
+                v(&["reset", "-q", mode.flag(), "--end-of-options", commit])
             }
             Op::Commit { message } | Op::CommitAll { message } => {
                 v(&["commit", "--message", message])
@@ -289,6 +322,9 @@ impl Op {
                     l.push_str(&format!(" ({})", how.join(", ")));
                 }
                 l
+            }
+            Op::Reset { mode, commit } => {
+                format!("reset {} {}", mode.flag(), &commit[..commit.len().min(7)])
             }
             Op::Commit { .. } => "commit staged".into(),
             Op::CommitAll { .. } => "commit".into(),
@@ -860,6 +896,13 @@ mod tests {
         let a = o.args();
         let dd = a.iter().position(|s| s == "--").unwrap();
         assert!(a.iter().position(|s| s == "--upload-pack=evil").unwrap() > dd);
+        let a = Op::Reset {
+            mode: ResetMode::Hard,
+            commit: "--evil".into(),
+        }
+        .args();
+        let end = a.iter().position(|s| s == "--end-of-options").unwrap();
+        assert!(a.iter().position(|s| s == "--evil").unwrap() > end);
         // stash/commit messages are passed as option *values*
         let a = Op::Stash {
             message: "-rf".into(),
