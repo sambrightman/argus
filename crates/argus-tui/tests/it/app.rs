@@ -396,19 +396,19 @@ fn commit_on_clean_repo_does_not_prompt() {
 #[test]
 fn c_c_commits_only_whats_staged() {
     let (sb, mut app) = setup("");
-    // dirty has only unstaged changes: nothing to commit staged
+    // dirty has only unstaged changes: no c c
     app.on_key(key('c'));
-    app.on_key(key('c'));
-    assert!(matches!(app.mode, Mode::Normal));
-    assert_eq!(
-        app.message.as_ref().unwrap().0,
-        "nothing staged (c a commits all changes)"
-    );
+    assert_eq!(menu_items(&app), ["a commit all changes…"]);
+    app.on_key(ctrl('g'));
     let d = sb.path("dev/dirty");
     git(&d, &["add", "README"]);
     app.ws.refresh(&d);
     app.rebuild();
     app.on_key(key('c'));
+    assert_eq!(
+        menu_items(&app),
+        ["c commit staged changes…", "a commit all changes…"]
+    );
     app.on_key(key('c'));
     assert!(
         render(&mut app, 100, 20).contains("commit staged changes (1 repo(s)):"),

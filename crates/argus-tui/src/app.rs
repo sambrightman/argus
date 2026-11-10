@@ -1158,6 +1158,7 @@ impl App {
                 let notes = self.menu_notes(m);
                 let mut menu = m.menu();
                 self.state_labels(&mut menu);
+                self.drop_inapplicable(&mut menu);
                 self.mode = Mode::Menu {
                     menu,
                     cursor: 0,
@@ -1955,6 +1956,20 @@ impl App {
 
     /// Labels for toggles saying what choosing them does now: mark or
     /// unmark (by the first selected repo, as toggling goes), show or hide.
+    /// Leave out items with nothing to act on: `c c` when nothing in the
+    /// selection is staged.
+    fn drop_inapplicable(&self, menu: &mut Menu) {
+        let staged = self.selected().iter().any(|&i| {
+            self.ws.entries[i]
+                .status()
+                .is_some_and(|s| s.changes.staged > 0)
+        });
+        if !staged {
+            menu.items
+                .retain(|it| it.action != Action::Commit { all: false });
+        }
+    }
+
     fn state_labels(&self, menu: &mut Menu) {
         let first = self.selected().first().map(|&i| &self.ws.entries[i].flags);
         let label = |key: char| -> Option<&'static str> {
