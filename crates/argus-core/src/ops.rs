@@ -137,7 +137,8 @@ impl Op {
         match self {
             Op::Fetch => v(&["fetch"]),
             // Submodules follow: a pull or clone leaves them checked out at
-            // the commits the repo records, whatever `submodule.recurse` says.
+            // the commits the repo records, whatever `submodule.recurse`
+            // says. (So does a switch: see `switch`.)
             Op::Pull => v(&["pull", "--recurse-submodules"]),
             Op::Push => v(&["push"]),
             Op::PushSetUpstream { remote, branch } => {
@@ -558,6 +559,7 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
     };
     match op {
         Op::Pull => return pull(&cwd, started),
+        Op::Switch { .. } => return switch(&cwd, op, started),
         Op::Ignore {
             file,
             paths,
@@ -711,6 +713,26 @@ fn pull(cwd: &Path, started: Instant) -> OpOutcome {
         } else {
             format!("\nargus: pull stopped with conflicts and `git {cmd} --abort` failed:\n{}", a.output)
         });
+        o.duration = started.elapsed();
+    }
+    o
+}
+
+/// `git switch`, then the submodules checked out at the commits the branch
+/// records. Not `switch --recurse-submodules`: that silently overwrites
+/// untracked files in a submodule, where `submodule update` (as `pull
+/// --recurse-submodules` uses) refuses, leaving the submodule as it was.
+fn switch(cwd: &Path, op: &Op, started: Instant) -> OpOutcome {
+    let mut o = git(cwd, &op.args(), started);
+    if o.success && cwd.join(".gitmodules").exists() {
+        let u = git_in(cwd, &["submodule", "update", "--recursive"]);
+        if !u.success {
+            o.success = false;
+            o.output.push_str(&format!(
+                "\nargus: switched, but checking out the submodules failed:\n{}",
+                u.output
+            ));
+        }
         o.duration = started.elapsed();
     }
     o

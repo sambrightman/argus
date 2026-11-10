@@ -610,3 +610,87 @@ fn undoing_a_pull_leaves_submodules_that_arent_checked_out() {
     assert!(out.output.contains("; undone"), "{}", out.output);
     assert!(!r.join("lib/README").exists());
 }
+
+#[test]
+fn switching_checks_out_the_branchs_submodules() {
+    let sb = Sandbox::new();
+    let (r, new) = submodule_bumped(&sb, "app");
+    git(&r, &["fetch", "-q"]);
+    git(&r, &["branch", "-q", "bumped", "origin/main"]);
+    let lib = r.join("lib");
+    let old = git(&lib, &["rev-parse", "HEAD"]);
+    let switch = |b: &str| {
+        let out = ops::run(&r, &Op::Switch { branch: b.into() });
+        assert!(out.success, "{}", out.output);
+    };
+    switch("bumped");
+    assert_eq!(git(&lib, &["rev-parse", "HEAD"]), new);
+    assert!(st(&r).changes.is_clean());
+    switch("main");
+    assert_eq!(git(&lib, &["rev-parse", "HEAD"]), old);
+    assert!(st(&r).changes.is_clean());
+}
+
+#[test]
+fn switching_never_overwrites_a_submodules_changes() {
+    let sb = Sandbox::new();
+    let (r, _) = submodule_bumped(&sb, "app");
+    git(&r, &["fetch", "-q"]);
+    git(&r, &["branch", "-q", "bumped", "origin/main"]);
+    let lib = r.join("lib");
+    let old = git(&lib, &["rev-parse", "HEAD"]);
+    // the bumped commit adds `new`, which the switch would overwrite
+    write(&lib, "new", "mine\n");
+    let out = ops::run(
+        &r,
+        &Op::Switch {
+            branch: "bumped".into(),
+        },
+    );
+    assert!(!out.success, "{}", out.output);
+    assert!(
+        out.output
+            .contains("switched, but checking out the submodules failed"),
+        "{}",
+        out.output
+    );
+    assert_eq!(std::fs::read_to_string(lib.join("new")).unwrap(), "mine\n");
+    assert_eq!(git(&lib, &["rev-parse", "HEAD"]), old);
+    assert_eq!(git(&r, &["branch", "--show-current"]).trim(), "bumped");
+}
+
+#[test]
+fn a_pull_never_overwrites_a_submodules_changes() {
+    // the bumped commit adds `new` (in the way) and leaves README (carried)
+    for (file, in_the_way) in [("new", true), ("README", false)] {
+        let sb = Sandbox::new();
+        let (r, new) = submodule_bumped(&sb, "app");
+        let lib = r.join("lib");
+        let old = git(&lib, &["rev-parse", "HEAD"]);
+        write(&lib, file, "mine\n");
+        let out = ops::run(&r, &Op::Pull);
+        assert_eq!(out.success, !in_the_way, "{file}: {}", out.output);
+        assert_eq!(std::fs::read_to_string(lib.join(file)).unwrap(), "mine\n");
+        let at = if in_the_way { old } else { new };
+        assert_eq!(git(&lib, &["rev-parse", "HEAD"]), at, "{file}");
+    }
+}
+
+#[test]
+fn a_failed_switch_leaves_submodules_where_they_are() {
+    let sb = Sandbox::new();
+    let (r, new) = submodule_bumped(&sb, "app");
+    let lib = r.join("lib");
+    // the user's own choice of commit, not the one recorded
+    git(&lib, &["fetch", "-q"]);
+    git(&lib, &["checkout", "-q", new.trim()]);
+    let out = ops::run(
+        &r,
+        &Op::Switch {
+            branch: "nope".into(),
+        },
+    );
+    assert!(!out.success, "{}", out.output);
+    assert!(!out.output.contains("switched"), "{}", out.output);
+    assert_eq!(git(&lib, &["rev-parse", "HEAD"]), new);
+}

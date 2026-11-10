@@ -124,8 +124,9 @@ kept there are shown as config lines to copy, and left in place.
 
 Credentials and git behaviour are yours: argus runs `git pull`/`push`/`clone`
 itself, so `pull.rebase`, `rebase.autoStash`, hooks, signing, credential
-helpers and ssh config all apply. Pulls and clones also check out
-submodules (`--recurse-submodules`), whatever `submodule.recurse` says. GitHub listing uses `GH_TOKEN`,
+helpers and ssh config all apply. Pulls, clones and branch switches also
+check out submodules, whatever `submodule.recurse` says; never over
+changes in a submodule (that submodule is left as it was, and reported). GitHub listing uses `GH_TOKEN`,
 `GITHUB_TOKEN` or `gh auth token`. Clone protocol follows `gh config get git_protocol`.
 
 ## TUI keys
