@@ -106,6 +106,13 @@ pub enum Op {
     Clean {
         paths: Vec<String>,
     },
+    /// Add ignore rules for untracked `paths` to `file` (see
+    /// [`crate::gitignore`]): a file edit, not a git command.
+    Ignore {
+        file: crate::gitignore::IgnoreFile,
+        paths: Vec<String>,
+        anchored: bool,
+    },
 }
 
 impl Op {
@@ -212,6 +219,8 @@ impl Op {
                 with_paths(v(&["rm", "-q", how]), paths)
             }
             Op::Clean { paths } => with_paths(v(&["clean", "-f", "-q"]), paths),
+            // not a git command (see `run`)
+            Op::Ignore { .. } => vec![],
         }
     }
 
@@ -288,6 +297,16 @@ impl Op {
                 format!("discard {}", files(paths))
             }
             Op::Clean { paths } => format!("delete untracked {}", files(paths)),
+            Op::Ignore { file, paths, .. } => {
+                use crate::gitignore::IgnoreFile::*;
+                let to = match file {
+                    TopLevel => ".gitignore",
+                    Directory => "their .gitignore",
+                    Private => ".git/info/exclude",
+                    Global => "the global excludes",
+                };
+                format!("ignore {} in {to}", files(paths))
+            }
         }
     }
 }
@@ -540,6 +559,26 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
     };
     match op {
         Op::Pull => return pull(&cwd, started),
+        Op::Ignore {
+            file,
+            paths,
+            anchored,
+        } => {
+            let r = crate::gitignore::add(&cwd, *file, paths, *anchored);
+            return OpOutcome {
+                success: r.is_ok(),
+                code: None,
+                output: match r {
+                    Ok(added) => added
+                        .iter()
+                        .map(|(f, rule)| format!("{rule} in {}", f.display()))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    Err(e) => e,
+                },
+                duration: started.elapsed(),
+            };
+        }
         Op::StashPop => {
             if let Some(why) = pop_problem(&cwd) {
                 return refused(format!("not popping: {why}"), started);

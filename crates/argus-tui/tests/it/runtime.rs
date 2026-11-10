@@ -420,31 +420,24 @@ fn suspended_programs_report_failure_but_shells_dont() {
 
 #[test]
 fn the_shell_is_a_login_shell_as_in_a_terminal() {
-    let home = tempfile::tempdir().unwrap();
-    // read only by a login bash
-    std::fs::write(
-        home.path().join(".bash_profile"),
-        "echo \"$0 $SHELL\" > \"$HOME/started\"; exit 0\n",
-    )
-    .unwrap();
-    let started = home.path().join("started");
+    // Not interactive (`-i`): an interactive bash takes over the terminal
+    // for job control, which stops this test process once it exits. With
+    // `-c`, bash still says whether it's a login shell.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let script = r#"shopt -q login_shell && echo "$0 $SHELL login" > out || echo "$0 not" > out"#;
     for login in [true, false] {
-        let _ = std::fs::remove_file(&started);
-        // `-i` for the terminal it would have: bash reads login files for a
-        // `-bash` only when interactive
-        let i = ["-i".to_string()];
-        let mut c = argus_tui::suspended_command("/bin/bash", &i, home.path(), login);
-        c.env("HOME", home.path())
-            .env("SHELL", "/my/shell")
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null()); // "no job control"
+        let args = ["-c".to_string(), script.to_string()];
+        let mut c = argus_tui::suspended_command("/bin/bash", &args, dir.path(), login);
+        c.env("SHELL", "/my/shell")
+            .stdin(std::process::Stdio::null());
         assert!(c.status().unwrap().success());
-        let got = std::fs::read_to_string(&started).ok();
+        let got = std::fs::read_to_string(&out).unwrap();
         if login {
-            // named -bash; $SHELL as it was
-            assert_eq!(got.as_deref(), Some("-bash /my/shell\n"));
+            // named -bash, so a login shell; $SHELL as it was
+            assert_eq!(got, "-bash /my/shell login\n");
         } else {
-            assert_eq!(got, None, "interactive, but not a login shell");
+            assert_eq!(got, "/bin/bash not\n");
         }
     }
 }

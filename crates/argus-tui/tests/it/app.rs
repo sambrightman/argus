@@ -2144,3 +2144,78 @@ fn toggles_say_what_they_will_do() {
     app.act(Action::ToggleLog);
     assert_eq!(label(&mut app, 'v', 'l'), "l hide process log");
 }
+
+#[test]
+fn untracked_files_go_into_the_gitignore_chosen() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let c = sb.path("dev/clean");
+        // tracked, so sub/'s untracked files are listed one by one
+        write(&c, "sub/keep.txt", "x\n");
+        git(&c, &["add", "sub/keep.txt"]);
+        commit(&c, "keep");
+        write(&c, "build/out.o", "x\n");
+        write(&c, "notes.txt", "x\n");
+    });
+    // a tracked file: nothing to ignore
+    cursor_on_detail(&mut app, "dirty", "     M README");
+    assert!(app.act(Action::GitignoreMenu).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
+    assert!(
+        app.message
+            .as_ref()
+            .unwrap()
+            .0
+            .starts_with("no untracked file selected")
+    );
+    // an untracked directory under the cursor
+    cursor_on_detail(&mut app, "clean", "    ?? build/");
+    app.on_key(key('i'));
+    match &app.mode {
+        Mode::Menu { menu, .. } => assert_eq!(menu.title, "Gitignore · 1 untracked file(s)"),
+        _ => panic!("no menu"),
+    }
+    assert_eq!(
+        menu_items(&app),
+        [
+            "t add /build/ to .gitignore",
+            "d add /build/ to .gitignore",
+            "p add /build/ to .git/info/exclude (this clone only)",
+            "g add /build/ to the global excludes file (every repo)",
+            "a anchored: only this path, not the name anywhere",
+        ]
+    );
+    // unanchored: the rules shown change, the menu stays
+    app.on_key(key('a'));
+    assert_eq!(menu_items(&app)[0], "t add build/ to .gitignore");
+    match app.on_key(key('t')).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(
+            j[0].op,
+            Op::Ignore {
+                file: argus_core::gitignore::IgnoreFile::TopLevel,
+                paths: vec!["build/".into()],
+                anchored: false
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(app.mode, Mode::Normal));
+    // marked files, from a subdirectory: its own .gitignore is relative
+    let c = sb.path("dev/clean");
+    write(&c, "sub/a.log", "x\n");
+    write(&c, "sub/b.log", "x\n");
+    app.running.clear();
+    app.ws.refresh(&c);
+    app.marked_files.insert(
+        c.clone(),
+        ["sub/a.log".to_string(), "sub/b.log".to_string()].into(),
+    );
+    app.act(Action::GitignoreMenu);
+    assert_eq!(
+        menu_items(&app)[1],
+        "d add /a.log, /b.log to sub/.gitignore"
+    );
+    assert_eq!(
+        menu_items(&app)[0],
+        "t add /sub/a.log, /sub/b.log to .gitignore"
+    );
+}

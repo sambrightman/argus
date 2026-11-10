@@ -17,6 +17,8 @@ pub enum MenuId {
     View,
     /// A repo's issues to ignore, built when opened (no prefix key).
     Ignore,
+    /// Where to add ignore rules for untracked files, built when opened.
+    Gitignore,
 }
 
 pub struct Item {
@@ -78,6 +80,7 @@ impl MenuId {
             MenuId::Open => 'o',
             MenuId::View => 'v',
             MenuId::Ignore => 'I',
+            MenuId::Gitignore => 'i',
         }
     }
 
@@ -234,6 +237,7 @@ impl MenuId {
                 ],
             ),
             MenuId::Ignore => ("Ignore issues", vec![]),
+            MenuId::Gitignore => ("Gitignore", vec![]),
             MenuId::View => (
                 "View",
                 vec![

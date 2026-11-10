@@ -7,6 +7,7 @@ mod demo;
 mod diff;
 mod discover;
 mod fix;
+mod gitignore;
 mod icons;
 mod kept;
 mod literals;

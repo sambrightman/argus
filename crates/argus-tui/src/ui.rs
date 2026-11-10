@@ -444,7 +444,9 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) {
     let targets = app.selected().len();
     let title = match menu.id {
         // names its repo
-        crate::menu::MenuId::Ignore => format!(" {} ", menu.title),
+        crate::menu::MenuId::Ignore | crate::menu::MenuId::Gitignore => {
+            format!(" {} ", menu.title)
+        }
         _ => format!(
             " {} · {} repo{} ",
             menu.title,
@@ -517,6 +519,10 @@ pub fn help_lines() -> Vec<(String, String)> {
         (
             "s u K",
             "stage / unstage / discard files (marked, else current; discard asks)",
+        ),
+        (
+            "i",
+            "add untracked files (marked, else current) to a .gitignore…",
         ),
         ("U Esc C-g", "unmark all (Esc also clears filter)"),
         ("/ C-s", "filter (readline keys)"),

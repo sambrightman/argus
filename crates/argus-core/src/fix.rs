@@ -750,7 +750,8 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
         | Op::Add { .. }
         | Op::Restore { .. }
         | Op::Remove { .. }
-        | Op::Clean { .. } => {}
+        | Op::Clean { .. }
+        | Op::Ignore { .. } => {}
     }
     s
 }

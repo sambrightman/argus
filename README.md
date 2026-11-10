@@ -141,6 +141,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `Tab` `Enter` | unfold details: issues, available fixes, branches, files; on a file, its diff (unstaged, then staged); on a hunk, fold it. Changed words are highlighted (`[ui] refine = "all"`, `"selected"` for the hunk under the cursor, or `"off"`) |
 | `Space` / `U` | mark / unmark (actions apply to marked repos, else current); on a file in the details, marks the file |
 | `s` `u` `K` | stage / unstage / discard files: the marked ones, else the one under the cursor in the details. Discard returns them to HEAD (deleting untracked files) and always asks first |
+| `i` | **Gitignore** the untracked files marked, else under the cursor: `t` top-level `.gitignore`, `d` their directory's, `p` `.git/info/exclude` (this clone), `g` global excludes. `a` switches between anchored (`/build/`: this path only, the default) and unanchored (`build/`: the name anywhere); each item shows the rules it adds |
 | `/` `C-s` | filter (readline editing) |
 | `a` / `H` | show all / attention only (the default, `[ui] attention_only`); show hidden |
 | `g` `C-l` / `R` | refresh statuses / rescan roots |

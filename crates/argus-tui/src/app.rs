@@ -9,6 +9,7 @@ use argus_core::badges::Role;
 use argus_core::config::StashConfig;
 use argus_core::diff::{self, FileDiff, LineKind, Side};
 use argus_core::fix::{self, Applied, FixKind};
+use argus_core::gitignore::IgnoreFile;
 use argus_core::ops::{self, Op, OpOutcome};
 use argus_core::pull::{self, Job, PullPlan};
 use argus_core::rules::{IgnoreState, IssueList, Mark};
@@ -90,6 +91,11 @@ pub enum Action {
     /// In the ignore menu: move that issue (by its place) to its next
     /// state, or (`None`) ignore every counted one its default way.
     IgnoreStep(Option<usize>),
+    /// Open the gitignore menu for the untracked files marked, or under
+    /// the cursor.
+    GitignoreMenu,
+    /// In the gitignore menu: add the rules to that file.
+    Gitignore(IgnoreFile),
     Snooze,
     Unsnooze,
     Ack,
@@ -223,6 +229,9 @@ pub enum Switch {
     Untracked,
     /// Leave staged changes in the index after stashing.
     KeepIndex,
+    /// In the gitignore menu: rules match only their path (`/build/`), not
+    /// the name anywhere (`build/`).
+    Anchored,
 }
 
 /// Something for the runtime to do.
@@ -379,6 +388,9 @@ pub struct App {
     auto_fixes: (usize, String),
     /// The repo the open ignore menu is for.
     ignore_menu: Option<PathBuf>,
+    /// The untracked files the open gitignore menu is for, by repo, and
+    /// whether rules are anchored.
+    gitignore: Option<GitignoreTargets>,
     pub log: Vec<LogEntry>,
     pub show_log: bool,
     pub message: Option<(String, bool)>,
@@ -417,6 +429,7 @@ impl App {
             running: HashMap::new(),
             auto_fixes: (0, String::new()),
             ignore_menu: None,
+            gitignore: None,
             log: vec![],
             show_log: false,
             message: None,
@@ -741,6 +754,7 @@ impl App {
                 'a' => ToggleAttention,
                 'H' => ToggleHidden,
                 'R' => Rescan,
+                'i' => GitignoreMenu,
                 c => {
                     let m = MenuId::from_key(c)?;
                     OpenMenu(m)
@@ -836,6 +850,37 @@ impl App {
             Toggle(Switch::Untracked) => self.stash.untracked = !self.stash.untracked,
             Toggle(Switch::KeepIndex) => self.stash.keep_index = !self.stash.keep_index,
             IgnoreStep(which) => return self.ignore_step(which),
+            GitignoreMenu => return self.open_gitignore_menu(),
+            Toggle(Switch::Anchored) => {
+                if let Some(g) = &mut self.gitignore {
+                    g.anchored = !g.anchored;
+                }
+                // the items show the rules
+                if let (Some(menu), Mode::Menu { menu: open, .. }) =
+                    (self.gitignore_menu_items(), &mut self.mode)
+                {
+                    *open = menu;
+                }
+            }
+            Gitignore(file) => {
+                let Some(GitignoreTargets { targets, anchored }) = self.gitignore.take() else {
+                    return vec![];
+                };
+                let jobs = targets
+                    .into_iter()
+                    .filter_map(|(p, paths)| {
+                        self.job(
+                            &p,
+                            Op::Ignore {
+                                file,
+                                paths,
+                                anchored,
+                            },
+                        )
+                    })
+                    .collect();
+                return self.start_jobs(jobs);
+            }
             Stash(kind) => return self.stash_action(kind),
             StageFiles => return self.file_op(ops::stage_ops, "stage"),
             UnstageFiles => return self.file_op(ops::unstage_ops, "unstage"),
@@ -1267,6 +1312,100 @@ impl App {
             notes: vec![],
         };
         vec![]
+    }
+
+    /// The gitignore menu for the untracked files marked, or under the
+    /// cursor (tracked ones left out: rules don't apply to them).
+    fn open_gitignore_menu(&mut self) -> Vec<Effect> {
+        let targets: Vec<(PathBuf, Vec<String>)> = self
+            .file_targets()
+            .into_iter()
+            .filter_map(|(i, files)| {
+                let e = &self.ws.entries[i];
+                let s = e.status()?;
+                let untracked: Vec<String> = files
+                    .into_iter()
+                    .filter(|f| {
+                        s.changes
+                            .files
+                            .iter()
+                            .any(|c| c.path == *f && c.index == '?')
+                    })
+                    .collect();
+                (!untracked.is_empty()).then(|| (e.path.clone(), untracked))
+            })
+            .collect();
+        if targets.is_empty() {
+            return self.not_applicable(
+                "no untracked file selected: put the cursor on one in the details, or mark some",
+            );
+        }
+        self.gitignore = Some(GitignoreTargets {
+            targets,
+            anchored: true,
+        });
+        if let Some(menu) = self.gitignore_menu_items() {
+            self.mode = Mode::Menu {
+                menu,
+                cursor: 0,
+                notes: vec![],
+            };
+        }
+        vec![]
+    }
+
+    /// The gitignore menu: each place, with the rules it would get.
+    fn gitignore_menu_items(&self) -> Option<Menu> {
+        use argus_core::gitignore::{dir_of, rule};
+        let GitignoreTargets { targets, anchored } = self.gitignore.as_ref()?;
+        let paths: Vec<&String> = targets.iter().flat_map(|(_, p)| p).collect();
+        let rules = |base: &dyn Fn(&str) -> String| -> String {
+            let r: Vec<String> = paths.iter().map(|p| rule(p, &base(p), *anchored)).collect();
+            fix::list(&r, 2)
+        };
+        let top = rules(&|_| String::new());
+        let mut dirs: Vec<&str> = paths.iter().map(|p| dir_of(p)).collect();
+        dirs.dedup();
+        let own = rules(&|p| dir_of(p).to_string());
+        let dir_label = match dirs.as_slice() {
+            [d] if targets.len() == 1 => {
+                let at = if d.is_empty() {
+                    String::new()
+                } else {
+                    format!("{d}/")
+                };
+                format!("add {own} to {at}.gitignore")
+            }
+            _ => format!("add {own} to each file's directory's .gitignore"),
+        };
+        let n = paths.len();
+        Some(Menu {
+            id: MenuId::Gitignore,
+            title: format!("Gitignore · {n} untracked file(s)"),
+            items: vec![
+                menu::item(
+                    't',
+                    format!("add {top} to .gitignore"),
+                    Action::Gitignore(IgnoreFile::TopLevel),
+                ),
+                menu::item('d', dir_label, Action::Gitignore(IgnoreFile::Directory)),
+                menu::item(
+                    'p',
+                    format!("add {top} to .git/info/exclude (this clone only)"),
+                    Action::Gitignore(IgnoreFile::Private),
+                ),
+                menu::item(
+                    'g',
+                    format!("add {top} to the global excludes file (every repo)"),
+                    Action::Gitignore(IgnoreFile::Global),
+                ),
+                menu::switch(
+                    'a',
+                    "anchored: only this path, not the name anywhere",
+                    Switch::Anchored,
+                ),
+            ],
+        })
     }
 
     /// Repo `i`'s issues that can be ignored, counted or not, one per
@@ -1701,6 +1840,7 @@ impl App {
         match s {
             Switch::Untracked => self.stash.untracked,
             Switch::KeepIndex => self.stash.keep_index,
+            Switch::Anchored => self.gitignore.as_ref().is_some_and(|g| g.anchored),
         }
     }
 
@@ -2071,6 +2211,13 @@ impl App {
             self.log.drain(..100);
         }
     }
+}
+
+/// The untracked files a gitignore menu is for, by repo, and whether its
+/// rules are anchored.
+struct GitignoreTargets {
+    targets: Vec<(PathBuf, Vec<String>)>,
+    anchored: bool,
 }
 
 /// An ignore menu item: the state's symbol, then the issue and, when
