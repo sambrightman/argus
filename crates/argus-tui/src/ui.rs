@@ -508,7 +508,11 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) {
 pub fn help_lines() -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = [
         ("↑↓ C-p C-n j k", "move"),
-        ("n p  M-n M-p", "next / previous repo"),
+        (
+            "n p",
+            "next / previous section (skips diff and message lines)",
+        ),
+        ("M-n M-p", "next / previous repo"),
         ("PgUp PgDn C-v M-v C-u C-d", "page"),
         ("Home End M-< M-> < > gg G", "top / bottom"),
         ("Tab Enter", "unfold / fold details"),

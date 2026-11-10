@@ -27,6 +27,16 @@ pub struct DetailLine {
     pub stash: Option<usize>,
     /// What Tab unfolds it into, read when unfolded.
     pub expand: Option<Expand>,
+    /// Body text (a commit message line, a diff line), which `n`/`p` skip
+    /// as magit's do, stopping only at section lines.
+    pub body: bool,
+}
+
+impl DetailLine {
+    /// Body text: see [`Self::body`]; a working tree diff's lines too.
+    pub fn is_body(&self) -> bool {
+        self.body || self.diff.as_ref().is_some_and(|d| d.line.is_some())
+    }
 }
 
 /// What a details line unfolds into.
@@ -90,6 +100,7 @@ fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
         ignored: false,
         stash: None,
         expand: None,
+        body: false,
     }
 }
 

@@ -50,6 +50,10 @@ pub enum Action {
     Bottom,
     NextRepo,
     PrevRepo,
+    /// The next / previous section line: like Down / Up, skipping body
+    /// text (see [`DetailLine::body`]).
+    NextSection,
+    PrevSection,
     ToggleExpand,
     ExpandAll,
     CollapseAll,
@@ -167,7 +171,12 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
             ignored: false,
             stash: None,
             expand: None,
+            body: false,
         }
+    };
+    let body = |parts| DetailLine {
+        body: true,
+        ..line(parts)
     };
     let dim = |t: String| (Some(Role::Dim), t);
     let failed = |e: String| vec![line(vec![(Some(Role::Error), e)])];
@@ -229,7 +238,7 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
                 rows.extend(
                     d.message
                         .lines()
-                        .map(|l| line(vec![(None, format!("  {l}"))])),
+                        .map(|l| body(vec![(None, format!("  {l}"))])),
                 );
                 rows.push(line(vec![dim(format!("files ({})", d.files.len()))]));
                 rows.extend(d.files.iter().map(|(code, path)| {
@@ -270,7 +279,7 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
                         if l.no_newline {
                             parts.push(dim("  (no newline at end of file)".into()));
                         }
-                        rows.push(line(parts));
+                        rows.push(body(parts));
                     }
                 }
                 rows
@@ -342,6 +351,7 @@ fn diff_rows(
         ignored: false,
         stash: None,
         expand: None,
+        body: false,
     };
     let mut v = vec![];
     for (side, _, title) in sides.into_iter().filter(|s| s.1) {
@@ -944,8 +954,8 @@ impl App {
             KeyCode::Char(c) => match c {
                 'j' => Down,
                 'k' => Up,
-                'n' => NextRepo,
-                'p' => PrevRepo,
+                'n' => NextSection,
+                'p' => PrevSection,
                 'g' if g => Top,
                 'g' => {
                     // `g` alone refreshes (magit); `gg` goes to top (vi). The
@@ -992,6 +1002,16 @@ impl App {
             PageDown => self.cursor = (self.cursor + self.page.max(1)).min(last),
             Top => self.cursor = 0,
             Bottom => self.cursor = last,
+            NextSection => {
+                if let Some(i) = (self.cursor + 1..self.rows.len()).find(|&i| self.is_section(i)) {
+                    self.cursor = i;
+                }
+            }
+            PrevSection => {
+                if let Some(i) = (0..self.cursor).rev().find(|&i| self.is_section(i)) {
+                    self.cursor = i;
+                }
+            }
             NextRepo => {
                 if let Some(i) = (self.cursor + 1..self.rows.len())
                     .find(|&i| matches!(self.rows[i], Row::Repo(_)))
@@ -2025,6 +2045,14 @@ impl App {
             return vec![];
         }
         self.start_jobs(jobs)
+    }
+
+    /// Whether row `i` is a section line (`n`/`p` stop there).
+    fn is_section(&self, i: usize) -> bool {
+        match &self.rows[i] {
+            Row::Repo(_) => true,
+            Row::Detail { line, .. } => !line.is_body(),
+        }
     }
 
     fn on_unfoldable(&self) -> bool {

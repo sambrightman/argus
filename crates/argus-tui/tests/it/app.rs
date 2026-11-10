@@ -155,10 +155,10 @@ fn unfold_details_and_next_repo_skips_them() {
     app.on_key(code(KeyCode::Tab));
     assert!(app.rows.len() > before);
     assert!(matches!(app.rows[1], Row::Detail { .. }));
-    app.on_key(key('n'));
+    app.on_key(alt('n'));
     assert_eq!(current(&app), "acme/feature");
     assert!(matches!(app.rows[app.cursor], Row::Repo(_)));
-    app.on_key(key('p'));
+    app.on_key(alt('p'));
     assert_eq!(current(&app), "acme/dirty");
     // fold from a detail line returns to the repo row
     app.on_key(key('j'));
@@ -2441,4 +2441,64 @@ fn commits_behind_and_on_a_detached_head_unfold() {
         adrift.len() == 1 && adrift[0].contains(" adrift  "),
         "{adrift:?}"
     );
+}
+
+/// The text of the row under the cursor, trimmed.
+fn here(app: &App) -> String {
+    match &app.rows[app.cursor] {
+        Row::Repo(i) => app.ws.entries[*i].display_name(),
+        Row::Detail { line, .. } => line
+            .parts
+            .iter()
+            .map(|(_, t)| t.as_str())
+            .collect::<String>()
+            .trim()
+            .to_string(),
+    }
+}
+
+#[test]
+fn n_and_p_step_through_sections_skipping_diff_and_message_lines() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "README");
+    app.on_key(code(KeyCode::Tab));
+    let mut steps = vec![];
+    for k in ['n', 'n', 'n', 'p', 'p'] {
+        app.on_key(key(k));
+        steps.push(here(&app));
+    }
+    assert_eq!(
+        steps,
+        [
+            "unstaged changes",
+            "@@ -1 +1 @@",
+            "?? bin",
+            "@@ -1 +1 @@",
+            "unstaged changes"
+        ]
+    );
+    // a commit: its message is skipped, its file's hunk isn't
+    cursor_on_detail(&mut app, "dirty", "issue     1 unpushed commit");
+    app.on_key(code(KeyCode::Tab));
+    app.on_key(key('n'));
+    assert!(here(&app).contains(" files "), "{}", here(&app));
+    app.on_key(code(KeyCode::Tab));
+    let mut steps = vec![];
+    for _ in 0..4 {
+        app.on_key(key('n'));
+        steps.push(here(&app));
+    }
+    assert!(steps[0].starts_with("commit "), "{steps:?}");
+    assert!(steps[1].starts_with("author "), "{steps:?}");
+    assert_eq!(steps[2..], ["files (2)", "M README"], "{steps:?}");
+    app.on_key(code(KeyCode::Tab));
+    app.on_key(key('n'));
+    assert_eq!(here(&app), "@@ -1 +1 @@");
+    app.on_key(key('n'));
+    assert_eq!(here(&app), "A both");
+    // M-n / M-p: the next and previous repo
+    app.on_key(alt('n'));
+    assert_eq!(here(&app), "acme/feature");
+    app.on_key(alt('p'));
+    assert_eq!(here(&app), "acme/dirty");
 }

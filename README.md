@@ -137,7 +137,8 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | keys | |
 |---|---|
 | `↑↓` `C-p C-n` `j k` | move |
-| `n p` `M-n M-p` | next / previous repo |
+| `n p` | next / previous section, as in magit: every line except diff and commit message lines |
+| `M-n M-p` | next / previous repo |
 | `PgUp PgDn` `C-v M-v` `C-u C-d` | page |
 | `Home End` `M-< M->` `gg G` | top / bottom |
 | `Tab` `Enter` | unfold details: issues, available fixes, branches, files; on a file, its diff (unstaged, then staged); on a hunk, fold it. Further down: an unpushed, behind or detached-commits issue (or a branch with commits on no remote) unfolds into its commits, a commit or stash into its message and files and each file into its diff, other branches with unpushed work into each branch, an untracked directory into its files (to stage, discard or gitignore one by one). Changed words are highlighted (`[ui] refine = "all"`, `"selected"` for the hunk under the cursor, or `"off"`) |
