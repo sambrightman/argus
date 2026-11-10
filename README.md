@@ -155,7 +155,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `f` | **Fetch**: `f` selected, `a` all shown except hidden |
 | `P` | **Push**: `p` push, `u` publish, `b` push other branches, `r` add a remote… |
 | `z` | **Stash**: switches `u` include untracked, `k` keep index (from `[stash]`, for the session); `z` all, `i` staged only, `m` with a message, `f` files marked in the details, `p` pop the newest, `d` drop the one under the cursor… |
-| `c` | **Commit** (prompts for message) |
+| `c` | **Commit** (prompts for the message): `c` what's staged, `a` all changes, untracked files included |
 | `b` | **Branch**: `d` switch to default, `r` reattach detached HEAD, `c` create a branch at detached HEAD…, `x` delete merged branches…, `f` fast-forward stale branches |
 | `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden |
 | `m` | **Mark**: `f` favourite, `p` pull, `i` ignore issues (a menu of the repo's issues and their state), `I` ignore or unignore the repo, `z` snooze, `u` unsnooze, `a` ack new, `c` clear |

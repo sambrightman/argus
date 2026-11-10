@@ -72,6 +72,10 @@ pub enum Op {
         staged: bool,
         paths: Vec<String>,
     },
+    /// Commit what's staged.
+    Commit {
+        message: String,
+    },
     /// Stage everything (including untracked) and commit.
     CommitAll {
         message: String,
@@ -184,7 +188,9 @@ impl Op {
                 }
                 a
             }
-            Op::CommitAll { message } => v(&["commit", "--message", message]),
+            Op::Commit { message } | Op::CommitAll { message } => {
+                v(&["commit", "--message", message])
+            }
             Op::FastForward { branch, upstream } => {
                 // `git fetch . upstream:branch` refuses non-fast-forward updates
                 // and never touches the work tree.
@@ -284,6 +290,7 @@ impl Op {
                 }
                 l
             }
+            Op::Commit { .. } => "commit staged".into(),
             Op::CommitAll { .. } => "commit".into(),
             Op::FastForward { branch, .. } => format!("fast-forward {branch}"),
             Op::Clone { .. } => "clone".into(),

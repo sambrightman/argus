@@ -297,6 +297,26 @@ fn commit_all_includes_untracked_and_runs_hooks() {
 }
 
 #[test]
+fn commit_takes_only_whats_staged() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "README", "staged\n");
+    git(&r, &["add", "README"]);
+    write(&r, "README", "and then unstaged\n");
+    write(&r, "new.txt", "x");
+    let o = argus_core::ops::run(
+        &r,
+        &Op::Commit {
+            message: "msg".into(),
+        },
+    );
+    assert!(o.success, "{}", o.output);
+    assert_eq!(git(&r, &["show", "HEAD:README"]), "staged\n");
+    let s = status(&r, StatusOptions::default()).unwrap();
+    assert_eq!((s.changes.unstaged, s.changes.untracked), (1, 1));
+}
+
+#[test]
 fn failed_fix_stops_the_chain() {
     let sb = Sandbox::new();
     let r = pushed_feature(&sb);

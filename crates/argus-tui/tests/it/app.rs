@@ -356,13 +356,19 @@ fn snooze_prompt_validates_duration() {
 #[test]
 fn commit_prompts_and_rejects_empty_message() {
     let (_sb, mut app) = setup("");
-    app.act(Action::Commit);
+    app.act(Action::Commit { all: true });
     assert!(matches!(app.mode, Mode::Input { .. }));
     assert!(
         app.on_key(code(KeyCode::Enter)).is_empty(),
         "empty message aborts"
     );
-    app.act(Action::Commit);
+    app.on_key(key('c'));
+    app.on_key(key('a'));
+    let screen = render(&mut app, 100, 20);
+    assert!(
+        screen.contains("commit all changes (1 repo(s)):"),
+        "c a: {screen}"
+    );
     for c in "wip".chars() {
         app.on_key(key(c));
     }
@@ -381,8 +387,45 @@ fn commit_prompts_and_rejects_empty_message() {
 fn commit_on_clean_repo_does_not_prompt() {
     let (_sb, mut app) = setup("");
     app.act(Action::Bottom);
-    assert!(app.act(Action::Commit).is_empty());
+    for all in [true, false] {
+        assert!(app.act(Action::Commit { all }).is_empty());
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+}
+
+#[test]
+fn c_c_commits_only_whats_staged() {
+    let (sb, mut app) = setup("");
+    // dirty has only unstaged changes: nothing to commit staged
+    app.on_key(key('c'));
+    app.on_key(key('c'));
     assert!(matches!(app.mode, Mode::Normal));
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "nothing staged (c a commits all changes)"
+    );
+    let d = sb.path("dev/dirty");
+    git(&d, &["add", "README"]);
+    app.ws.refresh(&d);
+    app.rebuild();
+    app.on_key(key('c'));
+    app.on_key(key('c'));
+    assert!(
+        render(&mut app, 100, 20).contains("commit staged changes (1 repo(s)):"),
+        "prompts"
+    );
+    for c in "wip".chars() {
+        app.on_key(key(c));
+    }
+    match app.on_key(code(KeyCode::Enter)).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(
+            j[0].op,
+            Op::Commit {
+                message: "wip".into()
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]

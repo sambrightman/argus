@@ -375,7 +375,11 @@ fn draw_status(f: &mut Frame, app: &App, v: &View, area: Rect) {
         Mode::Input { prompt, editor } => {
             let label = match prompt {
                 Prompt::Filter => "filter: ".to_string(),
-                Prompt::CommitMessage(p) => format!("commit message ({} repo(s)): ", p.len()),
+                Prompt::CommitMessage(p, all) => format!(
+                    "commit {} changes ({} repo(s)): ",
+                    if *all { "all" } else { "staged" },
+                    p.len()
+                ),
                 Prompt::StashMessage(p) => format!("stash message ({} repo(s)): ", p.len()),
                 Prompt::BranchName(p) => format!("new branch at HEAD ({} repo(s)): ", p.len()),
                 Prompt::RemoteUrl(_) => "URL of the remote to add as origin: ".to_string(),

@@ -78,7 +78,11 @@ pub enum Action {
     StageFiles,
     UnstageFiles,
     DiscardFiles,
-    Commit,
+    /// Ask for a message, then commit what's staged, or (`all`) every
+    /// change, untracked files included.
+    Commit {
+        all: bool,
+    },
     SwitchDefault,
     Reattach,
     /// Ask for a name, then create a branch at each selected detached HEAD
@@ -505,7 +509,7 @@ pub enum Msg {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Prompt {
     Filter,
-    CommitMessage(Vec<PathBuf>),
+    CommitMessage(Vec<PathBuf>, bool),
     StashMessage(Vec<PathBuf>),
     BranchName(Vec<PathBuf>),
     RemoteUrl(PathBuf),
@@ -1321,21 +1325,28 @@ impl App {
                 _ => self.error("add a remote to one repo at a time"),
             },
             FastForward => return self.fix_ops(FixKind::FastForward),
-            Commit => {
+            Commit { all } => {
                 let targets: Vec<PathBuf> = self
                     .selected()
                     .into_iter()
                     .map(|i| &self.ws.entries[i])
-                    .filter(|e| e.status().is_some_and(|s| !s.changes.is_clean()))
+                    .filter(|e| {
+                        e.status().is_some_and(|s| match all {
+                            true => !s.changes.is_clean(),
+                            false => s.changes.staged > 0,
+                        })
+                    })
                     .map(|e| e.path.clone())
                     .collect();
-                if targets.is_empty() {
-                    self.info("nothing to commit");
-                } else {
-                    self.mode = Mode::Input {
-                        prompt: Prompt::CommitMessage(targets),
-                        editor: LineEditor::default(),
-                    };
+                match (targets.is_empty(), all) {
+                    (true, true) => self.info("nothing to commit"),
+                    (true, false) => self.info("nothing staged (c a commits all changes)"),
+                    (false, _) => {
+                        self.mode = Mode::Input {
+                            prompt: Prompt::CommitMessage(targets, all),
+                            editor: LineEditor::default(),
+                        }
+                    }
                 }
             }
             AutoFix(scope) => {
@@ -2258,7 +2269,7 @@ impl App {
                 self.rebuild();
                 vec![]
             }
-            Prompt::CommitMessage(paths) => {
+            Prompt::CommitMessage(paths, all) => {
                 if text.trim().is_empty() {
                     self.error("empty commit message: aborted");
                     return vec![];
@@ -2274,8 +2285,13 @@ impl App {
                         label: format!("commit {name}"),
                         family: parent.unwrap_or_else(|| path.clone()),
                         path,
-                        op: Op::CommitAll {
-                            message: text.clone(),
+                        op: match all {
+                            true => Op::CommitAll {
+                                message: text.clone(),
+                            },
+                            false => Op::Commit {
+                                message: text.clone(),
+                            },
                         },
                     })
                     .collect();

@@ -166,7 +166,10 @@ impl MenuId {
             ),
             MenuId::Commit => (
                 "Commit",
-                vec![item('c', "commit all changes…", Action::Commit)],
+                vec![
+                    item('c', "commit staged changes…", Action::Commit { all: false }),
+                    item('a', "commit all changes…", Action::Commit { all: true }),
+                ],
             ),
             MenuId::Branch => (
                 "Branch",
