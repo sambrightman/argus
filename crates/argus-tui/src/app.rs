@@ -1652,10 +1652,15 @@ impl App {
             return vec![];
         };
         let e = &self.ws.entries[i];
-        let head = || Range::Ancestors { tip: "HEAD".into() };
-        let commits = match history::commits(&e.path, &head(), menu::LIST_KEYS.len()) {
-            Ok((v, _)) if !v.is_empty() => v,
-            Ok(_) => return self.not_applicable("no commits to reset to"),
+        if e.status()
+            .is_some_and(|s| matches!(s.head, argus_core::status::Head::Unborn(_)))
+        {
+            return self.not_applicable("no commits to reset to");
+        }
+        let head = Range::Ancestors { tip: "HEAD".into() };
+        // HEAD's history: never empty
+        let commits = match history::commits(&e.path, &head, menu::LIST_KEYS.len()) {
+            Ok((v, _)) => v,
             Err(err) => {
                 self.error(err);
                 return vec![];
@@ -1675,7 +1680,9 @@ impl App {
             },
             _ => None,
         };
-        let cursor = under.map_or(1, |n| n + 1).min(commits.len() - 1);
+        let cursor = under
+            .map_or(1, |n| n + 1)
+            .min(commits.len().saturating_sub(1));
         let items = commits
             .iter()
             .zip(menu::LIST_KEYS.chars())

@@ -826,25 +826,26 @@ fn undo_autostash_conflict(
         f if f.is_empty() => "files".to_string(),
         f => f,
     };
-    let mut reset = git_in(cwd, &["reset", "-q", "--hard", head]);
-    for (path, id) in subs {
-        if reset.success && git_in(path, &["rev-parse", "HEAD"]).output != *id {
-            reset = git_in(path, &["checkout", "-q", "--detach", id]);
-        }
-    }
-    let pop = reset
-        .success
-        .then(|| git_in(cwd, &["stash", "pop", "-q", "--index"]));
-    match pop {
-        Some(p) if p.success => format!(
+    // each step only once the last succeeded; the stash back last
+    let last = std::iter::once_with(|| git_in(cwd, &["reset", "-q", "--hard", head]))
+        .chain(
+            subs.iter()
+                .filter(|(path, id)| git_in(path, &["rev-parse", "HEAD"]).output != *id)
+                .map(|(path, id)| git_in(path, &["checkout", "-q", "--detach", id])),
+        )
+        .find(|o| !o.success)
+        .unwrap_or_else(|| git_in(cwd, &["stash", "pop", "-q", "--index"]));
+    if last.success {
+        format!(
             "\nargus: the pull conflicts with your uncommitted changes in {files}; \
              undone, repo left as it was"
-        ),
-        _ => format!(
+        )
+    } else {
+        format!(
             "\nargus: the pull conflicts with your uncommitted changes in {files}, and undoing \
              it failed: your changes are in stash@{{0}} (autostash):\n{}",
-            pop.map_or(reset.output, |p| p.output)
-        ),
+            last.output
+        )
     }
 }
 

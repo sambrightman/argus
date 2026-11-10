@@ -2830,12 +2830,33 @@ fn a_long_menu_scrolls_with_its_cursor() {
     assert!(screen.contains("change 20 (HEAD)"), "{screen}");
     assert!(screen.contains("↓ 1"), "{screen}");
     assert!(!screen.contains("initial"), "{screen}");
+    let more = |screen: &str, arrow: char| {
+        screen
+            .lines()
+            .any(|l| l.contains(&format!("{arrow} ")) && l.contains(" more"))
+    };
+    assert!(!more(&screen, '↑'), "nothing above: {screen}");
+    // its title names the repo already: no repo count after it
+    assert!(screen.contains("to which commit? ─"), "{screen}");
+    // as wide as it needs, not the whole window
+    let top = screen.lines().find(|l| l.contains("Reset --soft")).unwrap();
+    assert!(top.trim_end().chars().count() < 70, "{top}");
+    // in the middle: hidden both ways
+    for _ in 0..9 {
+        app.on_key(key('n'));
+    }
+    let screen = render(&mut app, 80, 14);
+    assert!(more(&screen, '↑') && more(&screen, '↓'), "{screen}");
+    for _ in 0..9 {
+        app.on_key(key('p'));
+    }
     // to the last: wrapping back from the top
     app.on_key(key('p'));
     app.on_key(key('p'));
     let screen = render(&mut app, 80, 14);
     assert!(screen.contains("initial · on a remote"), "{screen}");
     assert!(screen.contains("↑ 1"), "{screen}");
+    assert!(!more(&screen, '↓'), "nothing below: {screen}");
     // a full window, not half of one
     assert!(
         screen.contains("change 6\n") || screen.contains("change 6 "),
@@ -3054,5 +3075,52 @@ fn with_nothing_to_fix_the_fix_menu_doesnt_open() {
     assert_eq!(
         app.message.as_ref().unwrap().0,
         "nothing to fix in the selection"
+    );
+}
+
+#[test]
+fn reset_with_no_commits_says_so() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        git(&sb.path("dev"), &["init", "-q", "empty"]);
+    });
+    while !app.current().unwrap().path.ends_with("empty") {
+        app.act(Action::Down);
+    }
+    app.on_key(key('X'));
+    assert!(app.on_key(key('s')).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
+    assert_eq!(app.message.as_ref().unwrap().0, "no commits to reset to");
+}
+
+#[test]
+fn a_ctrl_key_in_a_menu_isnt_its_letter() {
+    let (_sb, mut app) = setup("");
+    app.on_key(key('F'));
+    // `a` pulls all marked for pull; C-a doesn't
+    assert!(app.on_key(ctrl('a')).is_empty());
+    assert!(matches!(app.mode, Mode::Menu { .. }));
+}
+
+#[test]
+fn all_leaves_issues_already_ignored_another_way() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let r = sb.path("dev/feature");
+        write(&r, "README", "fix's\n");
+        git(&r, &["stash", "push", "-q", "-m", "argus 2026-01-02 09:30"]);
+    });
+    cursor_on_detail(&mut app, "feature", "issue     not on default branch");
+    app.act(Action::IgnoreIssues);
+    // not on the default branch: ignored on any branch (not its default, pinned)
+    app.on_key(key('1'));
+    app.on_key(key('1'));
+    assert_eq!(
+        app.ws.config.ignore.non_default_branch,
+        ["github.com/acme/feature"]
+    );
+    app.on_key(key('a'));
+    assert_eq!(menu_items(&app)[1], "2 ● 1 stash(es) [ignored]");
+    assert_eq!(
+        app.ws.config.ignore.non_default_branch,
+        ["github.com/acme/feature"]
     );
 }
