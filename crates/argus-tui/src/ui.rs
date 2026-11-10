@@ -467,7 +467,24 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) {
     if !notes.is_empty() {
         lines.push(Line::from(""));
     }
-    for (n, it) in menu.items.iter().enumerate() {
+    // as many items as fit, around the cursor, saying how many are hidden
+    let fixed = lines.len() + 3; // borders and the footer
+    let room = (area.height as usize).saturating_sub(fixed);
+    let total = menu.items.len();
+    let (start, shown) = if total <= room {
+        (0, total)
+    } else {
+        let shown = room.saturating_sub(2).max(1);
+        let start = cursor.saturating_sub(shown / 2).min(total - shown);
+        (start, shown)
+    };
+    if start > 0 {
+        lines.push(Line::from(Span::styled(
+            format!(" ↑ {start} more"),
+            t.ui(Ui::Dim),
+        )));
+    }
+    for (n, it) in menu.items.iter().enumerate().skip(start).take(shown) {
         let label = match it.switch {
             Some(s) => format!(
                 "[{}] {}",
@@ -484,6 +501,12 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) {
             l = l.patch_style(t.ui(Ui::Selection));
         }
         lines.push(l);
+    }
+    if start + shown < total {
+        lines.push(Line::from(Span::styled(
+            format!(" ↓ {} more", total - start - shown),
+            t.ui(Ui::Dim),
+        )));
     }
     lines.push(Line::from(Span::styled(
         " q/Esc/C-g cancel · ↑↓ Enter",

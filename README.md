@@ -132,7 +132,9 @@ changes in a submodule (that submodule is left as it was, and reported). GitHub 
 ## TUI keys
 
 Arrows, emacs and vi motions all work at the same time. Prefix keys open
-transient-style menus. Press the item key, or use ↑↓ + Enter.
+transient-style menus. Press the item key, or move with ↑↓ (`C-n C-p`, and
+`n p j k` where they aren't the menu's own keys) and press Enter. A menu
+too long for the window scrolls, saying how many items are hidden.
 
 | keys | |
 |---|---|

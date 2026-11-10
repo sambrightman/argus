@@ -2748,3 +2748,58 @@ fn reset_with_one_commit_starts_on_it() {
     assert!(matches!(app.mode, Mode::Menu { cursor: 0, .. }));
     assert_eq!(menu_items(&app).len(), 1);
 }
+
+#[test]
+fn n_p_j_k_move_through_a_menu_unless_theyre_its_keys() {
+    let (_sb, mut app) = setup_with("", two_local_commits);
+    while current(&app) != "acme/clean" {
+        app.act(Action::Down);
+    }
+    app.on_key(key('X'));
+    app.on_key(key('s'));
+    let cursor = |app: &App| match app.mode {
+        Mode::Menu { cursor, .. } => cursor,
+        _ => panic!("menu closed"),
+    };
+    assert_eq!(cursor(&app), 1);
+    for (k, at) in [('n', 2), ('p', 1), ('j', 2), ('k', 1)] {
+        assert!(app.on_key(key(k)).is_empty(), "{k}: no reset");
+        assert_eq!(cursor(&app), at, "{k}");
+    }
+    // where it is a key, it runs its item: F p pulls
+    app.on_key(ctrl('g'));
+    app.on_key(key('F'));
+    assert!(matches!(app.on_key(key('p')).as_slice(), [Effect::Jobs(_)]));
+}
+
+#[test]
+fn a_long_menu_scrolls_with_its_cursor() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let c = sb.path("dev/clean");
+        for n in 1..=20 {
+            write(&c, "README", &format!("{n}\n"));
+            commit(&c, &format!("change {n}"));
+        }
+    });
+    while current(&app) != "acme/clean" {
+        app.act(Action::Down);
+    }
+    app.on_key(key('X'));
+    app.on_key(key('s'));
+    let screen = render(&mut app, 80, 14);
+    assert!(screen.contains("change 20 (HEAD)"), "{screen}");
+    assert!(screen.contains("↓ 1"), "{screen}");
+    assert!(!screen.contains("initial"), "{screen}");
+    // to the last: wrapping back from the top
+    app.on_key(key('p'));
+    app.on_key(key('p'));
+    let screen = render(&mut app, 80, 14);
+    assert!(screen.contains("initial · on a remote"), "{screen}");
+    assert!(screen.contains("↑ 1"), "{screen}");
+    // a full window, not half of one
+    assert!(
+        screen.contains("change 6\n") || screen.contains("change 6 "),
+        "{screen}"
+    );
+    assert!(!screen.contains("change 20"), "{screen}");
+}
