@@ -2968,3 +2968,38 @@ fn fixes_that_ask_first_ask_from_the_fix_menu_too() {
     assert!(app.on_key(key('D')).is_empty());
     assert!(matches!(app.mode, Mode::Confirm { .. }));
 }
+
+#[test]
+fn a_key_for_an_item_scrolled_out_of_sight_only_brings_it_into_view() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let c = sb.path("dev/clean");
+        for n in 1..=20 {
+            write(&c, "README", &format!("{n}\n"));
+            commit(&c, &format!("change {n}"));
+        }
+    });
+    while current(&app) != "acme/clean" {
+        app.act(Action::Down);
+    }
+    app.on_key(key('X'));
+    app.on_key(key('s'));
+    let screen = render(&mut app, 80, 14);
+    assert!(!screen.contains("initial"), "{screen}");
+    // `m` is the last commit's key: out of sight, so nothing happens but scrolling to it
+    assert!(app.on_key(key('m')).is_empty());
+    assert!(matches!(app.mode, Mode::Menu { cursor: 20, .. }));
+    let screen = render(&mut app, 80, 14);
+    assert!(screen.contains("m  "), "{screen}");
+    assert!(screen.contains("initial"), "{screen}");
+    // now that it's shown, the key picks it
+    match app.on_key(key('m')).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(
+            j[0].op,
+            Op::Reset {
+                mode: ResetMode::Soft,
+                commit: rev(&sb, "dev/clean", "HEAD~20")
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
+}

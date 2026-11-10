@@ -45,7 +45,7 @@ pub fn draw(f: &mut Frame, app: &mut App, v: &View) {
     }
     draw_status(f, app, v, status);
     match &app.mode {
-        Mode::Menu { .. } => draw_menu(f, app, v, main),
+        Mode::Menu { .. } => app.menu_shown = draw_menu(f, app, v, main),
         Mode::Help { scroll } => draw_help(f, v, main, *scroll),
         _ => {}
     }
@@ -444,14 +444,15 @@ fn popup(area: Rect, w: u16, h: u16) -> Rect {
     }
 }
 
-fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) {
+/// Draws the open menu; returns the places of the items shown.
+fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) -> Option<std::ops::Range<usize>> {
     let Mode::Menu {
         menu,
         cursor,
         notes,
     } = &app.mode
     else {
-        return;
+        return None;
     };
     let t = v.theme;
     let targets = app.selected().len();
@@ -541,6 +542,7 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) {
         ),
         r,
     );
+    Some(start..start + shown)
 }
 
 pub fn help_lines() -> Vec<(String, String)> {

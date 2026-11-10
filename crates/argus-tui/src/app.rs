@@ -586,6 +586,9 @@ pub struct App {
     pub cursor: usize,
     /// Top row of the viewport, maintained by the renderer.
     pub scroll: usize,
+    /// The places of the open menu's items last drawn, maintained by the
+    /// renderer: a key for an item out of sight only scrolls to it.
+    pub menu_shown: Option<std::ops::Range<usize>>,
     pub page: usize,
     pub filter: String,
     pub view: ViewFilter,
@@ -643,6 +646,7 @@ impl App {
             rows: vec![],
             cursor: 0,
             scroll: 0,
+            menu_shown: None,
             page: 20,
             filter: String::new(),
             view,
@@ -891,7 +895,13 @@ impl App {
                         *cursor = (*cursor + n - 1) % n
                     }
                     KeyCode::Char(c) if !ctrl => {
-                        if let Some(it) = menu.items.iter().find(|i| i.key == c) {
+                        let at = menu.items.iter().position(|i| i.key == c);
+                        let hidden =
+                            |n: usize| self.menu_shown.as_ref().is_some_and(|r| !r.contains(&n));
+                        if let Some(n) = at.filter(|&n| hidden(n)) {
+                            // never act on what can't be seen: show it first
+                            *cursor = n;
+                        } else if let Some(it) = at.map(|n| &menu.items[n]) {
                             // switches keep the menu open, as in magit
                             let (a, stays) = (it.action, it.stays);
                             if !stays {
