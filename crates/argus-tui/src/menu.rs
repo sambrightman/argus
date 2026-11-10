@@ -215,11 +215,7 @@ impl MenuId {
                         "auto-fix all shown, except hidden",
                         Action::AutoFix(Scope::All),
                     ),
-                    item(
-                        'A',
-                        "abort the merge, rebase… in progress…",
-                        Action::AbortOperation,
-                    ),
+                    // then each fix that applies: see App::fix_menu
                 ],
             ),
             MenuId::Mark => (
@@ -296,6 +292,28 @@ impl MenuId {
             title: title.into(),
             items,
         }
+    }
+}
+
+/// The Fix menu's key for a fix of `kind`.
+pub fn fix_key(kind: argus_core::fix::FixKind) -> char {
+    use argus_core::fix::FixKind::*;
+    match kind {
+        Abort => 'A',
+        Stash => 's',
+        Commit => 'c',
+        Gitignore => 'i',
+        Branch => 'b',
+        Push => 'p',
+        Publish => 'u',
+        AddRemote => 'R',
+        PushBranches => 'P',
+        SwitchDefault => 'd',
+        Reattach => 'r',
+        Pull => 'F',
+        FastForward => 'f',
+        DeleteBranches => 'D',
+        StashPop => 'z',
     }
 }
 

@@ -6,7 +6,7 @@ use argus_core::config::Config;
 use argus_core::ops::{Op, ResetMode};
 use argus_core::testkit::{Sandbox, commit, git, write};
 use argus_core::{State, Workspace};
-use argus_tui::app::{Action, App, Effect, Mode, Msg, Row, Scope, StashKind};
+use argus_tui::app::{Action, App, Effect, Mode, Msg, Prompt, Row, Scope, StashKind};
 use argus_tui::menu::MenuId;
 use argus_tui::theme::Theme;
 use argus_tui::ui;
@@ -2883,4 +2883,88 @@ fn amending_a_commit_on_a_remote_says_pushing_needs_force() {
     app.act(Action::Amend);
     assert!(matches!(app.mode, Mode::Normal));
     assert_eq!(app.message.as_ref().unwrap().0, "amend one repo at a time");
+}
+
+#[test]
+fn the_fix_menu_offers_each_fix_that_applies() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    while current(&app) != "acme/dirty" {
+        app.act(Action::Down);
+    }
+    app.on_key(key('x'));
+    let items = menu_items(&app);
+    assert_eq!(
+        items[..2],
+        ["x auto-fix selected", "a auto-fix all shown, except hidden"]
+    );
+    assert_eq!(
+        items[2..],
+        [
+            "s stash: 5 uncommitted path(s)",
+            "c commit…: 5 uncommitted path(s)",
+            "i gitignore…: 2 untracked path(s)",
+            "p push: 1 commit(s) ahead of origin/main",
+        ]
+    );
+    // nothing in progress: no abort
+    assert!(!items.iter().any(|i| i.starts_with("A ")), "{items:?}");
+    // one that asks first opens what it asks with
+    app.on_key(key('i'));
+    match &app.mode {
+        Mode::Menu { menu, .. } => assert!(menu.title.starts_with("Gitignore"), "{}", menu.title),
+        _ => panic!("no gitignore menu"),
+    }
+    // several repos: how many each applies to
+    app.on_key(ctrl('g'));
+    app.act(Action::Top);
+    app.act(Action::ToggleMark);
+    app.act(Action::ToggleMark);
+    app.on_key(key('x'));
+    assert!(
+        menu_items(&app).contains(&"d switch-default (1 of 2 repos)".to_string()),
+        "{:?}",
+        menu_items(&app)
+    );
+}
+
+#[test]
+fn the_fix_menu_starts_on_the_fix_under_the_cursor() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    cursor_on_detail(&mut app, "dirty", "fix       gitignore");
+    app.on_key(key('x'));
+    match &app.mode {
+        Mode::Menu { menu, cursor, .. } => {
+            assert!(menu.items[*cursor].label.starts_with("gitignore…"))
+        }
+        _ => panic!("no menu"),
+    }
+    // elsewhere: the first item
+    cursor_on_detail(&mut app, "dirty", "remote");
+    app.on_key(ctrl('g'));
+    app.on_key(key('x'));
+    assert!(matches!(app.mode, Mode::Menu { cursor: 0, .. }));
+}
+
+#[test]
+fn fixes_that_ask_first_ask_from_the_fix_menu_too() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        diff_fixture(sb);
+        git(&sb.path("dev/dirty"), &["branch", "old", "HEAD~1"]);
+    });
+    while current(&app) != "acme/dirty" {
+        app.act(Action::Down);
+    }
+    app.on_key(key('x'));
+    assert!(app.on_key(key('c')).is_empty());
+    assert!(matches!(
+        app.mode,
+        Mode::Input {
+            prompt: Prompt::CommitMessage(_, true),
+            ..
+        }
+    ));
+    app.on_key(code(KeyCode::Esc));
+    app.on_key(key('x'));
+    assert!(app.on_key(key('D')).is_empty());
+    assert!(matches!(app.mode, Mode::Confirm { .. }));
 }

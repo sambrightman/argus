@@ -28,6 +28,8 @@ pub struct DetailLine {
     pub stash: Option<usize>,
     /// What Tab unfolds it into, read when unfolded.
     pub expand: Option<Expand>,
+    /// The fix this line offers, for the Fix menu to start on.
+    pub fix: Option<FixKind>,
     /// Body text (a commit message line, a diff line), which `n`/`p` skip
     /// as magit's do, stopping only at section lines.
     pub body: bool,
@@ -101,6 +103,7 @@ fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
         ignored: false,
         stash: None,
         expand: None,
+        fix: None,
         body: false,
     }
 }
@@ -242,7 +245,10 @@ pub fn details(
         if let Some(why) = &f.blocked {
             parts.push(styled(Role::Warning, format!("  not automatic: {why}")));
         }
-        v.push(line(parts));
+        v.push(DetailLine {
+            fix: Some(f.kind),
+            ..line(parts)
+        });
     }
     // those that ask for something first, with the keys that run them
     let manual: Vec<fix::Fix> = fix::plan(s, stash)
@@ -273,7 +279,10 @@ pub fn details(
             parts.push(styled(Role::Warning, format!("  {why}")));
         }
         parts.push(styled(Role::Dim, format!("  ({})", manual_keys(kind))));
-        v.push(line(parts));
+        v.push(DetailLine {
+            fix: Some(kind),
+            ..line(parts)
+        });
     }
     if !s.branches.is_empty() {
         v.push(line(vec![styled(Role::Dim, "branches")]));
@@ -454,6 +463,11 @@ mod tests {
                 .collect();
             let action = match keys.as_slice() {
                 ['i'] => Action::GitignoreMenu,
+                // the Fix menu's own item for it, built when opened
+                ['x', k] => {
+                    assert_eq!(crate::menu::fix_key(kind), *k, "{kind:?}");
+                    continue;
+                }
                 [m, k] => {
                     let menu = MenuId::from_key(*m).unwrap().menu();
                     menu.items.iter().find(|i| i.key == *k).unwrap().action

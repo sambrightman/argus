@@ -115,6 +115,9 @@ pub enum Action {
     /// Open the gitignore menu for the untracked files marked, or under
     /// the cursor.
     GitignoreMenu,
+    /// Apply a fix of this kind to the selection, as its own action does
+    /// (asking first, or for what it needs, where that does).
+    ApplyFix(FixKind),
     /// Offer the current repo's commits to reset to, this way.
     Reset(ResetMode),
     /// In the reset menu: reset to that commit (by its place).
@@ -182,6 +185,7 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
             ignored: false,
             stash: None,
             expand: None,
+            fix: None,
             body: false,
         }
     };
@@ -362,6 +366,7 @@ fn diff_rows(
         ignored: false,
         stash: None,
         expand: None,
+        fix: None,
         body: false,
     };
     let mut v = vec![];
@@ -1145,6 +1150,17 @@ impl App {
             }
             Reset(mode) => return self.open_reset_menu(mode),
             Amend => return self.start_amend(),
+            ApplyFix(kind) => {
+                return match kind {
+                    FixKind::Abort => self.act(AbortOperation),
+                    FixKind::Commit => self.act(Commit { all: true }),
+                    FixKind::Gitignore => self.act(GitignoreMenu),
+                    FixKind::Branch => self.act(CreateBranch),
+                    FixKind::AddRemote => self.act(AddRemote),
+                    FixKind::DeleteBranches => self.act(DeleteMergedBranches),
+                    k => self.fix_ops(k),
+                };
+            }
             ResetTo(n) => return self.reset_to(n),
             Stash(kind) => return self.stash_action(kind),
             StageFiles => return self.file_op(ops::stage_ops, "stage"),
@@ -1174,9 +1190,20 @@ impl App {
                 let mut menu = m.menu();
                 self.state_labels(&mut menu);
                 self.drop_inapplicable(&mut menu);
+                let mut cursor = 0;
+                if m == MenuId::Fix {
+                    self.add_fixes(&mut menu);
+                    // on the fix under the cursor in the details
+                    if let Some(Row::Detail { line, .. }) = self.rows.get(self.cursor)
+                        && let Some(k) = line.fix
+                    {
+                        let key = menu::fix_key(k);
+                        cursor = menu.items.iter().position(|i| i.key == key).unwrap_or(0);
+                    }
+                }
                 self.mode = Mode::Menu {
                     menu,
-                    cursor: 0,
+                    cursor,
                     notes,
                 }
             }
@@ -1997,6 +2024,41 @@ impl App {
 
     /// Labels for toggles saying what choosing them does now: mark or
     /// unmark (by the first selected repo, as toggling goes), show or hide.
+    /// The Fix menu's items after auto-fix: each fix that applies to the
+    /// selection, with its reason for one repo or how many it applies to.
+    fn add_fixes(&self, menu: &mut Menu) {
+        let selected = self.selected();
+        let plans: Vec<Vec<fix::Fix>> = selected
+            .iter()
+            .filter_map(|&i| {
+                Some(fix::plan(
+                    self.ws.entries[i].status()?,
+                    &self.ws.config.stash,
+                ))
+            })
+            .collect();
+        for kind in FixKind::ALL {
+            let of_kind: Vec<&fix::Fix> = plans
+                .iter()
+                .filter_map(|p| p.iter().find(|f| f.kind == kind))
+                .collect();
+            let Some(f) = of_kind.first() else { continue };
+            let name = match kind.manual() {
+                true => format!("{}…", kind.name()),
+                false => kind.name().to_string(),
+            };
+            let label = match selected.len() {
+                1 => format!("{name}: {}", f.reason),
+                n => format!("{name} ({} of {n} repos)", of_kind.len()),
+            };
+            menu.items.push(menu::item(
+                menu::fix_key(kind),
+                label,
+                Action::ApplyFix(kind),
+            ));
+        }
+    }
+
     /// Leave out items with nothing to act on: `c c` when nothing in the
     /// selection is staged.
     fn drop_inapplicable(&self, menu: &mut Menu) {
