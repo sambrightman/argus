@@ -106,7 +106,8 @@ impl MenuId {
     ];
 
     /// A list of things (commits) rather than of choices: `n p j k` move
-    /// through it and are never its keys.
+    /// through it and are never its keys. A new list goes here, with its
+    /// items keyed from [`LIST_KEYS`].
     pub fn is_list(self) -> bool {
         matches!(self, MenuId::ResetTo)
     }
@@ -291,6 +292,11 @@ impl MenuId {
     }
 }
 
+/// Keys for the items of every list menu (see [`MenuId::is_list`]), in
+/// order: never `n` `p` `j` `k`, which move through lists, nor `q`, which
+/// closes menus. A list has at most this many items.
+pub const LIST_KEYS: &str = "1234567890abcdefghilmorstuvwxyz";
+
 /// The Fix menu's key for a fix of `kind`.
 pub fn fix_key(kind: argus_core::fix::FixKind) -> char {
     use argus_core::fix::FixKind::*;
@@ -316,6 +322,15 @@ pub fn fix_key(kind: argus_core::fix::FixKind) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_keys_leave_out_moving_and_closing() {
+        for c in ['n', 'p', 'j', 'k', 'q'] {
+            assert!(!LIST_KEYS.contains(c), "{c}");
+        }
+        let mut seen = std::collections::HashSet::new();
+        assert!(LIST_KEYS.chars().all(|c| seen.insert(c)), "no repeats");
+    }
 
     #[test]
     fn keys_unique_within_each_menu_and_across_prefixes() {

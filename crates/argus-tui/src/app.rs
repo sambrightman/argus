@@ -1653,7 +1653,7 @@ impl App {
         };
         let e = &self.ws.entries[i];
         let head = || Range::Ancestors { tip: "HEAD".into() };
-        let commits = match history::commits(&e.path, &head(), RESET_KEYS.len()) {
+        let commits = match history::commits(&e.path, &head(), menu::LIST_KEYS.len()) {
             Ok((v, _)) if !v.is_empty() => v,
             Ok(_) => return self.not_applicable("no commits to reset to"),
             Err(err) => {
@@ -1664,7 +1664,7 @@ impl App {
         let local = history::commits(
             &e.path,
             &Range::NotOnRemote { tip: "HEAD".into() },
-            RESET_KEYS.len(),
+            menu::LIST_KEYS.len(),
         )
         .map(|(v, _)| v.into_iter().map(|c| c.id).collect::<Vec<_>>())
         .unwrap_or_default();
@@ -1678,7 +1678,7 @@ impl App {
         let cursor = under.map_or(1, |n| n + 1).min(commits.len() - 1);
         let items = commits
             .iter()
-            .zip(RESET_KEYS.chars())
+            .zip(menu::LIST_KEYS.chars())
             .enumerate()
             .map(|(n, (c, key))| {
                 let mut label = format!("{} {}", &c.id[..7], c.summary);
@@ -2787,10 +2787,6 @@ struct ResetPick {
     mode: ResetMode,
     commits: Vec<argus_core::history::CommitLine>,
 }
-
-/// Keys for a reset menu's commits: not `q`, which closes menus, nor
-/// `n` `p` `j` `k`, which move through lists (see [`MenuId::is_list`]).
-const RESET_KEYS: &str = "1234567890abcdefghilmorstuvwxyz";
 
 /// The untracked files a gitignore menu is for, by repo, and whether its
 /// rules are anchored.

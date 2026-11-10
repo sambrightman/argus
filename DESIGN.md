@@ -353,6 +353,11 @@ Two findings:
   * transient-style prefix keys: `f` fix, `F` pull, `m` mark, `o` open, `?` help.
     One more key executes. `C-g`/Esc cancels.
   * emacs (`C-n C-p C-v M-v M-< M->`, `C-s` search) and vi (`j k g G /`) motions.
+  * Menus of choices have only item keys. Menus that list things (the
+    commits to reset to) also move with `n p j k`, so their items are
+    keyed from `menu::LIST_KEYS`, which leaves those out (and `q`): every
+    future list must use it, or a key meant to move would pick an item.
+    A key for an item scrolled out of sight only scrolls to it.
 * `!` drops to `$SHELL` (or `tools.shell`) in the repo (TUI suspended), as a
   login shell, as terminals start one: `argv[0]` is `-bash` (for
   `/opt/homebrew/bin/bash`), so it reads `~/.bash_profile`, `~/.zprofile`…

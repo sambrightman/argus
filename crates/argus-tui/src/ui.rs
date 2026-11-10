@@ -508,7 +508,7 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) -> Option<std::ops:
         )));
     }
     let moves = if menu.id.is_list() {
-        "↑↓ n p"
+        "↑↓ n p j k"
     } else {
         "↑↓"
     };

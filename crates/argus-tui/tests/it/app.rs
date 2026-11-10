@@ -2017,7 +2017,7 @@ fn the_fix_menus_auto_fix_items_say_what_they_do() {
 }
 
 #[test]
-fn the_footer_names_n_p_in_lists_only() {
+fn the_footer_names_n_p_j_k_in_lists_only() {
     let (_sb, mut app) = setup_with("", two_local_commits);
     while current(&app) != "acme/clean" {
         app.act(Action::Down);
@@ -2028,7 +2028,7 @@ fn the_footer_names_n_p_in_lists_only() {
     app.on_key(key('s'));
     let screen = render(&mut app, 100, 20);
     assert!(
-        screen.contains("q/Esc/C-g cancel · ↑↓ n p Enter"),
+        screen.contains("q/Esc/C-g cancel · ↑↓ n p j k Enter"),
         "{screen}"
     );
 }
