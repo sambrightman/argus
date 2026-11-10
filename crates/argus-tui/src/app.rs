@@ -2044,7 +2044,7 @@ impl App {
         if let Some((_, t)) = self.auto_fix_tally(&paths(self.bulk_repos())) {
             menu.items.push(menu::item(
                 'a',
-                format!("auto-fix all shown · {t}"),
+                format!("auto-fix all · {t}"),
                 Action::AutoFix(Scope::All),
             ));
         }

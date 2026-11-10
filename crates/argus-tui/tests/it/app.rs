@@ -1999,7 +1999,7 @@ fn the_fix_menus_auto_fix_items_say_what_they_do() {
         menu_items(&app)[..2],
         [
             "x auto-fix acme/feature: switch main",
-            "a auto-fix all shown · acme/feature: switch main"
+            "a auto-fix all · acme/feature: switch main"
         ]
     );
     // no header saying it again
@@ -2011,7 +2011,7 @@ fn the_fix_menus_auto_fix_items_say_what_they_do() {
     app.on_key(key('x'));
     assert_eq!(
         menu_items(&app)[0],
-        "a auto-fix all shown · acme/feature: switch main"
+        "a auto-fix all · acme/feature: switch main"
     );
     assert!(!menu_items(&app).iter().any(|i| i.starts_with("x ")));
 }
@@ -2918,7 +2918,7 @@ fn the_fix_menu_offers_each_fix_that_applies() {
         items[..2],
         [
             "x auto-fix acme/dirty: push",
-            "a auto-fix all shown · 2 repo(s): push (1), switch-default (1)"
+            "a auto-fix all · 2 repo(s): push (1), switch-default (1)"
         ]
     );
     assert_eq!(
