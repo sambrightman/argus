@@ -136,7 +136,9 @@ impl Op {
         let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         match self {
             Op::Fetch => v(&["fetch"]),
-            Op::Pull => v(&["pull"]),
+            // Submodules follow: a pull or clone leaves them checked out at
+            // the commits the repo records, whatever `submodule.recurse` says.
+            Op::Pull => v(&["pull", "--recurse-submodules"]),
             Op::Push => v(&["push"]),
             Op::PushSetUpstream { remote, branch } => {
                 v(&["push", "--set-upstream", remote, branch])
@@ -190,6 +192,7 @@ impl Op {
             Op::Clone { url, dest } => {
                 vec![
                     "clone".into(),
+                    "--recurse-submodules".into(),
                     "--".into(),
                     url.clone(),
                     dest.display().to_string(),
@@ -677,6 +680,7 @@ fn pull(cwd: &Path, started: Instant) -> OpOutcome {
         o.success.then_some(o.output)
     };
     let (head_before, stash_before) = (rev("HEAD"), rev("refs/stash"));
+    let subs_before = submodule_heads(cwd);
     let mut o = git(cwd, &Op::Pull.args(), started);
     if o.success {
         if let Some(head) = head_before
@@ -685,8 +689,12 @@ fn pull(cwd: &Path, started: Instant) -> OpOutcome {
         {
             let conflicted = git_in(cwd, &["diff", "--name-only", "--diff-filter=U"]).output;
             o.success = false;
-            o.output
-                .push_str(&undo_autostash_conflict(cwd, &head, &conflicted));
+            o.output.push_str(&undo_autostash_conflict(
+                cwd,
+                &head,
+                &subs_before,
+                &conflicted,
+            ));
         }
         o.duration = started.elapsed();
         return o;
@@ -708,14 +716,49 @@ fn pull(cwd: &Path, started: Instant) -> OpOutcome {
     o
 }
 
-/// Back to `head` with the autostash (`stash@{0}`) re-applied there, where
-/// it was made, so it applies cleanly. Says what happened.
-fn undo_autostash_conflict(cwd: &Path, head: &str, conflicted: &str) -> String {
+/// Each checked-out submodule's HEAD, nested ones after their parent.
+fn submodule_heads(dir: &Path) -> Vec<(PathBuf, String)> {
+    let mut v = vec![];
+    let Ok(repo) = crate::isolation::open(dir) else {
+        return v;
+    };
+    let Ok(Some(sms)) = repo.submodules() else {
+        return v;
+    };
+    for sm in sms {
+        if !sm.state().is_ok_and(|s| s.worktree_checkout) {
+            continue;
+        }
+        let (Ok(path), Ok(Some(r))) = (sm.work_dir(), sm.open()) else {
+            continue;
+        };
+        if let Ok(id) = r.head_id() {
+            v.push((path.clone(), id.to_string()));
+            v.extend(submodule_heads(&path));
+        }
+    }
+    v
+}
+
+/// Back to `head`, and each submodule to the commit in `subs` (the pull
+/// checked them out too), with the autostash (`stash@{0}`) re-applied
+/// there, where it was made, so it applies cleanly. Says what happened.
+fn undo_autostash_conflict(
+    cwd: &Path,
+    head: &str,
+    subs: &[(PathBuf, String)],
+    conflicted: &str,
+) -> String {
     let files = match conflicted.lines().collect::<Vec<_>>().join(", ") {
         f if f.is_empty() => "files".to_string(),
         f => f,
     };
-    let reset = git_in(cwd, &["reset", "-q", "--hard", head]);
+    let mut reset = git_in(cwd, &["reset", "-q", "--hard", head]);
+    for (path, id) in subs {
+        if reset.success && git_in(path, &["rev-parse", "HEAD"]).output != *id {
+            reset = git_in(path, &["checkout", "-q", "--detach", id]);
+        }
+    }
     let pop = reset
         .success
         .then(|| git_in(cwd, &["stash", "pop", "-q", "--index"]));

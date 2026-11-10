@@ -415,3 +415,198 @@ fn only_the_pulls_own_autostash_is_undone() {
     assert_ne!(head(&r), before, "pulled");
     assert_eq!(st(&r).stashes, ["hooked"]);
 }
+
+/// `owner/app` with `owner/lib` as a submodule at `lib`, cloned (with the
+/// submodule checked out) at `rel`; then a new `lib` commit is pushed and
+/// `app` moved to it upstream. Returns the clone and the new `lib` commit.
+fn submodule_bumped(sb: &Sandbox, rel: &str) -> (std::path::PathBuf, String) {
+    let lib = sb.remote("acme", "lib");
+    let app = sb.remote("acme", "app");
+    let seed = sb.path(&format!("scratch/{rel}-seed"));
+    git(
+        &sb.root(),
+        &["clone", "-q", app.to_str().unwrap(), seed.to_str().unwrap()],
+    );
+    git(
+        &seed,
+        &["submodule", "add", "-q", lib.to_str().unwrap(), "lib"],
+    );
+    commit(&seed, "add lib");
+    git(&seed, &["push", "-q"]);
+    let r = sb.path(rel);
+    git(
+        &sb.root(),
+        &[
+            "clone",
+            "-q",
+            "--recurse-submodules",
+            app.to_str().unwrap(),
+            r.to_str().unwrap(),
+        ],
+    );
+    sb.advance_remote("acme", "lib", "new");
+    git(&seed, &["submodule", "update", "-q", "--remote", "lib"]);
+    commit(&seed, "bump lib");
+    git(&seed, &["push", "-q"]);
+    let new = git(&seed.join("lib"), &["rev-parse", "HEAD"]);
+    (r, new)
+}
+
+#[test]
+fn a_pull_checks_out_the_submodules_it_moves() {
+    for rebase in ["false", "true"] {
+        let sb = Sandbox::new();
+        let (r, new) = submodule_bumped(&sb, "app");
+        git(&r, &["config", "pull.rebase", rebase]);
+        let old = git(&r.join("lib"), &["rev-parse", "HEAD"]);
+        assert_ne!(old, new);
+        let out = ops::run(&r, &Op::Pull);
+        assert!(out.success, "pull.rebase={rebase}: {}", out.output);
+        assert_eq!(
+            git(&r.join("lib"), &["rev-parse", "HEAD"]),
+            new,
+            "pull.rebase={rebase}"
+        );
+        assert!(st(&r).changes.is_clean(), "pull.rebase={rebase}");
+    }
+}
+
+#[test]
+fn a_clone_checks_out_submodules() {
+    let sb = Sandbox::new();
+    let (_, new) = submodule_bumped(&sb, "app");
+    let dest = sb.path("fresh");
+    let out = ops::run(
+        &sb.root(),
+        &Op::Clone {
+            url: sb.path("forge/acme/app.git").display().to_string(),
+            dest: dest.clone(),
+        },
+    );
+    assert!(out.success, "{}", out.output);
+    assert_eq!(git(&dest.join("lib"), &["rev-parse", "HEAD"]), new);
+    assert!(st(&dest).changes.is_clean());
+}
+
+#[test]
+fn undoing_a_pull_puts_its_submodules_back() {
+    for rebase in ["false", "true"] {
+        let sb = Sandbox::new();
+        let (r, _) = submodule_bumped(&sb, "app");
+        sb.advance_remote("acme", "app", "README");
+        git(&r, &["config", "pull.rebase", rebase]);
+        git(&r, &["config", "rebase.autoStash", "true"]);
+        git(&r, &["config", "merge.autoStash", "true"]);
+        let (before, old) = (head(&r), git(&r.join("lib"), &["rev-parse", "HEAD"]));
+        write(&r, "README", "mine\n");
+        let out = ops::run(&r, &Op::Pull);
+        assert!(!out.success, "pull.rebase={rebase}: {}", out.output);
+        assert!(out.output.contains("undone"), "{}", out.output);
+        assert_eq!(head(&r), before, "pull.rebase={rebase}");
+        assert_eq!(
+            git(&r.join("lib"), &["rev-parse", "HEAD"]),
+            old,
+            "pull.rebase={rebase}"
+        );
+        let codes: Vec<String> = st(&r)
+            .changes
+            .files
+            .iter()
+            .map(|f| format!("{}{} {}", f.index, f.worktree, f.path))
+            .collect();
+        assert_eq!(codes, [" M README"], "pull.rebase={rebase}");
+    }
+}
+
+/// A pull of `r` that moves its submodules and then conflicts with the
+/// autostash; returns the outcome.
+fn conflicting_pull(sb: &Sandbox, r: &Path) -> ops::OpOutcome {
+    sb.advance_remote("acme", "app", "README");
+    git(r, &["config", "merge.autoStash", "true"]);
+    git(r, &["config", "pull.rebase", "false"]);
+    write(r, "README", "mine\n");
+    ops::run(r, &Op::Pull)
+}
+
+#[test]
+fn undoing_a_pull_puts_nested_submodules_back() {
+    let sb = Sandbox::new();
+    let url = |name: &str| {
+        sb.path(&format!("forge/acme/{name}.git"))
+            .display()
+            .to_string()
+    };
+    let clone = |name: &str, rel: &str| {
+        let dest = sb.path(rel);
+        git(
+            &sb.root(),
+            &[
+                "clone",
+                "-q",
+                "--recurse-submodules",
+                &url(name),
+                dest.to_str().unwrap(),
+            ],
+        );
+        dest
+    };
+    for name in ["inner", "lib", "app"] {
+        sb.remote("acme", name);
+    }
+    // app has lib at `lib`, which has inner at `inner`
+    let lib_seed = clone("lib", "scratch/lib-seed");
+    git(
+        &lib_seed,
+        &["submodule", "add", "-q", &url("inner"), "inner"],
+    );
+    commit(&lib_seed, "add inner");
+    git(&lib_seed, &["push", "-q"]);
+    let app_seed = clone("app", "scratch/app-seed");
+    git(&app_seed, &["submodule", "add", "-q", &url("lib"), "lib"]);
+    git(
+        &app_seed,
+        &["submodule", "update", "-q", "--init", "--recursive"],
+    );
+    commit(&app_seed, "add lib");
+    git(&app_seed, &["push", "-q"]);
+    let r = clone("app", "app");
+    let nested = r.join("lib/inner");
+    let old = git(&nested, &["rev-parse", "HEAD"]);
+    // upstream, inner moves in lib, and lib (with it) in app
+    sb.advance_remote("acme", "inner", "new");
+    git(
+        &lib_seed,
+        &["submodule", "update", "-q", "--remote", "inner"],
+    );
+    commit(&lib_seed, "bump inner");
+    git(&lib_seed, &["push", "-q"]);
+    git(
+        &app_seed,
+        &[
+            "submodule",
+            "update",
+            "-q",
+            "--remote",
+            "--recursive",
+            "lib",
+        ],
+    );
+    commit(&app_seed, "bump lib");
+    git(&app_seed, &["push", "-q"]);
+    let out = conflicting_pull(&sb, &r);
+    assert!(out.output.contains("; undone"), "{}", out.output);
+    assert_eq!(git(&nested, &["rev-parse", "HEAD"]), old);
+    assert_eq!(git(&r.join("lib"), &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn undoing_a_pull_leaves_submodules_that_arent_checked_out() {
+    let sb = Sandbox::new();
+    let (r, _) = submodule_bumped(&sb, "app");
+    git(&r, &["submodule", "deinit", "-q", "lib"]);
+    // or the clone's `submodule.active=.` keeps it active: git checks it out again
+    git(&r, &["config", "--unset", "submodule.active"]);
+    let out = conflicting_pull(&sb, &r);
+    assert!(out.output.contains("; undone"), "{}", out.output);
+    assert!(!r.join("lib/README").exists());
+}

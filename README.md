@@ -124,7 +124,8 @@ kept there are shown as config lines to copy, and left in place.
 
 Credentials and git behaviour are yours: argus runs `git pull`/`push`/`clone`
 itself, so `pull.rebase`, `rebase.autoStash`, hooks, signing, credential
-helpers and ssh config all apply. GitHub listing uses `GH_TOKEN`,
+helpers and ssh config all apply. Pulls and clones also check out
+submodules (`--recurse-submodules`), whatever `submodule.recurse` says. GitHub listing uses `GH_TOKEN`,
 `GITHUB_TOKEN` or `gh auth token`. Clone protocol follows `gh config get git_protocol`.
 
 ## TUI keys
@@ -315,7 +316,8 @@ repos instead of pulling them. Any pull argus runs that still stops with
 conflicts is aborted, leaving the repo as it was, autostash included. So is
 one git calls a success but whose autostash (`rebase.autoStash`,
 `merge.autoStash`) conflicted when re-applied: argus goes back to the commit
-from before the pull and re-applies your changes there.
+from before the pull, puts back any submodules the pull checked out,
+and re-applies your changes there.
 `pull` isn't in the default `[fix] auto`.
 
 `stash` saves staged, unstaged and untracked changes (not ignored files);
