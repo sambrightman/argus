@@ -12,6 +12,7 @@ pub mod discover;
 pub mod fix;
 pub mod forge;
 pub mod gitignore;
+pub mod history;
 pub mod icons;
 pub mod identity;
 pub mod isolation;

@@ -6,6 +6,7 @@ use argus_core::badges::Role;
 use argus_core::config::StashConfig;
 use argus_core::diff::Side;
 use argus_core::fix::{self, FixKind};
+use argus_core::history::Range;
 use argus_core::icons::Icons;
 use argus_core::paths::contract_tilde;
 
@@ -24,6 +25,43 @@ pub struct DetailLine {
     pub ignored: bool,
     /// The stash this line shows (`stash@{n}`), for dropping it.
     pub stash: Option<usize>,
+    /// What Tab unfolds it into, read when unfolded.
+    pub expand: Option<Expand>,
+}
+
+/// What a details line unfolds into.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Expand {
+    /// A list of commits.
+    Commits(Range),
+    /// The other local branches with commits on no remote, each unfolding
+    /// into them.
+    UnpushedBranches,
+    /// One commit (or stash): its message and changed files.
+    Commit(String),
+    /// The files of an untracked directory shown collapsed.
+    Dir(String),
+}
+
+/// What an issue's line unfolds into: the commits behind it.
+fn issue_expand(issue: &Issue, s: &argus_core::status::RepoStatus) -> Option<Expand> {
+    let on_no_remote = |b: &str| {
+        Expand::Commits(Range::NotOnRemote {
+            tip: format!("refs/heads/{b}"),
+        })
+    };
+    Some(match issue {
+        Issue::Unpushed(_) | Issue::UpstreamGone | Issue::NoUpstream => {
+            on_no_remote(s.head.branch()?)
+        }
+        Issue::UnpushedBranches(_) => Expand::UnpushedBranches,
+        Issue::DetachedCommits(_) => Expand::Commits(Range::Orphans),
+        Issue::Behind(_) => Expand::Commits(Range::Missing {
+            tip: format!("refs/remotes/{}", s.upstream.as_ref()?.name),
+            from: "HEAD".into(),
+        }),
+        _ => return None,
+    })
 }
 
 /// A diff row under a file's line: a side's heading, a hunk header, or one
@@ -48,6 +86,7 @@ fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
         issue: None,
         ignored: false,
         stash: None,
+        expand: None,
     }
 }
 
@@ -59,7 +98,7 @@ fn styled(r: Role, s: impl Into<String>) -> (Option<Role>, String) {
     (Some(r), s.into())
 }
 
-fn ago(t: jiff::Timestamp) -> String {
+pub(crate) fn ago(t: jiff::Timestamp) -> String {
     let secs = (jiff::Timestamp::now() - t).get_seconds().max(0);
     match secs {
         s if s < 90 => format!("{s}s ago"),
@@ -157,6 +196,7 @@ pub fn details(
         let (role, text) = describe(issue, s.default_branch.as_deref());
         v.push(DetailLine {
             issue: Some(*issue),
+            expand: issue_expand(issue, s),
             ..line(vec![styled(Role::Dim, "issue     "), styled(role, text)])
         });
     }
@@ -164,6 +204,7 @@ pub fn details(
         let (_, text) = describe(issue, s.default_branch.as_deref());
         v.push(DetailLine {
             issue: Some(*issue),
+            expand: issue_expand(issue, s),
             ignored: true,
             ..line(vec![
                 styled(Role::Dim, "issue     "),
@@ -223,7 +264,20 @@ pub fn details(
             if b.merged && s.default_branch.as_deref() != Some(&b.name) {
                 parts.push(styled(Role::Dim, "  merged"));
             }
-            v.push(line(parts));
+            let unpushed = b.unpushed.filter(|&n| n > 0);
+            // unless ↑ already says it
+            let ahead = b.upstream.as_ref().filter(|t| !t.gone).map(|t| t.ahead);
+            if let Some(n) = unpushed.filter(|&n| ahead != Some(n)) {
+                parts.push(styled(Role::Dim, format!("  {n} on no remote")));
+            }
+            v.push(DetailLine {
+                expand: unpushed.map(|_| {
+                    Expand::Commits(Range::NotOnRemote {
+                        tip: format!("refs/heads/{}", b.name),
+                    })
+                }),
+                ..line(parts)
+            });
         }
     }
     if !s.changes.files.is_empty() {
@@ -240,6 +294,8 @@ pub fn details(
             };
             v.push(DetailLine {
                 file: Some(f.path.clone()),
+                expand: (f.index == '?' && f.path.ends_with('/'))
+                    .then(|| Expand::Dir(f.path.clone())),
                 ..line(vec![
                     plain("    "),
                     styled(role, format!("{}{}", f.index, f.worktree)),
@@ -266,6 +322,7 @@ pub fn details(
             let label = format!("          stash@{{{n}}} {message}");
             v.push(DetailLine {
                 stash: Some(n),
+                expand: s.stash_ids.get(n).map(|id| Expand::Commit(id.clone())),
                 ..line(vec![if e.stash_ignored.get(n) == Some(&true) {
                     styled(Role::Dim, format!("{label}  (ignored)"))
                 } else {

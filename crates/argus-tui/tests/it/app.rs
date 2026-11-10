@@ -2219,3 +2219,173 @@ fn untracked_files_go_into_the_gitignore_chosen() {
         "t add /sub/a.log, /sub/b.log to .gitignore"
     );
 }
+
+/// The details lines after the one starting `after`, while they're
+/// indented deeper than `depth` spaces, trimmed.
+fn below(app: &App, after: &str, depth: usize) -> Vec<String> {
+    let texts = detail_texts(app);
+    let at = texts
+        .iter()
+        .position(|t| t.starts_with(after))
+        .unwrap_or_else(|| panic!("no {after:?}: {texts:?}"));
+    texts[at + 1..]
+        .iter()
+        .take_while(|t| t.len() - t.trim_start().len() > depth)
+        .map(|t| t.trim().to_string())
+        .collect()
+}
+
+#[test]
+fn unpushed_commits_unfold_and_so_does_each_commit() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let f = sb.path("dev/feature");
+        write(&f, "new.txt", "x\n");
+        git(&f, &["add", "new.txt"]);
+        git(
+            &f,
+            &[
+                "commit",
+                "-q",
+                "-m",
+                "Add new.txt\n\nBecause it was needed.",
+            ],
+        );
+    });
+    let f = sb.path("dev/feature");
+    cursor_on_detail(&mut app, "feature", "issue     1 unpushed commit(s)");
+    app.act(Action::ToggleExpand);
+    let id = git(&f, &["rev-parse", "HEAD"]);
+    let short = &id[..7];
+    let commits = below(&app, "issue     1 unpushed commit(s)", 0);
+    assert_eq!(commits.len(), 1, "{commits:?}");
+    assert!(
+        commits[0].starts_with(&format!("{short} Add new.txt  ")),
+        "{commits:?}"
+    );
+    // the cursor stays put; Tab on the commit shows it in full
+    cursor_on_detail(&mut app, "feature", &format!("      {short}"));
+    app.act(Action::ToggleExpand);
+    let full = below(&app, &format!("      {short}"), 6);
+    assert_eq!(full[0], format!("commit {}", id.trim()));
+    assert!(full[1].starts_with("author "), "{full:?}");
+    assert_eq!(
+        &full[2..6],
+        ["Add new.txt", "", "Because it was needed.", "files (1)"].map(|s| s.to_string())
+    );
+    assert_eq!(full[6], "A new.txt");
+    // stays unfolded across a refresh, cursor on the commit
+    app.ws.refresh(&f);
+    app.on_msg(Msg::Status(
+        f.clone(),
+        Box::new(Ok(app.ws.get(&f).unwrap().status().unwrap().clone())),
+    ));
+    assert!(detail_texts(&app).iter().any(|t| t.trim() == "files (1)"));
+    // and folds again
+    cursor_on_detail(&mut app, "feature", &format!("      {short}"));
+    app.act(Action::ToggleExpand);
+    assert!(!detail_texts(&app).iter().any(|t| t.trim() == "files (1)"));
+}
+
+#[test]
+fn other_branches_unfold_into_their_commits() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let f = sb.path("dev/feature");
+        git(&f, &["switch", "-q", "-c", "local"]);
+        commit(&f, "only here");
+        git(&f, &["switch", "-q", "main"]);
+    });
+    cursor_on_detail(&mut app, "feature", "issue     1 other local branch(es)");
+    app.act(Action::ToggleExpand);
+    let branches = below(&app, "issue     1 other local branch(es)", 0);
+    assert_eq!(branches, ["local  1 on no remote"]);
+    cursor_on_detail(&mut app, "feature", "      local");
+    app.act(Action::ToggleExpand);
+    let commits = below(&app, "      local", 6);
+    assert!(
+        commits.len() == 1 && commits[0].contains(" only here  "),
+        "{commits:?}"
+    );
+    // the branch's own line, in the branches list, unfolds the same
+    assert!(
+        detail_texts(&app)
+            .iter()
+            .any(|t| t.starts_with("    local") && t.ends_with("1 on no remote"))
+    );
+}
+
+#[test]
+fn an_untracked_directory_unfolds_into_files_that_can_be_acted_on() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let c = sb.path("dev/clean");
+        write(&c, "build/a.o", "a\n");
+        write(&c, "build/sub/b.o", "b\n");
+    });
+    cursor_on_detail(&mut app, "clean", "    ?? build/");
+    app.act(Action::ToggleExpand);
+    assert_eq!(
+        below(&app, "    ?? build/", 4),
+        ["?? build/a.o", "?? build/sub/b.o"]
+    );
+    // a file in it: staged, gitignored, diffed like any untracked file
+    cursor_on_detail(&mut app, "clean", "      ?? build/a.o");
+    match app.act(Action::StageFiles).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(
+            j[0].op,
+            Op::Add {
+                paths: vec!["build/a.o".into()]
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
+    app.running.clear();
+    app.act(Action::GitignoreMenu);
+    assert_eq!(menu_items(&app)[0], "t add /build/a.o to .gitignore");
+    app.on_key(ctrl('g'));
+    cursor_on_detail(&mut app, "clean", "      ?? build/a.o");
+    app.act(Action::ToggleExpand);
+    assert!(
+        detail_texts(&app).iter().any(|t| t.trim() == "+a"),
+        "{:?}",
+        detail_texts(&app)
+    );
+    let _ = sb;
+}
+
+#[test]
+fn a_stash_unfolds_into_what_it_holds() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let c = sb.path("dev/clean");
+        write(&c, "README", "stashed\n");
+        git(&c, &["stash", "push", "-q", "-m", "keep this"]);
+    });
+    cursor_on_detail(&mut app, "clean", "          stash@{0} keep this");
+    app.act(Action::ToggleExpand);
+    let held = below(&app, "          stash@{0} keep this", 10);
+    assert!(held.iter().any(|l| l == "On main: keep this"), "{held:?}");
+    assert!(held.iter().any(|l| l == "M README"), "{held:?}");
+}
+
+#[test]
+fn commits_behind_and_on_a_detached_head_unfold() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        sb.advance_remote("acme", "clean", "theirs.txt");
+        git(&sb.path("dev/clean"), &["fetch", "-q"]);
+        let d = sb.path("dev/dirty");
+        git(&d, &["switch", "-q", "--detach"]);
+        commit(&d, "adrift");
+    });
+    cursor_on_detail(&mut app, "clean", "issue     1 commit(s) behind upstream");
+    app.act(Action::ToggleExpand);
+    let incoming = below(&app, "issue     1 commit(s) behind upstream", 0);
+    assert!(
+        incoming.len() == 1 && incoming[0].contains(" remote theirs.txt  "),
+        "{incoming:?}"
+    );
+    cursor_on_detail(&mut app, "dirty", "issue     1 commit(s) on detached HEAD");
+    app.act(Action::ToggleExpand);
+    let adrift = below(&app, "issue     1 commit(s) on detached HEAD", 0);
+    assert!(
+        adrift.len() == 1 && adrift[0].contains(" adrift  "),
+        "{adrift:?}"
+    );
+}

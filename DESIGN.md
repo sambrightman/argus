@@ -623,9 +623,9 @@ speed.
 * Embedded terminal pane; worktree pruning.
 * Snoozing per issue (and per repo, as now): today a snooze hides the
   whole repo until it expires.
-* Drilling down in the details: unpushed/unmerged commits under their
-  issue, a commit into its message and diff, an untracked directory into
-  its files, stashes into their diffs.
+* Drilling down further: a commit's (or stash's) files into their diffs.
+  Today a commit unfolds into its message and changed files, issues and
+  branches into commits, untracked directories into files.
 * Adding untracked files to `.gitignore` (top-level, the directory's,
   `.git/info/exclude`, global), anchored (`/build/`) by default.
 * Pull requests: fetched with the remote, shown per branch; a merged PR

@@ -96,6 +96,16 @@ pub struct Changes {
 pub const MAX_FILES: usize = 500;
 
 impl Changes {
+    /// The entry for `path`: its own, or for a file in an untracked
+    /// directory listed collapsed (`build/`), that directory's.
+    pub fn entry(&self, path: &str) -> Option<&FileChange> {
+        self.files.iter().find(|c| c.path == path).or_else(|| {
+            self.files
+                .iter()
+                .find(|c| c.index == '?' && c.path.ends_with('/') && path.starts_with(&c.path))
+        })
+    }
+
     pub fn is_clean(&self) -> bool {
         self.total() == 0
     }
@@ -856,6 +866,44 @@ fn branches(
     }
     out.sort_by(|a, b| b.is_head.cmp(&a.is_head).then_with(|| a.name.cmp(&b.name)));
     Ok(out)
+}
+
+/// The untracked files in `dir` (repo-relative, ending in `/`), which
+/// status shows collapsed, up to `limit`, sorted; and whether there are
+/// more. Ignored files are left out, as git does.
+pub fn untracked_in(
+    path: &Path,
+    dir: &str,
+    limit: usize,
+) -> Result<(Vec<String>, bool), StatusError> {
+    use gix::status::index_worktree::Item as IW;
+    let repo = crate::isolation::open(path).map_err(err)?;
+    let iter = repo
+        .status(gix::progress::Discard)
+        .map_err(err)?
+        .untracked_files(gix::status::UntrackedFiles::Files)
+        .index_worktree_submodules(gix::status::Submodule::Given {
+            ignore: gix::submodule::config::Ignore::All,
+            check_dirty: false,
+        })
+        .into_iter([gix::bstr::BString::from(dir)])
+        .map_err(err)?;
+    let mut v = vec![];
+    for item in iter {
+        if let gix::status::Item::IndexWorktree(IW::DirectoryContents { entry, .. }) =
+            item.map_err(err)?
+            && entry.status == gix::dir::entry::Status::Untracked
+        {
+            let p = entry.rela_path.to_str_lossy().into_owned();
+            if p.starts_with(dir) {
+                v.push(p);
+            }
+        }
+    }
+    v.sort();
+    let more = v.len() > limit;
+    v.truncate(limit);
+    Ok((v, more))
 }
 
 /// `head_tree`, when known, saves gix reading HEAD again.

@@ -8,6 +8,7 @@ mod diff;
 mod discover;
 mod fix;
 mod gitignore;
+mod history;
 mod icons;
 mod kept;
 mod literals;

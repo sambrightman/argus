@@ -17,7 +17,7 @@ use argus_core::status::RepoStatus;
 use argus_core::{Entry, ViewFilter, Workspace, paths};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::details::{DetailLine, DiffRef, describe, details};
+use crate::details::{DetailLine, DiffRef, Expand, ago, describe, details};
 use crate::input::{Edit, LineEditor};
 use crate::menu::{self, Item, Menu, MenuId};
 
@@ -114,9 +114,160 @@ pub enum Action {
     NextIcons,
 }
 
-/// A row's identity across rebuilds: repo path, file, and diff position
-/// (side, hunk, whether a line).
-type RowKey = (PathBuf, Option<String>, Option<(Side, Option<usize>, bool)>);
+/// Most commits a list unfolds into.
+const MAX_COMMITS: usize = 50;
+/// Most files an untracked directory unfolds into.
+const MAX_DIR_FILES: usize = 200;
+
+/// The rows directly below `line` if it's unfolded, indented two more
+/// than it (six at least).
+fn unfolded_rows(
+    cache: &mut HashMap<(PathBuf, Expand, usize), Vec<DetailLine>>,
+    unfolded: &BTreeSet<(PathBuf, Expand)>,
+    repo: &std::path::Path,
+    s: &RepoStatus,
+    line: &DetailLine,
+) -> Vec<DetailLine> {
+    let Some(x) = &line.expand else {
+        return vec![];
+    };
+    let text: String = line.parts.iter().map(|(_, t)| t.as_str()).collect();
+    let indent = (text.len() - text.trim_start().len() + 2).max(6);
+    if !unfolded.contains(&(repo.to_path_buf(), x.clone())) {
+        return vec![];
+    }
+    cache
+        .entry((repo.to_path_buf(), x.clone(), indent))
+        .or_insert_with(|| unfold(repo, s, x, indent))
+        .clone()
+}
+
+/// What `x` unfolds into, read now, indented `indent` spaces.
+fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> Vec<DetailLine> {
+    use argus_core::history;
+    let pad = " ".repeat(indent);
+    let line = |parts: Vec<(Option<Role>, String)>| {
+        let mut p = vec![(None, pad.clone())];
+        p.extend(parts);
+        DetailLine {
+            parts: p,
+            file: None,
+            diff: None,
+            issue: None,
+            ignored: false,
+            stash: None,
+            expand: None,
+        }
+    };
+    let dim = |t: String| (Some(Role::Dim), t);
+    let failed = |e: String| vec![line(vec![(Some(Role::Error), e)])];
+    match x {
+        Expand::Commits(range) => match history::commits(repo, range, MAX_COMMITS) {
+            Err(e) => failed(e),
+            Ok((v, _)) if v.is_empty() => vec![line(vec![dim("no commits".into())])],
+            Ok((v, more)) => {
+                let mut rows: Vec<DetailLine> = v
+                    .into_iter()
+                    .map(|c| {
+                        let when = c.time.map(|t| format!(", {}", ago(t))).unwrap_or_default();
+                        DetailLine {
+                            expand: Some(Expand::Commit(c.id.clone())),
+                            ..line(vec![
+                                dim(c.id.chars().take(7).collect()),
+                                (None, format!(" {}", c.summary)),
+                                dim(format!("  {}{when}", c.author)),
+                            ])
+                        }
+                    })
+                    .collect();
+                if more {
+                    rows.push(line(vec![dim(format!(
+                        "… more (the newest {MAX_COMMITS} shown)"
+                    ))]));
+                }
+                rows
+            }
+        },
+        Expand::UnpushedBranches => s
+            .branches
+            .iter()
+            .filter(|b| !b.is_head && b.is_unpushed())
+            .map(|b| DetailLine {
+                expand: Some(Expand::Commits(history::Range::NotOnRemote {
+                    tip: format!("refs/heads/{}", b.name),
+                })),
+                ..line(vec![
+                    (Some(Role::Branch), b.name.clone()),
+                    dim(match b.unpushed {
+                        Some(n) => format!("  {n} on no remote"),
+                        None => "  on no remote".into(),
+                    }),
+                ])
+            })
+            .collect(),
+        Expand::Commit(id) => match history::commit_detail(repo, id) {
+            Err(e) => failed(e),
+            Ok(d) => {
+                let when = d.time.map(|t| format!(", {}", ago(t))).unwrap_or_default();
+                let mut rows = vec![
+                    line(vec![dim("commit ".into()), (None, d.id.clone())]),
+                    line(vec![
+                        dim("author ".into()),
+                        (None, format!("{} <{}>{when}", d.author, d.email)),
+                    ]),
+                ];
+                rows.extend(
+                    d.message
+                        .lines()
+                        .map(|l| line(vec![(None, format!("  {l}"))])),
+                );
+                rows.push(line(vec![dim(format!("files ({})", d.files.len()))]));
+                rows.extend(d.files.iter().map(|(code, path)| {
+                    let role = match code {
+                        'A' => Role::Ahead,
+                        'D' => Role::Behind,
+                        _ => Role::Unstaged,
+                    };
+                    line(vec![
+                        (Some(role), format!("  {code}")),
+                        (None, format!(" {path}")),
+                    ])
+                }));
+                rows
+            }
+        },
+        Expand::Dir(dir) => match argus_core::status::untracked_in(repo, dir, MAX_DIR_FILES) {
+            Err(e) => failed(e.to_string()),
+            Ok((files, more)) => {
+                let mut rows: Vec<DetailLine> = files
+                    .into_iter()
+                    .map(|f| DetailLine {
+                        file: Some(f.clone()),
+                        ..line(vec![
+                            (Some(Role::Untracked), "??".into()),
+                            (None, format!(" {f}")),
+                        ])
+                    })
+                    .collect();
+                if more {
+                    rows.push(line(vec![dim(format!(
+                        "… more (the first {MAX_DIR_FILES} shown)"
+                    ))]));
+                }
+                rows
+            }
+        },
+    }
+}
+
+/// A row's identity across rebuilds: repo path, file, diff position
+/// (side, hunk, whether a line), and what it unfolds into.
+type RowKey = (
+    PathBuf,
+    Option<String>,
+    Option<(Side, Option<usize>, bool)>,
+    Option<Expand>,
+);
 
 /// The diff rows under an expanded file's line: each side with changes (unstaged first), its hunks
 /// (unless folded) and their lines.
@@ -127,7 +278,7 @@ fn diff_rows(
     s: &RepoStatus,
     file: &str,
 ) -> Vec<DetailLine> {
-    let Some(c) = s.changes.files.iter().find(|c| c.path == file) else {
+    let Some(c) = s.changes.entry(file) else {
         return vec![];
     };
     let sides = [
@@ -150,6 +301,7 @@ fn diff_rows(
         issue: None,
         ignored: false,
         stash: None,
+        expand: None,
     };
     let mut v = vec![];
     for (side, _, title) in sides.into_iter().filter(|s| s.1) {
@@ -380,6 +532,11 @@ pub struct App {
     pub folded_hunks: BTreeSet<(PathBuf, String, Side, usize)>,
     /// Diffs read so far; a repo's go when its status changes.
     diffs: HashMap<(PathBuf, String, Side), Result<FileDiff, String>>,
+    /// Details lines unfolded (Tab), by repo.
+    pub unfolded: BTreeSet<(PathBuf, Expand)>,
+    /// What they unfolded into, by indent, read once until the repo's
+    /// status changes.
+    unfold_cache: HashMap<(PathBuf, Expand, usize), Vec<DetailLine>>,
     /// The stash switches for this session.
     pub stash: StashConfig,
     pub running: HashMap<PathBuf, String>,
@@ -425,6 +582,8 @@ impl App {
             expanded_files: BTreeSet::new(),
             folded_hunks: BTreeSet::new(),
             diffs: HashMap::new(),
+            unfolded: BTreeSet::new(),
+            unfold_cache: HashMap::new(),
             stash,
             running: HashMap::new(),
             auto_fixes: (0, String::new()),
@@ -455,13 +614,14 @@ impl App {
     /// rows its file and diff position.
     fn row_key(&self, n: usize) -> Option<RowKey> {
         match self.rows.get(n)? {
-            Row::Repo(i) => Some((self.ws.entries[*i].path.clone(), None, None)),
+            Row::Repo(i) => Some((self.ws.entries[*i].path.clone(), None, None, None)),
             Row::Detail { repo, line } => Some((
                 self.ws.entries[*repo].path.clone(),
                 line.file.clone(),
                 line.diff
                     .as_ref()
                     .map(|d| (d.side, d.hunk, d.line.is_some())),
+                line.expand.clone(),
             )),
         }
     }
@@ -484,19 +644,38 @@ impl App {
             }
             rows.push(Row::Repo(i));
             if self.expanded.contains(&e.path) {
-                for line in details(e, &self.ws.config.fix.auto, &self.ws.config.stash, &icons) {
+                // depth first: each line, its diff, then what it unfolds into
+                let mut stack: Vec<DetailLine> =
+                    details(e, &self.ws.config.fix.auto, &self.ws.config.stash, &icons)
+                        .into_iter()
+                        .rev()
+                        .collect();
+                while let Some(line) = stack.pop() {
                     let expanded = line.file.as_ref().filter(|f| {
                         self.expanded_files
                             .contains(&(e.path.clone(), f.to_string()))
                     });
-                    let diff = match (expanded, e.status()) {
-                        (Some(f), Some(s)) => {
-                            diff_rows(&mut self.diffs, &self.folded_hunks, &e.path, s, f)
-                        }
-                        _ => vec![],
+                    let (diff, below) = match e.status() {
+                        Some(s) => (
+                            match expanded {
+                                Some(f) => {
+                                    diff_rows(&mut self.diffs, &self.folded_hunks, &e.path, s, f)
+                                }
+                                None => vec![],
+                            },
+                            unfolded_rows(
+                                &mut self.unfold_cache,
+                                &self.unfolded,
+                                &e.path,
+                                s,
+                                &line,
+                            ),
+                        ),
+                        None => (vec![], vec![]),
                     };
                     rows.push(Row::Detail { repo: i, line });
                     rows.extend(diff.into_iter().map(|line| Row::Detail { repo: i, line }));
+                    stack.extend(below.into_iter().rev());
                 }
             }
         }
@@ -504,15 +683,12 @@ impl App {
         // marks on files that are no longer changed go
         let ws = &self.ws;
         self.marked_files.retain(|repo, files| {
-            let changed = ws
-                .get(repo)
-                .and_then(|e| e.status())
-                .map(|s| &s.changes.files);
-            files.retain(|f| changed.is_some_and(|c| c.iter().any(|x| x.path == *f)));
+            let changed = ws.get(repo).and_then(|e| e.status()).map(|s| &s.changes);
+            files.retain(|f| changed.is_some_and(|c| c.entry(f).is_some()));
             !files.is_empty()
         });
         let exact = target.as_ref().and_then(|t| {
-            let file_line = (t.0.clone(), t.1.clone(), None);
+            let file_line = (t.0.clone(), t.1.clone(), None, None);
             (0..self.rows.len())
                 .find(|&n| self.row_key(n).as_ref() == Some(t))
                 .or_else(|| {
@@ -792,6 +968,7 @@ impl App {
                     self.cursor = i;
                 }
             }
+            ToggleExpand if self.on_unfoldable() => return self.toggle_unfold(),
             ToggleExpand if self.on_file_or_diff() => return self.toggle_file_or_hunk(),
             ToggleExpand => {
                 if let Some(p) = self.current_path() {
@@ -1325,12 +1502,7 @@ impl App {
                 let s = e.status()?;
                 let untracked: Vec<String> = files
                     .into_iter()
-                    .filter(|f| {
-                        s.changes
-                            .files
-                            .iter()
-                            .any(|c| c.path == *f && c.index == '?')
-                    })
+                    .filter(|f| s.changes.entry(f).is_some_and(|c| c.index == '?'))
                     .collect();
                 (!untracked.is_empty()).then(|| (e.path.clone(), untracked))
             })
@@ -1800,6 +1972,28 @@ impl App {
         self.start_jobs(jobs)
     }
 
+    fn on_unfoldable(&self) -> bool {
+        matches!(self.rows.get(self.cursor), Some(Row::Detail { line, .. }) if line.expand.is_some())
+    }
+
+    /// Tab on a line that unfolds: shows or hides what's below it.
+    fn toggle_unfold(&mut self) -> Vec<Effect> {
+        let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor) else {
+            return vec![];
+        };
+        let Some(x) = line.expand.clone() else {
+            return vec![];
+        };
+        let key = (self.ws.entries[*repo].path.clone(), x);
+        if !self.unfolded.remove(&key) {
+            self.unfolded.insert(key);
+        }
+        let at = self.cursor;
+        self.rebuild();
+        self.cursor = at.min(self.rows.len().saturating_sub(1));
+        vec![]
+    }
+
     fn on_file_or_diff(&self) -> bool {
         matches!(self.rows.get(self.cursor), Some(Row::Detail { line, .. }) if line.file.is_some())
     }
@@ -1821,7 +2015,7 @@ impl App {
                 if !self.folded_hunks.remove(&key) {
                     self.folded_hunks.insert(key);
                 }
-                self.rebuild_at(Some((path, Some(file), Some((side, Some(h), false)))));
+                self.rebuild_at(Some((path, Some(file), Some((side, Some(h), false)), None)));
             }
             None => {
                 let key = (path, file);
@@ -2069,6 +2263,7 @@ impl App {
             Msg::Status(path, st) => {
                 self.ws.update_status(&path, *st);
                 self.diffs.retain(|k, _| k.0 != path);
+                self.unfold_cache.retain(|k, _| k.0 != path);
                 self.rebuild();
                 return self.describe_opened();
             }

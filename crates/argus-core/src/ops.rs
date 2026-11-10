@@ -354,13 +354,9 @@ fn codes<'a>(
     s: &'a crate::status::RepoStatus,
     files: &'a [String],
 ) -> impl Iterator<Item = (&'a String, char)> {
-    files.iter().filter_map(|f| {
-        s.changes
-            .files
-            .iter()
-            .find(|c| c.path == *f)
-            .map(|c| (f, c.index))
-    })
+    files
+        .iter()
+        .filter_map(|f| s.changes.entry(f).map(|c| (f, c.index)))
 }
 
 /// Stage `files` (changes, new files and deletions).
