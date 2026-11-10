@@ -2626,7 +2626,11 @@ impl App {
                 self.ws.entries = entries;
                 self.ws.truncated = truncated;
                 self.ws.resolve_flags();
-                let mut parts = vec![format!("{} repos", self.ws.entries.len())];
+                let hidden = self.ws.entries.iter().filter(|e| e.flags.hidden()).count();
+                let mut parts = vec![match hidden {
+                    0 => format!("{} repos", self.ws.entries.len()),
+                    h => format!("{} repos, {h} hidden", self.ws.entries.len()),
+                }];
                 parts.extend(self.notices.iter().cloned());
                 parts.extend(self.ws.truncation_warning());
                 self.info(parts.join(" · "));
