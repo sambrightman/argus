@@ -1993,7 +1993,7 @@ fn the_ignore_menu_steps_an_issue_through_its_states() {
         menu_items(&app),
         [
             "1 · not on default branch (main)",
-            "a all: ignore 1 counted issue(s)"
+            "a all: ignore 1 remaining issue(s)"
         ]
     );
     // counted, pinned (the default), ignored everywhere, counted; the menu stays
@@ -2004,7 +2004,7 @@ fn the_ignore_menu_steps_an_issue_through_its_states() {
         menu_items(&app)[0],
         "1 ○ not on default branch (main) [ignored@feat]"
     );
-    assert_eq!(menu_items(&app)[1], "a all: no counted issue to ignore");
+    assert_eq!(menu_items(&app)[1..], ["n none: stop ignoring 1 issue(s)"]);
     app.on_key(key('1'));
     assert_eq!(nd(&app), ["github.com/acme/feature"]);
     assert_eq!(
@@ -2013,13 +2013,19 @@ fn the_ignore_menu_steps_an_issue_through_its_states() {
     );
     app.on_key(key('1'));
     assert!(nd(&app).is_empty());
-    assert_eq!(menu_items(&app)[0], "1 · not on default branch (main)");
+    assert_eq!(
+        menu_items(&app),
+        [
+            "1 · not on default branch (main)",
+            "a all: ignore 1 remaining issue(s)"
+        ]
+    );
     app.on_key(ctrl('g'));
     assert!(matches!(app.mode, Mode::Normal));
 }
 
 #[test]
-fn all_ignores_only_counted_issues_each_its_default_way() {
+fn all_ignores_the_remaining_issues_and_none_stops_ignoring_them() {
     let (sb, mut app) = setup("");
     let f = sb.path("dev/feature");
     write(&f, "README", "wip\n");
@@ -2030,25 +2036,71 @@ fn all_ignores_only_counted_issues_each_its_default_way() {
     cursor_on_detail(&mut app, "feature", "issue     1 stash");
     app.act(Action::IgnoreIssues);
     assert!(matches!(app.mode, Mode::Menu { cursor: 1, .. }));
-    // the stash is ignored by the default patterns: not counted
+    // the stash is ignored by the default patterns
     assert_eq!(
         menu_items(&app),
         [
             "1 · not on default branch (main)",
             "2 ● 1 stash(es) [ignored]",
-            "a all: ignore 1 counted issue(s)"
+            "a all: ignore 1 remaining issue(s)",
+            "n none: stop ignoring 1 issue(s)"
         ]
     );
     let stashes = app.ws.config.ignore.stashes.clone();
+    // each its default way; the ignored one left as it was
     app.on_key(key('a'));
     assert_eq!(
         app.ws.config.ignore.non_default_branch,
         ["github.com/acme/feature@feat"]
     );
-    assert_eq!(app.ws.config.ignore.stashes, stashes, "left as it was");
-    assert_eq!(menu_items(&app)[2], "a all: no counted issue to ignore");
-    // nothing counted: a changes nothing
+    assert_eq!(app.ws.config.ignore.stashes, stashes);
+    assert_eq!(menu_items(&app)[2..], ["n none: stop ignoring 2 issue(s)"]);
+    // nothing remaining: a isn't there, and changes nothing
     assert!(app.on_key(key('a')).is_empty());
+    assert_eq!(app.ws.config.ignore.stashes, stashes);
+    let fx = app.on_key(key('n'));
+    assert!(matches!(fx.as_slice(), [Effect::SaveMarks(_)]), "{fx:?}");
+    assert!(app.ws.config.ignore.non_default_branch.is_empty());
+    assert_eq!(
+        app.ws.config.ignore.stashes[stashes.len()..],
+        ["!github.com/acme/feature"]
+    );
+    assert_eq!(
+        menu_items(&app),
+        [
+            "1 · not on default branch (main)",
+            "2 · 1 stash(es)",
+            "a all: ignore 2 remaining issue(s)"
+        ]
+    );
+    assert!(app.on_key(key('n')).is_empty());
+}
+
+#[test]
+fn none_leaves_issues_that_arent_ignored() {
+    // the stash issue counts, though the patterns ignore one of the two
+    let (_sb, mut app) = setup_with("", |sb| {
+        let r = sb.path("dev/feature");
+        write(&r, "README", "mine\n");
+        git(&r, &["stash", "push", "-q", "-m", "mine"]);
+        write(&r, "README", "fix's\n");
+        git(&r, &["stash", "push", "-q", "-m", "argus 2026-01-02 09:30"]);
+    });
+    cursor_on_detail(&mut app, "feature", "issue     not on default branch");
+    app.act(Action::IgnoreIssues);
+    let stashes = app.ws.config.ignore.stashes.clone();
+    app.on_key(key('1'));
+    // in the same order as before
+    assert_eq!(
+        menu_items(&app)[..2],
+        [
+            "1 ○ not on default branch (main) [ignored@feat]",
+            "2 · 2 stash(es), 1 ignored by patterns"
+        ]
+    );
+    app.on_key(key('n'));
+    assert!(app.ws.config.ignore.non_default_branch.is_empty());
+    assert_eq!(app.ws.config.ignore.stashes, stashes);
 }
 
 #[test]

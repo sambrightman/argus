@@ -335,13 +335,15 @@ stash, and use `extend_stashes` to add to the default rather than replace
 it (the TUI and `argus mark` do).
 
 In the TUI, `m i` lists the repo's issues that can be ignored, each with
-its state: `·` counted, `○` ignored for its current value only (pinned:
+its state: `·` not ignored, `○` ignored for its current value only (pinned:
 while on this branch, at this HEAD, for these stash messages), `●` ignored
-whatever the value. A digit moves its issue to the next state: counted,
-then the list's default way of ignoring, then the other, then counted
+whatever the value. A digit moves its issue to the next state: not ignored,
+then the list's default way of ignoring, then the other, then not ignored
 again. Branch and HEAD issues pin by default; stashes don't, so ignoring
-them covers later stashes too. `a` ignores every counted issue its default
-way. The menu stays open to show the result; `q`, Esc or `C-g` closes it.
+them covers later stashes too. `a` ignores each remaining issue its
+default way, and `n` stops ignoring them all; each is offered only when it
+would change something. The menu stays open to show the result; `q`, Esc
+or `C-g` closes it.
 `argus mark --ignore-issue` does the same, with `--pin`/`--no-pin`.
 
 Ignoring an issue never hides a fact: the row still shows how far behind

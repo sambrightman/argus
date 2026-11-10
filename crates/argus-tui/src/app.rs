@@ -29,6 +29,17 @@ pub enum Scope {
     All,
 }
 
+/// Which of the ignore menu's issues to move, and where.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IgnoreWhich {
+    /// That one (by its place), to its next state.
+    One(usize),
+    /// Each remaining (counted) one, to its default way of ignoring.
+    All,
+    /// Each ignored one, to counted.
+    None,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Up,
@@ -88,9 +99,8 @@ pub enum Action {
     /// Open the ignore menu for the repo under the cursor: its issues that
     /// can be ignored, each with its state.
     IgnoreIssues,
-    /// In the ignore menu: move that issue (by its place) to its next
-    /// state, or (`None`) ignore every counted one its default way.
-    IgnoreStep(Option<usize>),
+    /// In the ignore menu: move issues to another state.
+    IgnoreStep(IgnoreWhich),
     /// Open the gitignore menu for the untracked files marked, or under
     /// the cursor.
     GitignoreMenu,
@@ -1631,6 +1641,8 @@ impl App {
                 }
             }
         }
+        // a fixed order, so stepping an issue never renumbers the menu
+        v.sort_by_key(|(l, _)| IssueList::ALL.iter().position(|a| a == l));
         v
     }
 
@@ -1645,12 +1657,13 @@ impl App {
             return None;
         }
         let (icons, _) = self.ws.config.ui.icons();
-        let mut counted = 0;
+        let (mut counted, mut ignored) = (0, 0);
         let mut items: Vec<Item> = vec![];
         for (n, (list, issue)) in lists.iter().enumerate() {
             let state = self.ws.issue_state(i, *list).ok()?;
-            if state == IgnoreState::Counted {
-                counted += 1;
+            match state {
+                IgnoreState::Counted => counted += 1,
+                _ => ignored += 1,
             }
             let key = char::from_digit(n as u32 + 1, 10).unwrap_or('?');
             let partly = match list {
@@ -1660,16 +1673,26 @@ impl App {
                 _ => 0,
             };
             let label = state_label(*issue, *list, state, partly, s, &icons);
-            items.push(menu::stepper(key, label, Action::IgnoreStep(Some(n))));
+            items.push(menu::stepper(
+                key,
+                label,
+                Action::IgnoreStep(IgnoreWhich::One(n)),
+            ));
         }
-        items.push(menu::stepper(
-            'a',
-            match counted {
-                0 => "all: no counted issue to ignore".to_string(),
-                n => format!("all: ignore {n} counted issue(s)"),
-            },
-            Action::IgnoreStep(None),
-        ));
+        if counted > 0 {
+            items.push(menu::stepper(
+                'a',
+                format!("all: ignore {counted} remaining issue(s)"),
+                Action::IgnoreStep(IgnoreWhich::All),
+            ));
+        }
+        if ignored > 0 {
+            items.push(menu::stepper(
+                'n',
+                format!("none: stop ignoring {ignored} issue(s)"),
+                Action::IgnoreStep(IgnoreWhich::None),
+            ));
+        }
         Some(Menu {
             id: MenuId::Ignore,
             title: format!("Ignore issues · {}", e.display_name()),
@@ -1677,9 +1700,9 @@ impl App {
         })
     }
 
-    /// Move the ignore menu's issue `which` to its next state, or every
-    /// counted one to its default; the menu stays open, showing the result.
-    fn ignore_step(&mut self, which: Option<usize>) -> Vec<Effect> {
+    /// Move the ignore menu's issues as `which` says; the menu stays open,
+    /// showing the result.
+    fn ignore_step(&mut self, which: IgnoreWhich) -> Vec<Effect> {
         let Some(i) = self.ignore_menu.as_ref().and_then(|p| self.ws.index_of(p)) else {
             return vec![];
         };
@@ -1689,11 +1712,13 @@ impl App {
             let Ok(now) = self.ws.issue_state(i, *list) else {
                 continue;
             };
+            let counted = now == IgnoreState::Counted;
             match which {
-                Some(w) if w == n => changes.push((*list, now.next(*list))),
-                None if now == IgnoreState::Counted => {
+                IgnoreWhich::One(w) if w == n => changes.push((*list, now.next(*list))),
+                IgnoreWhich::All if counted => {
                     changes.push((*list, IgnoreState::default_for(*list)))
                 }
+                IgnoreWhich::None if !counted => changes.push((*list, IgnoreState::Counted)),
                 _ => {}
             }
         }
