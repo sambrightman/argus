@@ -623,8 +623,8 @@ speed.
 * Embedded terminal pane; worktree pruning.
 * Snoozing per issue (and per repo, as now): today a snooze hides the
   whole repo until it expires.
-* Adding untracked files to `.gitignore` (top-level, the directory's,
-  `.git/info/exclude`, global), anchored (`/build/`) by default.
+* Fixup commits (`c f`, as in magit): commit what's staged as a fixup
+  of a commit picked like reset's, for a later autosquash.
 * Pull requests: fetched with the remote, shown per branch; a merged PR
   makes a squash-merged branch safe to delete.
 * Orphans (local clones the forge no longer lists): reported only, no
