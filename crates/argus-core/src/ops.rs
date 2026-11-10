@@ -77,6 +77,11 @@ pub enum Op {
         mode: ResetMode,
         commit: String,
     },
+    /// Replace the last commit with one that adds what's staged, with the
+    /// same message or (`Some`) this one.
+    Amend {
+        message: Option<String>,
+    },
     /// Commit what's staged.
     Commit {
         message: String,
@@ -221,6 +226,8 @@ impl Op {
             Op::Reset { mode, commit } => {
                 v(&["reset", "-q", mode.flag(), "--end-of-options", commit])
             }
+            Op::Amend { message: None } => v(&["commit", "--amend", "--no-edit"]),
+            Op::Amend { message: Some(m) } => v(&["commit", "--amend", "--message", m]),
             Op::Commit { message } | Op::CommitAll { message } => {
                 v(&["commit", "--message", message])
             }
@@ -326,6 +333,7 @@ impl Op {
             Op::Reset { mode, commit } => {
                 format!("reset {} {}", mode.flag(), &commit[..commit.len().min(7)])
             }
+            Op::Amend { .. } => "amend".into(),
             Op::Commit { .. } => "commit staged".into(),
             Op::CommitAll { .. } => "commit".into(),
             Op::FastForward { branch, .. } => format!("fast-forward {branch}"),

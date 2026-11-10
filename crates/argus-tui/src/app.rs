@@ -83,6 +83,9 @@ pub enum Action {
     Commit {
         all: bool,
     },
+    /// Ask for a message, starting from the last commit's, then amend it
+    /// with what's staged.
+    Amend,
     SwitchDefault,
     Reattach,
     /// Ask for a name, then create a branch at each selected detached HEAD
@@ -514,6 +517,9 @@ pub enum Msg {
 pub enum Prompt {
     Filter,
     CommitMessage(Vec<PathBuf>, bool),
+    /// For amending the repo's last commit: its message, and whether
+    /// it's on a remote.
+    AmendMessage(PathBuf, String, bool),
     StashMessage(Vec<PathBuf>),
     BranchName(Vec<PathBuf>),
     RemoteUrl(PathBuf),
@@ -1138,6 +1144,7 @@ impl App {
                 return self.start_jobs(jobs);
             }
             Reset(mode) => return self.open_reset_menu(mode),
+            Amend => return self.start_amend(),
             ResetTo(n) => return self.reset_to(n),
             Stash(kind) => return self.stash_action(kind),
             StageFiles => return self.file_op(ops::stage_ops, "stage"),
@@ -1675,6 +1682,32 @@ impl App {
             menu,
             cursor,
             notes: vec![],
+        };
+        vec![]
+    }
+
+    /// Ask for the message to amend the current repo's last commit with,
+    /// starting from its own summary line.
+    fn start_amend(&mut self) -> Vec<Effect> {
+        use argus_core::history::{self, Range};
+        let [i] = self.selected()[..] else {
+            self.error("amend one repo at a time");
+            return vec![];
+        };
+        let path = self.ws.entries[i].path.clone();
+        let message = match history::commit_detail(&path, "HEAD") {
+            Ok(d) => d.message,
+            Err(e) => {
+                self.error(e);
+                return vec![];
+            }
+        };
+        let local = history::commits(&path, &Range::NotOnRemote { tip: "HEAD".into() }, 1)
+            .is_ok_and(|(v, _)| !v.is_empty());
+        let summary = message.lines().next().unwrap_or_default().to_string();
+        self.mode = Mode::Input {
+            prompt: Prompt::AmendMessage(path, message, !local),
+            editor: LineEditor::new(&summary),
         };
         vec![]
     }
@@ -2435,6 +2468,18 @@ impl App {
                 self.filter = text;
                 self.rebuild();
                 vec![]
+            }
+            Prompt::AmendMessage(path, message, _) => {
+                if text.trim().is_empty() {
+                    self.error("empty commit message: aborted");
+                    return vec![];
+                }
+                // a new summary line; the rest of the message stays
+                let summary = message.lines().next().unwrap_or_default();
+                let message =
+                    (text != summary).then(|| format!("{text}{}", &message[summary.len()..]));
+                let jobs = self.job(&path, Op::Amend { message }).into_iter().collect();
+                self.start_jobs(jobs)
             }
             Prompt::CommitMessage(paths, all) => {
                 if text.trim().is_empty() {

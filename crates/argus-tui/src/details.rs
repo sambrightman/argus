@@ -430,7 +430,7 @@ pub fn describe(i: &Issue, default: Option<&str>) -> (Role, String) {
 fn manual_keys(kind: FixKind) -> &'static str {
     match kind {
         FixKind::Abort => "x A",
-        FixKind::Commit => "c a",
+        FixKind::Commit => "c A",
         FixKind::Gitignore => "i",
         FixKind::Branch => "b c",
         FixKind::AddRemote => "P r",

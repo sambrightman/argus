@@ -363,11 +363,11 @@ fn commit_prompts_and_rejects_empty_message() {
         "empty message aborts"
     );
     app.on_key(key('c'));
-    app.on_key(key('a'));
+    app.on_key(key('A'));
     let screen = render(&mut app, 100, 20);
     assert!(
         screen.contains("commit all changes (1 repo(s)):"),
-        "c a: {screen}"
+        "c A: {screen}"
     );
     for c in "wip".chars() {
         app.on_key(key(c));
@@ -398,7 +398,10 @@ fn c_c_commits_only_whats_staged() {
     let (sb, mut app) = setup("");
     // dirty has only unstaged changes: no c c
     app.on_key(key('c'));
-    assert_eq!(menu_items(&app), ["a commit all changes…"]);
+    assert_eq!(
+        menu_items(&app),
+        ["A commit all changes…", "a amend the last commit…"]
+    );
     app.on_key(ctrl('g'));
     let d = sb.path("dev/dirty");
     git(&d, &["add", "README"]);
@@ -407,7 +410,11 @@ fn c_c_commits_only_whats_staged() {
     app.on_key(key('c'));
     assert_eq!(
         menu_items(&app),
-        ["c commit staged changes…", "a commit all changes…"]
+        [
+            "c commit staged changes…",
+            "A commit all changes…",
+            "a amend the last commit…"
+        ]
     );
     app.on_key(key('c'));
     assert!(
@@ -2569,7 +2576,7 @@ fn details_list_fixes_that_need_input_with_their_keys() {
         fix("gitignore"),
         "fix       gitignore…  2 untracked path(s)  (i)"
     );
-    assert!(fix("commit").ends_with("  (c a)"), "{}", fix("commit"));
+    assert!(fix("commit").ends_with("  (c A)"), "{}", fix("commit"));
     assert_eq!(
         fix("delete-branches"),
         "fix       delete-branches…  2 merged branches: old1, old2  (b x)"
@@ -2802,4 +2809,78 @@ fn a_long_menu_scrolls_with_its_cursor() {
         "{screen}"
     );
     assert!(!screen.contains("change 20"), "{screen}");
+}
+
+/// Type `text` into the open prompt after clearing it (`C-a C-k`).
+fn retype(app: &mut App, text: &str) {
+    app.on_key(ctrl('a'));
+    app.on_key(ctrl('k'));
+    for c in text.chars() {
+        app.on_key(key(c));
+    }
+}
+
+#[test]
+fn amend_starts_from_the_message_keeping_its_body() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let c = sb.path("dev/clean");
+        write(&c, "README", "x\n");
+        git(&c, &["add", "README"]);
+        git(
+            &c,
+            &["commit", "-q", "-m", "local summary", "-m", "the body"],
+        );
+    });
+    while current(&app) != "acme/clean" {
+        app.act(Action::Down);
+    }
+    let amend = |app: &mut App, text: Option<&str>| {
+        app.on_key(key('c'));
+        app.on_key(key('a'));
+        let screen = render(app, 100, 20);
+        assert!(
+            screen.contains("amend acme/clean: local summary"),
+            "{screen}"
+        );
+        if let Some(t) = text {
+            retype(app, t);
+        }
+        match app.on_key(code(KeyCode::Enter)).as_slice() {
+            [Effect::Jobs(j)] => j[0].op.clone(),
+            other => panic!("{other:?}"),
+        }
+    };
+    // unchanged: the message stays as it is
+    assert_eq!(amend(&mut app, None), Op::Amend { message: None });
+    app.running.clear();
+    assert_eq!(
+        amend(&mut app, Some("better summary")),
+        Op::Amend {
+            message: Some("better summary\n\nthe body".into())
+        }
+    );
+}
+
+#[test]
+fn amending_a_commit_on_a_remote_says_pushing_needs_force() {
+    let (_sb, mut app) = setup("");
+    while current(&app) != "acme/clean" {
+        app.act(Action::Down);
+    }
+    app.on_key(key('c'));
+    app.on_key(key('a'));
+    let screen = render(&mut app, 120, 20);
+    assert!(
+        screen.contains("amend acme/clean (on a remote: pushing it will need force): initial"),
+        "{screen}"
+    );
+    // several repos: one at a time
+    app.on_key(code(KeyCode::Esc));
+    assert!(matches!(app.mode, Mode::Normal));
+    app.act(Action::Top);
+    app.act(Action::ToggleMark);
+    app.act(Action::ToggleMark);
+    app.act(Action::Amend);
+    assert!(matches!(app.mode, Mode::Normal));
+    assert_eq!(app.message.as_ref().unwrap().0, "amend one repo at a time");
 }

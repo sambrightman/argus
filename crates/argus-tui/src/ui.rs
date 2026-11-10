@@ -375,6 +375,15 @@ fn draw_status(f: &mut Frame, app: &App, v: &View, area: Rect) {
         Mode::Input { prompt, editor } => {
             let label = match prompt {
                 Prompt::Filter => "filter: ".to_string(),
+                Prompt::AmendMessage(p, _, on_remote) => format!(
+                    "amend {}{}: ",
+                    app.ws.get(p).map(|e| e.display_name()).unwrap_or_default(),
+                    if *on_remote {
+                        " (on a remote: pushing it will need force)"
+                    } else {
+                        ""
+                    }
+                ),
                 Prompt::CommitMessage(p, all) => format!(
                     "commit {} changes ({} repo(s)): ",
                     if *all { "all" } else { "staged" },

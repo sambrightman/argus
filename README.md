@@ -157,7 +157,7 @@ too long for the window scrolls, saying how many items are hidden.
 | `f` | **Fetch**: `f` selected, `a` all shown except hidden |
 | `P` | **Push**: `p` push, `u` publish, `b` push other branches, `r` add a remote… |
 | `z` | **Stash**: switches `u` include untracked, `k` keep index (from `[stash]`, for the session); `z` all, `i` staged only, `m` with a message, `f` files marked in the details, `p` pop the newest, `d` drop the one under the cursor… |
-| `c` | **Commit** (prompts for the message): `c` what's staged (offered only when something is), `a` all changes, untracked files included |
+| `c` | **Commit** (prompts for the message): `c` what's staged (offered only when something is), `A` all changes, untracked files included, `a` amend the last commit with what's staged, starting from its summary line (unchanged keeps the message; the body is always kept; says so when the commit is on a remote, as pushing will then need force) |
 | `X` | **Reset** the current branch (one repo at a time): `s` soft (changes stay staged), `m` mixed (unstaged), `k` keep (drops the commits' changes, refusing if uncommitted ones are in the way), `h` hard (drops uncommitted changes too; asks first). Then pick the commit from HEAD's recent history, those on a remote marked; the cursor starts on the commit before HEAD, or, pressed on a commit in the details, on the one before it |
 | `b` | **Branch**: `d` switch to default, `r` reattach detached HEAD, `c` create a branch at detached HEAD…, `x` delete merged branches…, `f` fast-forward stale branches |
 | `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden |

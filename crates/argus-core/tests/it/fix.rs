@@ -398,6 +398,32 @@ fn reset_moves_the_branch_each_way() {
 }
 
 #[test]
+fn amend_adds_whats_staged_keeping_or_replacing_the_message() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    let amend = |message: Option<&str>| {
+        argus_core::ops::run(
+            &r,
+            &Op::Amend {
+                message: message.map(str::to_string),
+            },
+        )
+    };
+    let before = git(&r, &["rev-parse", "HEAD"]);
+    write(&r, "README", "staged\n");
+    git(&r, &["add", "README"]);
+    write(&r, "other.txt", "not staged\n");
+    assert!(amend(None).success);
+    assert_ne!(git(&r, &["rev-parse", "HEAD"]), before);
+    assert_eq!(git(&r, &["log", "--format=%B", "-1"]).trim(), "initial");
+    assert_eq!(git(&r, &["show", "HEAD:README"]), "staged\n");
+    assert_eq!(git(&r, &["rev-list", "--count", "HEAD"]).trim(), "1");
+    assert!(amend(Some("new words")).success);
+    assert_eq!(git(&r, &["log", "--format=%B", "-1"]).trim(), "new words");
+    assert!(r.join("other.txt").exists());
+}
+
+#[test]
 fn failed_fix_stops_the_chain() {
     let sb = Sandbox::new();
     let r = pushed_feature(&sb);
