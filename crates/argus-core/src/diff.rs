@@ -127,28 +127,67 @@ pub fn file_diff(repo: &Path, path: &str, side: Side) -> Result<FileDiff, DiffEr
             ((old.0, kind(Some(old.1))), (new.0, kind(Some(new.1))), None)
         }
     };
-    let mut cache = repo
-        .diff_resource_cache(
-            Mode::ToGit,
-            WorktreeRoots {
-                old_root: None,
-                new_root,
-            },
-        )
+    blob_diff(&repo, rela, old, new, new_root).map_err(|e| err(&e))
+}
+
+/// The changes `commit` (any revision) made to `path` against its first
+/// parent (an empty file for a root commit), with 3 lines of context. A
+/// rename is given as `old -> new`, as [`crate::history`] lists it.
+pub fn commit_file_diff(repo: &Path, commit: &str, path: &str) -> Result<FileDiff, DiffError> {
+    let err = |e: &dyn std::fmt::Display| DiffError {
+        path: path.to_string(),
+        message: e.to_string(),
+    };
+    let (old_path, new_path) = path.split_once(" -> ").unwrap_or((path, path));
+    let repo = crate::isolation::open(repo).map_err(|e| err(&e))?;
+    let c = repo
+        .rev_parse_single(commit)
+        .map_err(|e| err(&e))?
+        .object()
+        .map_err(|e| err(&e))?
+        .try_into_commit()
         .map_err(|e| err(&e))?;
-    cache
-        .set_resource(old.0, old.1, rela, ResourceKind::OldOrSource, &repo.objects)
-        .map_err(|e| err(&e))?;
-    cache
-        .set_resource(
-            new.0,
-            new.1,
-            rela,
-            ResourceKind::NewOrDestination,
-            &repo.objects,
-        )
-        .map_err(|e| err(&e))?;
-    let outcome = cache.prepare_diff().map_err(|e| err(&e))?;
+    let null = gix::ObjectId::null(repo.object_hash());
+    let entry = |tree: Option<gix::Tree<'_>>, p: &str| -> (gix::ObjectId, EntryKind) {
+        tree.and_then(|t| t.lookup_entry_by_path(p).ok().flatten())
+            .map(|e| (e.object_id(), e.mode().kind()))
+            .unwrap_or((null, EntryKind::Blob))
+    };
+    let new = entry(c.tree().ok(), new_path);
+    let parent = c
+        .parent_ids()
+        .next()
+        .and_then(|p| repo.find_commit(p).ok())
+        .and_then(|p| p.tree().ok());
+    let old = entry(parent, old_path);
+    blob_diff(&repo, new_path.into(), old, new, None).map_err(|e| err(&e))
+}
+
+/// The diff between two versions of `rela` (a null id: missing), the new
+/// one read from `new_root` when given (the work tree).
+fn blob_diff(
+    repo: &gix::Repository,
+    rela: &BStr,
+    old: (gix::ObjectId, EntryKind),
+    new: (gix::ObjectId, EntryKind),
+    new_root: Option<std::path::PathBuf>,
+) -> Result<FileDiff, Box<dyn std::error::Error + Send + Sync>> {
+    let mut cache = repo.diff_resource_cache(
+        Mode::ToGit,
+        WorktreeRoots {
+            old_root: None,
+            new_root,
+        },
+    )?;
+    cache.set_resource(old.0, old.1, rela, ResourceKind::OldOrSource, &repo.objects)?;
+    cache.set_resource(
+        new.0,
+        new.1,
+        rela,
+        ResourceKind::NewOrDestination,
+        &repo.objects,
+    )?;
+    let outcome = cache.prepare_diff()?;
     let algorithm = match outcome.operation {
         Operation::InternalDiff { algorithm } => algorithm,
         Operation::SourceOrDestinationIsBinary => return Ok(FileDiff::Binary),
@@ -158,9 +197,8 @@ pub fn file_diff(repo: &Path, path: &str, side: Side) -> Result<FileDiff, DiffEr
     // last newline changes its last line
     let input = blob::InternedInput::new(outcome.old.intern_source(), outcome.new.intern_source());
     let diff = blob::diff_with_slider_heuristics(algorithm, &input);
-    let hunks = UnifiedDiff::new(&diff, &input, Collect(vec![]), ContextSize::symmetrical(3))
-        .consume()
-        .map_err(|e| err(&e))?;
+    let hunks =
+        UnifiedDiff::new(&diff, &input, Collect(vec![]), ContextSize::symmetrical(3)).consume()?;
     Ok(FileDiff::Text(hunks))
 }
 

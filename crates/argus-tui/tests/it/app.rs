@@ -2273,6 +2273,13 @@ fn unpushed_commits_unfold_and_so_does_each_commit() {
         ["Add new.txt", "", "Because it was needed.", "files (1)"].map(|s| s.to_string())
     );
     assert_eq!(full[6], "A new.txt");
+    // a file it changed unfolds into its diff
+    cursor_on_detail(&mut app, "feature", "          A new.txt");
+    app.act(Action::ToggleExpand);
+    assert_eq!(
+        below(&app, "          A new.txt", 10),
+        ["@@ -0,0 +1 @@", "+x"]
+    );
     // stays unfolded across a refresh, cursor on the commit
     app.ws.refresh(&f);
     app.on_msg(Msg::Status(

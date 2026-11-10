@@ -350,3 +350,59 @@ fn hunks_match_git_diff() {
         [("line 40", false), ("line 40", true)]
     );
 }
+
+#[test]
+fn a_commits_changes_to_a_file() {
+    use argus_core::diff::commit_file_diff;
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "a.txt", "one\ntwo\nthree\n");
+    write(&r, "old.txt", "moved content\nline 2\nline 3\n");
+    git(&r, &["add", "."]);
+    git(&r, &["commit", "-q", "-m", "setup"]);
+    write(&r, "a.txt", "one\nTWO\nthree\n");
+    write(&r, "b.txt", "new\n");
+    git(&r, &["mv", "old.txt", "new.txt"]);
+    git(&r, &["add", "."]);
+    git(&r, &["commit", "-q", "-m", "change"]);
+    let lines = |d: FileDiff| -> Vec<String> {
+        let FileDiff::Text(h) = d else {
+            panic!("{d:?}")
+        };
+        h.iter()
+            .flat_map(|h| {
+                std::iter::once(h.header()).chain(h.lines.iter().map(|l| {
+                    let m = match l.kind {
+                        LineKind::Add => '+',
+                        LineKind::Remove => '-',
+                        LineKind::Context => ' ',
+                    };
+                    format!("{m}{}", l.text)
+                }))
+            })
+            .collect()
+    };
+    assert_eq!(
+        lines(commit_file_diff(&r, "HEAD", "a.txt").unwrap()),
+        ["@@ -1,3 +1,3 @@", " one", "-two", "+TWO", " three"]
+    );
+    // added: against nothing
+    assert_eq!(
+        lines(commit_file_diff(&r, "HEAD", "b.txt").unwrap()),
+        ["@@ -0,0 +1 @@", "+new"]
+    );
+    // renamed unchanged: no hunks
+    assert_eq!(
+        lines(commit_file_diff(&r, "HEAD", "old.txt -> new.txt").unwrap()),
+        Vec::<String>::new()
+    );
+    // deleted, seen from the commit that deleted it
+    git(&r, &["rm", "-q", "b.txt"]);
+    git(&r, &["commit", "-q", "-m", "drop"]);
+    assert_eq!(
+        lines(commit_file_diff(&r, "HEAD", "b.txt").unwrap()),
+        ["@@ -1 +0,0 @@", "-new"]
+    );
+    // inverse: an unknown commit is an error
+    assert!(commit_file_diff(&r, "nope", "a.txt").is_err());
+}

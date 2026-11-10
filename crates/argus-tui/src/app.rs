@@ -228,11 +228,41 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
                         'D' => Role::Behind,
                         _ => Role::Unstaged,
                     };
-                    line(vec![
-                        (Some(role), format!("  {code}")),
-                        (None, format!(" {path}")),
-                    ])
+                    DetailLine {
+                        expand: Some(Expand::CommitFile(d.id.clone(), path.clone())),
+                        ..line(vec![
+                            (Some(role), format!("  {code}")),
+                            (None, format!(" {path}")),
+                        ])
+                    }
                 }));
+                rows
+            }
+        },
+        Expand::CommitFile(id, path) => match diff::commit_file_diff(repo, id, path) {
+            Err(e) => failed(e.to_string()),
+            Ok(FileDiff::Binary) => vec![line(vec![dim("binary file".into())])],
+            Ok(FileDiff::External) => vec![line(vec![dim("external diff configured".into())])],
+            Ok(FileDiff::Text(hunks)) if hunks.is_empty() => {
+                vec![line(vec![dim("no change in content".into())])]
+            }
+            Ok(FileDiff::Text(hunks)) => {
+                let mut rows = vec![];
+                for h in hunks {
+                    rows.push(line(vec![(Some(Role::DiffHunk), h.header())]));
+                    for l in &h.lines {
+                        let (role, mark) = match l.kind {
+                            LineKind::Add => (Some(Role::DiffAdd), '+'),
+                            LineKind::Remove => (Some(Role::DiffRemove), '-'),
+                            LineKind::Context => (None, ' '),
+                        };
+                        let mut parts = vec![(role, format!("{mark}{}", l.text))];
+                        if l.no_newline {
+                            parts.push(dim("  (no newline at end of file)".into()));
+                        }
+                        rows.push(line(parts));
+                    }
+                }
                 rows
             }
         },

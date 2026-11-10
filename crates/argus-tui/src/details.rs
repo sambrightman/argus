@@ -39,6 +39,9 @@ pub enum Expand {
     UnpushedBranches,
     /// One commit (or stash): its message and changed files.
     Commit(String),
+    /// A file a commit changed (`old -> new` for a rename): its diff
+    /// against the commit's first parent.
+    CommitFile(String, String),
     /// The files of an untracked directory shown collapsed.
     Dir(String),
 }
