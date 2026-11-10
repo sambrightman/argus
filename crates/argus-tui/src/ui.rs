@@ -446,12 +446,7 @@ fn popup(area: Rect, w: u16, h: u16) -> Rect {
 
 /// Draws the open menu; returns the places of the items shown.
 fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) -> Option<std::ops::Range<usize>> {
-    let Mode::Menu {
-        menu,
-        cursor,
-        notes,
-    } = &app.mode
-    else {
+    let Mode::Menu { menu, cursor } = &app.mode else {
         return None;
     };
     let t = v.theme;
@@ -470,15 +465,9 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) -> Option<std::ops:
             if targets == 1 { "" } else { "s" }
         ),
     };
-    let mut lines: Vec<Line> = notes
-        .iter()
-        .map(|n| Line::from(Span::styled(format!(" {n}"), t.ui(Ui::Dim))))
-        .collect();
-    if !notes.is_empty() {
-        lines.push(Line::from(""));
-    }
+    let mut lines: Vec<Line> = vec![];
     // as many items as fit, around the cursor, saying how many are hidden
-    let fixed = lines.len() + 3; // borders and the footer
+    let fixed = 3; // borders and the footer
     let room = (area.height as usize).saturating_sub(fixed);
     let total = menu.items.len();
     let (start, shown) = if total <= room {
@@ -518,15 +507,19 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) -> Option<std::ops:
             t.ui(Ui::Dim),
         )));
     }
+    let moves = if menu.id.is_list() {
+        "↑↓ n p"
+    } else {
+        "↑↓"
+    };
     lines.push(Line::from(Span::styled(
-        " q/Esc/C-g cancel · ↑↓ Enter",
+        format!(" q/Esc/C-g cancel · {moves} Enter"),
         t.ui(Ui::Dim),
     )));
     let w = menu
         .items
         .iter()
         .map(|i| i.label.len() as u16 + 12)
-        .chain(notes.iter().map(|n| n.chars().count() as u16 + 4))
         .max()
         .unwrap_or(20)
         .max(title.len() as u16 + 4);

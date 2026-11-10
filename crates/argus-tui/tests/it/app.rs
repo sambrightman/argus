@@ -1989,31 +1989,48 @@ fn prompts_say_what_they_ask_for() {
 }
 
 #[test]
-fn the_fix_menu_says_what_auto_fix_would_do() {
+fn the_fix_menus_auto_fix_items_say_what_they_do() {
     let (_sb, mut app) = setup("");
     while current(&app) != "acme/feature" {
         app.act(Action::Down);
     }
     app.on_key(key('x'));
+    assert_eq!(
+        menu_items(&app)[..2],
+        [
+            "x auto-fix acme/feature: switch main",
+            "a auto-fix all shown · acme/feature: switch main"
+        ]
+    );
+    // no header saying it again
     let screen = render(&mut app, 100, 20);
-    assert!(
-        screen.contains("x: auto-fix acme/feature: switch main"),
-        "{screen}"
-    );
-    assert!(
-        screen.contains("a: auto-fix acme/feature: switch main"),
-        "{screen}"
-    );
+    assert!(!screen.contains("x: "), "{screen}");
     app.on_key(key('q'));
-    // inverse: nothing to do for the selection
+    // nothing to auto-fix in the selection: no x
     app.act(Action::Bottom);
     app.on_key(key('x'));
+    assert_eq!(
+        menu_items(&app)[0],
+        "a auto-fix all shown · acme/feature: switch main"
+    );
+    assert!(!menu_items(&app).iter().any(|i| i.starts_with("x ")));
+}
+
+#[test]
+fn the_footer_names_n_p_in_lists_only() {
+    let (_sb, mut app) = setup_with("", two_local_commits);
+    while current(&app) != "acme/clean" {
+        app.act(Action::Down);
+    }
+    app.on_key(key('X'));
     let screen = render(&mut app, 100, 20);
-    assert!(screen.contains("x: nothing to auto-fix"), "{screen}");
-    // other menus have no notes
-    app.on_key(key('q'));
-    app.on_key(key('P'));
-    assert!(!render(&mut app, 100, 20).contains("auto-fix"));
+    assert!(screen.contains("q/Esc/C-g cancel · ↑↓ Enter"), "{screen}");
+    app.on_key(key('s'));
+    let screen = render(&mut app, 100, 20);
+    assert!(
+        screen.contains("q/Esc/C-g cancel · ↑↓ n p Enter"),
+        "{screen}"
+    );
 }
 
 /// The open menu's items as `key label`.
@@ -2899,7 +2916,10 @@ fn the_fix_menu_offers_each_fix_that_applies() {
     let items = menu_items(&app);
     assert_eq!(
         items[..2],
-        ["x auto-fix selected", "a auto-fix all shown, except hidden"]
+        [
+            "x auto-fix acme/dirty: push",
+            "a auto-fix all shown · 2 repo(s): push (1), switch-default (1)"
+        ]
     );
     assert_eq!(
         items[2..],
@@ -3006,4 +3026,21 @@ fn a_key_for_an_item_scrolled_out_of_sight_only_brings_it_into_view() {
         ),
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn with_nothing_to_fix_the_fix_menu_doesnt_open() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    sb.clone_as_github("acme", "w", "dev/w");
+    let cfg = format!("roots = ['{}']", sb.path("dev").display());
+    let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    ws.scan();
+    let mut app = App::new(ws);
+    assert!(app.on_key(key('x')).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "nothing to fix in the selection"
+    );
 }

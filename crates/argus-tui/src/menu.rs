@@ -212,18 +212,8 @@ impl MenuId {
                     ),
                 ],
             ),
-            MenuId::Fix => (
-                "Fix",
-                vec![
-                    item('x', "auto-fix selected", Action::AutoFix(Scope::Selected)),
-                    item(
-                        'a',
-                        "auto-fix all shown, except hidden",
-                        Action::AutoFix(Scope::All),
-                    ),
-                    // then each fix that applies: see App::fix_menu
-                ],
-            ),
+            // built when opened: see App::add_fixes
+            MenuId::Fix => ("Fix", vec![]),
             MenuId::Mark => (
                 "Mark",
                 vec![

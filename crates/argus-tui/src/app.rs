@@ -536,8 +536,6 @@ pub enum Mode {
     Menu {
         menu: Menu,
         cursor: usize,
-        /// What its actions would do, shown above them.
-        notes: Vec<String>,
     },
     Input {
         prompt: Prompt,
@@ -1195,7 +1193,6 @@ impl App {
                 };
             }
             OpenMenu(m) => {
-                let notes = self.menu_notes(m);
                 let mut menu = m.menu();
                 self.state_labels(&mut menu);
                 self.drop_inapplicable(&mut menu);
@@ -1210,11 +1207,10 @@ impl App {
                         cursor = menu.items.iter().position(|i| i.key == key).unwrap_or(0);
                     }
                 }
-                self.mode = Mode::Menu {
-                    menu,
-                    cursor,
-                    notes,
+                if menu.items.is_empty() {
+                    return self.not_applicable("nothing to fix in the selection");
                 }
+                self.mode = Mode::Menu { menu, cursor }
             }
             StartFilter => {
                 self.mode = Mode::Input {
@@ -1615,11 +1611,7 @@ impl App {
         let cursor = at
             .and_then(|l| lists.iter().position(|(m, _)| *m == l))
             .unwrap_or(0);
-        self.mode = Mode::Menu {
-            menu,
-            cursor,
-            notes: vec![],
-        };
+        self.mode = Mode::Menu { menu, cursor };
         vec![]
     }
 
@@ -1714,11 +1706,7 @@ impl App {
             mode,
             commits,
         });
-        self.mode = Mode::Menu {
-            menu,
-            cursor,
-            notes: vec![],
-        };
+        self.mode = Mode::Menu { menu, cursor };
         vec![]
     }
 
@@ -1810,11 +1798,7 @@ impl App {
             anchored: true,
         });
         if let Some(menu) = self.gitignore_menu_items() {
-            self.mode = Mode::Menu {
-                menu,
-                cursor: 0,
-                notes: vec![],
-            };
+            self.mode = Mode::Menu { menu, cursor: 0 };
         }
         vec![]
     }
@@ -1997,6 +1981,16 @@ impl App {
     /// What auto-fixing the repos at `paths` would do: `auto-fix acme/w:
     /// push`, or how many of each kind for several. `None` for nothing.
     fn auto_fix_summary(&self, paths: &[PathBuf]) -> Option<String> {
+        Some(match self.auto_fix_tally(paths)? {
+            (1, t) => format!("auto-fix {t}"),
+            (_, t) => format!("auto-fixing {t}"),
+        })
+    }
+
+    /// How many of the repos at `paths` auto-fix would fix, and how:
+    /// `acme/w: push`, or how many of each kind for several (`3 repo(s):
+    /// push (2), stash (1)`). `None` for none.
+    fn auto_fix_tally(&self, paths: &[PathBuf]) -> Option<(usize, String)> {
         let kinds = &self.ws.config.fix.auto;
         let fixes: Vec<(String, fix::Fix)> = paths
             .iter()
@@ -2008,7 +2002,7 @@ impl App {
             .collect();
         match fixes.as_slice() {
             [] => None,
-            [(name, f)] => Some(format!("auto-fix {name}: {}", f.op.label())),
+            [(name, f)] => Some((1, format!("{name}: {}", f.op.label()))),
             _ => {
                 // how many of each kind, in priority order
                 let mut counts: Vec<(FixKind, usize)> = vec![];
@@ -2022,20 +2016,38 @@ impl App {
                     .iter()
                     .map(|(k, n)| format!("{} ({n})", k.name()))
                     .collect();
-                Some(format!(
-                    "auto-fixing {} repo(s): {}",
+                Some((
                     fixes.len(),
-                    tally.join(", ")
+                    format!("{} repo(s): {}", fixes.len(), tally.join(", ")),
                 ))
             }
         }
     }
 
-    /// Labels for toggles saying what choosing them does now: mark or
-    /// unmark (by the first selected repo, as toggling goes), show or hide.
-    /// The Fix menu's items after auto-fix: each fix that applies to the
-    /// selection, with its reason for one repo or how many it applies to.
+    /// The Fix menu's items: auto-fix for the selection and for all shown,
+    /// saying what each would do (when it would do something); then each
+    /// fix that applies to the selection, with its reason for one repo or
+    /// how many it applies to.
     fn add_fixes(&self, menu: &mut Menu) {
+        let paths = |idx: Vec<usize>| -> Vec<PathBuf> {
+            idx.into_iter()
+                .map(|i| self.ws.entries[i].path.clone())
+                .collect()
+        };
+        if let Some((_, t)) = self.auto_fix_tally(&paths(self.selected())) {
+            menu.items.push(menu::item(
+                'x',
+                format!("auto-fix {t}"),
+                Action::AutoFix(Scope::Selected),
+            ));
+        }
+        if let Some((_, t)) = self.auto_fix_tally(&paths(self.bulk_repos())) {
+            menu.items.push(menu::item(
+                'a',
+                format!("auto-fix all shown · {t}"),
+                Action::AutoFix(Scope::All),
+            ));
+        }
         let selected = self.selected();
         let plans: Vec<Vec<fix::Fix>> = selected
             .iter()
@@ -2082,6 +2094,8 @@ impl App {
         }
     }
 
+    /// Labels for toggles saying what choosing them does now: mark or
+    /// unmark (by the first selected repo, as toggling goes), show or hide.
     fn state_labels(&self, menu: &mut Menu) {
         let first = self.selected().first().map(|&i| &self.ws.entries[i].flags);
         let label = |key: char| -> Option<&'static str> {
@@ -2107,30 +2121,6 @@ impl App {
                 it.label = l.to_string();
             }
         }
-    }
-
-    /// Lines for the top of menu `m`: for Fix, what `x` and `a` would do.
-    fn menu_notes(&self, m: MenuId) -> Vec<String> {
-        if m != MenuId::Fix {
-            return vec![];
-        }
-        let paths = |idx: Vec<usize>| -> Vec<PathBuf> {
-            idx.into_iter()
-                .map(|i| self.ws.entries[i].path.clone())
-                .collect()
-        };
-        [
-            ('x', paths(self.selected())),
-            ('a', paths(self.bulk_repos())),
-        ]
-        .into_iter()
-        .map(|(key, p)| {
-            let what = self
-                .auto_fix_summary(&p)
-                .unwrap_or_else(|| "nothing to auto-fix".into());
-            format!("{key}: {what}")
-        })
-        .collect()
     }
 
     /// Carry out a confirmed (or harmless enough) destructive action.
