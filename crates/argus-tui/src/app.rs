@@ -871,7 +871,6 @@ impl App {
             Mode::Menu { menu, cursor, .. } => {
                 let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
                 let n = menu.items.len();
-                let free = |c: char| menu.items.iter().all(|i| i.key != c);
                 match k.code {
                     KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
                     KeyCode::Char('g') if ctrl => self.mode = Mode::Normal,
@@ -887,11 +886,11 @@ impl App {
                         }
                         return self.act(a);
                     }
-                    // moving, when they aren't the menu's keys
-                    KeyCode::Char(c @ ('n' | 'j')) if !ctrl && free(c) => {
+                    // moving through a list of things
+                    KeyCode::Char('n' | 'j') if !ctrl && menu.id.is_list() => {
                         *cursor = (*cursor + 1) % n
                     }
-                    KeyCode::Char(c @ ('p' | 'k')) if !ctrl && free(c) => {
+                    KeyCode::Char('p' | 'k') if !ctrl && menu.id.is_list() => {
                         *cursor = (*cursor + n - 1) % n
                     }
                     KeyCode::Char(c) if !ctrl => {
@@ -2800,7 +2799,7 @@ struct ResetPick {
 }
 
 /// Keys for a reset menu's commits: not `q`, which closes menus, nor
-/// `n` `p` `j` `k`, which move through them.
+/// `n` `p` `j` `k`, which move through lists (see [`MenuId::is_list`]).
 const RESET_KEYS: &str = "1234567890abcdefghilmorstuvwxyz";
 
 /// The untracked files a gitignore menu is for, by repo, and whether its

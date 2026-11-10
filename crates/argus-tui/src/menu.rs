@@ -105,6 +105,12 @@ impl MenuId {
         MenuId::Reset,
     ];
 
+    /// A list of things (commits) rather than of choices: `n p j k` move
+    /// through it and are never its keys.
+    pub fn is_list(self) -> bool {
+        matches!(self, MenuId::ResetTo)
+    }
+
     pub fn from_key(c: char) -> Option<Self> {
         Self::ALL.into_iter().find(|m| m.key() == c)
     }

@@ -2757,7 +2757,7 @@ fn reset_with_one_commit_starts_on_it() {
 }
 
 #[test]
-fn n_p_j_k_move_through_a_menu_unless_theyre_its_keys() {
+fn n_p_j_k_move_through_lists_of_things_only() {
     let (_sb, mut app) = setup_with("", two_local_commits);
     while current(&app) != "acme/clean" {
         app.act(Action::Down);
@@ -2773,7 +2773,11 @@ fn n_p_j_k_move_through_a_menu_unless_theyre_its_keys() {
         assert!(app.on_key(key(k)).is_empty(), "{k}: no reset");
         assert_eq!(cursor(&app), at, "{k}");
     }
-    // where it is a key, it runs its item: F p pulls
+    // menus of choices: keys only, never moving; F p pulls
+    app.on_key(ctrl('g'));
+    app.on_key(key('c'));
+    app.on_key(key('j'));
+    assert_eq!(cursor(&app), 0, "j isn't a Commit menu key: nothing");
     app.on_key(ctrl('g'));
     app.on_key(key('F'));
     assert!(matches!(app.on_key(key('p')).as_slice(), [Effect::Jobs(_)]));
