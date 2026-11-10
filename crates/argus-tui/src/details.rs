@@ -8,6 +8,7 @@ use argus_core::diff::Side;
 use argus_core::fix::{self, FixKind};
 use argus_core::history::Range;
 use argus_core::icons::Icons;
+use argus_core::ops::Op;
 use argus_core::paths::contract_tilde;
 
 /// A detail line: styled parts. `None` uses the plain detail style.
@@ -243,6 +244,37 @@ pub fn details(
         }
         v.push(line(parts));
     }
+    // those that ask for something first, with the keys that run them
+    let manual: Vec<fix::Fix> = fix::plan(s, stash)
+        .into_iter()
+        .filter(|f| f.kind.manual())
+        .collect();
+    for kind in FixKind::ALL {
+        let of_kind: Vec<&fix::Fix> = manual.iter().filter(|f| f.kind == kind).collect();
+        let Some(f) = of_kind.first() else { continue };
+        // one fix per branch to delete: all of them on one line
+        let branches: Vec<String> = of_kind
+            .iter()
+            .filter_map(|f| match &f.op {
+                Op::DeleteBranch { branch } => Some(branch.clone()),
+                _ => None,
+            })
+            .collect();
+        let reason = match branches.len() {
+            n if n > 1 => format!("{n} merged branches: {}", fix::list(&branches, 3)),
+            _ => f.reason.clone(),
+        };
+        let mut parts = vec![
+            styled(Role::Dim, "fix       "),
+            styled(Role::Ahead, format!("{}…", kind.name())),
+            styled(Role::Dim, format!("  {reason}")),
+        ];
+        if let Some(why) = &f.blocked {
+            parts.push(styled(Role::Warning, format!("  {why}")));
+        }
+        parts.push(styled(Role::Dim, format!("  ({})", manual_keys(kind))));
+        v.push(line(parts));
+    }
     if !s.branches.is_empty() {
         v.push(line(vec![styled(Role::Dim, "branches")]));
         for b in &s.branches {
@@ -391,5 +423,53 @@ pub fn describe(i: &Issue, default: Option<&str>) -> (Role, String) {
             format!("{n} commit(s) on detached HEAD in no branch: create one before switching"),
         ),
         Issue::NoRemote => (Role::Dim, "no remote".into()),
+    }
+}
+
+/// The keys that run a fix of `kind`, which asks for something first.
+fn manual_keys(kind: FixKind) -> &'static str {
+    match kind {
+        FixKind::Abort => "x A",
+        FixKind::Commit => "c a",
+        FixKind::Gitignore => "i",
+        FixKind::Branch => "b c",
+        FixKind::AddRemote => "P r",
+        FixKind::DeleteBranches => "b x",
+        _ => "x x",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::Action;
+    use crate::menu::MenuId;
+
+    #[test]
+    fn manual_fix_keys_lead_to_their_actions() {
+        for kind in FixKind::ALL.into_iter().filter(|k| k.manual()) {
+            let keys: Vec<char> = manual_keys(kind)
+                .split(' ')
+                .flat_map(|k| k.chars())
+                .collect();
+            let action = match keys.as_slice() {
+                ['i'] => Action::GitignoreMenu,
+                [m, k] => {
+                    let menu = MenuId::from_key(*m).unwrap().menu();
+                    menu.items.iter().find(|i| i.key == *k).unwrap().action
+                }
+                other => panic!("{kind:?}: {other:?}"),
+            };
+            let expect = match kind {
+                FixKind::Abort => Action::AbortOperation,
+                FixKind::Commit => Action::Commit { all: true },
+                FixKind::Gitignore => Action::GitignoreMenu,
+                FixKind::Branch => Action::CreateBranch,
+                FixKind::AddRemote => Action::AddRemote,
+                FixKind::DeleteBranches => Action::DeleteMergedBranches,
+                k => panic!("{k:?} isn't manual"),
+            };
+            assert_eq!(action, expect, "{kind:?}");
+        }
     }
 }

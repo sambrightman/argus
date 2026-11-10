@@ -33,6 +33,9 @@ pub enum FixKind {
     Stash,
     /// Commit everything (never automatic: needs a message).
     Commit,
+    /// Add the untracked files to a gitignore (never automatic: which
+    /// file, and anchored or not, are asked).
+    Gitignore,
     /// Name the commits a detached HEAD has on no branch: create a branch
     /// there (never automatic: needs a name).
     Branch,
@@ -69,10 +72,11 @@ pub enum FixKind {
 impl FixKind {
     /// Default priority: clean up uncommitted work, share commits, leave
     /// the branch, then catch up (on the branch you end up on).
-    pub const ALL: [FixKind; 14] = [
+    pub const ALL: [FixKind; 15] = [
         FixKind::Abort,
         FixKind::Stash,
         FixKind::Commit,
+        FixKind::Gitignore,
         FixKind::Branch,
         FixKind::Push,
         FixKind::Publish,
@@ -88,7 +92,10 @@ impl FixKind {
 
     /// Requires a message, name or URL from the user.
     pub fn needs_input(self) -> bool {
-        matches!(self, FixKind::Commit | FixKind::Branch | FixKind::AddRemote)
+        matches!(
+            self,
+            FixKind::Commit | FixKind::Gitignore | FixKind::Branch | FixKind::AddRemote
+        )
     }
 
     /// Permanently destructive: asked about first, never automatic.
@@ -118,6 +125,7 @@ impl FixKind {
             FixKind::Abort => "abort",
             FixKind::DeleteBranches => "delete-branches",
             FixKind::StashPop => "stash-pop",
+            FixKind::Gitignore => "gitignore",
         }
     }
 }
@@ -458,6 +466,25 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
                 message: String::new(),
             },
             reason: format!("{} uncommitted path(s)", s.changes.total()),
+        });
+    }
+    let untracked: Vec<String> = s
+        .changes
+        .files
+        .iter()
+        .filter(|f| f.index == '?')
+        .map(|f| f.path.clone())
+        .collect();
+    if !untracked.is_empty() {
+        v.push(Fix {
+            blocked: None,
+            kind: FixKind::Gitignore,
+            reason: format!("{} untracked path(s)", untracked.len()),
+            op: Op::Ignore {
+                file: crate::gitignore::IgnoreFile::TopLevel,
+                paths: untracked,
+                anchored: true,
+            },
         });
     }
     v

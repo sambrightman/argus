@@ -1565,8 +1565,11 @@ impl App {
     /// The gitignore menu for the untracked files marked, or under the
     /// cursor (tracked ones left out: rules don't apply to them).
     fn open_gitignore_menu(&mut self) -> Vec<Effect> {
-        let targets: Vec<(PathBuf, Vec<String>)> = self
-            .file_targets()
+        let files = self.file_targets();
+        if files.is_empty() {
+            return self.open_gitignore_menu_for_repos();
+        }
+        let targets: Vec<(PathBuf, Vec<String>)> = files
             .into_iter()
             .filter_map(|(i, files)| {
                 let e = &self.ws.entries[i];
@@ -1583,6 +1586,33 @@ impl App {
                 "no untracked file selected: put the cursor on one in the details, or mark some",
             );
         }
+        self.show_gitignore_menu(targets)
+    }
+
+    /// The gitignore menu for every untracked path of the selected repos
+    /// (the gitignore fix), when no file is marked or under the cursor.
+    fn open_gitignore_menu_for_repos(&mut self) -> Vec<Effect> {
+        let targets: Vec<(PathBuf, Vec<String>)> = self
+            .selected()
+            .into_iter()
+            .filter_map(|i| {
+                let e = &self.ws.entries[i];
+                let f = fix::plan(e.status()?, &self.ws.config.stash)
+                    .into_iter()
+                    .find(|f| f.kind == FixKind::Gitignore)?;
+                match f.op {
+                    Op::Ignore { paths, .. } => Some((e.path.clone(), paths)),
+                    _ => None,
+                }
+            })
+            .collect();
+        if targets.is_empty() {
+            return self.not_applicable("nothing untracked to ignore");
+        }
+        self.show_gitignore_menu(targets)
+    }
+
+    fn show_gitignore_menu(&mut self, targets: Vec<(PathBuf, Vec<String>)>) -> Vec<Effect> {
         self.gitignore = Some(GitignoreTargets {
             targets,
             anchored: true,

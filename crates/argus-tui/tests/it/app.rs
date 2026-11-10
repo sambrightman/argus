@@ -654,6 +654,8 @@ fn details_show_the_auto_fix_its_chain_and_alternatives() {
                     .iter()
                     .any(|p| t.starts_with(p))
             })
+            // not those that ask for something first (commit…, gitignore…)
+            .filter(|t| !t.contains('…'))
             .map(|t| t.split_whitespace().take(3).collect::<Vec<_>>().join(" "))
             .collect::<Vec<_>>()
     };
@@ -2544,4 +2546,66 @@ fn n_and_p_step_through_sections_skipping_diff_and_message_lines() {
     assert_eq!(here(&app), "acme/feature");
     app.on_key(alt('p'));
     assert_eq!(here(&app), "acme/dirty");
+}
+
+#[test]
+fn details_list_fixes_that_need_input_with_their_keys() {
+    let (sb, mut app) = setup_with("", |sb| {
+        diff_fixture(sb);
+        // merged, no upstream: to delete
+        for b in ["old1", "old2"] {
+            git(&sb.path("dev/dirty"), &["branch", b, "HEAD~1"]);
+        }
+    });
+    cursor_on_detail(&mut app, "dirty", "issue");
+    let t = trimmed(&app);
+    let fix = |name: &str| {
+        t.iter()
+            .find(|l| l.starts_with(&format!("fix       {name}…")))
+            .unwrap_or_else(|| panic!("{name}: {t:?}"))
+            .clone()
+    };
+    assert_eq!(
+        fix("gitignore"),
+        "fix       gitignore…  2 untracked path(s)  (i)"
+    );
+    assert!(fix("commit").ends_with("  (c a)"), "{}", fix("commit"));
+    assert_eq!(
+        fix("delete-branches"),
+        "fix       delete-branches…  2 merged branches: old1, old2  (b x)"
+    );
+    // one: its own reason
+    let d = sb.path("dev/dirty");
+    git(&d, &["branch", "-q", "-D", "old2"]);
+    app.ws.refresh(&d);
+    app.rebuild();
+    let line = trimmed(&app)
+        .into_iter()
+        .find(|l| l.starts_with("fix       delete-branches…"))
+        .unwrap();
+    assert_eq!(
+        line,
+        "fix       delete-branches…  old1 is merged into main  (b x)"
+    );
+}
+
+#[test]
+fn gitignore_on_a_repo_takes_all_its_untracked_files() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    while current(&app) != "acme/dirty" {
+        app.act(Action::Down);
+    }
+    app.on_key(key('i'));
+    assert_eq!(menu_items(&app)[0], "t add /bin, /new to .gitignore");
+    // nothing untracked
+    app.on_key(ctrl('g'));
+    while current(&app) != "acme/clean" {
+        app.act(Action::Down);
+    }
+    assert!(app.act(Action::GitignoreMenu).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "nothing untracked to ignore"
+    );
 }

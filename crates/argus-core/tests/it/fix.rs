@@ -317,6 +317,36 @@ fn commit_takes_only_whats_staged() {
 }
 
 #[test]
+fn untracked_files_offer_a_gitignore_fix_never_automatic() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    assert!(
+        !kinds(&r).contains(&FixKind::Gitignore),
+        "nothing untracked"
+    );
+    write(&r, "new.txt", "x");
+    write(&r, "build/out.o", "x");
+    let s = status(&r, StatusOptions::default()).unwrap();
+    let f = plan(&s, &StashConfig::default())
+        .into_iter()
+        .find(|f| f.kind == FixKind::Gitignore)
+        .unwrap();
+    assert_eq!(f.reason, "2 untracked path(s)");
+    assert_eq!(
+        f.op,
+        Op::Ignore {
+            file: argus_core::gitignore::IgnoreFile::TopLevel,
+            paths: vec!["build/".into(), "new.txt".into()],
+            anchored: true
+        }
+    );
+    // which file, and how: always asked
+    assert!(FixKind::Gitignore.needs_input());
+    assert_eq!(FixKind::Gitignore.name(), "gitignore");
+    assert!(choose(&s, &[FixKind::Gitignore], &StashConfig::default()).is_none());
+}
+
+#[test]
 fn failed_fix_stops_the_chain() {
     let sb = Sandbox::new();
     let r = pushed_feature(&sb);
@@ -501,15 +531,25 @@ fn the_order_given_is_the_priority() {
 fn unlisted_kinds_rank_after_listed_ones_in_default_order() {
     let sb = Sandbox::new();
     let r = switch_or_stash(&sb);
-    // commit is available too (needs a message, so never chosen)
+    // commit and gitignore are available too (need input, so never chosen)
     assert_eq!(
         ranked_kinds(&r, &[FixKind::SwitchDefault]),
-        [FixKind::SwitchDefault, FixKind::Stash, FixKind::Commit]
+        [
+            FixKind::SwitchDefault,
+            FixKind::Stash,
+            FixKind::Commit,
+            FixKind::Gitignore
+        ]
     );
     // default order: clean up uncommitted work first
     assert_eq!(
         ranked_kinds(&r, &[]),
-        [FixKind::Stash, FixKind::Commit, FixKind::SwitchDefault]
+        [
+            FixKind::Stash,
+            FixKind::Commit,
+            FixKind::Gitignore,
+            FixKind::SwitchDefault
+        ]
     );
     let s = status(&r, StatusOptions::default()).unwrap();
     assert!(

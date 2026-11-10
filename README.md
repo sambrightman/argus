@@ -144,7 +144,7 @@ transient-style menus. Press the item key, or use ↑↓ + Enter.
 | `Tab` `Enter` | unfold details: issues, available fixes, branches, files; on a file, its diff (unstaged, then staged); on a hunk, fold it. Further down: an unpushed, behind or detached-commits issue (or a branch with commits on no remote) unfolds into its commits, a commit or stash into its message and files and each file into its diff, other branches with unpushed work into each branch, an untracked directory into its files (to stage, discard or gitignore one by one). Changed words are highlighted (`[ui] refine = "all"`, `"selected"` for the hunk under the cursor, or `"off"`) |
 | `Space` / `U` | mark / unmark (actions apply to marked repos, else current); on a file in the details, marks the file |
 | `s` `u` `K` | stage / unstage / discard files: the marked ones, else the one under the cursor in the details. Discard returns them to HEAD (deleting untracked files) and always asks first |
-| `i` | **Gitignore** the untracked files marked, else under the cursor: `t` top-level `.gitignore`, `d` their directory's, `p` `.git/info/exclude` (this clone), `g` global excludes. `a` switches between anchored (`/build/`: this path only, the default) and unanchored (`build/`: the name anywhere); each item shows the rules it adds |
+| `i` | **Gitignore** the untracked files marked, else under the cursor, else all of the selected repos': `t` top-level `.gitignore`, `d` their directory's, `p` `.git/info/exclude` (this clone), `g` global excludes. `a` switches between anchored (`/build/`: this path only, the default) and unanchored (`build/`: the name anywhere); each item shows the rules it adds |
 | `/` `C-s` | filter (readline editing) |
 | `a` / `H` | show all / attention only (the default, `[ui] attention_only`); show hidden |
 | `g` `C-l` / `R` | refresh statuses / rescan roots |
@@ -264,8 +264,11 @@ Nothing is offered during a conflict.
   Not in submodules, where a detached HEAD is normal.
 * **Commits on no branch** (a detached HEAD that moved on) get `b c`: a
   branch there, by the name you give. **No remote** gets `P r`: the URL
-  you give, added as `origin`. Like `commit`, they need input, so they're
-  never automatic.
+  you give, added as `origin`. **Untracked files** get `gitignore`: `i`
+  on the repo opens the gitignore menu for all of them, to choose the file
+  and the kind of rule. Like `commit`, they need input, so they're never
+  automatic. The details list them all the same, with the keys that run
+  them (`fix  gitignore…  2 untracked path(s)  (i)`).
 * **`stash-pop`** pops the newest stash into a work tree with no tracked
   changes, after a trial merge (`git merge-tree`) says it applies without
   conflicts (`z p`; automatic only if listed, and not while any stash is
@@ -290,7 +293,7 @@ Each auto-fix action applies **one** fix: the first kind in `[fix] auto`
 branch is pushed by one `x x` (or `argus fix`) and switched back to the
 default branch by the next. Or snooze it in between (`m z`).
 Kinds you don't list rank after the ones you do, in the default order:
-abort, stash, commit, branch, push, publish, add-remote, push-branches,
+abort, stash, commit, gitignore, branch, push, publish, add-remote, push-branches,
 switch-default, reattach, pull, fast-forward, delete-branches, stash-pop.
 
 `argus fix -n` shows, per repo, the fix this run would apply, then the
