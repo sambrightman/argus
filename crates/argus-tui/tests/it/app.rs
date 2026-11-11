@@ -2270,6 +2270,130 @@ fn toggles_say_what_they_will_do() {
     assert_eq!(label(&mut app, 'v', 'l'), "l show process log");
     app.act(Action::ToggleLog);
     assert_eq!(label(&mut app, 'v', 'l'), "l hide process log");
+
+    assert_eq!(
+        label(&mut app, 'm', 'p'),
+        "p pull (with F a and argus pull)"
+    );
+    app.act(Action::TogglePull);
+    assert_eq!(label(&mut app, 'm', 'p'), "p stop pulling");
+    app.act(Action::ToggleAttention);
+    assert_eq!(label(&mut app, 'v', 'a'), "a show all repos");
+    app.act(Action::ToggleHidden);
+    assert_eq!(
+        label(&mut app, 'v', 'h'),
+        "h hide ignored and snoozed repos"
+    );
+    // shown while ignored, so it stays the first selected
+    app.act(Action::ToggleAttention);
+    app.act(Action::ToggleIgnore);
+    assert_eq!(current(&app), "acme/feature");
+    assert_eq!(label(&mut app, 'm', 'I'), "I unignore repo");
+}
+
+#[test]
+fn paging_and_home_end_move_by_the_page_and_to_the_ends() {
+    let (_sb, mut app) = setup("");
+    app.page = 1;
+    for k in [code(KeyCode::PageDown), ctrl('v'), ctrl('d')] {
+        app.cursor = 0;
+        app.on_key(k);
+        assert_eq!(app.cursor, 1, "{k:?}");
+    }
+    for k in [code(KeyCode::PageUp), alt('v'), ctrl('u')] {
+        app.cursor = 2;
+        app.on_key(k);
+        assert_eq!(app.cursor, 1, "{k:?}");
+    }
+    app.page = 20;
+    app.cursor = 0;
+    app.on_key(code(KeyCode::PageDown));
+    assert_eq!(app.cursor, 2, "clamped at the bottom");
+    app.on_key(code(KeyCode::Home));
+    assert_eq!(app.cursor, 0);
+    app.on_key(code(KeyCode::End));
+    assert_eq!(app.cursor, 2);
+}
+
+#[test]
+fn ctrl_keys_quit_refresh_and_clear_marks() {
+    let (_sb, mut app) = setup("");
+    assert!(matches!(app.on_key(ctrl('l')).as_slice(), [Effect::Refresh(p)] if p.len() == 3));
+    app.on_key(key(' '));
+    app.on_key(ctrl('g'));
+    assert!(app.marked.is_empty());
+    assert_eq!(app.on_key(ctrl('c')), vec![Effect::SaveState, Effect::Quit]);
+}
+
+#[test]
+fn help_scrolls_with_arrows_vi_and_emacs_keys_and_any_other_key_closes_it() {
+    let (_sb, mut app) = setup("");
+    let scroll = |app: &App| match app.mode {
+        Mode::Help { scroll } => scroll,
+        _ => panic!("help closed"),
+    };
+    app.on_key(key('?'));
+    for (down, up) in [
+        (code(KeyCode::Down), code(KeyCode::Up)),
+        (key('j'), key('k')),
+        (ctrl('n'), ctrl('p')),
+    ] {
+        app.on_key(down);
+        app.on_key(down);
+        assert_eq!(scroll(&app), 2, "{down:?}");
+        app.on_key(up);
+        assert_eq!(scroll(&app), 1, "{up:?}");
+        app.on_key(up);
+        app.on_key(up);
+        assert_eq!(scroll(&app), 0, "stops at the top");
+    }
+    for k in ['n', 'p'] {
+        app.on_key(key('?'));
+        app.on_key(key(k));
+        assert!(matches!(app.mode, Mode::Normal), "plain {k} closes it");
+    }
+}
+
+#[test]
+fn menu_bar_wraps_both_ways_and_enter_keeps_open_only_what_stays() {
+    let (_sb, mut app) = setup("");
+    let cursor = |app: &App| match app.mode {
+        Mode::Menu { cursor, .. } => cursor,
+        _ => panic!("menu closed"),
+    };
+    app.on_key(key('z')); // stash: two switches, then actions
+    let n = menu_items(&app).len();
+    for (down, up) in [
+        (code(KeyCode::Down), code(KeyCode::Up)),
+        (code(KeyCode::Tab), code(KeyCode::BackTab)),
+        (ctrl('n'), ctrl('p')),
+    ] {
+        let start = cursor(&app);
+        app.on_key(up);
+        assert_eq!(cursor(&app), (start + n - 1) % n, "{up:?} wraps");
+        app.on_key(down);
+        app.on_key(down);
+        assert_eq!(cursor(&app), (start + 1) % n, "{down:?}");
+        app.on_key(up);
+    }
+    // the first item is a switch: Enter toggles it and the menu stays
+    while cursor(&app) != 0 {
+        app.on_key(code(KeyCode::Down));
+    }
+    app.on_key(code(KeyCode::Enter));
+    assert_eq!(cursor(&app), 0, "still open");
+    app.on_key(code(KeyCode::Enter));
+    app.on_key(code(KeyCode::Down));
+    app.on_key(code(KeyCode::Down));
+    app.on_key(ctrl('g'));
+    app.on_key(key('v')); // view: nothing stays
+    app.on_key(code(KeyCode::Enter));
+    assert!(matches!(app.mode, Mode::Normal));
+    app.on_key(key('v'));
+    assert!(
+        matches!(app.on_key(key('g')).as_slice(), [Effect::Refresh(_)]),
+        "plain g is the menu's item; only C-g closes"
+    );
 }
 
 #[test]

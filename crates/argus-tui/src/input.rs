@@ -231,6 +231,90 @@ mod tests {
         assert_eq!(e.handle(ctrl('t')), Edit::Ignored);
     }
 
+    fn plain(c: KeyCode) -> KeyEvent {
+        key(c, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn arrows_move_a_char_and_with_a_modifier_a_word() {
+        let mut e = typed("hello world");
+        assert_eq!(e.handle(plain(KeyCode::Left)), Edit::Moved);
+        assert_eq!(e.cursor(), 10);
+        e.handle(plain(KeyCode::Home));
+        assert_eq!(e.cursor(), 0);
+        e.handle(plain(KeyCode::Right));
+        assert_eq!(e.cursor(), 1);
+        e.handle(ctrl('f'));
+        assert_eq!(e.cursor(), 2);
+        e.handle(plain(KeyCode::End));
+        assert_eq!(e.cursor(), 11);
+        assert_eq!(e.handle(plain(KeyCode::Right)), Edit::Ignored, "at end");
+        for m in [KeyModifiers::ALT, KeyModifiers::CONTROL] {
+            e.handle(ctrl('a'));
+            e.handle(key(KeyCode::Right, m));
+            assert_eq!(e.cursor(), 5, "{m:?}");
+            e.handle(ctrl('e'));
+            e.handle(key(KeyCode::Left, m));
+            assert_eq!(e.cursor(), 6, "{m:?}");
+        }
+    }
+
+    #[test]
+    fn word_motion_skips_separators_and_stops_at_the_ends() {
+        let mut e = typed("foo, bar  ");
+        e.handle(alt('b'));
+        assert_eq!(e.cursor(), 5, "back over spaces, then the word");
+        e.handle(alt('b'));
+        assert_eq!(e.cursor(), 0, "back over \", \", then to the start");
+        assert_eq!(e.handle(alt('b')), Edit::Ignored, "at the start");
+        e.handle(alt('f'));
+        e.handle(alt('f'));
+        assert_eq!(e.cursor(), 8);
+        e.handle(alt('f'));
+        assert_eq!(e.cursor(), 10, "over the trailing spaces");
+        assert_eq!(e.handle(alt('f')), Edit::Ignored, "at the end");
+    }
+
+    #[test]
+    fn deleting_words_and_chars() {
+        for m in [KeyModifiers::ALT, KeyModifiers::CONTROL] {
+            let mut e = typed("foo bar");
+            e.handle(key(KeyCode::Backspace, m));
+            assert_eq!(e.text(), "foo ", "{m:?}");
+        }
+        let mut e = typed("foo bar");
+        e.handle(plain(KeyCode::Backspace));
+        assert_eq!(e.text(), "foo ba", "plain backspace: one char");
+        e.handle(ctrl('a'));
+        e.handle(alt('d'));
+        assert_eq!(e.text(), " ba");
+        e.handle(plain(KeyCode::Delete));
+        assert_eq!(e.text(), "ba");
+        e.handle(ctrl('d'));
+        assert_eq!(e.text(), "a");
+    }
+
+    #[test]
+    fn letters_bound_with_ctrl_type_plainly() {
+        assert_eq!(typed("kayak").text(), "kayak");
+        let mut e = typed("x");
+        assert_eq!(e.handle(alt('y')), Edit::Ignored, "alt keys don't insert");
+        assert_eq!(e.text(), "x");
+    }
+
+    #[test]
+    fn transpose_two_chars_and_in_the_middle() {
+        let mut e = typed("ab");
+        e.handle(ctrl('t'));
+        assert_eq!(e.text(), "ba");
+        let mut e = typed("abc");
+        e.handle(ctrl('a'));
+        e.handle(ctrl('f'));
+        e.handle(ctrl('t'));
+        assert_eq!(e.text(), "bac");
+        assert_eq!(e.cursor(), 2, "after the moved char");
+    }
+
     #[test]
     fn submit_and_cancel() {
         let mut e = typed("x");

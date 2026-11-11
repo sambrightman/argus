@@ -363,12 +363,16 @@ fn a_failed_forge_listing_is_reported() {
 #[test]
 fn urls_are_handed_to_the_opener() {
     let (sb, mut app, _) = setup("");
-    // an opener that records what it was given
+    // an opener that records what it was given; renamed into place, as
+    // `>` creates the file before echo writes to it
     let script = sb.path("opener.sh");
     let got = sb.path("opened.txt");
     std::fs::write(
         &script,
-        format!("#!/bin/sh\necho \"$1\" > '{}'\n", got.display()),
+        format!(
+            "#!/bin/sh\necho \"$1\" > '{0}.tmp' && mv '{0}.tmp' '{0}'\n",
+            got.display()
+        ),
     )
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();

@@ -620,9 +620,15 @@ with `Swatinem/rust-cache`, and mold as the Linux linker.
   page, lcov uploaded as an artifact and to Codecov for history); and `cargo mutants --in-diff` on what the push or
   PR changed, failing on a missed mutant.
 * `mutants.yml`, weekly and on demand: the full cargo-mutants run in 16
-  shards, `--in-place` on the cached build and skipping the baseline (CI
-  has just run the tests). A summary job lists missed mutants and
-  timeouts, and fails if there are any.
+  shards on each of Linux and macOS, `--in-place` on the cached build and
+  skipping the baseline (CI has just run the tests). cargo-mutants doesn't
+  evaluate `#[cfg]` (its issues #50 and #623; a `cfg_attr` skip applies on
+  every platform), so code built only on the other platform always looks
+  untested. The summary job therefore counts a mutant only if both
+  platforms missed it, lists those and any timeouts, and fails if there
+  are any, or if a shard failed (which would leave the intersection
+  incomplete). The first full run (Linux only, 2026-11-11): 1,842 caught,
+  380 missed, 254 unviable.
 * Dependabot groups cargo and action updates weekly, major versions
   included, which covers what cargo-outdated would report. It waits two
   weeks after a release before proposing it (`cooldown`); security
