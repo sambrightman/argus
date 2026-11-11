@@ -4070,3 +4070,49 @@ fn a_nested_repo_unfolds_into_its_own_details_and_acts_there() {
     app.act(Action::ToggleExpand);
     assert_eq!(below(&app, "    ?? nested", 4), Vec::<String>::new());
 }
+
+/// Clearing says what's left: marks that patterns (or tracking) still give.
+#[test]
+fn clearing_marks_says_what_patterns_still_give() {
+    use argus_core::rules::Mark;
+    let (_sb, mut app) = setup("favourite = ['acme/c*']");
+    let msg = |app: &App| app.message.as_ref().unwrap().0.clone();
+    let at = |app: &App, n: &str| {
+        app.ws
+            .entries
+            .iter()
+            .position(|e| e.path.ends_with(n))
+            .unwrap()
+    };
+    let (clean, dirty) = (at(&app, "clean"), at(&app, "dirty"));
+    app.ws
+        .set_mark(&[clean, dirty], Mark::Ignore, true)
+        .unwrap();
+    app.marked = [clean, dirty]
+        .map(|i| app.ws.entries[i].path.clone())
+        .into();
+    app.act(Action::ClearMarks);
+    app.on_key(key('y'));
+    assert_eq!(
+        msg(&app),
+        "marks cleared for 2 repos; still: acme/clean favourite (acme/c*)"
+    );
+    // inverse: nothing left to mention
+    app.marked.clear();
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if *i == dirty))
+        .unwrap();
+    app.ws.set_mark(&[dirty], Mark::Favourite, true).unwrap();
+    app.act(Action::ClearMarks);
+    assert_eq!(msg(&app), "marks cleared");
+    // the menu item
+    app.act(Action::Top);
+    app.on_key(key('m'));
+    assert!(
+        menu_items(&app).iter().any(|l| l == "c clear marks"),
+        "{:?}",
+        menu_items(&app)
+    );
+}

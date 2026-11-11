@@ -206,7 +206,8 @@ struct MarkArgs {
     #[arg(long)]
     unsnooze: bool,
     /// Remove the repos' own entries from the favourite, pull and ignore
-    /// lists (patterns decide again) and end any snooze.
+    /// lists and end any snooze. Marks that patterns (or a tracked owner)
+    /// still give are noted.
     #[arg(long)]
     clear: bool,
 }
@@ -1396,8 +1397,20 @@ fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> R
         }
     }
     let before = ws.config.clone();
+    // what patterns (or tracking) still mark once the repos' own entries go
+    let mut left = vec![];
     if m.clear {
         ws.clear_marks(&sel)?;
+        for &i in &sel {
+            let marks = ws.remaining_marks(i);
+            if !marks.is_empty() {
+                left.push(format!(
+                    "{}: still {}",
+                    ws.entries[i].display_name(),
+                    marks.join(", ")
+                ));
+            }
+        }
     }
     for (mark, on, off) in [
         (Mark::Favourite, m.favourite, m.no_favourite),
@@ -1415,6 +1428,9 @@ fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> R
         }
     }
     configfile::update_mark_lists(&ctx.config_path, &before, &ws.config)?;
+    for l in &left {
+        eprintln!("{l}");
+    }
     let mut records = vec![];
     for i in sel {
         let key = ws.entries[i].key.clone();

@@ -381,6 +381,25 @@ impl Workspace {
         self.marks_changed()
     }
 
+    /// The marks the repo at `i` has without entries of its own (as after
+    /// [`Self::clear_marks`]), each with what gives it: `favourite
+    /// (acme/*)`, or for pull a tracked owner, `pull (tracking
+    /// github.com/acme)`.
+    pub fn remaining_marks(&self, i: usize) -> Vec<String> {
+        let e = &self.entries[i];
+        Mark::ALL
+            .into_iter()
+            .filter(|&m| m.of(&e.flags))
+            .filter_map(|m| {
+                let why = match self.rules.marking(m, e.id.as_ref(), &e.path) {
+                    Some(entry) => entry.to_string(),
+                    None => format!("tracking {}", e.flags.tracked.as_ref()?),
+                };
+                Some(format!("{} ({why})", m.label()))
+            })
+            .collect()
+    }
+
     /// How many of the repos at `indices` have entries of their own in the
     /// mark lists: clearing those of more than one needs confirmation.
     pub fn marked_count(&self, indices: &[usize]) -> usize {

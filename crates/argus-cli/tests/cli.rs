@@ -1116,10 +1116,21 @@ fn marks_are_written_to_the_config_lists() {
     assert_eq!(c.pull, ["acme/*", "!github.com/acme/dirty"]);
     assert_eq!(c.ignore.repos, ["github.com/acme/feature"]);
     assert!(text.starts_with("# mine\n"), "{text}");
-    // --clear: the repo's own entries go, patterns decide again
-    mark(&["acme/dirty", "--clear"]);
+    // --clear: the repo's own entries go; what patterns still give is said
+    let clear = |repo: &str| {
+        let o = argus(&sb)
+            .args(["--config", cfg.to_str().unwrap(), "mark", repo, "--clear"])
+            .output()
+            .unwrap();
+        assert!(o.status.success());
+        String::from_utf8(o.stderr).unwrap()
+    };
+    assert_eq!(clear("acme/dirty"), "acme/dirty: still pull (acme/*)\n");
     let c = argus_core::Config::parse(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
     assert_eq!(c.pull, ["acme/*"]);
+    // inverse: nothing left, nothing said
+    std::fs::write(&cfg, "favourite = ['acme/clean']\n").unwrap();
+    assert_eq!(clear("acme/clean"), "");
 }
 
 #[test]

@@ -2234,6 +2234,24 @@ impl App {
                 for k in &keys {
                     self.ws.state.snoozed.remove(k);
                 }
+                // what patterns (or tracking) still mark
+                let left: Vec<String> = indices
+                    .iter()
+                    .filter_map(|&i| {
+                        let marks = self.ws.remaining_marks(i);
+                        (!marks.is_empty()).then(|| {
+                            format!("{} {}", self.ws.entries[i].display_name(), marks.join(", "))
+                        })
+                    })
+                    .collect();
+                let what = match indices.len() {
+                    1 => "marks cleared".to_string(),
+                    n => format!("marks cleared for {n} repos"),
+                };
+                self.info(match left.is_empty() {
+                    true => what,
+                    false => format!("{what}; still: {}", left.join("; ")),
+                });
                 let mut fx = vec![Effect::SaveMarks(Box::new(before))];
                 fx.extend(self.flags_changed());
                 fx

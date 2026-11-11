@@ -121,8 +121,8 @@ the describe line.
 Favourite, pull and ignore live in config: marking a repo in the TUI or
 with `argus mark` adds its name to the list (or `!name` to turn off what a
 pattern says) and saves the change, keeping the rest of the file as
-written; clearing removes the repo's own entries, so patterns decide
-again. With extended files, an entry is removed from every file that
+written; clearing removes the repo's own entries, and says which marks
+patterns (or a tracked owner, for pull) still give it. With extended files, an entry is removed from every file that
 lists it, and new entries go where roots do: the highest-precedence file
 with the list or its `extend_` form (to keep them in your main file, give
 it e.g. `extend_favourite = []`). Nothing is dropped for

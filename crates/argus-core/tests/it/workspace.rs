@@ -1378,3 +1378,35 @@ fn a_nested_repo_is_an_entry_only_when_asked_for() {
     // not listed, under its parent or otherwise
     assert_eq!(names(&w, ALL), [contract_tilde(&app)]);
 }
+
+/// What clearing a repo's marks leaves on, and why: a pattern, or for pull
+/// a tracked owner's default.
+#[test]
+fn marks_left_after_clearing_say_what_gives_them() {
+    use argus_core::rules::Mark;
+    let sb = Sandbox::new();
+    for n in ["app", "lib"] {
+        sb.remote("acme", n);
+        sb.clone_as_github("acme", n, &format!("dev/{n}"));
+    }
+    let mut w = ws(
+        &sb,
+        "favourite = ['acme/*', '!acme/l*']\n[[track]]\nowner='acme'\npull=true",
+    );
+    let at = |w: &Workspace, n: &str| w.entries.iter().position(|e| e.path.ends_with(n)).unwrap();
+    let (app, lib) = (at(&w, "app"), at(&w, "lib"));
+    w.set_mark(&[app], Mark::Ignore, true).unwrap();
+    w.clear_marks(&[app, lib]).unwrap();
+    assert_eq!(
+        w.remaining_marks(app),
+        ["favourite (acme/*)", "pull (tracking github.com/acme)"]
+    );
+    // a `!` pattern turns a mark off: nothing to say for it
+    assert_eq!(w.remaining_marks(lib), ["pull (tracking github.com/acme)"]);
+    // inverse: no patterns, no tracking, nothing left
+    let mut w = ws(&sb, "");
+    let app = at(&w, "app");
+    w.set_mark(&[app], Mark::Favourite, true).unwrap();
+    w.clear_marks(&[app]).unwrap();
+    assert_eq!(w.remaining_marks(app), Vec::<String>::new());
+}

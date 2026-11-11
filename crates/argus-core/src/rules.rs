@@ -78,6 +78,15 @@ impl Mark {
             Mark::Ignore => f.ignored,
         }
     }
+
+    /// How a repo with the mark is described: `favourite`, `pull`, `ignored`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Mark::Favourite => "favourite",
+            Mark::Pull => "pull",
+            Mark::Ignore => "ignored",
+        }
+    }
 }
 
 /// Issues that can be ignored for some repos: the `[ignore]` lists other
@@ -379,6 +388,17 @@ impl RuleSet {
             .rev()
             .find(|e| e.matches(id, path))
             .map(|e| !e.negate)
+    }
+
+    /// The entry that turns `m` on for the repo, if one does (its last
+    /// matching entry, when that isn't a `!` one).
+    pub fn marking(&self, m: Mark, id: Option<&RepoId>, path: &Path) -> Option<&str> {
+        self.entries(m)
+            .iter()
+            .rev()
+            .find(|e| e.matches(id, path))
+            .filter(|e| !e.negate)
+            .map(|e| e.text.as_str())
     }
 
     /// Whether a (possibly not yet cloned) repo is ignored.

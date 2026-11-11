@@ -225,7 +225,7 @@ impl MenuId {
                     item('z', "snooze for…", Action::Snooze),
                     item('u', "unsnooze", Action::Unsnooze),
                     item('a', "acknowledge new", Action::Ack),
-                    item('c', "clear marks (patterns decide)", Action::ClearMarks),
+                    item('c', "clear marks", Action::ClearMarks),
                 ],
             ),
             MenuId::Open => (
