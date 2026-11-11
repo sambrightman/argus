@@ -209,6 +209,28 @@ fn stage_and_unstage_files() {
     assert!(codes(&r).contains(&" M staged".into()), "{:?}", codes(&r));
 }
 
+/// A file tracked inside a gitignored directory (added with `-f`): plain
+/// `git add` stages it but exits 1, refusing the ignored path.
+#[test]
+fn a_tracked_file_in_an_ignored_directory_stages() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, ".gitignore", ".claude\n");
+    write(&r, ".claude/s.sh", "a\n");
+    git(&r, &["add", ".gitignore"]);
+    git(&r, &["add", "-f", ".claude/s.sh"]);
+    commit(&r, "i");
+    write(&r, ".claude/gone", "x\n");
+    git(&r, &["add", "-f", ".claude/gone"]);
+    commit(&r, "gone");
+    write(&r, ".claude/s.sh", "b\n");
+    std::fs::remove_file(r.join(".claude/gone")).unwrap();
+    write(&r, "new", "something else\n");
+    assert_eq!(codes(&r), [" D .claude/gone", " M .claude/s.sh", "?? new"]);
+    run_all(&r, ops::stage_ops(&st(&r), &all(&r)));
+    assert_eq!(codes(&r), ["A  new", "D  .claude/gone", "M  .claude/s.sh"]);
+}
+
 #[test]
 fn unstaging_works_before_the_first_commit() {
     let sb = Sandbox::new();

@@ -1524,7 +1524,7 @@ fn stage_and_unstage_the_file_under_the_cursor() {
     let fx = app.on_key(key('s'));
     assert_eq!(
         job_ops(&fx),
-        [Op::Add {
+        [Op::AddTracked {
             paths: paths(&["README"])
         }]
     );
@@ -1575,11 +1575,17 @@ fn file_operations_apply_to_marked_files() {
     app.on_key(key(' '));
     app.act(Action::Top); // cursor away from both
     let fx = app.on_key(key('s'));
+    // tracked, then untracked
     assert_eq!(
         job_ops(&fx),
-        [Op::Add {
-            paths: paths(&["README", "new"])
-        }]
+        [
+            Op::AddTracked {
+                paths: paths(&["README"])
+            },
+            Op::Add {
+                paths: paths(&["new"])
+            }
+        ]
     );
 }
 
@@ -4024,7 +4030,7 @@ fn a_nested_repo_unfolds_into_its_own_details_and_acts_there() {
             assert_eq!(j[0].path, nested);
             assert_eq!(
                 j[0].op,
-                Op::Add {
+                Op::AddTracked {
                     paths: vec!["a".into()]
                 }
             );

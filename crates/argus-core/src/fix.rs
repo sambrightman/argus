@@ -805,6 +805,7 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
         | Op::Reset { .. }
         | Op::Amend { .. }
         | Op::Add { .. }
+        | Op::AddTracked { .. }
         | Op::Restore { .. }
         | Op::Remove { .. }
         | Op::Clean { .. }

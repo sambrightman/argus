@@ -99,8 +99,14 @@ pub enum Op {
         url: String,
         dest: PathBuf,
     },
-    /// `git add`: stage files (deletions too).
+    /// `git add`: stage untracked files.
     Add {
+        paths: Vec<String>,
+    },
+    /// `git add -u`: stage tracked files' changes, deletions too. Plain
+    /// `add` stages one under a gitignored directory but fails, refusing
+    /// the ignored path.
+    AddTracked {
         paths: Vec<String>,
     },
     /// `git restore`: from the index, or HEAD with `from_head`.
@@ -246,6 +252,7 @@ impl Op {
                 ]
             }
             Op::Add { paths } => with_paths(v(&["add"]), paths),
+            Op::AddTracked { paths } => with_paths(v(&["add", "--update"]), paths),
             Op::Restore {
                 staged,
                 worktree,
@@ -338,7 +345,7 @@ impl Op {
             Op::CommitAll { .. } => "commit".into(),
             Op::FastForward { branch, .. } => format!("fast-forward {branch}"),
             Op::Clone { .. } => "clone".into(),
-            Op::Add { paths } => format!("stage {}", files(paths)),
+            Op::Add { paths } | Op::AddTracked { paths } => format!("stage {}", files(paths)),
             Op::Restore {
                 worktree: false,
                 paths,
@@ -411,13 +418,23 @@ fn codes<'a>(
         .filter_map(|f| s.changes.entry(f).map(|c| (f, c.index)))
 }
 
-/// Stage `files` (changes, new files and deletions).
+/// Stage `files` (changes, new files and deletions): tracked ones, then
+/// untracked ones.
 pub fn stage_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
-    let paths: Vec<String> = codes(s, files).map(|(f, _)| f.clone()).collect();
-    if paths.is_empty() {
-        return vec![];
+    let (untracked, tracked): (Vec<_>, Vec<_>) = codes(s, files).partition(|(_, c)| *c == '?');
+    let paths = |v: Vec<(&String, char)>| v.into_iter().map(|(f, _)| f.clone()).collect();
+    let mut ops = vec![];
+    if !tracked.is_empty() {
+        ops.push(Op::AddTracked {
+            paths: paths(tracked),
+        });
     }
-    vec![Op::Add { paths }]
+    if !untracked.is_empty() {
+        ops.push(Op::Add {
+            paths: paths(untracked),
+        });
+    }
+    ops
 }
 
 /// Unstage `files`, keeping the work tree: `git restore --staged` for files
