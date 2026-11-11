@@ -1,7 +1,7 @@
 name: Release
 
 # A tag `v1.2.3` (matching the version in Cargo.toml) builds argus for
-# macOS and Linux, publishes a GitHub release with the archives and their
+# Apple silicon macOS and Linux, publishes a GitHub release with the archives and their
 # SHA-256 sums, and publishes the crates to crates.io. Run by hand, it
 # builds and packages everything but publishes nothing.
 on:
@@ -20,9 +20,8 @@ jobs:
     strategy:
       matrix:
         include:
+          # Apple silicon only: Intel Macs can `cargo install argus-git`
           - target: aarch64-apple-darwin
-            os: macos-latest
-          - target: x86_64-apple-darwin
             os: macos-latest
           # musl: static, so they run on any distribution
           - target: x86_64-unknown-linux-musl
