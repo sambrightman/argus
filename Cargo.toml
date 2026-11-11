@@ -13,9 +13,10 @@ rust-version = "1.90"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
-# Release builds (release.yml): smaller and faster, slower to build.
+# Release builds (release.yml): faster, slower to build. Symbols are kept
+# (only debug info is stripped, as in any release build), so a panic's
+# backtrace names functions.
 [profile.dist]
 inherits = "release"
 lto = "thin"
 codegen-units = 1
-strip = true
