@@ -629,6 +629,14 @@ with `Swatinem/rust-cache`, and mold as the Linux linker.
   are any, or if a shard failed (which would leave the intersection
   incomplete). The first full run (Linux only, 2026-11-11): 1,842 caught,
   380 missed, 254 unviable.
+* `bench.yml`, on every push to main: the criterion benchmarks, prebuilt
+  into an image (`.github/bench`, with git for the fixtures), run on
+  Bencher's bare-metal `intel-v1` runners, which are dedicated, so runs
+  are comparable, and tracked per commit with a t-test threshold that
+  fails the job on a regression. The free plan stops a job at 5 minutes,
+  so the run uses 1 s of warm-up and 3 s of measurement per benchmark
+  (the whole suite takes about 4 minutes locally at criterion's defaults).
+  Skipped until the `BENCHER_API_KEY` secret exists.
 * Dependabot groups cargo and action updates weekly, major versions
   included, which covers what cargo-outdated would report. It waits two
   weeks after a release before proposing it (`cooldown`); security

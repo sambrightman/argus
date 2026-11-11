@@ -1,0 +1,77 @@
+name: Benchmarks
+
+# The criterion benchmarks on Bencher's bare-metal runners (intel-v1:
+# dedicated hardware, so runs are comparable), tracked per commit on main.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # The project-scoped API key's registry username is the project slug.
+  BENCHER_PROJECT: argus
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    # Until the BENCHER_API_KEY secret exists, every step is skipped.
+    env:
+      BENCHER_API_KEY: ${{ secrets.BENCHER_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.BENCHER_API_KEY != ''
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        if: env.BENCHER_API_KEY != ''
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: env.BENCHER_API_KEY != ''
+      - name: Build the benchmarks
+        if: env.BENCHER_API_KEY != ''
+        run: |
+          mkdir -p .github/bench/bin
+          cargo bench --workspace --locked --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.kind == ["bench"]) | .executable' \
+            | while read -r exe; do
+                cp "$exe" ".github/bench/bin/bin-$(basename "${exe%-*}")"
+              done
+          ls -l .github/bench/bin
+      - name: Push the image
+        if: env.BENCHER_API_KEY != ''
+        run: |
+          image="registry.bencher.dev/$BENCHER_PROJECT:$GITHUB_SHA"
+          docker build --platform linux/amd64 -t "$image" .github/bench
+          echo "$BENCHER_API_KEY" | docker login registry.bencher.dev -u "$BENCHER_PROJECT" --password-stdin
+          docker push "$image"
+      - uses: bencherdev/bencher@7de3c69a85380826613050826b4bce062be2f07d # v0.6.16
+        if: env.BENCHER_API_KEY != ''
+      - name: Run on bare metal and track
+        if: env.BENCHER_API_KEY != ''
+        run: |
+          bencher run \
+            --project "$BENCHER_PROJECT" \
+            --image "$BENCHER_PROJECT:$GITHUB_SHA" \
+            --spec intel-v1 \
+            --testbed intel-v1 \
+            --branch "$GITHUB_REF_NAME" \
+            --hash "$GITHUB_SHA" \
+            --job-timeout 300 \
+            --adapter rust_criterion \
+            --threshold-measure latency \
+            --threshold-test t_test \
+            --threshold-max-sample-size 64 \
+            --threshold-upper-boundary 0.99 \
+            --thresholds-reset \
+            --error-on-alert \
+            --github-actions "${{ secrets.GITHUB_TOKEN }}"
