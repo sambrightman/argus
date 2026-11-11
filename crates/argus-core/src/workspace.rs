@@ -442,6 +442,19 @@ impl Workspace {
         self.index_of(path).map(|i| &self.entries[i])
     }
 
+    /// `path`, then its parent, grandparent…: what a change in a submodule
+    /// or worktree may change the status of.
+    pub fn with_parents(&self, path: &Path) -> Vec<PathBuf> {
+        let mut v = vec![path.to_path_buf()];
+        while let Some(p) = self.get(&v[v.len() - 1]).and_then(|e| e.parent.clone()) {
+            if v.contains(&p) {
+                break;
+            }
+            v.push(p);
+        }
+        v
+    }
+
     /// Worktrees and submodules living outside the roots (or not walked into)
     /// are learnt from their main repo's status.
     fn add_children(&mut self) {

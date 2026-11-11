@@ -3920,3 +3920,62 @@ fn when_the_diff_line_under_the_cursor_goes_the_cursor_falls_back_to_its_file() 
         r => panic!("{r:?}"),
     }
 }
+
+/// An action in a submodule or worktree changes its parent's status too
+/// (the submodule's commit, the shared branches): parents are refreshed with it.
+#[test]
+fn a_childs_parents_are_refreshed_with_it() {
+    let (sb, mut app) = setup("");
+    let [clean, dirty, feature] =
+        ["clean", "dirty", "feature"].map(|n| sb.path(&format!("dev/{n}")));
+    // feature inside dirty inside clean, as nested submodules are
+    for e in &mut app.ws.entries {
+        e.parent = match e.path.file_name().unwrap().to_str().unwrap() {
+            "dirty" => Some(clean.clone()),
+            "feature" => Some(dirty.clone()),
+            _ => None,
+        };
+    }
+    let finished = |path: &std::path::PathBuf| Msg::JobFinished {
+        path: path.clone(),
+        label: "fetch".into(),
+        op: Op::Fetch,
+        outcome: argus_core::ops::OpOutcome {
+            success: true,
+            code: Some(0),
+            output: String::new(),
+            duration: Default::default(),
+        },
+    };
+    assert_eq!(
+        app.on_msg(finished(&feature)),
+        [Effect::Refresh(vec![
+            feature.clone(),
+            dirty.clone(),
+            clean.clone()
+        ])]
+    );
+    assert_eq!(
+        app.on_msg(Msg::FixDone {
+            path: dirty.clone(),
+            applied: Ok(None),
+        }),
+        [Effect::Refresh(vec![dirty.clone(), clean.clone()])]
+    );
+    // inverse: a repo with no parent refreshes alone
+    assert_eq!(
+        app.on_msg(finished(&clean)),
+        [Effect::Refresh(vec![clean.clone()])]
+    );
+    // back from a shell or git UI in the repo
+    let current = app.current().unwrap().path.clone();
+    let expect = match current.file_name().unwrap().to_str().unwrap() {
+        "feature" => vec![feature.clone(), dirty.clone(), clean.clone()],
+        "dirty" => vec![dirty.clone(), clean.clone()],
+        _ => vec![clean.clone()],
+    };
+    assert_eq!(
+        app.on_msg(Msg::Suspended(Ok(()))),
+        [Effect::Refresh(expect)]
+    );
+}

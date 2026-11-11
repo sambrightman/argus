@@ -2691,7 +2691,7 @@ impl App {
                 if self.running.is_empty() && self.message.as_ref().is_none_or(|m| !m.1) {
                     self.info("done");
                 }
-                return vec![Effect::Refresh(vec![path])];
+                return vec![Effect::Refresh(self.ws.with_parents(&path))];
             }
             Msg::FixDone { path, applied } => {
                 self.running.remove(&path);
@@ -2723,7 +2723,7 @@ impl App {
                     let what = std::mem::take(&mut self.auto_fixes.1);
                     self.info(format!("{what}: done"));
                 }
-                return vec![Effect::Refresh(vec![path])];
+                return vec![Effect::Refresh(self.ws.with_parents(&path))];
             }
             Msg::PullPlanned {
                 tracks,
@@ -2765,7 +2765,7 @@ impl App {
                     self.error(e);
                 }
                 if let Some(p) = self.current_path() {
-                    return vec![Effect::Refresh(vec![p])];
+                    return vec![Effect::Refresh(self.ws.with_parents(&p))];
                 }
             }
         }

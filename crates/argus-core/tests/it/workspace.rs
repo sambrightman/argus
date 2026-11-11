@@ -191,6 +191,15 @@ fn worktrees_and_submodules_become_children() {
         .map(|&i| w.entries[i].display_name())
         .collect();
     assert_eq!(names, vec!["app-wt", "lib"]);
+    // what a change in a child may change the status of
+    let lib = app.join("lib");
+    assert_eq!(w.with_parents(&lib), [lib.clone(), app.clone()]);
+    assert_eq!(w.with_parents(&app), std::slice::from_ref(&app));
+    // a loop of parents, should one ever be recorded, is cut
+    let mut w = w;
+    let i = w.index_of(&app).unwrap();
+    w.entries[i].parent = Some(lib.clone());
+    assert_eq!(w.with_parents(&lib), [lib, app]);
 }
 
 #[test]
