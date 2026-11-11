@@ -1,17 +1,24 @@
 [package]
-name = "argus-forge"
+name = "argus-git-forge"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Internal crate of argus-git (forge listings: GitHub, directories); no stability guarantees."
+
+# The name the code uses (the package name was taken on crates.io).
+[lib]
+name = "argus_forge"
 
 [dependencies]
-argus-core = { version = "0.1.0", path = "../argus-core" }
+argus-git-core = { version = "0.1.0", path = "../argus-core" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 ureq = { version = "3.5.1", features = ["json"] }
 
 [dev-dependencies]
-argus-core = { path = "../argus-core", features = ["testkit"] }
+argus-git-core = { path = "../argus-core", features = ["testkit"] }
 
 [lints]
 workspace = true

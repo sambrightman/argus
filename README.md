@@ -24,7 +24,7 @@ language choice and architecture.
 ## Install
 
 ```sh
-cargo install --path crates/argus-cli
+cargo install argus-git          # the `argus` command (or --path crates/argus-cli)
 cd ~/dev && argus     # TUI over the current directory
 argus root add ~/dev ~/work   # save roots; then `argus` works from anywhere
 ```
@@ -384,7 +384,7 @@ warn (no upstream, unpushed branches) go when their issue is ignored.
 ```sh
 cargo nextest run --workspace     # the tests (~310; real git repos in temp dirs)
 cargo clippy --workspace --all-targets
-cargo run -p argus-tui --example snapshot -- ~/dev 'jj\t'   # render a frame as text
+cargo run -p argus-git-tui --example snapshot -- ~/dev 'jj\t'   # render a frame as text
 
 # after a sizeable batch of work: mutation-test what changed
 cargo mutants --in-diff <(git diff <base>) --baseline=skip
@@ -396,8 +396,8 @@ ARGUS_RANDOM_TREES=5000 cargo nextest run --workspace       # more random trees 
 cargo deny check                  # advisories, licences, duplicate versions, sources
 cargo machete                     # unused dependencies
 cargo outdated --workspace --root-deps-only
-cargo bench -p argus-core -- --save-baseline before         # criterion; after a change:
-cargo bench -p argus-core -- --baseline before              # compare (likewise -p argus-tui)
+cargo bench -p argus-git-core -- --save-baseline before    # criterion; after a change:
+cargo bench -p argus-git-core -- --baseline before          # compare (likewise -p argus-git-tui)
 scripts/bench-cli.sh              # hyperfine: whole commands on 200 generated repos (--help)
 ```
 

@@ -122,13 +122,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "argus"
+name = "argus-git"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "argus-core",
- "argus-forge",
- "argus-tui",
+ "argus-git-core",
+ "argus-git-forge",
+ "argus-git-tui",
  "assert_cmd",
  "clap",
  "clap_complete",
@@ -140,10 +140,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "argus-core"
+name = "argus-git-core"
 version = "0.1.0"
 dependencies = [
- "argus-core",
+ "argus-git-core",
  "criterion",
  "gix",
  "globset",
@@ -162,20 +162,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "argus-forge"
+name = "argus-git-forge"
 version = "0.1.0"
 dependencies = [
- "argus-core",
+ "argus-git-core",
  "serde",
  "serde_json",
  "ureq",
 ]
 
 [[package]]
-name = "argus-tui"
+name = "argus-git-tui"
 version = "0.1.0"
 dependencies = [
- "argus-core",
+ "argus-git-core",
  "criterion",
  "crossbeam-channel",
  "crossterm",

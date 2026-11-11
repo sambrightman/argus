@@ -1,14 +1,24 @@
 [package]
-name = "argus"
+name = "argus-git"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "See which of your many git clones need attention, clean them up, and keep them (and whole GitHub orgs) up to date. TUI first, CLI for scripts and cron. Installs the `argus` command."
+readme = "../../README.md"
+keywords = ["git", "tui", "cli", "repositories", "github"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "argus"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.104"
-argus-core = { version = "0.1.0", path = "../argus-core", features = ["demo"] }
-argus-forge = { version = "0.1.0", path = "../argus-forge" }
-argus-tui = { version = "0.1.0", path = "../argus-tui" }
+argus-git-core = { version = "0.1.0", path = "../argus-core", features = ["demo"] }
+argus-git-forge = { version = "0.1.0", path = "../argus-forge" }
+argus-git-tui = { version = "0.1.0", path = "../argus-tui" }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 clap_complete = { version = "4.6.11", features = ["unstable-dynamic"] }
 jiff = "0.2.39"
@@ -17,7 +27,7 @@ serde_json = "1.0.154"
 unicode-width = "0.2.3"
 
 [dev-dependencies]
-argus-core = { path = "../argus-core", features = ["testkit"] }
+argus-git-core = { path = "../argus-core", features = ["testkit"] }
 assert_cmd = "2.2.2"
 predicates = "3.1.4"
 

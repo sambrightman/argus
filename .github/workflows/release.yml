@@ -1,9 +1,9 @@
 name: Release
 
 # A tag `v1.2.3` (matching the version in Cargo.toml) builds argus for
-# macOS and Linux and publishes a GitHub release with the archives and
-# their SHA-256 sums. Run by hand, it builds everything but publishes
-# nothing, to check the builds.
+# macOS and Linux, publishes a GitHub release with the archives and their
+# SHA-256 sums, and publishes the crates to crates.io. Run by hand, it
+# builds and packages everything but publishes nothing.
 on:
   push:
     tags: ["v*"]
@@ -43,10 +43,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           version=$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[] | select(.name == "argus") | .version')
+            | jq -r '.packages[] | select(.name == "argus-git") | .version')
           test "${GITHUB_REF_NAME#v}" = "$version" \
             || { echo "tag $GITHUB_REF_NAME, but Cargo.toml says $version"; exit 1; }
-      - run: cargo build --locked --profile dist --package argus --target ${{ matrix.target }}
+      - run: cargo build --locked --profile dist --package argus-git --target ${{ matrix.target }}
       - name: Package
         run: |
           name="argus-${GITHUB_REF_NAME}-${{ matrix.target }}"
@@ -79,3 +79,39 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "argus $GITHUB_REF_NAME" --generate-notes
+
+  # crates.io by trusted publishing (a short-lived token; no secret), which
+  # each crate allows once it exists: its first version is published by
+  # hand. Crates already there at this version are skipped, so that first
+  # tag, or a re-run after a partial failure, goes through.
+  crates-io:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: cargo publish --workspace --locked --dry-run
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        if: startsWith(github.ref, 'refs/tags/')
+        id: auth
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          # dependencies first
+          for p in argus-git-core argus-git-forge argus-git-tui argus-git; do
+            if curl -sf -A "argus-git release (github.com/$GITHUB_REPOSITORY)" \
+                "https://crates.io/api/v1/crates/$p/$version" >/dev/null; then
+              echo "$p $version is already on crates.io"
+            else
+              cargo publish --locked --package "$p"
+            fi
+          done

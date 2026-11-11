@@ -55,10 +55,10 @@ export_args() {
 # example's.
 build_here() {
     if [[ ${1:-} == example ]]; then
-        cargo build --release --quiet -p argus-core --example discover --manifest-path "$here/Cargo.toml"
+        cargo build --release --quiet --example discover --manifest-path "$here/crates/argus-core/Cargo.toml"
         echo "$here/target/release/examples/discover"
     else
-        cargo build --release --quiet -p argus --manifest-path "$here/Cargo.toml"
+        cargo build --release --quiet --manifest-path "$here/crates/argus-cli/Cargo.toml"
         echo "$here/target/release/argus"
     fi
 }
@@ -79,11 +79,11 @@ build_rev() {
         echo "building $compare ($sha) ..." >&2
         if [[ ${1:-} == example ]]; then
             CARGO_TARGET_DIR=$bench/compare-target nice cargo build --release --quiet \
-                -p argus-core --example discover --manifest-path "$src/Cargo.toml" 2>/dev/null \
+                --example discover --manifest-path "$src/crates/argus-core/Cargo.toml" 2>/dev/null \
                 && cp "$bench/compare-target/release/examples/discover" "$out"
         else
             CARGO_TARGET_DIR=$bench/compare-target nice cargo build --release --quiet \
-                -p argus --manifest-path "$src/Cargo.toml" \
+                --manifest-path "$src/crates/argus-cli/Cargo.toml" \
                 && cp "$bench/compare-target/release/argus" "$out"
         fi
         rm -rf "$src"

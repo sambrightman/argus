@@ -69,6 +69,9 @@ crates/
   argus-tui    library: ratatui app (state machine separate from rendering, so it's testable).
   argus-cli    binary `argus`: clap subcommands (status, pull, fix, forge, tui). Default = TUI.
 ```
+On crates.io they're `argus-git` (the binary) and `argus-git-core`, `-tui`,
+`-forge` (`argus`, `argus-core` and `argus-tui` were taken); the libraries
+keep their names in code (`argus_core`…) through `[lib] name`.
 A future `argus-server` (axum + JSON) would depend on core + forge only.
 
 **VCS abstraction.** Status is a plain data model (`RepoStatus`) produced by
@@ -562,7 +565,7 @@ rendering is snapshot-tested via `TestBackend`.
     truncation reports through the link are dropped.
   On a synthetic tree (15,789 directories, 2,000 repos, 91 links: aliases,
   chains, loops) with name skips, `-L` went from 161 ms to 40 ms, against
-  35 ms without `-L` (`cargo run --release -p argus-core --example
+  35 ms without `-L` (`cargo run --release -p argus-git-core --example
   discover`).
 * **Symlinks** are not followed unless asked (`-L`, `follow_symlinks`).
   When followed, cycles are cut by remembering the real directory at each

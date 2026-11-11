@@ -1,8 +1,15 @@
 [package]
-name = "argus-core"
+name = "argus-git-core"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Internal crate of argus-git (discovery, status, fixes, config); no stability guarantees."
+
+# The name the code uses (the package name was taken on crates.io).
+[lib]
+name = "argus_core"
 
 [dependencies]
 tempfile = { version = "3.27.0", optional = true }
@@ -18,7 +25,7 @@ toml_edit = "0.25.18"
 serde_json = "1.0.154"
 
 [dev-dependencies]
-argus-core = { path = ".", features = ["testkit", "demo"] }
+argus-git-core = { path = ".", features = ["testkit", "demo"] }
 criterion = "0.8.2"
 pretty_assertions = "1.4.1"
 proptest = "1.12.0"
