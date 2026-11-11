@@ -117,7 +117,12 @@ fn styled(r: Role, s: impl Into<String>) -> (Option<Role>, String) {
 }
 
 pub(crate) fn ago(t: jiff::Timestamp) -> String {
-    let secs = (jiff::Timestamp::now() - t).get_seconds().max(0);
+    ago_since(t, jiff::Timestamp::now())
+}
+
+/// How long before `now` `t` was, in the largest unit that reads well.
+fn ago_since(t: jiff::Timestamp, now: jiff::Timestamp) -> String {
+    let secs = (now - t).get_seconds().max(0);
     match secs {
         s if s < 90 => format!("{s}s ago"),
         s if s < 90 * 60 => format!("{}m ago", s / 60),
@@ -453,6 +458,25 @@ mod tests {
     use super::*;
     use crate::app::Action;
     use crate::menu::MenuId;
+
+    #[test]
+    fn ago_switches_unit_at_one_and_a_half_of_each() {
+        let now = jiff::Timestamp::from_second(1_000_000_000).unwrap();
+        let ago = |secs: i64| ago_since(now - jiff::SignedDuration::from_secs(secs), now);
+        for (secs, want) in [
+            (0, "0s ago"),
+            (89, "89s ago"),
+            (90, "1m ago"),
+            (90 * 60 - 1, "89m ago"),
+            (90 * 60, "1h ago"),
+            (36 * 3600 - 1, "35h ago"),
+            (36 * 3600, "1d ago"),
+            (10 * 86_400, "10d ago"),
+            (-5, "0s ago"),
+        ] {
+            assert_eq!(ago(secs), want, "{secs}");
+        }
+    }
 
     #[test]
     fn manual_fix_keys_lead_to_their_actions() {

@@ -103,11 +103,11 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
 
     let height = body.height as usize;
     app.page = height.saturating_sub(2).max(1);
-    if app.cursor < app.scroll {
-        app.scroll = app.cursor;
-    } else if app.cursor >= app.scroll + height {
-        app.scroll = app.cursor + 1 - height;
-    }
+    // keep the cursor's row in view, moving as little as possible
+    app.scroll = app
+        .scroll
+        .min(app.cursor)
+        .max((app.cursor + 1).saturating_sub(height));
     app.scroll = app
         .scroll
         .min(app.rows.len().saturating_sub(height.min(app.rows.len())));
@@ -205,13 +205,8 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
         if selected {
             line = line.patch_style(t.ui(Ui::Selection));
             // extend the selection bar to the full width
-            let w = line.width();
-            if w < body.width as usize {
-                line.push_span(Span::styled(
-                    " ".repeat(body.width as usize - w),
-                    t.ui(Ui::Selection),
-                ));
-            }
+            let pad = (body.width as usize).saturating_sub(line.width());
+            line.push_span(Span::styled(" ".repeat(pad), t.ui(Ui::Selection)));
         }
         lines.push(line);
     }

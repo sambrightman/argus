@@ -3248,3 +3248,463 @@ fn all_leaves_issues_already_ignored_another_way() {
         ["github.com/acme/feature"]
     );
 }
+
+#[test]
+fn branch_lines_show_upstream_state_merged_and_unpushed_work() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let c = sb.path("dev/clean");
+        git(&c, &["switch", "-q", "-c", "gone"]);
+        git(&c, &["push", "-q", "-u", "origin", "gone"]);
+        git(&c, &["push", "-q", "origin", "--delete", "gone"]);
+        git(&c, &["switch", "-q", "main"]);
+        git(&c, &["branch", "merged"]);
+        // on the remote, just not as its upstream: nothing unpushed
+        git(&c, &["branch", "--no-track", "elsewhere", "origin/main"]);
+        git(&c, &["branch", "--track", "behind", "origin/main"]);
+        commit(&c, "two");
+        git(&c, &["push", "-q", "origin", "main"]);
+        git(
+            &c,
+            &["switch", "-q", "-c", "ahead", "--track", "origin/main"],
+        );
+        commit(&c, "three");
+        git(&c, &["switch", "-q", "-c", "local", "main"]);
+        commit(&c, "four");
+        git(&c, &["switch", "-q", "main"]);
+        git(&c, &["fetch", "-q", "--prune"]);
+    });
+    use argus_core::badges::Role::*;
+    cursor_on_detail(&mut app, "clean", "branches");
+    let branch = |name: &str| {
+        app.rows[app.cursor..]
+            .iter()
+            .find_map(|r| match r {
+                Row::Detail { line, .. } if line.parts.get(1).is_some_and(|p| p.1 == name) => {
+                    Some(line.clone())
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let parts = |name: &str| branch(name).parts[2..].to_vec();
+    let s = |r, t: &str| (Some(r), t.to_string());
+    assert_eq!(branch("main").parts[1], s(DefaultBranch, "main"));
+    assert_eq!(
+        parts("main"),
+        [s(Dim, "  origin/main")],
+        "not merged into itself"
+    );
+    assert_eq!(parts("ahead"), [s(Dim, "  origin/main"), s(Ahead, " ↑1")]);
+    assert_eq!(
+        parts("behind"),
+        [
+            s(Dim, "  origin/main"),
+            s(Behind, " ↓1"),
+            s(Dim, "  merged")
+        ]
+    );
+    assert_eq!(
+        parts("gone"),
+        [s(Warning, "  origin/gone gone"), s(Dim, "  merged")]
+    );
+    assert_eq!(
+        parts("merged"),
+        [s(Dim, "  (no upstream)"), s(Dim, "  merged")]
+    );
+    assert_eq!(
+        parts("elsewhere"),
+        [s(Dim, "  (no upstream)"), s(Dim, "  merged")]
+    );
+    assert_eq!(
+        parts("local"),
+        [s(Dim, "  (no upstream)"), s(Dim, "  1 on no remote")]
+    );
+    // the commits on no remote unfold from the branch, and only there
+    for (name, unfolds) in [
+        ("ahead", true),
+        ("local", true),
+        ("elsewhere", false),
+        ("main", false),
+    ] {
+        assert_eq!(branch(name).expand.is_some(), unfolds, "{name}");
+    }
+}
+
+#[test]
+fn detail_lines_carry_their_issue_fix_and_unfolding() {
+    use argus_core::attention::Issue;
+    let (_sb, mut app) = setup_with("[ignore]\nbehind = ['acme/clean']", |sb| {
+        let seed = sb.path("seed/acme/clean");
+        commit(&seed, "upstream");
+        let bare = sb.path("forge/acme/clean.git");
+        git(&seed, &["push", "-q", bare.to_str().unwrap(), "main"]);
+        git(&sb.path("dev/clean"), &["fetch", "-q"]);
+    });
+    let line = |app: &App, text: &str| {
+        app.rows
+            .iter()
+            .find_map(|r| match r {
+                Row::Detail { line, .. }
+                    if line
+                        .parts
+                        .iter()
+                        .map(|p| p.1.as_str())
+                        .collect::<String>()
+                        .starts_with(text) =>
+                {
+                    Some(line.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {text:?}: {:?}", detail_texts(app)))
+    };
+    cursor_on_detail(&mut app, "clean", "issue");
+    let behind = line(&app, "issue     1 commit(s) behind");
+    assert!(behind.ignored, "{:?}", behind.parts);
+    assert_eq!(behind.issue, Some(Issue::Behind(1)));
+    assert!(behind.expand.is_some(), "its commits unfold");
+    let activity = line(&app, "activity  ");
+    let text: String = activity.parts.iter().map(|p| p.1.as_str()).collect();
+    assert!(
+        text.starts_with("activity  commit ") && text.contains("s ago"),
+        "{text}"
+    );
+    assert!(
+        !detail_texts(&app).iter().any(|t| t.starts_with("flags")),
+        "no flags, no line"
+    );
+    app.act(Action::ToggleFavourite);
+    cursor_on_detail(&mut app, "clean", "flags");
+    assert_eq!(
+        detail_texts(&app)
+            .iter()
+            .find(|t| t.starts_with("flags"))
+            .unwrap(),
+        "flags     favourite"
+    );
+
+    cursor_on_detail(&mut app, "dirty", "issue");
+    let dirty = line(&app, "issue     ");
+    assert_eq!(dirty.issue, Some(Issue::Dirty(1)));
+    assert!(!dirty.ignored);
+    let stash = line(&app, "fix       stash");
+    assert_eq!(stash.fix, Some(argus_core::fix::FixKind::Stash));
+}
+
+#[test]
+fn change_lines_are_coloured_by_state_and_the_rest_counted() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let c = sb.path("dev/clean");
+        write(&c, "t.txt", "t\n");
+        commit(&c, "t");
+        git(&c, &["switch", "-q", "-c", "other"]);
+        write(&c, "README", "other\n");
+        commit(&c, "other");
+        git(&c, &["switch", "-q", "main"]);
+        write(&c, "README", "main\n");
+        commit(&c, "main");
+        assert!(!argus_core::testkit::git_may_fail(&c, &["merge", "other"]));
+        write(&c, "s.txt", "s\n");
+        git(&c, &["add", "s.txt"]);
+        write(&c, "t.txt", "changed\n");
+        write(&c, "u.txt", "u\n");
+    });
+    use argus_core::badges::Role::*;
+    cursor_on_detail(&mut app, "clean", "changes");
+    let role = |code: &str, path: &str| {
+        app.rows
+            .iter()
+            .find_map(|r| match r {
+                Row::Detail { line, .. } if line.file.as_deref() == Some(path) => {
+                    Some(line.parts[1].clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {path}"))
+            == (Some(code_role(code)), code.to_string())
+    };
+    fn code_role(code: &str) -> argus_core::badges::Role {
+        match code {
+            "UU" => Conflict,
+            "??" => Untracked,
+            "A " => Staged,
+            _ => Unstaged,
+        }
+    }
+    for (code, path) in [
+        ("UU", "README"),
+        ("A ", "s.txt"),
+        (" M", "t.txt"),
+        ("??", "u.txt"),
+    ] {
+        assert!(role(code, path), "{code} {path}: {:?}", detail_texts(&app));
+    }
+
+    // the dirty repo: 25 changed paths fit, a 26th is counted
+    let d = sb.path("dev/dirty");
+    for n in 1..25 {
+        write(&d, &format!("new{n:02}.txt"), "x\n");
+    }
+    let more = |app: &mut App| {
+        app.ws.refresh(&d);
+        app.rebuild();
+        cursor_on_detail(app, "dirty", "changes");
+        detail_texts(app)
+            .into_iter()
+            .find(|t| t.trim_start().starts_with('…'))
+    };
+    assert_eq!(more(&mut app), None, "25 shown");
+    write(&d, "new25.txt", "x\n");
+    assert_eq!(more(&mut app).as_deref(), Some("    … 1 more"));
+}
+
+/// The terminal after drawing `app` (mono theme, Unicode icons), for
+/// styles and the cursor.
+fn draw(app: &mut App, w: u16, h: u16) -> Terminal<TestBackend> {
+    let (theme, _) = Theme::build("mono", &Default::default());
+    let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+    let view = ui::View {
+        theme: &theme,
+        icons: argus_core::icons::UNICODE,
+        tick: 0,
+    };
+    t.draw(|f| ui::draw(f, app, &view)).unwrap();
+    t
+}
+
+#[test]
+fn truncation_keeps_what_fits_with_an_ellipsis() {
+    for (s, w, want) in [
+        ("abcd", 4, "abcd"),
+        ("abcdef", 4, "abc…"),
+        ("日本語", 6, "日本語"),
+        ("日本語", 5, "日本…"),
+        ("日本語", 4, "日…"),
+        ("abc", 1, "…"),
+    ] {
+        assert_eq!(ui::truncate(s, w), want, "{s} in {w}");
+    }
+}
+
+#[test]
+fn repo_columns_line_up_and_nested_names_are_indented_with_their_icon() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let c = sb.path("dev/clean");
+        let wt = sb.path("dev/clean-worktree-x");
+        git(&c, &["worktree", "add", "-q", wt.to_str().unwrap()]);
+        let bare = sb.path("forge/acme/feature.git");
+        git(
+            &c,
+            &["submodule", "add", "-q", bare.to_str().unwrap(), "sub"],
+        );
+        commit(&c, "sub");
+        // a second badge on dirty: work on no remote, beside the change
+        let d = sb.path("dev/dirty");
+        write(&d, "a.txt", "a\n");
+        git(&d, &["add", "a.txt"]);
+        git(&d, &["commit", "-q", "-m", "a"]);
+    });
+    app.act(Action::Bottom);
+    app.act(Action::ToggleFavourite);
+    app.act(Action::Top);
+    let screen = render(&mut app, 100, 24);
+    let row = |name: &str| {
+        screen
+            .lines()
+            .find(|l| l.split_whitespace().any(|w| w == name))
+            .unwrap_or_else(|| panic!("no {name}:\n{screen}"))
+            .to_string()
+    };
+    // the widest name sets the column, with one space after it
+    let wt = row("clean-worktree-x");
+    assert!(
+        wt.contains("├ clean-worktree-x clean-worktree-x"),
+        "{screen}"
+    );
+    assert!(row("sub").contains("§ sub "), "{}", row("sub"));
+    let branch_col = |name: &str, branch: &str| {
+        let l = row(name);
+        let after = l.find(name).unwrap() + name.len();
+        l[..after + l[after..].find(branch).unwrap()]
+            .chars()
+            .count()
+    };
+    let col = branch_col("acme/dirty", "main");
+    assert_eq!(branch_col("acme/feature", "feat"), col, "{screen}");
+    assert_eq!(branch_col("acme/clean", "main"), col);
+    assert_eq!(branch_col("clean-worktree-x", "clean-worktree-x"), col);
+    assert_eq!(branch_col("sub", "main"), col);
+    let name_col = |name: &str| {
+        let l = row(name);
+        l[..l.find(name).unwrap()].chars().count()
+    };
+    assert_eq!(
+        name_col("acme/clean"),
+        name_col("acme/dirty"),
+        "a flag keeps its column's width:\n{screen}"
+    );
+    assert!(row("acme/dirty").contains("↑1 ±1"), "{}", row("acme/dirty"));
+    let dirty = row("acme/dirty");
+    assert_eq!(
+        dirty[..dirty.find('↑').unwrap()].chars().count(),
+        col + "clean-worktree-x".len() + 1,
+        "badges one space after the widest branch:\n{screen}"
+    );
+    // at most half the width: the widest name is cut
+    let narrow = render(&mut app, 30, 24);
+    assert!(narrow.contains("clean-work…"), "{narrow}");
+}
+
+#[test]
+fn the_selection_bar_spans_the_width_and_the_cursor_stays_in_view() {
+    let (_sb, mut app) = setup("");
+    app.act(Action::ExpandAll);
+    let (w, h) = (60, 10);
+    let t = draw(&mut app, w, h);
+    let reversed = |y: u16| {
+        t.backend().buffer()[(w - 1, y)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    };
+    assert!(reversed(1), "the cursor's row, to the last column");
+    assert!(!reversed(2));
+    // one page down, more rows below: the cursor's row is the last shown
+    let body = app.page + 2;
+    app.cursor = 2 * body;
+    assert!(app.rows.len() > app.cursor + body, "enough rows below");
+    draw(&mut app, w, h);
+    assert_eq!(app.scroll, app.cursor + 1 - body);
+    app.act(Action::Bottom);
+    let t = draw(&mut app, w, h);
+    assert_eq!(
+        app.scroll,
+        app.cursor + 1 - body,
+        "the cursor on the last row"
+    );
+    let last = (1 + app.cursor - app.scroll) as u16;
+    assert!(
+        t.backend().buffer()[(w - 1, last)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
+}
+
+#[test]
+fn the_widest_top_level_name_sets_the_column_and_a_repo_without_a_branch_keeps_it() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        // unreadable: no branch badge, only an error
+        let b = sb.path("dev/broken");
+        std::fs::create_dir_all(&b).unwrap();
+        git(&b, &["init", "-q"]);
+        std::fs::write(b.join(".git/HEAD"), "nonsense\n").unwrap();
+    });
+    let screen = render(&mut app, 80, 12);
+    let (_plain_sb, mut plain) = setup("");
+    let plain_screen = render(&mut plain, 80, 12);
+    assert!(
+        plain_screen.contains("acme/feature   feat"),
+        "{plain_screen}"
+    );
+    let col = |text: &str, mark: &str| {
+        let l = screen.lines().find(|l| l.contains(text)).unwrap();
+        l[..l.find(mark).unwrap()].chars().count()
+    };
+    assert_eq!(col("acme/dirty", "±1"), col("!!", "!!"), "{screen}");
+}
+
+#[test]
+fn the_log_takes_a_third_and_shows_short_or_failed_output() {
+    let (_sb, mut app) = setup("");
+    app.show_log = true;
+    let entry = |label: &str, ok: bool, lines: usize| argus_tui::app::LogEntry {
+        at: jiff::Timestamp::now(),
+        repo: "acme/clean".into(),
+        label: label.into(),
+        ok,
+        output: (1..=lines).map(|n| format!("{label}-{n}\n")).collect(),
+    };
+    app.log = vec![
+        entry("short", true, 3),
+        entry("long", true, 4),
+        entry("failed", false, 4),
+    ];
+    let screen = render(&mut app, 80, 30);
+    for l in ["short-3", "failed-4"] {
+        assert!(screen.contains(l), "{l}:\n{screen}");
+    }
+    assert!(
+        !screen.contains("long-1"),
+        "succeeded, 4 lines: hidden\n{screen}"
+    );
+    let top = screen
+        .lines()
+        .position(|l| l.contains("process log"))
+        .unwrap();
+    assert_eq!(
+        30 - 1 - top,
+        10,
+        "a third of 30 rows, above the status line"
+    );
+}
+
+#[test]
+fn the_prompt_puts_the_cursor_after_the_text() {
+    let (_sb, mut app) = setup("");
+    app.on_key(key('z'));
+    app.on_key(key('m'));
+    for c in "ab".chars() {
+        app.on_key(key(c));
+    }
+    app.on_key(code(KeyCode::Left));
+    let mut t = draw(&mut app, 80, 10);
+    let screen: String = (0..80)
+        .map(|x| t.backend().buffer()[(x, 9)].symbol().to_string())
+        .collect();
+    let label = screen.find("ab").unwrap();
+    let pos = t.get_cursor_position().unwrap();
+    assert_eq!((pos.x as usize, pos.y), (label + 1, 9), "{screen}");
+}
+
+#[test]
+fn a_menu_highlights_only_its_bar_and_fits_its_lines() {
+    let (_sb, mut app) = setup("");
+    app.on_key(key('v'));
+    app.on_key(code(KeyCode::Down));
+    let t = draw(&mut app, 80, 30);
+    let buf = t.backend().buffer().clone();
+    let row_of = |text: &str| {
+        (0..30u16)
+            .find(|&y| {
+                (0..80)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+                    .contains(text)
+            })
+            .unwrap()
+    };
+    let rev = |y: u16| {
+        (0..80).any(|x| {
+            buf[(x, y)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        })
+    };
+    assert!(rev(row_of("show ignored")), "the bar, on the second item");
+    assert!(!rev(row_of("show only")));
+    let (top, bottom) = (row_of("╭ View"), row_of("╰"));
+    let items = menu_items(&app).len() as u16;
+    assert_eq!(
+        bottom - top + 1,
+        items + 1 + 2,
+        "items, the footer and borders"
+    );
+}
+
+#[test]
+fn help_sits_inside_a_margin() {
+    let (_sb, mut app) = setup("");
+    app.on_key(key('?'));
+    let screen = render(&mut app, 80, 20);
+    let top = screen.lines().nth(1).unwrap();
+    assert!(top.starts_with("  ╭ keys"), "{top:?}");
+}
