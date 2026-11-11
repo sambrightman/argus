@@ -366,7 +366,7 @@ impl Op {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OpOutcome {
     pub success: bool,
     pub code: Option<i32>,
@@ -377,13 +377,10 @@ pub struct OpOutcome {
 }
 
 mod duration_ms {
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::Serializer;
     use std::time::Duration;
     pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_u64(d.as_millis() as u64)
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
-        Ok(Duration::from_millis(u64::deserialize(d)?))
     }
 }
 
@@ -822,10 +819,7 @@ fn undo_autostash_conflict(
     subs: &[(PathBuf, String)],
     conflicted: &str,
 ) -> String {
-    let files = match conflicted.lines().collect::<Vec<_>>().join(", ") {
-        f if f.is_empty() => "files".to_string(),
-        f => f,
-    };
+    let files = conflicted_files(conflicted);
     // each step only once the last succeeded; the stash back last
     let last = std::iter::once_with(|| git_in(cwd, &["reset", "-q", "--hard", head]))
         .chain(
@@ -846,6 +840,14 @@ fn undo_autostash_conflict(
              it failed: your changes are in stash@{{0}} (autostash):\n{}",
             last.output
         )
+    }
+}
+
+/// `git diff --name-only`'s lines as a list, or just "files".
+fn conflicted_files(names: &str) -> String {
+    match names.lines().collect::<Vec<_>>().join(", ") {
+        f if f.is_empty() => "files".to_string(),
+        f => f,
     }
 }
 
@@ -895,6 +897,21 @@ fn git(cwd: &Path, args: &[String], started: Instant) -> OpOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn labels_name_one_file_and_count_more() {
+        let add = |paths: &[&str]| Op::Add {
+            paths: paths.iter().map(|p| p.to_string()).collect(),
+        };
+        assert_eq!(add(&["a"]).label(), "stage a");
+        assert_eq!(add(&["a", "b"]).label(), "stage 2 files");
+    }
+
+    #[test]
+    fn conflicted_files_are_listed_or_just_files() {
+        assert_eq!(conflicted_files("a\nb/c\n"), "a, b/c");
+        assert_eq!(conflicted_files(""), "files");
+    }
 
     #[test]
     fn args_never_put_user_text_where_it_could_be_an_option() {

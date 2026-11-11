@@ -373,8 +373,8 @@ fn device(path: &Path) -> Option<u64> {
 
 fn visit<'s>(s: &rayon::Scope<'s>, dir: PathBuf, depth: usize, walk: Walk<'s>, links: Links) {
     let Walk { opts, sink, .. } = walk;
-    let real =
-        || (opts.follow_symlinks && opts.tuning.real_from_links).then(|| real_path(&dir, &links));
+    // without -L there are no links: the path itself, dropped unused
+    let real = || opts.tuning.real_from_links.then(|| real_path(&dir, &links));
     let mut kind = classify_dotgit(&dir);
     if let Some(kind) = kind
         && !opts.scan_inside_repos
@@ -432,6 +432,11 @@ fn list(dir: &Path) -> Vec<DirEntry> {
             })
         })
         .collect()
+}
+
+/// Whether `name` is a directory in `entries`, as the walk would enter it.
+fn lists_dir(entries: &[DirEntry], name: &std::ffi::OsStr) -> bool {
+    entries.iter().any(|e| e.name == name && e.ty.is_dir())
 }
 
 /// Directories worth descending into, each with the links taken to reach
@@ -583,7 +588,7 @@ fn plain_walk_covers(
                 Some(_) => !opts.scan_inside_repos,
                 None => is_bare_listing(&entries),
             };
-            let listed = entries.iter().any(|e| &e.name == name && e.ty.is_dir());
+            let listed = lists_dir(&entries, name);
             let child = dir.join(name);
             let n = name.to_string_lossy();
             if stops
@@ -686,6 +691,24 @@ fn is_bare_listing(entries: &[DirEntry]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_directory_by_that_name_is_listed() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join("dir")).unwrap();
+        std::fs::write(d.path().join("file"), "").unwrap();
+        let entries = list(d.path());
+        assert!(lists_dir(&entries, "dir".as_ref()));
+        assert!(!lists_dir(&entries, "file".as_ref()));
+        assert!(!lists_dir(&entries, "missing".as_ref()));
+    }
+
+    #[test]
+    fn a_patterns_literal_dir_stops_before_the_first_glob() {
+        assert_eq!(literal_dir("/a/b/*/c"), "/a/b");
+        assert_eq!(literal_dir("/a/b"), "/a/b");
+        assert_eq!(literal_dir("x*"), "");
+    }
 
     fn mk(dir: &Path, rel: &str) -> PathBuf {
         let p = dir.join(rel);

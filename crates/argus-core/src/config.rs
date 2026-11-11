@@ -896,6 +896,23 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_list_adds_no_tables_and_replaces_values() {
+        let t = |s: &str| -> toml::Table { toml::from_str(s).unwrap() };
+        let mut base = t("roots = [\"a\"]\n[[track]]\nowner = \"o\"");
+        merge_table(&mut base, t("track = []\nroots = []"), "").unwrap();
+        assert_eq!(base, t("roots = []\n[[track]]\nowner = \"o\""));
+        // and tables add to tables
+        merge_table(&mut base, t("[[track]]\nowner = \"p\""), "").unwrap();
+        assert_eq!(base["track"].as_array().unwrap().len(), 2);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn cores_come_in_one_kind_elsewhere() {
+        assert_eq!(performance_cores(), None);
+    }
+
+    #[test]
     fn a_misused_section_says_what_it_expects() {
         for (key, toml) in [
             ("concurrency", "concurrency = 3"),

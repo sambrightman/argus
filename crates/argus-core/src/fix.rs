@@ -547,16 +547,26 @@ pub fn choose(s: &RepoStatus, allowed: &[FixKind], stash: &StashConfig) -> Optio
 /// The fixes successive auto-fix actions would apply, starting with
 /// [`choose`]: predicted with [`simulate`], assuming each one succeeds.
 pub fn chain(s: &RepoStatus, allowed: &[FixKind], stash: &StashConfig) -> Vec<Fix> {
+    chain_by(s, allowed, stash, simulate)
+}
+
+/// [`chain`], predicting with `sim`: guarded against one that makes no
+/// progress (a repeat) or never settles (a cap).
+fn chain_by(
+    s: &RepoStatus,
+    allowed: &[FixKind],
+    stash: &StashConfig,
+    sim: fn(&RepoStatus, &Fix) -> RepoStatus,
+) -> Vec<Fix> {
     let mut out: Vec<Fix> = vec![];
     let mut cur = s.clone();
     while let Some(f) = choose(&cur, allowed, stash) {
-        // a repeat would mean the simulation made no progress
         if out.iter().any(|g| g.kind == f.kind && g.op == f.op)
             || out.len() > 2 * FixKind::ALL.len()
         {
             break;
         }
-        cur = simulate(&cur, &f);
+        cur = sim(&cur, &f);
         out.push(f);
     }
     out
@@ -819,6 +829,169 @@ pub fn apply_fix(
 mod tests {
     use super::*;
     use crate::attention::Issue;
+    use crate::status::{StatusOptions, Tracking, status};
+    use crate::testkit::{Sandbox, git};
+
+    /// A clone whose `main` is checked out and `stale` is one behind.
+    fn with_stale_branch() -> RepoStatus {
+        let sb = Sandbox::new();
+        sb.remote("acme", "w");
+        let r = sb.clone_as_github("acme", "w", "w");
+        git(&r, &["branch", "-q", "stale", "HEAD"]);
+        let mut s = status(&r, StatusOptions::default()).unwrap();
+        let b = s.branches.iter_mut().find(|b| b.name == "stale").unwrap();
+        b.upstream = Some(Tracking {
+            name: "origin/stale".into(),
+            ahead: 0,
+            behind: 1,
+            gone: false,
+        });
+        s
+    }
+
+    fn ff_branches(v: &[Fix]) -> Vec<String> {
+        v.iter()
+            .map(|f| match &f.op {
+                Op::FastForward { branch, .. } => branch.clone(),
+                op => panic!("{op:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_chain_stops_when_the_simulation_makes_no_progress() {
+        let s = with_stale_branch();
+        let all = FixKind::ALL;
+        let stash = StashConfig::default();
+        assert_eq!(ff_branches(&chain(&s, &all, &stash)), ["stale"]);
+        // the same fix again: stop instead of repeating it
+        let unchanged = chain_by(&s, &all, &stash, |s, _| s.clone());
+        assert_eq!(ff_branches(&unchanged), ["stale"]);
+    }
+
+    #[test]
+    fn a_chain_that_never_settles_is_capped() {
+        // each fast-forward makes another branch stale: a new fix every time
+        fn another(s: &RepoStatus, f: &Fix) -> RepoStatus {
+            let mut s = simulate(s, f);
+            let mut b = s
+                .branches
+                .iter()
+                .find(|b| b.name == "stale")
+                .unwrap()
+                .clone();
+            b.name = format!("stale{}", s.branches.len());
+            b.upstream.as_mut().unwrap().behind = 1;
+            s.branches.push(b);
+            s
+        }
+        let s = with_stale_branch();
+        let v = chain_by(&s, &FixKind::ALL, &StashConfig::default(), another);
+        assert_eq!(v.len(), 2 * FixKind::ALL.len() + 1);
+        let names = ff_branches(&v);
+        assert!(names.windows(2).all(|w| w[0] != w[1]), "{names:?}");
+    }
+
+    #[test]
+    fn a_simulated_commit_adds_one_to_what_is_ahead_and_unpushed() {
+        let mut s = with_stale_branch();
+        let two = Tracking {
+            name: "origin/main".into(),
+            ahead: 2,
+            behind: 0,
+            gone: false,
+        };
+        s.upstream = Some(two.clone());
+        let main = s.branches.iter_mut().find(|b| b.is_head).unwrap();
+        main.upstream = Some(two);
+        main.unpushed = Some(2);
+        let commit = Fix {
+            blocked: None,
+            kind: FixKind::Commit,
+            op: Op::CommitAll {
+                message: "m".into(),
+            },
+            reason: String::new(),
+        };
+        let after = simulate(&s, &commit);
+        assert_eq!(after.upstream.unwrap().ahead, 3);
+        let main = after.branches.iter().find(|b| b.is_head).unwrap();
+        assert_eq!(main.unpushed, Some(3));
+        assert_eq!(main.upstream.as_ref().unwrap().ahead, 3);
+        let stale = after.branches.iter().find(|b| !b.is_head).unwrap();
+        assert_eq!(stale.upstream.as_ref().unwrap().ahead, 0, "only HEAD's");
+    }
+
+    #[test]
+    fn a_simulated_switch_makes_the_branch_only_if_missing() {
+        let s = with_stale_branch();
+        let switch = |branch: &str| Fix {
+            blocked: None,
+            kind: FixKind::SwitchDefault,
+            op: Op::Switch {
+                branch: branch.into(),
+            },
+            reason: String::new(),
+        };
+        let names = |s: &RepoStatus| -> Vec<(String, bool)> {
+            s.branches
+                .iter()
+                .map(|b| (b.name.clone(), b.is_head))
+                .collect()
+        };
+        let after = simulate(&s, &switch("stale"));
+        assert_eq!(
+            names(&after),
+            [("main".into(), false), ("stale".into(), true)]
+        );
+        assert_eq!(after.upstream.unwrap().behind, 1, "stale's upstream");
+        let after = simulate(&s, &switch("new"));
+        assert_eq!(
+            names(&after),
+            [
+                ("main".into(), false),
+                ("stale".into(), false),
+                ("new".into(), true)
+            ]
+        );
+        assert_eq!(after.upstream.unwrap().name, "origin/new");
+    }
+
+    #[test]
+    fn a_blocked_fix_of_a_kind_in_the_chain_is_still_an_alternative() {
+        let mut s = with_stale_branch();
+        let stale = s
+            .branches
+            .iter()
+            .find(|b| b.name == "stale")
+            .unwrap()
+            .clone();
+        for (name, behind) in [("ahead", 0), ("diverged", 1)] {
+            let mut b = stale.clone();
+            b.name = name.into();
+            b.upstream = Some(Tracking {
+                name: format!("origin/{name}"),
+                ahead: 1,
+                behind,
+                gone: false,
+            });
+            s.branches.push(b);
+        }
+        let p = preview(&s, &FixKind::ALL, &StashConfig::default());
+        let push = |v: &[Fix]| -> Vec<(String, bool)> {
+            v.iter()
+                .filter(|f| f.kind == FixKind::PushBranches)
+                .map(|f| (f.op.label(), f.blocked.is_some()))
+                .collect()
+        };
+        let [(ahead, false)] = &push(&p.chain)[..] else {
+            panic!("{:?}", p.chain)
+        };
+        let [(diverged, true)] = &push(&p.alternatives)[..] else {
+            panic!("{:?}", p.alternatives)
+        };
+        assert!(ahead.contains("ahead") && diverged.contains("diverged"));
+    }
 
     #[test]
     fn lists_say_how_many_more() {

@@ -128,5 +128,11 @@ mod tests {
         assert_eq!(id("git@github.com:widget.git"), None);
         assert_eq!(id(""), None);
         assert_eq!(id("https:///acme/widget"), None);
+        // each of these alone makes it not scp-like
+        assert_eq!(id("C:/repos/widget"), None, "a drive letter");
+        assert_eq!(id(":acme/widget"), None, "no host");
+        assert_eq!(id("./a:acme/widget"), None, "a path");
+        assert_eq!(id("https://github.com//widget"), None, "no owner");
+        assert_eq!(id("https://github.com/~/widget"), None, "no owner");
     }
 }

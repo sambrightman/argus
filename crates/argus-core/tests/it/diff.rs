@@ -222,6 +222,19 @@ fn unstaging_works_before_the_first_commit() {
 }
 
 #[test]
+fn discarding_works_before_the_first_commit() {
+    let sb = Sandbox::new();
+    let r = sb.path("empty");
+    std::fs::create_dir_all(&r).unwrap();
+    git(&r, &["init", "-q"]);
+    write(&r, "a", "1\n");
+    git(&r, &["add", "a"]);
+    run_all(&r, ops::discard_ops(&st(&r), &["a".into()]));
+    assert!(codes(&r).is_empty(), "{:?}", codes(&r));
+    assert!(!r.join("a").exists());
+}
+
+#[test]
 fn discard_returns_files_to_head() {
     let sb = Sandbox::new();
     let r = messy(&sb);

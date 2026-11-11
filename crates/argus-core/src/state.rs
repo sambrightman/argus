@@ -166,6 +166,18 @@ mod tests {
         assert!(s.expire_snoozes(now));
         assert!(!s.expire_snoozes(now), "second expiry is a no-op");
         assert_eq!(s.snoozed.keys().collect::<Vec<_>>(), vec!["future"]);
+        // a snooze ends at its time exactly
+        s.snoozed.insert("now".into(), now);
+        assert!(!s.is_snoozed("now", now));
+        assert!(s.expire_snoozes(now));
+        assert!(!s.snoozed.contains_key("now"));
+    }
+
+    #[test]
+    fn an_unreadable_state_file_is_an_error_not_a_fresh_state() {
+        let d = tempfile::tempdir().unwrap();
+        let e = State::load(d.path()).unwrap_err();
+        assert!(matches!(e, StateError::Io { .. }), "{e}");
     }
 
     #[test]

@@ -132,3 +132,51 @@ fn ignoring_keeps_badges_stating_facts_and_drops_warning_only_ones() {
         "{b:?}"
     );
 }
+
+#[test]
+fn change_badges_count_each_kind_and_only_when_there_are_some() {
+    let sb = Sandbox::new();
+    let r = sb.init("dev/w");
+    let i = &UNICODE;
+    assert_eq!(state_badges(&r, ""), Vec::<String>::new(), "clean");
+    argus_core::testkit::write(&r, "README", "staged\n");
+    git(&r, &["add", "README"]);
+    argus_core::testkit::write(&r, "a", "x");
+    argus_core::testkit::write(&r, "b", "x");
+    assert_eq!(
+        state_badges(&r, ""),
+        [format!("{}1", i.staged), format!("{}2", i.untracked),]
+    );
+    git(&r, &["add", "a", "b"]);
+    commit(&r, "ab");
+    argus_core::testkit::write(&r, "a", "changed");
+    assert_eq!(state_badges(&r, ""), [format!("{}1", i.unstaged)]);
+}
+
+#[test]
+fn conflicts_are_counted() {
+    let sb = Sandbox::new();
+    let r = sb.init("dev/w");
+    git(&r, &["switch", "-q", "-c", "other"]);
+    argus_core::testkit::write(&r, "README", "theirs\n");
+    commit(&r, "theirs");
+    git(&r, &["switch", "-q", "main"]);
+    argus_core::testkit::write(&r, "README", "ours\n");
+    commit(&r, "ours");
+    assert!(!argus_core::testkit::git_may_fail(
+        &r,
+        &["merge", "-q", "other"]
+    ));
+    let b = state_badges(&r, "");
+    assert!(b.contains(&format!("{}1", UNICODE.conflict)), "{b:?}");
+}
+
+#[test]
+fn ahead_and_behind_badges_show_only_when_not_zero() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "dev/w");
+    assert_eq!(state_badges(&r, ""), Vec::<String>::new(), "level");
+    commit(&r, "mine");
+    assert_eq!(state_badges(&r, ""), [format!("{}1", UNICODE.ahead)]);
+}

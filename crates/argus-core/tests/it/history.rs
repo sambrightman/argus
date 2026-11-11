@@ -142,3 +142,11 @@ fn a_branchs_history_newest_first() {
         (vec!["third".into(), "second".into()], true)
     );
 }
+
+#[test]
+fn a_bad_revision_says_why() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    let e = commit_detail(&r, "no-such-rev").unwrap_err();
+    assert!(e.contains("no-such-rev"), "{e}");
+}

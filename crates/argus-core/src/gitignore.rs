@@ -112,13 +112,21 @@ fn private_file(repo: &Path) -> Result<PathBuf, String> {
 /// or `~/.config/git/ignore`.
 fn global_file(repo: &Path) -> Result<PathBuf, String> {
     let o = crate::ops::git_in(repo, &["config", "--path", "--get", "core.excludesFile"]);
-    if o.success && !o.output.is_empty() {
-        return Ok(PathBuf::from(o.output));
+    excludes_file(o.success.then_some(o.output), |k| std::env::var_os(k))
+}
+
+/// [`global_file`], given `core.excludesFile` and the environment.
+fn excludes_file(
+    configured: Option<String>,
+    env: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Result<PathBuf, String> {
+    if let Some(f) = configured.filter(|f| !f.is_empty()) {
+        return Ok(PathBuf::from(f));
     }
-    let config = std::env::var_os("XDG_CONFIG_HOME")
+    let config = env("XDG_CONFIG_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .or_else(|| env("HOME").map(|h| PathBuf::from(h).join(".config")))
         .ok_or("no home directory for the global excludes file")?;
     Ok(config.join("git/ignore"))
 }
@@ -156,6 +164,25 @@ pub fn add(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_global_file_is_configured_else_where_git_looks() {
+        let env = |xdg: &'static str| {
+            move |k: &str| match k {
+                "XDG_CONFIG_HOME" => Some(xdg.into()),
+                "HOME" => Some("/home/me".into()),
+                _ => None,
+            }
+        };
+        let file = |configured: Option<&str>, xdg| {
+            excludes_file(configured.map(String::from), env(xdg)).unwrap()
+        };
+        assert_eq!(file(Some("/x/ignore"), "/xdg"), Path::new("/x/ignore"));
+        assert_eq!(file(Some(""), "/xdg"), Path::new("/xdg/git/ignore"));
+        assert_eq!(file(None, "/xdg"), Path::new("/xdg/git/ignore"));
+        assert_eq!(file(None, ""), Path::new("/home/me/.config/git/ignore"));
+        assert!(excludes_file(None, |_| None).is_err());
+    }
 
     #[test]
     fn rules_anchor_or_match_anywhere() {

@@ -602,11 +602,12 @@ pub fn set_issue_state(
     let own = RuleSet::new(config)?.own_issue_entries(list, id, path);
     list.list_mut(config).retain(|e| !own.contains(e));
     let rules = RuleSet::new(config)?;
+    // with values, an entry ignoring the issue ignores one of them
     let any_ignored = rules
         .ignored_values(list, id, path, values)
         .next()
         .is_some()
-        || (values.is_empty() && rules.ignores_issue(list, id, path, values));
+        || rules.ignores_issue(list, id, path, values);
     let pinned = |v: &String| format!("{name}@{}", globset::escape(v));
     let state = match state {
         IgnoreState::Pinned if !list.pins() || values.is_empty() => IgnoreState::Ignored,
@@ -945,6 +946,10 @@ mod tests {
         assert_eq!(c.ignore.non_default_branch, ["acme/widget"]);
         assert_eq!(go(&mut c, nd, &branch, Counted), Counted);
         assert!(c.ignore.non_default_branch.is_empty());
+        // a list that doesn't pin ignores, whatever values it's given
+        let mut c = Config::default();
+        assert_eq!(go(&mut c, IssueList::Behind, &branch, Pinned), Ignored);
+        assert_eq!(c.ignore.behind, ["acme/widget"]);
         // stashes, under the default patterns (all but argus's own)
         let stashes = vec!["wip".to_string(), "argus 2026-01-01 10:00".to_string()];
         let mut c = Config::default();

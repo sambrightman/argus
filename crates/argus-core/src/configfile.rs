@@ -893,6 +893,70 @@ mod tests {
     }
 
     #[test]
+    fn examples_show_beside_an_empty_default() {
+        let ex = example();
+        for (key, example) in [
+            ("roots", r#"["~/dev"]"#),
+            (
+                "colors",
+                r#"{ branch = "bold magenta", favourite = "yellow" }"#,
+            ),
+            ("icon_overrides", r#"{ favourite = "★" }"#),
+        ] {
+            let want = format!("##   e.g. {example}\n# {key} = ");
+            assert!(ex.contains(&want), "{want}\n{ex}");
+        }
+        assert!(ex.contains("\n# forge = \"github\"\n"), "{ex}");
+    }
+
+    #[test]
+    fn a_default_that_isnt_empty_needs_no_example() {
+        let g = Gen { defs: &Json::Null };
+        let mut out = String::new();
+        let p = serde_json::json!({"default": 3, "examples": [5]});
+        g.key(&mut out, "n", &p, false);
+        assert_eq!(out, "# n = 3\n");
+        // inverse: empty ones (lists and tables) show it
+        for d in [serde_json::json!([]), serde_json::json!({})] {
+            let mut out = String::new();
+            g.key(
+                &mut out,
+                "n",
+                &serde_json::json!({"default": d, "examples": [5]}),
+                false,
+            );
+            assert!(out.starts_with("##   e.g. 5\n"), "{out}");
+        }
+    }
+
+    #[test]
+    fn only_objects_with_properties_are_tables() {
+        let g = Gen { defs: &Json::Null };
+        let kind = |v: Json| g.kind(&v);
+        assert!(kind(serde_json::json!({"type": "object", "properties": {}})) == Kind::Table);
+        let map = serde_json::json!({"type": "object", "additionalProperties": {"type": "string"}});
+        assert!(kind(map) == Kind::Value);
+        assert!(kind(serde_json::json!({"properties": {}})) == Kind::Value);
+    }
+
+    #[test]
+    fn wrapping_fills_lines_exactly() {
+        assert_eq!(wrap_to("aa bb", 5), ["aa bb"]);
+        assert_eq!(wrap_to("aa bb", 4), ["aa", "bb"]);
+        assert_eq!(wrap_to("aa\n\nbb", 80), ["aa", "", "bb"]);
+    }
+
+    #[test]
+    fn arrays_break_only_past_the_width() {
+        let fits = |n: usize| -> Json {
+            // `k = ["…"]` is 8 characters around the string
+            Json::Array(vec![Json::String("x".repeat(n - 8))])
+        };
+        assert!(!render("k", &fits(WIDTH - 2)).contains('\n'));
+        assert_eq!(render("k", &fits(WIDTH - 1)).lines().count(), 3);
+    }
+
+    #[test]
     fn lines_fit_and_long_arrays_wrap() {
         let ex = example();
         for l in ex.lines() {

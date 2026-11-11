@@ -1104,3 +1104,154 @@ fn pinning_a_detached_head_writes_one_of_its_names() {
         .unwrap();
     assert_eq!(w.config.ignore.detached, ["github.com/acme/w@v1"]);
 }
+
+#[test]
+fn a_bare_clone_is_known_by_its_identity_and_a_worktree_by_its_path() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "app");
+    let app = sb.clone_as_github("acme", "app", "dev/app");
+    let forge = format!("{}/", sb.path("forge").display());
+    let rewrite = format!("url.{forge}.insteadOf=https://github.com/");
+    let bare = sb.path("dev/lib.git");
+    sb.remote("acme", "lib");
+    git(
+        &sb.root(),
+        &[
+            "-c",
+            &rewrite,
+            "clone",
+            "-q",
+            "--bare",
+            "https://github.com/acme/lib.git",
+            bare.to_str().unwrap(),
+        ],
+    );
+    let wt = sb.path("dev/app-wt");
+    git(
+        &app,
+        &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()],
+    );
+    let w = ws(&sb, "");
+    let key = |p: &std::path::Path| w.get(&p.canonicalize().unwrap()).unwrap().key.clone();
+    assert_eq!(key(&bare), "github.com/acme/lib");
+    assert_eq!(key(&app), "github.com/acme/app");
+    assert_ne!(key(&wt), key(&app), "a worktree has a key of its own");
+}
+
+#[test]
+fn several_worktrees_outside_the_roots_are_all_children() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "app");
+    let app = sb.clone_as_github("acme", "app", "dev/app");
+    for name in ["wt1", "wt2"] {
+        let wt = sb.path(&format!("elsewhere/{name}"));
+        git(
+            &app,
+            &["worktree", "add", "-q", "-b", name, wt.to_str().unwrap()],
+        );
+    }
+    let w = ws(&sb, "");
+    let n = names(&w, ALL);
+    assert_eq!(n, ["acme/app", "wt1", "wt2"]);
+}
+
+#[test]
+fn depth_stops_at_a_cycle() {
+    let sb = Sandbox::new();
+    sb.init("dev/a");
+    sb.init("dev/b");
+    let mut w = ws(&sb, "");
+    let (a, b) = (w.entries[0].path.clone(), w.entries[1].path.clone());
+    w.entries[0].parent = Some(b);
+    w.entries[1].parent = Some(a);
+    assert_eq!(w.depth(0), 16);
+}
+
+#[test]
+fn a_repo_can_be_picked_by_its_name_or_identity() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "app");
+    sb.clone_as_github("acme", "app", "dev/app");
+    sb.init("dev/other");
+    let w = ws(&sb, "");
+    for p in ["acme/app", "github.com/acme/app", "ACME/*"] {
+        let picked: Vec<_> = w
+            .select(&[p.into()], ALL)
+            .into_iter()
+            .map(|i| w.entries[i].display_name())
+            .collect();
+        assert_eq!(picked, ["acme/app"], "{p}");
+    }
+}
+
+#[test]
+fn a_bare_repo_is_fetched_even_with_an_upstream() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "lib");
+    let forge = format!("{}/", sb.path("forge").display());
+    let rewrite = format!("url.{forge}.insteadOf=https://github.com/");
+    let bare = sb.path("dev/lib.git");
+    git(
+        &sb.root(),
+        &[
+            "-c",
+            &rewrite,
+            "clone",
+            "-q",
+            "--bare",
+            "--config",
+            &rewrite,
+            "https://github.com/acme/lib.git",
+            bare.to_str().unwrap(),
+        ],
+    );
+    git(
+        &bare,
+        &[
+            "config",
+            "remote.origin.fetch",
+            "+refs/heads/*:refs/remotes/origin/*",
+        ],
+    );
+    git(&bare, &["fetch", "-q"]);
+    git(&bare, &["config", "branch.main.remote", "origin"]);
+    git(&bare, &["config", "branch.main.merge", "refs/heads/main"]);
+    let w = ws(&sb, "pull = ['acme/*']");
+    let s = w.entries[0].status().unwrap();
+    assert!(s.bare && s.upstream.is_some(), "{s:?}");
+    assert_eq!(plan_updates(&w)[0].op, Op::Fetch);
+}
+
+#[test]
+fn only_successful_clones_are_recorded() {
+    use argus_core::ops::OpOutcome;
+    use argus_core::pull::Job;
+    let sb = Sandbox::new();
+    let r = sb.init("dev/r");
+    let mut w = ws(&sb, "");
+    let job = |op| Job {
+        label: String::new(),
+        path: r.clone(),
+        op,
+        family: r.clone(),
+    };
+    let outcome = |success| {
+        Some(OpOutcome {
+            success,
+            code: Some(0),
+            output: String::new(),
+            duration: std::time::Duration::ZERO,
+        })
+    };
+    let clone = Op::Clone {
+        url: String::new(),
+        dest: r.clone(),
+    };
+    let added = argus_core::pull::record_clones(
+        &mut w,
+        &[job(clone), job(Op::Pull)],
+        &[outcome(false), outcome(true)],
+    );
+    assert!(added.is_empty(), "{added:?}");
+    assert!(w.state.new.is_empty());
+}

@@ -125,3 +125,16 @@ pub fn score(issues: &[Issue]) -> u32 {
 pub fn needs_attention(issues: &[Issue]) -> bool {
     issues.iter().any(|i| !i.is_pull_only())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_being_behind_is_for_a_pull() {
+        assert!(Issue::Behind(2).is_pull_only());
+        for i in [Issue::Dirty(1), Issue::Detached, Issue::NoUpstream] {
+            assert!(!i.is_pull_only(), "{i:?}");
+        }
+    }
+}

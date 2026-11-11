@@ -1,7 +1,7 @@
 //! The workspace: every discovered repo with its identity, flags and status.
 //! This is the model the CLI, TUI (and a future server) share.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -441,25 +441,26 @@ impl Workspace {
     /// Worktrees and submodules living outside the roots (or not walked into)
     /// are learnt from their main repo's status.
     fn add_children(&mut self) {
-        let mut extra = vec![];
+        let mut extra: BTreeMap<PathBuf, Entry> = BTreeMap::new();
         for e in &self.entries {
             let Some(s) = e.status() else { continue };
             let kids = s.worktrees.iter().map(|p| (p, RepoKind::Worktree));
             let kids = kids.chain(s.submodules.iter().map(|p| (p, RepoKind::Submodule)));
             for (p, kind) in kids {
                 let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
-                if !self.entries.iter().any(|x| x.path == p)
-                    && !extra.iter().any(|x: &Entry| x.path == p)
-                {
-                    let mut child = Entry::new(p, kind);
-                    child.parent = Some(e.path.clone());
-                    extra.push(child);
+                if self.index_of(&p).is_none() {
+                    extra.entry(p.clone()).or_insert_with(|| {
+                        let mut child = Entry::new(p, kind);
+                        child.parent = Some(e.path.clone());
+                        child
+                    });
                 }
             }
         }
         if extra.is_empty() {
             return;
         }
+        let extra: Vec<Entry> = extra.into_values().collect();
         let results = self.statuses(extra.iter().map(|e| e.path.as_path()));
         for (mut e, r) in extra.into_iter().zip(results) {
             e.set_status(r);

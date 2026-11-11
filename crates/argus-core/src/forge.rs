@@ -56,3 +56,25 @@ pub trait Forge: Send + Sync {
         Protocol::Https
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_forge_that_doesnt_say_clones_over_https() {
+        struct Quiet;
+        impl Forge for Quiet {
+            fn kind(&self) -> &str {
+                "quiet"
+            }
+            fn host(&self) -> &str {
+                "example.com"
+            }
+            fn list(&self, _: &str, _: Option<&str>) -> Result<Vec<RemoteRepo>, ForgeError> {
+                Ok(vec![])
+            }
+        }
+        assert_eq!(Quiet.protocol(), Protocol::Https);
+    }
+}

@@ -886,3 +886,72 @@ fn version_order_compares_numbers_as_numbers() {
         assert_eq!(version_cmp(b, a), o.reverse(), "{b} vs {a}");
     }
 }
+
+#[test]
+fn a_local_master_is_the_default_branch_when_nothing_says_otherwise() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    git(&r, &["branch", "-q", "-m", "master"]);
+    git(&r, &["config", "init.defaultBranch", "trunk"]);
+    assert_eq!(st(&r).default_branch.as_deref(), Some("master"));
+    // inverse: neither main nor master, so the configured name
+    git(&r, &["branch", "-q", "-m", "dev"]);
+    assert_eq!(st(&r).default_branch.as_deref(), Some("trunk"));
+}
+
+#[test]
+fn a_detached_submodule_isnt_checked_for_orphaned_commits() {
+    // detached is how submodules are checked out; the parent records the commit
+    let sb = Sandbox::new();
+    let lib = sb.init("lib");
+    let r = sb.init("r");
+    git(
+        &r,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            lib.to_str().unwrap(),
+            "lib",
+        ],
+    );
+    let sub = r.join("lib");
+    git(&sub, &["switch", "-q", "--detach"]);
+    commit(&sub, "only here");
+    let s = st(&sub);
+    assert!(s.submodule && matches!(s.head, Head::Detached(_)));
+    assert_eq!(s.detached_orphans, 0);
+    // inverse: the same in a repo of its own counts
+    git(&lib, &["switch", "-q", "--detach"]);
+    commit(&lib, "only here");
+    assert_eq!(st(&lib).detached_orphans, 1);
+}
+
+#[test]
+fn untracked_listings_say_whether_there_are_more() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    for f in ["a", "b", "c"] {
+        write(&r, &format!("d/{f}"), "x");
+    }
+    let list = |limit| argus_core::status::untracked_in(&r, "d/", limit).unwrap();
+    assert_eq!(
+        list(3),
+        (vec!["d/a".into(), "d/b".into(), "d/c".into()], false)
+    );
+    assert_eq!(list(2), (vec!["d/a".into(), "d/b".into()], true));
+}
+
+#[test]
+fn files_are_listed_up_to_the_cap_and_all_counted() {
+    use argus_core::status::MAX_FILES;
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    for i in 0..=MAX_FILES {
+        write(&r, &format!("f{i:04}"), "x");
+    }
+    let c = st(&r).changes;
+    assert_eq!((c.files.len(), c.untracked), (MAX_FILES, MAX_FILES + 1));
+}

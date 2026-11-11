@@ -24,4 +24,9 @@ exclude_re = [
     # what forge listings found and what was cloned needs a forge that
     # lists repos; tests have no network
     'crates/argus-cli/src/main\.rs:\d+:\d+: (replace print_forge_news |.* in print_forge_news$)',
+    # only saves work: a tag's object header is read before peeling it,
+    # and peeling a lightweight tag's commit gives the same commit
+    'crates/argus-core/src/status\.rs:\d+:\d+: replace match guard h\.kind\(\) == gix::object::Kind::Tag with true in head_tags$',
+    # HTTPS is also Protocol's Default, so the replacement is the same
+    'crates/argus-core/src/forge\.rs:\d+:\d+: replace Forge::protocol -> Protocol with Default::default\(\)$',
 ]

@@ -228,11 +228,6 @@ impl RepoStatus {
     pub fn behind(&self) -> usize {
         self.upstream.as_ref().map_or(0, |t| t.behind)
     }
-
-    /// Local branches with commits not on any remote or the default branch.
-    pub fn unpushed_branches(&self) -> impl Iterator<Item = &BranchInfo> {
-        self.branches.iter().filter(|b| b.is_unpushed())
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1154,9 +1149,8 @@ fn describe(
         return (answer.clone(), gave_up_at.is_some());
     }
     let (mut seen, mut found) = (0, false);
-    if limit > 0
-        && let Ok(walk) = repo.rev_walk([head]).all()
-    {
+    // with limit 0, only HEAD (which has no tag) is seen
+    if let Ok(walk) = repo.rev_walk([head]).all() {
         for info in walk.take(limit + 1).filter_map(Result::ok) {
             seen += 1;
             if tagged.contains(&info.id) {
@@ -1330,6 +1324,25 @@ fn mtime(p: &Path) -> Option<Timestamp> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_in_a_collapsed_directory_finds_the_directory() {
+        let change = |path: &str, index| FileChange {
+            path: path.into(),
+            index,
+            worktree: index,
+        };
+        let c = Changes {
+            files: vec![change("build/", '?'), change("src/", 'M')],
+            ..Default::default()
+        };
+        let found = |p| c.entry(p).map(|f| f.path.as_str());
+        assert_eq!(found("build/"), Some("build/"));
+        assert_eq!(found("build/out/x"), Some("build/"));
+        // only untracked directories are collapsed
+        assert_eq!(found("src/x"), None);
+        assert_eq!(found("other"), None);
+    }
 
     #[test]
     fn config_candidates_include_files_that_dont_exist_yet() {
