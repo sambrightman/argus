@@ -98,10 +98,7 @@ fn ordering_attention_then_favourites_then_severity_then_changes_then_name() {
     git(&c, &["switch", "-q", "main"]);
     write(&c, "README", "m");
     commit(&c, "m");
-    let _ = std::process::Command::new("git")
-        .current_dir(&c)
-        .args(["merge", "o"])
-        .output();
+    assert!(!argus_core::testkit::git_may_fail(&c, &["merge", "o"]));
 
     let w = ws(&sb, "favourite = ['acme/fav*']");
     assert_eq!(

@@ -3,7 +3,7 @@
 
 use argus_core::attention::{Issue, issues};
 use argus_core::status::{Head, InProgress, RepoStatus, StatusOptions, status};
-use argus_core::testkit::{Sandbox, commit, git, write};
+use argus_core::testkit::{Sandbox, commit, git, git_may_fail, write};
 use pretty_assertions::assert_eq;
 
 fn st(p: &std::path::Path) -> RepoStatus {
@@ -357,12 +357,7 @@ fn merge_conflict() {
     git(&r, &["switch", "-q", "main"]);
     write(&r, "README", "main\n");
     commit(&r, "main");
-    let out = std::process::Command::new("git")
-        .current_dir(&r)
-        .args(["merge", "other"])
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
+    assert!(!git_may_fail(&r, &["merge", "other"]));
     let s = st(&r);
     assert_eq!(s.in_progress, Some(InProgress::Merge));
     assert_eq!(s.changes.conflicted, 1);
@@ -385,11 +380,7 @@ fn rebase_in_progress() {
     git(&r, &["switch", "-q", "main"]);
     write(&r, "README", "main\n");
     commit(&r, "main");
-    let _ = std::process::Command::new("git")
-        .current_dir(&r)
-        .args(["rebase", "other"])
-        .output()
-        .unwrap();
+    assert!(!git_may_fail(&r, &["rebase", "other"]));
     assert_eq!(st(&r).in_progress, Some(InProgress::Rebase));
 }
 

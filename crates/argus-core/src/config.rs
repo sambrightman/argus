@@ -870,19 +870,29 @@ mod tests {
         }
     }
 
+    // Apple silicon has core kinds, but a virtual machine (as on CI)
+    // reports one: the command is the second opinion either way.
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     #[test]
-    fn apple_silicon_reports_fewer_performance_cores_than_cpus() {
+    fn performance_cores_agree_with_sysctl() {
+        let sysctl = |name: &str| -> usize {
+            let out = std::process::Command::new("sysctl")
+                .args(["-n", name])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+        };
         let cpus = std::thread::available_parallelism().unwrap().get();
-        let p = performance_cores().expect("Apple silicon has core kinds");
-        assert!(p >= 1 && p < cpus, "{p} of {cpus}");
-        // the command, as a second opinion
-        let out = std::process::Command::new("sysctl")
-            .args(["-n", "hw.perflevel0.logicalcpu"])
-            .output()
-            .unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), p.to_string());
-        assert_eq!(Config::default().disk_jobs(), p);
+        let p = performance_cores();
+        if sysctl("hw.nperflevels") < 2 {
+            assert_eq!(p, None);
+            assert_eq!(Config::default().disk_jobs(), (cpus / 2).max(1));
+        } else {
+            let p = p.expect("core kinds");
+            assert!(p >= 1 && p < cpus, "{p} of {cpus}");
+            assert_eq!(p, sysctl("hw.perflevel0.logicalcpu"));
+            assert_eq!(Config::default().disk_jobs(), p);
+        }
     }
 
     #[test]
