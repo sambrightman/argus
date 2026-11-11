@@ -6,3 +6,22 @@ timeout_multiplier = 3.0
 
 # Mutants run their tests with nextest: stops at the first failure.
 test_tool = "nextest"
+
+# Mutants no test can tell apart, with why:
+exclude_re = [
+    # the interactive loop and its terminal check need a real terminal on
+    # stdin and stdout; under the test runner there is neither
+    'crates/argus-tui/src/lib\.rs:\d+:\d+: (replace run -> |.* in run$)',
+    'crates/argus-tui/src/lib\.rs:\d+:\d+: .*check_terminal',
+    # no message leads to an effect needing the terminal yet, so what
+    # drain returns is always empty
+    'crates/argus-tui/src/lib\.rs:\d+:\d+: replace Runtime::drain -> ',
+    # likewise in the CLI: asking before a destructive operation, the
+    # progress line, and the TUI demo
+    'crates/argus-cli/src/main\.rs:\d+:\d+: .* in confirm$',
+    'crates/argus-cli/src/main\.rs:\d+:\d+: (replace progress |.* in progress$)',
+    'crates/argus-cli/src/main\.rs:\d+:\d+: (replace demo -> |.* in demo$)',
+    # what forge listings found and what was cloned needs a forge that
+    # lists repos; tests have no network
+    'crates/argus-cli/src/main\.rs:\d+:\d+: (replace print_forge_news |.* in print_forge_news$)',
+]

@@ -1910,10 +1910,10 @@ impl App {
                 _ => ignored += 1,
             }
             let key = char::from_digit(n as u32 + 1, 10).unwrap_or('?');
+            // stashes the patterns ignore while the issue still counts
+            // (read only in that state)
             let partly = match list {
-                IssueList::Stashes if state == IgnoreState::Counted => {
-                    e.stash_ignored.iter().filter(|&&b| b).count()
-                }
+                IssueList::Stashes => e.stash_ignored.iter().filter(|&&b| b).count(),
                 _ => 0,
             };
             let label = state_label(*issue, *list, state, partly, s, &icons);

@@ -1456,3 +1456,210 @@ fn destructive_fixes_are_listed_and_need_yes() {
         .success()
         .stdout("nothing to fix\n");
 }
+
+#[test]
+fn ack_and_mark_reach_hidden_repos_and_ack_keeps_the_other_new_ones() {
+    let sb = Sandbox::new();
+    three(&sb);
+    for n in ["n1", "n2"] {
+        sb.remote("acme", n);
+        sb.clone_as_github("acme", n, &format!("dev/{n}"));
+    }
+    // as if argus had cloned both for a track
+    let state = sb.path(".state/argus/state.toml");
+    std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state,
+        "new = [\"github.com/acme/n1\", \"github.com/acme/n2\"]\n",
+    )
+    .unwrap();
+    argus(&sb)
+        .args(["mark", "acme/n2", "--snooze", "2d"])
+        .assert()
+        .success();
+    // a pattern reaches hidden repos too (a name always would)
+    argus(&sb)
+        .args(["mark", "acme/n*", "--favourite"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("acme/n2"));
+    argus(&sb)
+        .args(["ack", "acme/n1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("acknowledged 1"));
+    // snoozed, so hidden: acknowledging everything includes it
+    let out = argus(&sb).args(["--json", "ack"]).output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["acknowledged"], serde_json::json!(["acme/n2"]));
+    argus(&sb)
+        .arg("ack")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("acknowledged 0"));
+}
+
+#[test]
+fn plain_output_has_no_colour_codes() {
+    let sb = Sandbox::new();
+    three(&sb);
+    argus(&sb)
+        .env_remove("NO_COLOR")
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\x1b[").not());
+}
+
+#[test]
+fn pull_takes_patterns_indents_failures_and_json_says_failed() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "pull = ['acme/clean', 'acme/feature']\n").unwrap();
+    argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["pull", "--dry-run", "acme/feature"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would pull acme/feature"))
+        .stdout(predicate::str::contains("acme/clean").not());
+    // no progress line where stderr isn't a terminal
+    for args in [
+        &["pull", "acme/feature"][..],
+        &["fix", "-n", "-F", "-k", "pull", "acme/feature"],
+    ] {
+        argus(&sb)
+            .arg("--config")
+            .arg(&cfg)
+            .args(args)
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("\x1b[").not());
+    }
+    // a remote that's gone: the failure's output, indented under it
+    let c = sb.path("dev/clean");
+    git(
+        &c,
+        &[
+            "config",
+            "--remove-section",
+            &format!("url.{}/", sb.path("forge").display()),
+        ],
+    );
+    git(
+        &c,
+        &[
+            "config",
+            "url./nonexistent/.insteadOf",
+            "https://github.com/",
+        ],
+    );
+    let out = argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["pull", "acme/clean"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    let after = stderr
+        .split("failed: pull acme/clean\n")
+        .nth(1)
+        .unwrap_or_else(|| panic!("{stderr}"));
+    assert!(after.starts_with("    ") && after.len() > 4, "{stderr}");
+    let out = argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--json", "pull", "acme/clean"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let statuses: Vec<&str> = v["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| j["outcome"].as_str().unwrap())
+        .collect();
+    assert_eq!(statuses, ["failed"], "{v}");
+}
+
+#[test]
+fn tracks_ask_the_forge_unless_no_clone_and_forge_errors_are_reported() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "[[track]]\nowner = 'acme'\nhost = 'nothing.invalid'\ninto = '{}'\n",
+            sb.path("dev").display()
+        ),
+    )
+    .unwrap();
+    argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["pull", "--dry-run"])
+        .assert()
+        .stderr(predicate::str::contains("forge error"));
+    argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["pull", "--dry-run", "--no-clone"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("forge error").not());
+    argus(&sb)
+        .args(["forge", "list", "--host", "nothing.invalid", "acme"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("failed to lookup address"));
+}
+
+#[test]
+fn the_tui_needs_a_terminal_before_anything_else() {
+    let sb = Sandbox::new();
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "roots = 3\n").unwrap();
+    argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("needs a terminal"));
+}
+
+#[test]
+fn glyph_columns_leave_two_spaces_after_the_widest_entry() {
+    use unicode_width::UnicodeWidthStr;
+    let sb = Sandbox::new();
+    let out = argus(&sb).args(["demo", "--glyphs"]).output().unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    let header = lines.iter().position(|l| l.starts_with("icon ")).unwrap();
+    // display column where `s` starts in `l`
+    let col = |l: &str, s: &str| UnicodeWidthStr::width(&l[..l.find(s).unwrap()]);
+    let first_set = col(lines[header], argus_core::icons::SETS[0]);
+    let longest = argus_core::icons::ICON_NAMES
+        .iter()
+        .map(|n| n.len())
+        .max()
+        .unwrap();
+    assert_eq!(first_set, longest + 2, "{}", lines[header]);
+    // the first set's column: its widest cell, then two spaces
+    let second = col(lines[header], argus_core::icons::SETS[1]);
+    // its cells are "|g|MgM" and a marker ('*' when two cells wide in
+    // CJK mode, else a space): the widest, then two spaces
+    let set = argus_core::icons::by_name(argus_core::icons::SETS[0]);
+    let widest = argus_core::icons::ICON_NAMES
+        .iter()
+        .map(|n| {
+            let g = set.get(n).unwrap();
+            UnicodeWidthStr::width(format!("|{g}|M{g}M ").as_str())
+        })
+        .chain([argus_core::icons::SETS[0].len()])
+        .max()
+        .unwrap();
+    assert_eq!(second, first_set + widest + 2, "{}", lines[header]);
+}

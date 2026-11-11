@@ -240,7 +240,10 @@ impl Runtime {
                 }
                 Err(_) => {}
             }
-            if std::time::Instant::now() > until {
+            if until
+                .saturating_duration_since(std::time::Instant::now())
+                .is_zero()
+            {
                 return false;
             }
         }
@@ -374,5 +377,18 @@ impl Runtime {
             suspend @ Effect::Suspend { .. } => return vec![suspend],
         }
         vec![]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_default_opener_is_the_platforms() {
+        let want = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        assert_eq!(super::default_opener(), want);
     }
 }

@@ -875,20 +875,7 @@ fn pull_cmd(
             "jobs": jobs.iter().map(|j| job_json(j, "planned", None)).collect::<Vec<_>>(),
         }));
     }
-    for r in tracks.missing.iter().filter(|_| !json) {
-        println!(
-            "{} {} (not cloned)",
-            p.role(Role::New, "new on forge:"),
-            r.id.slug()
-        );
-    }
-    for o in tracks.orphans.iter().filter(|_| !json) {
-        println!(
-            "{} {} (no longer listed by the forge)",
-            p.role(Role::Warning, "orphan:"),
-            paths::contract_tilde(o)
-        );
-    }
+    print_forge_news(&p, &tracks, &[], json);
     if dry_run {
         for j in &jobs {
             println!("would {}", j.label);
@@ -904,7 +891,6 @@ fn pull_cmd(
         &AtomicBool::new(false),
         &|ev| {
             if let Event::Finished { index, outcome } = ev {
-                let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 if !outcome.success {
                     eprintln!(
                         "{} {}\n{}",
@@ -912,9 +898,8 @@ fn pull_cmd(
                         jobs[index].label,
                         indent(&outcome.output)
                     );
-                } else if tty {
-                    eprint!("\r\x1b[K[{n}/{total}] {}", jobs[index].label);
                 }
+                progress(&done, total, &jobs[index].label, tty && outcome.success);
             }
         },
     );
@@ -922,13 +907,7 @@ fn pull_cmd(
         eprint!("\r\x1b[K");
     }
     let added = pull::record_clones(ws, &jobs, &results);
-    for a in added.iter().filter(|_| !json) {
-        println!(
-            "{} {}",
-            p.role(Role::New, "cloned:"),
-            paths::contract_tilde(a)
-        );
-    }
+    print_forge_news(&p, &pull::PullPlan::default(), &added, json);
     let failed = results
         .iter()
         .filter(|r| r.as_ref().is_some_and(|o| !o.success))
@@ -971,6 +950,44 @@ fn pull_cmd(
     Ok(())
 }
 
+/// Count a finished job and, if `show`, overwrite the progress line on the
+/// terminal with it.
+fn progress(done: &std::sync::atomic::AtomicUsize, total: usize, label: &str, show: bool) {
+    let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if show {
+        eprint!("\r\x1b[K[{n}/{total}] {label}");
+    }
+}
+
+/// What the forge listings found (repos not cloned, clones no longer
+/// listed) and what was cloned, for people (JSON has its own fields).
+fn print_forge_news(p: &Paint, tracks: &pull::PullPlan, cloned: &[PathBuf], json: bool) {
+    if json {
+        return;
+    }
+    for r in &tracks.missing {
+        println!(
+            "{} {} (not cloned)",
+            p.role(Role::New, "new on forge:"),
+            r.id.slug()
+        );
+    }
+    for o in &tracks.orphans {
+        println!(
+            "{} {} (no longer listed by the forge)",
+            p.role(Role::Warning, "orphan:"),
+            paths::contract_tilde(o)
+        );
+    }
+    for a in cloned {
+        println!(
+            "{} {}",
+            p.role(Role::New, "cloned:"),
+            paths::contract_tilde(a)
+        );
+    }
+}
+
 fn indent(s: &str) -> String {
     s.lines()
         .map(|l| format!("    {l}"))
@@ -983,21 +1000,7 @@ fn indent(s: &str) -> String {
 fn demo(ctx: &Ctx, theme: Option<String>, icons: Option<String>) -> Result<()> {
     eprintln!("argus: building sample repos…");
     let d = argus_core::demo::build();
-    // Only the user's look carries over; everything else is the demo's own.
-    let mut config = Config {
-        roots: vec![d.root.clone()],
-        ..Config::default()
-    };
-    if let Ok(c) = Config::load(&ctx.config_path) {
-        config.ui = c.ui;
-    }
-    config.ui.attention_only = false;
-    if let Some(t) = theme {
-        config.ui.theme = t;
-    }
-    if let Some(i) = icons {
-        config.ui.icons = i;
-    }
+    let config = demo_config(&d.root, Config::load(&ctx.config_path).ok(), theme, icons);
     let mut ws = Workspace::new(config, State::default())?;
     ws.scan();
     d.apply_marks(&mut ws);
@@ -1014,6 +1017,29 @@ fn demo(ctx: &Ctx, theme: Option<String>, icons: Option<String>) -> Result<()> {
         opener: argus_tui::default_opener().into(),
     };
     argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))
+}
+
+/// The demo's config: its own repos, every one shown, in the user's look
+/// (`yours`' `[ui]`) unless `theme` or `icons` say otherwise.
+fn demo_config(
+    root: &std::path::Path,
+    yours: Option<Config>,
+    theme: Option<String>,
+    icons: Option<String>,
+) -> Config {
+    let mut config = Config {
+        roots: vec![root.to_path_buf()],
+        ui: yours.map(|c| c.ui).unwrap_or_default(),
+        ..Config::default()
+    };
+    config.ui.attention_only = false;
+    if let Some(t) = theme {
+        config.ui.theme = t;
+    }
+    if let Some(i) = icons {
+        config.ui.icons = i;
+    }
+    config
 }
 
 /// One glyph as `|g|MgM`, with `*` if it takes two cells in CJK mode.
@@ -1117,7 +1143,6 @@ fn fetch_selected(ws: &mut Workspace, patterns: &[String]) {
         &AtomicBool::new(false),
         &|ev| {
             if let Event::Finished { index, outcome } = ev {
-                let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 if !outcome.success {
                     eprintln!(
                         "{} {}\n{}",
@@ -1125,9 +1150,13 @@ fn fetch_selected(ws: &mut Workspace, patterns: &[String]) {
                         jobs[index].label.trim_start_matches("fetch "),
                         indent(&outcome.output)
                     );
-                } else if tty {
-                    eprint!("\r\x1b[K[{n}/{}] {}", jobs.len(), jobs[index].label);
                 }
+                progress(
+                    &done,
+                    jobs.len(),
+                    &jobs[index].label,
+                    tty && outcome.success,
+                );
             }
         },
     );
@@ -1344,13 +1373,8 @@ fn issue_list(s: &str) -> std::result::Result<IssueList, String> {
 }
 
 fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> Result<()> {
-    let sel = ws.select(
-        &m.patterns,
-        ViewFilter {
-            show_hidden: true,
-            ..Default::default()
-        },
-    );
+    // patterns are required, and they reach hidden repos whatever the filter
+    let sel = ws.select(&m.patterns, ViewFilter::default());
     if sel.is_empty() {
         bail!("no repos match {:?}", m.patterns);
     }
@@ -1449,6 +1473,25 @@ fn forge_cmd(cmd: ForgeCmd, json: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_demo_shows_its_own_repos_in_the_users_look() {
+        let root = std::path::Path::new("/demo");
+        let mut yours =
+            Config::parse("roots = ['/mine']\n[ui]\ntheme = 'light'\nicons = 'ascii'\n").unwrap();
+        yours.ui.attention_only = true;
+        let c = demo_config(root, Some(yours.clone()), None, None);
+        assert_eq!(c.roots, [root]);
+        assert_eq!(
+            (c.ui.theme.as_str(), c.ui.icons.as_str()),
+            ("light", "ascii")
+        );
+        assert!(!c.ui.attention_only, "every demo repo shown");
+        let c = demo_config(root, Some(yours), Some("mono".into()), Some("nerd".into()));
+        assert_eq!((c.ui.theme.as_str(), c.ui.icons.as_str()), ("mono", "nerd"));
+        let c = demo_config(root, None, None, None);
+        assert_eq!(c.ui.theme, Config::default().ui.theme);
+    }
 
     #[test]
     fn causes_are_reported_unless_the_message_already_says_them() {

@@ -3708,3 +3708,215 @@ fn help_sits_inside_a_margin() {
     let top = screen.lines().nth(1).unwrap();
     assert!(top.starts_with("  ╭ keys"), "{top:?}");
 }
+
+#[test]
+fn unfolding_commit_files_mode_changes_staged_files_and_emptied_ranges() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let c = sb.path("dev/clean");
+        for f in ["gone.txt", "t.sh", "w.sh"] {
+            write(&c, f, "x\n");
+        }
+        commit(&c, "base");
+        git(&c, &["push", "-q", "origin", "main"]);
+        git(&c, &["switch", "-q", "-c", "local"]);
+        write(&c, "a.txt", "a\n");
+        std::fs::remove_file(c.join("gone.txt")).unwrap();
+        std::fs::set_permissions(
+            c.join("t.sh"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        git(&c, &["add", "-A"]);
+        git(&c, &["commit", "-q", "-m", "mixed"]);
+        git(&c, &["switch", "-q", "-c", "pushed", "main"]);
+        commit(&c, "soon pushed");
+        git(&c, &["switch", "-q", "main"]);
+        // in the worktree: a mode change only, and a staged-only file
+        git(&c, &["update-index", "--chmod=+x", "w.sh"]);
+        git(&c, &["reset", "-q", "--", "w.sh"]);
+        std::fs::set_permissions(
+            c.join("w.sh"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        write(&c, "s.txt", "s\n");
+        git(&c, &["add", "s.txt"]);
+    });
+    use argus_core::badges::Role::*;
+    let c = sb.path("dev/clean");
+    let short = git(&c, &["rev-parse", "--short=7", "local"]);
+    cursor_on_detail(&mut app, "clean", "    local");
+    app.act(Action::ToggleExpand);
+    cursor_on_detail(&mut app, "clean", &format!("      {}", short.trim()));
+    app.act(Action::ToggleExpand);
+    let file_role = |app: &App, path: &str| {
+        app.rows
+            .iter()
+            .find_map(|r| match r {
+                Row::Detail { line, .. }
+                    if line.parts.last().is_some_and(|p| p.1 == format!(" {path}")) =>
+                {
+                    Some(line.parts[line.parts.len() - 2].clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {path}: {:?}", detail_texts(app)))
+    };
+    assert_eq!(file_role(&app, "a.txt"), (Some(Ahead), "  A".into()));
+    assert_eq!(file_role(&app, "gone.txt"), (Some(Behind), "  D".into()));
+    assert_eq!(file_role(&app, "t.sh"), (Some(Unstaged), "  M".into()));
+    cursor_on_detail(&mut app, "clean", "          M t.sh");
+    app.act(Action::ToggleExpand);
+    assert_eq!(
+        below(&app, "          M t.sh", 10),
+        ["no change in content"]
+    );
+
+    to_file(&mut app, "w.sh");
+    app.act(Action::ToggleExpand);
+    let t = trimmed(&app);
+    let at = t.iter().position(|l| l.ends_with("w.sh")).unwrap();
+    assert_eq!(
+        t[at + 1..at + 3],
+        ["unstaged changes", "no change in content"]
+    );
+    to_file(&mut app, "s.txt");
+    app.act(Action::ToggleExpand);
+    let t = trimmed(&app);
+    let at = t.iter().position(|l| l.ends_with("s.txt")).unwrap();
+    assert_eq!(
+        t[at + 1..at + 5],
+        ["staged changes", "@@ -0,0 +1 @@", "+s", "M w.sh"],
+        "staged only: no unstaged side"
+    );
+
+    // pushed since the status was read: its range is empty when unfolded
+    git(&c, &["push", "-q", "origin", "pushed"]);
+    cursor_on_detail(&mut app, "clean", "    pushed");
+    app.act(Action::ToggleExpand);
+    assert_eq!(below(&app, "    pushed", 4), ["no commits"]);
+}
+
+#[test]
+fn fix_results_are_logged_failures_reported_and_the_log_capped() {
+    use argus_core::fix::{Applied, Fix, FixKind};
+    use argus_core::ops::OpOutcome;
+    let (sb, mut app) = setup("");
+    let c = sb.path("dev/clean");
+    let done = |success: bool| Msg::FixDone {
+        path: c.clone(),
+        applied: Ok(Some(Applied {
+            fix: Fix {
+                kind: FixKind::Push,
+                op: Op::Push,
+                reason: "1 unpushed".into(),
+                blocked: None,
+            },
+            outcome: OpOutcome {
+                success,
+                code: Some(if success { 0 } else { 1 }),
+                output: "out".into(),
+                duration: std::time::Duration::ZERO,
+            },
+        })),
+    };
+    app.on_msg(done(true));
+    assert!(!app.message.as_ref().unwrap().1, "{:?}", app.message);
+    assert!(app.log.last().unwrap().ok);
+    app.on_msg(done(false));
+    assert_eq!(
+        app.message.clone().unwrap(),
+        ("acme/clean: push failed ($ for log)".to_string(), true)
+    );
+    // at most 1,000 entries: past that, the oldest 100 go
+    let entry = app.log[0].clone();
+    app.log = vec![entry; 999];
+    app.on_msg(done(true));
+    assert_eq!(app.log.len(), 1000);
+    app.on_msg(done(true));
+    assert_eq!(app.log.len(), 901);
+}
+
+#[test]
+fn the_filter_matches_the_identity_too_and_a_status_refreshes_unfolded_commits() {
+    let (sb, mut app) = setup("");
+    app.on_key(key('/'));
+    for c in "github.com/acme/f".chars() {
+        app.on_key(key(c));
+    }
+    assert_eq!(names(&app), vec!["acme/feature"], "by key, not name");
+    app.on_key(code(KeyCode::Esc));
+    app.on_key(code(KeyCode::Esc));
+
+    let f = sb.path("dev/feature");
+    commit(&f, "one");
+    app.ws.refresh(&f);
+    app.rebuild();
+    cursor_on_detail(&mut app, "feature", "issue     1 unpushed commit(s)");
+    app.act(Action::ToggleExpand);
+    assert_eq!(below(&app, "issue     1 unpushed", 0).len(), 1);
+    commit(&f, "two");
+    app.ws.refresh(&f);
+    app.on_msg(Msg::Status(
+        f.clone(),
+        Box::new(Ok(app.ws.get(&f).unwrap().status().unwrap().clone())),
+    ));
+    assert_eq!(
+        below(&app, "issue     2 unpushed", 0).len(),
+        2,
+        "unfolded afresh: {:?}",
+        detail_texts(&app)
+    );
+}
+
+#[test]
+fn several_repos_untracked_files_go_to_each_files_directory() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        for n in ["clean", "feature"] {
+            write(&sb.path(&format!("dev/{n}")), "logs/x.log", "x\n");
+        }
+    });
+    let pick = |app: &mut App, name: &str| {
+        while current(app) != name {
+            app.act(Action::Down);
+        }
+        app.act(Action::ToggleMark);
+    };
+    app.act(Action::Top);
+    pick(&mut app, "acme/feature");
+    app.act(Action::Top);
+    pick(&mut app, "acme/clean");
+    app.act(Action::GitignoreMenu);
+    let d = menu_items(&app)
+        .into_iter()
+        .find(|l| l.starts_with("d "))
+        .unwrap();
+    assert!(d.ends_with("to each file's directory's .gitignore"), "{d}");
+}
+
+#[test]
+fn when_the_diff_line_under_the_cursor_goes_the_cursor_falls_back_to_its_file() {
+    let (sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "both");
+    app.on_key(code(KeyCode::Tab));
+    // on the unstaged hunk's line, then that hunk goes (the staged one stays)
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Detail { line, .. } if line.file.as_deref() == Some("both") && line.parts.iter().any(|p| p.1 == "+three")))
+        .unwrap();
+    let d = sb.path("dev/dirty");
+    git(&d, &["checkout", "--", "both"]);
+    app.ws.refresh(&d);
+    app.on_msg(Msg::Status(
+        d.clone(),
+        Box::new(Ok(app.ws.get(&d).unwrap().status().unwrap().clone())),
+    ));
+    match &app.rows[app.cursor] {
+        Row::Detail { line, .. } => {
+            assert_eq!(line.file.as_deref(), Some("both"));
+            assert!(line.diff.is_none(), "the file's own line: {:?}", line.parts);
+        }
+        r => panic!("{r:?}"),
+    }
+}

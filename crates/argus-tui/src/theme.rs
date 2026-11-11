@@ -316,6 +316,16 @@ mod tests {
     }
 
     #[test]
+    fn each_ui_element_gets_its_own_style() {
+        let (t, _) = Theme::build("mono", &BTreeMap::new());
+        assert_eq!(
+            t.ui(Ui::Selection),
+            Style::new().add_modifier(Modifier::REVERSED)
+        );
+        assert_ne!(t.ui(Ui::Header), t.ui(Ui::Selection));
+    }
+
+    #[test]
     fn overrides_apply_and_bad_ones_warn() {
         let o = BTreeMap::from([
             ("favourite".to_string(), "#ff0000".to_string()),

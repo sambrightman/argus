@@ -47,12 +47,21 @@ impl Http for Ureq {
     }
 }
 
+/// Reads an environment variable.
+pub type EnvSource = fn(&str) -> Option<String>;
+/// Runs `gh` with these arguments: its output, if it succeeded.
+pub type GhSource = fn(&[&str]) -> Option<String>;
+
 pub struct GitHub {
     host: String,
     api: String,
     http: Box<dyn Http>,
     token: OnceLock<Option<String>>,
     protocol: OnceLock<Protocol>,
+    /// Where the token and protocol come from: the environment and the
+    /// `gh` CLI, swappable for tests.
+    env: EnvSource,
+    gh: GhSource,
 }
 
 impl GitHub {
@@ -76,7 +85,14 @@ impl GitHub {
             http,
             token: OnceLock::new(),
             protocol: OnceLock::new(),
+            env: |v| std::env::var(v).ok(),
+            gh: |args| run_cli("gh", args),
         }
+    }
+
+    /// Read environment variables and run `gh` through these instead.
+    pub fn with_sources(self, env: EnvSource, gh: GhSource) -> Self {
+        Self { env, gh, ..self }
     }
 
     /// Pre-seed the token (tests; or callers with their own credential source).
@@ -95,9 +111,9 @@ impl GitHub {
             .get_or_init(|| {
                 let env = ["GH_TOKEN", "GITHUB_TOKEN"]
                     .iter()
-                    .find_map(|v| std::env::var(v).ok());
+                    .find_map(|v| (self.env)(v));
                 env.filter(|t| !t.is_empty())
-                    .or_else(|| gh(&["auth", "token", "--hostname", &self.host]))
+                    .or_else(|| (self.gh)(&["auth", "token", "--hostname", &self.host]))
             })
             .as_deref()
     }
@@ -195,7 +211,7 @@ impl Forge for GitHub {
 
     fn protocol(&self) -> Protocol {
         *self.protocol.get_or_init(|| {
-            match gh(&["config", "get", "git_protocol", "--host", &self.host]).as_deref() {
+            match (self.gh)(&["config", "get", "git_protocol", "--host", &self.host]).as_deref() {
                 Some("ssh") => Protocol::Ssh,
                 _ => Protocol::Https,
             }
@@ -222,8 +238,9 @@ struct ApiRepo {
     description: Option<String>,
 }
 
-fn gh(args: &[&str]) -> Option<String> {
-    let out = Command::new("gh")
+/// `program`'s trimmed output, if it succeeded and printed something.
+fn run_cli(program: &str, args: &[&str]) -> Option<String> {
+    let out = Command::new(program)
         .args(args)
         .stdin(std::process::Stdio::null())
         .output()
@@ -451,5 +468,76 @@ mod tests {
     fn explicit_protocol() {
         let (g, _) = gh_with(Fake::default());
         assert_eq!(g.with_protocol(Protocol::Ssh).protocol(), Protocol::Ssh);
+    }
+
+    fn sourced(env: EnvSource, gh: GhSource) -> GitHub {
+        GitHub::with_http("github.com", Box::new(std::sync::Arc::new(Fake::default())))
+            .with_sources(env, gh)
+    }
+
+    #[test]
+    fn the_token_comes_from_gh_token_github_token_then_gh() {
+        let gh: GhSource = |args| {
+            assert_eq!(args, ["auth", "token", "--hostname", "github.com"]);
+            Some("from-gh".into())
+        };
+        let cases: [(EnvSource, &str); 4] = [
+            (|v| (v == "GH_TOKEN").then(|| "a".into()), "a"),
+            (|v| (v == "GITHUB_TOKEN").then(|| "b".into()), "b"),
+            // set but empty: as if unset
+            (|v| (v == "GH_TOKEN").then(String::new), "from-gh"),
+            (|_| None, "from-gh"),
+        ];
+        for (env, want) in cases {
+            assert_eq!(sourced(env, gh).token(), Some(want));
+        }
+    }
+
+    #[test]
+    fn the_protocol_follows_gh_config() {
+        let ssh: GhSource = |args| {
+            assert_eq!(
+                args,
+                ["config", "get", "git_protocol", "--host", "github.com"]
+            );
+            Some("ssh".into())
+        };
+        assert_eq!(sourced(|_| None, ssh).protocol(), Protocol::Ssh);
+        assert_eq!(
+            sourced(|_| None, |_| Some("https".into())).protocol(),
+            Protocol::Https
+        );
+        assert_eq!(sourced(|_| None, |_| None).protocol(), Protocol::Https);
+    }
+
+    #[test]
+    fn kind_and_host() {
+        let (g, _) = gh_with(Fake::default());
+        assert_eq!((g.kind(), g.host()), ("github", "github.com"));
+        let e = GitHub::with_http(
+            "ghe.example.com",
+            Box::new(std::sync::Arc::new(Fake::default())),
+        );
+        assert_eq!(e.host(), "ghe.example.com");
+    }
+
+    #[test]
+    fn paging_stops_after_200_pages() {
+        let p = format!("{API}/orgs/acme/repos?per_page=100&type=all");
+        let f = Fake::default().route(&p, 200, "[]", Some(&format!("<{p}>; rel=\"next\"")));
+        let (g, f) = gh_with(f);
+        match g.list("acme", None) {
+            Err(ForgeError::Other(m)) => assert_eq!(m, "too many pages"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(f.seen.lock().unwrap().len(), 200);
+    }
+
+    #[test]
+    fn a_cli_counts_only_when_it_succeeds_and_prints_something() {
+        assert_eq!(run_cli("sh", &["-c", "echo ' hi '"]), Some("hi".into()));
+        assert_eq!(run_cli("sh", &["-c", "echo hi; exit 1"]), None);
+        assert_eq!(run_cli("sh", &["-c", "true"]), None);
+        assert_eq!(run_cli("/no/such/program", &[]), None);
     }
 }
