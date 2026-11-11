@@ -613,17 +613,19 @@ and rarely reused), line tables only for debug info, dependencies cached
 with `Swatinem/rust-cache`, and mold as the Linux linker.
 
 * `ci.yml`, on every push to main and every PR: rustfmt, clippy and
-  rustdoc with warnings as errors; the tests with nextest's `ci` profile
-  (no fail-fast, two retries, JUnit uploaded) plus doctests, on Linux and
-  macOS; a check on the MSRV (`rust-version`, 1.90); cargo-deny; and
-  coverage with cargo-llvm-cov (summary on the run's page, lcov
-  uploaded).
+  rustdoc with warnings as errors, and cargo-machete; the tests with
+  nextest's `ci` profile (no fail-fast, two retries, JUnit uploaded) plus
+  doctests, on Linux and macOS; a check on the MSRV (`rust-version`,
+  1.90); cargo-deny; coverage with cargo-llvm-cov (summary on the run's
+  page, lcov uploaded); and `cargo mutants --in-diff` on what the push or
+  PR changed, failing on a missed mutant.
 * `mutants.yml`, weekly and on demand: the full cargo-mutants run in 16
   shards, `--in-place` on the cached build and skipping the baseline (CI
   has just run the tests). A summary job lists missed mutants and
   timeouts, and fails if there are any.
-* Dependabot groups cargo and action updates weekly. Actions are pinned
-  to commit hashes, with the version in a comment.
+* Dependabot groups cargo and action updates weekly, major versions
+  included, which covers what cargo-outdated would report. Actions are
+  pinned to commit hashes, with the version in a comment.
 * Windows isn't covered: parts of argus are Unix-only.
 
 **Release builds (planned).** Measure before choosing: `lto` (thin or

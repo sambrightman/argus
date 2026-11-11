@@ -384,6 +384,10 @@ cargo bench -p argus-core -- --baseline before              # compare (likewise 
 scripts/bench-cli.sh              # hyperfine: whole commands on 200 generated repos (--help)
 ```
 
+CI (GitHub Actions) runs the tests on Linux and macOS, plus clippy, rustdoc,
+cargo-deny, cargo-machete, coverage and the `--in-diff` mutants, on every
+push and PR, and the full mutation run weekly: see DESIGN.md §8a.
+
 Tools: `cargo install --locked cargo-nextest cargo-llvm-cov cargo-mutants
 cargo-deny cargo-machete cargo-outdated` and `brew install hyperfine`, and `rustup component add
 llvm-tools-preview` for coverage. Settings: `.config/nextest.toml`,

@@ -36,6 +36,10 @@ jobs:
       - run: cargo doc --workspace --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-machete
+      - run: cargo machete
 
   test:
     strategy:
@@ -64,6 +68,42 @@ jobs:
         with:
           name: junit-${{ matrix.os }}
           path: target/nextest/ci/junit.xml
+
+  # Mutants in the code this push or PR changed; the full run is weekly
+  # (mutants.yml). Skips the baseline, as the test job runs alongside.
+  mutants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-mutants,cargo-nextest
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: test
+          save-if: false
+      - name: Diff
+        env:
+          # A PR's base, or the commit main pointed at before this push
+          # (absent for a new branch, unreachable after a force-push: then
+          # just the last commit).
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then BASE=HEAD~1; fi
+          git diff "$(git merge-base "$BASE" HEAD)" HEAD > ../changes.diff
+          git diff --stat "$(git merge-base "$BASE" HEAD)" HEAD | tail -1
+      - run: cargo mutants --in-place --baseline=skip --timeout 300 --in-diff ../changes.diff
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ failure() }}
+        with:
+          name: mutants-in-diff
+          path: mutants.out
 
   msrv:
     runs-on: ubuntu-latest
