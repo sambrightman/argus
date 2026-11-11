@@ -221,11 +221,7 @@ impl MenuId {
                     item('f', "toggle favourite", Action::ToggleFavourite),
                     item('p', "toggle pull", Action::TogglePull),
                     item('i', "ignore issues…", Action::IgnoreIssues),
-                    item(
-                        'I',
-                        "toggle ignoring the repo: hidden, no pulls or bulk actions",
-                        Action::ToggleIgnore,
-                    ),
+                    item('I', "toggle ignoring the repo", Action::ToggleIgnore),
                     item('z', "snooze for…", Action::Snooze),
                     item('u', "unsnooze", Action::Unsnooze),
                     item('a', "acknowledge new", Action::Ack),

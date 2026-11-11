@@ -2258,10 +2258,7 @@ fn toggles_say_what_they_will_do() {
         l
     };
     assert_eq!(label(&mut app, 'm', 'f'), "f favourite");
-    assert_eq!(
-        label(&mut app, 'm', 'I'),
-        "I ignore repo: hidden, no pulls or bulk actions"
-    );
+    assert_eq!(label(&mut app, 'm', 'I'), "I ignore repo");
     assert_eq!(label(&mut app, 'm', 'i'), "i ignore issues…");
     app.act(Action::ToggleFavourite);
     assert_eq!(label(&mut app, 'm', 'f'), "f unfavourite");

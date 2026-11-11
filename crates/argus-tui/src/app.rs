@@ -2185,7 +2185,7 @@ impl App {
                 (MenuId::Mark, 'p') if first?.pull => "stop pulling",
                 (MenuId::Mark, 'p') => "pull (with F a and argus pull)",
                 (MenuId::Mark, 'I') if first?.ignored => "unignore repo",
-                (MenuId::Mark, 'I') => "ignore repo: hidden, no pulls or bulk actions",
+                (MenuId::Mark, 'I') => "ignore repo",
                 (MenuId::View, 'a') if self.view.attention_only => "show all repos",
                 (MenuId::View, 'a') => "show only repos needing attention",
                 (MenuId::View, 'h') if self.view.show_hidden => "hide ignored and snoozed repos",
