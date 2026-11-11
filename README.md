@@ -224,6 +224,9 @@ directory name at any depth (`node_modules`, `*.egg-info`); starting with
 `/` or `~` it's a full path (`~/dev/archive`, `~/src/*/third_party`); any
 other with a `/` is below each root (`go/pkg`, in the defaults: the Go
 module cache under a root). Roots are always scanned.
+The scan stops at each repo; `scan_inside_repos = true` keeps walking its
+work tree for repos nested inside (slower; submodules are found from
+their parent either way).
 To keep scanning repos but hide them, list them in `[ignore] repos`.
 Hidden repos (ignored or snoozed; `H` shows them) are never part of a
 bulk action such as fetch all or fix all, even while shown; choosing one

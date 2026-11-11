@@ -43,6 +43,10 @@ pub struct Config {
     /// Skip directories whose name starts with `.`; add one as a root to
     /// scan it.
     pub skip_hidden: bool,
+    /// Keep scanning inside each repo's work tree for repos nested in it
+    /// (not submodules: those are found from their parent either way).
+    /// Slower: every work tree is walked, so keep `exclude_paths` up to date.
+    pub scan_inside_repos: bool,
     /// Follow symlinks to directories (`-L`). Cycles are cut and a repo
     /// reachable by several paths is listed once.
     pub follow_symlinks: bool,
@@ -113,6 +117,7 @@ impl Default for Config {
             .collect(),
             max_depth: 6,
             skip_hidden: true,
+            scan_inside_repos: false,
             follow_symlinks: false,
             one_file_system: false,
             concurrency: Concurrency::default(),

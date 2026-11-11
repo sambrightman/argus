@@ -11,6 +11,7 @@ use argus_core::discover::RepoKind;
 use argus_core::forge::{Protocol, RemoteRepo};
 use argus_core::identity::RepoId;
 use argus_core::ops::Op;
+use argus_core::paths::contract_tilde;
 use argus_core::pull::{plan_tracks, plan_updates};
 use argus_core::runner::{Event, run_jobs};
 use argus_core::state::State;
@@ -602,7 +603,7 @@ fn marking_edits_the_config_lists() {
     w.set_mark(&[local], Mark::Ignore, true).unwrap();
     assert_eq!(
         w.config.ignore.repos,
-        [argus_core::paths::contract_tilde(&w.entries[local].path)]
+        [contract_tilde(&w.entries[local].path)]
     );
     assert!(w.entries[local].flags.ignored);
     // off against a pattern: a `!` entry
@@ -1285,4 +1286,55 @@ fn clones_of_a_directory_forge_are_known_by_its_identity() {
     let (key, names) = tracked("github");
     assert_ne!(key, id);
     assert_eq!(names, [path("dev/local"), path("dev/w")]);
+}
+
+#[test]
+fn repos_inside_work_trees_are_found_only_when_asked() {
+    let sb = Sandbox::new();
+    let lib = sb.init("libsrc");
+    commit(&lib, "l");
+    let app = sb.init("dev/app");
+    commit(&app, "a");
+    git(
+        &app,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            lib.to_str().unwrap(),
+            "lib",
+        ],
+    );
+    commit(&app, "sub");
+    let nested = sb.init("dev/app/tools/nested");
+    commit(&nested, "n");
+    let rows = |extra: &str| {
+        let w = ws(&sb, extra);
+        w.ordered(ALL)
+            .into_iter()
+            .map(|i| (w.entries[i].display_name(), w.entries[i].kind, w.depth(i)))
+            .collect::<Vec<_>>()
+    };
+    let app_name = contract_tilde(&app.canonicalize().unwrap());
+    let nested_name = contract_tilde(&nested.canonicalize().unwrap());
+    // inverse: by default the submodule is learnt from its parent, the
+    // nested repo is never seen
+    assert_eq!(
+        rows(""),
+        [
+            (app_name.clone(), RepoKind::Main, 0),
+            ("lib".into(), RepoKind::Submodule, 1),
+        ]
+    );
+    // the submodule found by the walk is still its parent's child, once
+    assert_eq!(
+        rows("scan_inside_repos = true"),
+        [
+            (app_name, RepoKind::Main, 0),
+            ("lib".into(), RepoKind::Submodule, 1),
+            (nested_name, RepoKind::Main, 0),
+        ]
+    );
 }

@@ -129,7 +129,9 @@ Two findings:
 ## 5. Concepts
 
 * **Roots.** Directories scanned recursively for repos. Nested containers are
-  supported, and so are repos nested inside repos (non-submodule). Skips
+  supported; the walk stops at a repo, unless `scan_inside_repos` asks it to
+  look for repos nested in work trees (submodules come from their parent's
+  status either way). Skips
   `node_modules`, `target`, `.git` internals and configurable globs.
 * **Identity.** `host/owner/name` parsed from the `origin` remote URL (or the
   first remote).

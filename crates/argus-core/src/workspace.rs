@@ -210,7 +210,7 @@ impl Workspace {
             // validated in `new`; compiled per scan, as roots can change
             skip: Skip::new(&self.config.exclude_paths, &self.config.roots).unwrap_or_default(),
             max_depth: self.config.max_depth,
-            scan_inside_repos: false,
+            scan_inside_repos: self.config.scan_inside_repos,
             skip_hidden: self.config.skip_hidden,
             follow_symlinks: self.config.follow_symlinks,
             one_file_system: self.config.one_file_system,
