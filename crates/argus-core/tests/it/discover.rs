@@ -51,3 +51,53 @@ fn one_file_system_stays_on_each_roots_filesystem() {
         "each root its own"
     );
 }
+
+/// Git accepts a `.git` that is a symlink, to a git dir or to a gitfile.
+#[cfg(unix)]
+#[test]
+fn a_dot_git_symlink_is_followed() {
+    use argus_core::discover::{DiscoverOptions, RepoKind, discover};
+    use argus_core::status::{StatusOptions, status};
+    use argus_core::testkit::{Sandbox, git, write};
+    use std::os::unix::fs::symlink;
+    let sb = Sandbox::new();
+    let r = sb.init("dev/linked");
+    std::fs::create_dir_all(sb.path("gitdirs")).unwrap();
+    std::fs::rename(r.join(".git"), sb.path("gitdirs/linked")).unwrap();
+    symlink(sb.path("gitdirs/linked"), r.join(".git")).unwrap();
+    let main = sb.init("dev/main");
+    git(
+        &main,
+        &["worktree", "add", "-q", "-b", "wt", "../../wt-real"],
+    );
+    let wt = sb.path("dev/wt");
+    std::fs::create_dir_all(&wt).unwrap();
+    symlink(sb.path("wt-real/.git"), wt.join(".git")).unwrap();
+    let dangling = sb.path("dev/dangling");
+    std::fs::create_dir_all(&dangling).unwrap();
+    symlink(sb.path("nowhere"), dangling.join(".git")).unwrap();
+    write(&dangling, "f", "x");
+    let device = sb.path("dev/device");
+    std::fs::create_dir_all(&device).unwrap();
+    symlink("/dev/null", device.join(".git")).unwrap();
+    let found: Vec<(String, RepoKind)> = discover(&[sb.path("dev")], &DiscoverOptions::default())
+        .into_iter()
+        .map(|f| {
+            (
+                f.path.file_name().unwrap().to_string_lossy().into_owned(),
+                f.kind,
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("linked".into(), RepoKind::Main),
+            ("main".into(), RepoKind::Main),
+            ("wt".into(), RepoKind::Worktree),
+        ],
+        "a dangling link, or one to neither a dir nor a file, isn't a repo"
+    );
+    let st = status(&r, StatusOptions::default()).unwrap();
+    assert!(st.head.branch().is_some(), "{:?}", st.head);
+}

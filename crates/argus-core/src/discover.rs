@@ -647,10 +647,11 @@ pub fn classify(dir: &Path) -> Option<RepoKind> {
     classify_dotgit(dir).or_else(|| is_bare_listing(&list(dir)).then_some(RepoKind::Bare))
 }
 
-/// A work tree's kind, from its `.git` (one `lstat`).
+/// A work tree's kind, from its `.git` (one `stat`: a symlink is followed,
+/// as git does).
 fn classify_dotgit(dir: &Path) -> Option<RepoKind> {
     let dotgit = dir.join(".git");
-    match fs::symlink_metadata(&dotgit) {
+    match fs::metadata(&dotgit) {
         Ok(m) if m.is_dir() => Some(RepoKind::Main),
         Ok(m) if m.is_file() => Some(classify_gitfile(&dotgit)),
         _ => None,
