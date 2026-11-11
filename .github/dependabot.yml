@@ -4,6 +4,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Only versions out for two weeks; security updates ignore this.
+    cooldown:
+      default-days: 14
     groups:
       cargo:
         patterns: ["*"]
@@ -11,6 +14,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Only versions out for two weeks; security updates ignore this.
+    cooldown:
+      default-days: 14
     groups:
       actions:
         patterns: ["*"]

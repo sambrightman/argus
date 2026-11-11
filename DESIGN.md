@@ -617,14 +617,16 @@ with `Swatinem/rust-cache`, and mold as the Linux linker.
   nextest's `ci` profile (no fail-fast, two retries, JUnit uploaded) plus
   doctests, on Linux and macOS; a check on the MSRV (`rust-version`,
   1.90); cargo-deny; coverage with cargo-llvm-cov (summary on the run's
-  page, lcov uploaded); and `cargo mutants --in-diff` on what the push or
+  page, lcov uploaded as an artifact and to Codecov for history); and `cargo mutants --in-diff` on what the push or
   PR changed, failing on a missed mutant.
 * `mutants.yml`, weekly and on demand: the full cargo-mutants run in 16
   shards, `--in-place` on the cached build and skipping the baseline (CI
   has just run the tests). A summary job lists missed mutants and
   timeouts, and fails if there are any.
 * Dependabot groups cargo and action updates weekly, major versions
-  included, which covers what cargo-outdated would report. Actions are
+  included, which covers what cargo-outdated would report. It waits two
+  weeks after a release before proposing it (`cooldown`); security
+  updates don't wait. Actions are
   pinned to commit hashes, with the version in a comment.
 * Windows isn't covered: parts of argus are Unix-only.
 
