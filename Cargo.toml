@@ -12,3 +12,10 @@ rust-version = "1.90"
 # opts in with `[lints] workspace = true`.
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# Release builds (release.yml): smaller and faster, slower to build.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+strip = true
