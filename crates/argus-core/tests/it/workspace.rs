@@ -349,7 +349,9 @@ fn track_clones_missing_and_reports_orphans() {
     sb.clone_as_github("acme", "have", "dev/acme/have");
     sb.remote("acme", "deleted");
     sb.clone_as_github("acme", "deleted", "dev/acme/deleted");
-    let w = ws(
+    sb.remote("acme", "vendored");
+    sb.clone_as_github("acme", "vendored", "dev/acme/have/vendored");
+    let mut w = ws(
         &sb,
         &format!(
             "ignore.repos = ['acme/secret']\n[[track]]\nowner='acme'\ninclude_forks=false\ninto='{}'",
@@ -371,6 +373,10 @@ fn track_clones_missing_and_reports_orphans() {
             ],
         ),
     );
+    // a repo nested in another, unlisted, is no orphan: it's not a clone
+    // of the owner's that argus made or keeps
+    let nested = w.nested(&sb.path("dev/acme/have"), "vendored").unwrap();
+    assert!(w.entries[nested].id.is_some());
     let plan = plan_tracks(&w, &l, Protocol::Https);
     let clones: Vec<_> = plan.clones().map(|j| j.label.clone()).collect();
     assert_eq!(
@@ -1346,4 +1352,29 @@ fn repos_inside_work_trees_are_found_only_when_asked() {
             (nested_name, RepoKind::Main, 0),
         ]
     );
+}
+
+#[test]
+fn a_nested_repo_is_an_entry_only_when_asked_for() {
+    let sb = Sandbox::new();
+    let app = sb.init("dev/app");
+    commit(&app, "a");
+    let inner = sb.init("dev/app/tools/inner");
+    write(&app, "plain/file", "x");
+    let mut w = ws(&sb, "");
+    let app = app.canonicalize().unwrap();
+    let before = w.entries.len();
+    assert_eq!(w.nested(&app, "plain"), None, "not a repo");
+    assert_eq!(w.nested(&app, "nowhere"), None);
+    assert_eq!(w.entries.len(), before);
+    let i = w.nested(&app, "tools/inner").unwrap();
+    let e = &w.entries[i];
+    assert_eq!(e.path, inner.canonicalize().unwrap());
+    assert!(e.nested && e.status().is_some());
+    assert_eq!(e.parent.as_deref(), Some(app.as_path()));
+    // asked again: the same entry
+    assert_eq!(w.nested(&app, "tools/inner"), Some(i));
+    assert_eq!(w.entries.len(), before + 1);
+    // not listed, under its parent or otherwise
+    assert_eq!(names(&w, ALL), [contract_tilde(&app)]);
 }

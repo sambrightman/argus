@@ -1,10 +1,11 @@
 //! Fix planning and application. Each fix has tests for when it must *not*
 //! be offered, since an unsafe fix is far worse than a missing one.
 
+use argus_core::attention::{self, Issue};
 use argus_core::config::StashConfig;
-use argus_core::fix::{FixKind, apply_fix, chain, choose, plan, ranked};
+use argus_core::fix::{FixKind, apply_fix, chain, choose, plan, ranked, simulate};
 use argus_core::ops::Op;
-use argus_core::status::{Head, StatusOptions, status};
+use argus_core::status::{Head, PathKind, StatusOptions, status};
 use argus_core::testkit::{Sandbox, commit, git, write};
 
 fn kinds(p: &std::path::Path) -> Vec<FixKind> {
@@ -1408,4 +1409,179 @@ fn alternatives_are_what_the_chain_leaves_out() {
     assert_eq!(kinds_of(&p.chain), [FixKind::SwitchDefault]);
     // stash is there, switch-default isn't repeated, commit needs input
     assert_eq!(kinds_of(&p.alternatives), [FixKind::Stash]);
+}
+
+/// `pushed_feature`, with `lib` a submodule since before the branch.
+fn with_submodule(sb: &Sandbox) -> (std::path::PathBuf, std::path::PathBuf) {
+    let src = sb.init("libsrc");
+    commit(&src, "l");
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    git(
+        &r,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            src.to_str().unwrap(),
+            "lib",
+        ],
+    );
+    commit(&r, "sub");
+    git(&r, &["push", "-q"]);
+    git(&r, &["switch", "-q", "-c", "feat"]);
+    commit(&r, "feat");
+    git(&r, &["push", "-q", "-u", "origin", "feat"]);
+    let lib = r.join("lib");
+    (r, lib)
+}
+
+fn sub_entry(p: &std::path::Path) -> (char, char, PathKind) {
+    let s = status(p, StatusOptions::default()).unwrap();
+    let f = s.changes.entry("lib").unwrap();
+    (f.index, f.worktree, f.kind)
+}
+
+/// Changes inside a submodule are its own to stash, commit or ignore, on
+/// its own row: the parent can't (git's stash ignores submodules).
+#[test]
+fn changes_inside_a_submodule_are_fixed_in_it_not_its_parent() {
+    let sb = Sandbox::new();
+    let (r, lib) = with_submodule(&sb);
+    write(&lib, "new", "x");
+    // as `git status --short`: untracked content, then modified content
+    assert_eq!(sub_entry(&r), (' ', '?', PathKind::Submodule));
+    write(&lib, ".gitkeep", "x");
+    git(&lib, &["add", ".gitkeep"]);
+    assert_eq!(sub_entry(&r), (' ', 'm', PathKind::Submodule));
+    let s = status(&r, StatusOptions::default()).unwrap();
+    let c = &s.changes;
+    assert_eq!(
+        (c.staged, c.unstaged, c.untracked, c.submodule_content),
+        (0, 0, 0, 1)
+    );
+    assert!(
+        !attention::issues(&s)
+            .iter()
+            .any(|i| matches!(i, Issue::Dirty(_)))
+    );
+    let k = kinds(&r);
+    assert!(
+        !k.contains(&FixKind::Stash) && !k.contains(&FixKind::Commit),
+        "{k:?}"
+    );
+    assert!(k.contains(&FixKind::SwitchDefault), "{k:?}");
+    assert!(kinds(&lib).contains(&FixKind::Stash), "its own row");
+    // what an auto-fix does is what was offered
+    let applied = apply_fix(
+        &r,
+        &[FixKind::Stash, FixKind::SwitchDefault],
+        &Default::default(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(applied.fix.kind, FixKind::SwitchDefault);
+    assert!(lib.join("new").exists(), "the submodule's changes stay");
+    // and stay after committing everything else
+    write(&r, "README", "changed\n");
+    assert_eq!(after_commit(&r), [(' ', 'm')]);
+}
+
+/// What a preview expects to be left after committing everything.
+fn after_commit(r: &std::path::Path) -> Vec<(char, char)> {
+    let s = status(r, StatusOptions::default()).unwrap();
+    let commit = plan(&s, &StashConfig::default())
+        .into_iter()
+        .find(|f| f.kind == FixKind::Commit)
+        .unwrap();
+    let c = simulate(&s, &commit).changes;
+    assert_eq!((c.uncommitted(), c.submodule_content), (0, c.files.len()));
+    c.files.iter().map(|f| (f.index, f.worktree)).collect()
+}
+
+/// A submodule at another commit than its parent records: a commit records
+/// it; no stash can take it, and switching away would lose track of it.
+#[test]
+fn a_submodule_at_another_commit_is_committed_in_its_parent() {
+    let sb = Sandbox::new();
+    let (r, lib) = with_submodule(&sb);
+    commit(&lib, "l2");
+    assert_eq!(sub_entry(&r), (' ', 'M', PathKind::Submodule));
+    let only = |r: &std::path::Path| {
+        let k = kinds(r);
+        assert!(k.contains(&FixKind::Commit), "{k:?}");
+        assert!(!k.contains(&FixKind::Stash), "{k:?}");
+        assert!(!k.contains(&FixKind::SwitchDefault), "{k:?}");
+    };
+    only(&r);
+    git(&r, &["add", "lib"]);
+    assert_eq!(sub_entry(&r), ('M', ' ', PathKind::Submodule));
+    only(&r);
+    assert!(
+        apply_fix(
+            &r,
+            &[FixKind::Stash, FixKind::SwitchDefault],
+            &Default::default()
+        )
+        .unwrap()
+        .is_none()
+    );
+    // inverse: an ordinary change alongside is stashed, the submodule stays
+    write(&r, "README", "changed\n");
+    let s = status(&r, StatusOptions::default()).unwrap();
+    let stash = plan(&s, &StashConfig::default())
+        .into_iter()
+        .find(|f| f.kind == FixKind::Stash)
+        .unwrap();
+    assert_eq!(stash.reason, "1 uncommitted path(s)");
+    let after = simulate(&s, &stash);
+    assert_eq!((after.changes.staged, after.changes.unstaged), (1, 0));
+    assert_eq!(after.changes.files.len(), 1);
+    assert_eq!(after.changes.files[0].path, "lib");
+    // a commit records the submodule's commit; what's inside it stays
+    assert_eq!(after_commit(&r), []);
+    write(&lib, "new", "x");
+    assert_eq!(after_commit(&r), [(' ', '?')]);
+}
+
+/// A repo nested untracked in the work tree: no stash takes it (git skips
+/// it) and a commit mustn't add it as an embedded repo; ignoring it can.
+#[test]
+fn a_nested_repo_is_ignored_not_stashed_or_committed() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    sb.init("w/top");
+    sb.init("w/tools/deep");
+    let k = kinds(&r);
+    assert!(k.contains(&FixKind::Gitignore), "{k:?}");
+    assert!(
+        !k.contains(&FixKind::Stash) && !k.contains(&FixKind::Commit),
+        "{k:?}"
+    );
+    // inverse: with a file alongside, they take the file only
+    write(&r, "README", "changed\n");
+    let s = status(&r, StatusOptions::default()).unwrap();
+    let fixes = plan(&s, &StashConfig::default());
+    for kind in [FixKind::Stash, FixKind::Commit] {
+        let f = fixes.iter().find(|f| f.kind == kind).unwrap();
+        assert_eq!(f.reason, "1 uncommitted path(s)", "{kind:?}");
+    }
+    // what a commit's preview leaves: the nested repos, as they were
+    let commit = fixes.iter().find(|f| f.kind == FixKind::Commit).unwrap();
+    let c = simulate(&s, commit).changes;
+    assert_eq!((c.untracked, c.untracked_repos, c.uncommitted()), (2, 2, 0));
+    let left: Vec<&str> = c.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(left, ["tools/", "top"]);
+    let out = argus_core::ops::run(
+        &r,
+        &Op::CommitAll {
+            message: "readme".into(),
+        },
+    );
+    assert!(out.success, "{}", out.output);
+    assert_eq!(git(&r, &["ls-files", "--", "top", "tools"]), "");
+    assert_eq!(git(&r, &["status", "--short"]), "?? tools/\n?? top/\n");
 }

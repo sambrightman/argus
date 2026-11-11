@@ -153,7 +153,7 @@ again runs it.
 | `M-n M-p` | next / previous repo |
 | `PgUp PgDn` `C-v M-v` `C-u C-d` | page |
 | `Home End` `M-< M->` `gg G` | top / bottom |
-| `Tab` `Enter` | unfold details: issues, available fixes, branches, files; on a file, its diff (unstaged, then staged); on a hunk, fold it. Further down: an unpushed, behind or detached-commits issue (or a branch with commits on no remote) unfolds into its commits, a commit or stash into its message and files and each file into its diff, other branches with unpushed work into each branch, an untracked directory into its files (to stage, discard or gitignore one by one). Changed words are highlighted (`[ui] refine = "all"`, `"selected"` for the hunk under the cursor, or `"off"`) |
+| `Tab` `Enter` | unfold details: issues, available fixes, branches, files; on a file, its diff (unstaged, then staged); on a hunk, fold it. Further down: an unpushed, behind or detached-commits issue (or a branch with commits on no remote) unfolds into its commits, a commit or stash into its message and files and each file into its diff, other branches with unpushed work into each branch, an untracked directory into its files (to stage, discard or gitignore one by one), a repo nested in the work tree into its own details (whose keys act on it). Changed words are highlighted (`[ui] refine = "all"`, `"selected"` for the hunk under the cursor, or `"off"`) |
 | `Space` / `U` | mark / unmark (actions apply to marked repos, else current); on a file in the details, marks the file |
 | `s` `u` `K` | stage / unstage / discard files: the marked ones, else the one under the cursor in the details. Discard returns them to HEAD (deleting untracked files) and always asks first |
 | `i` | **Gitignore** the untracked files marked, else under the cursor, else all of the selected repos': `t` top-level `.gitignore`, `d` their directory's, `p` `.git/info/exclude` (this clone), `g` global excludes. `a` switches between anchored (`/build/`: this path only, the default) and unanchored (`build/`: the name anywhere); each item shows the rules it adds |
@@ -278,6 +278,14 @@ Nothing is offered during a conflict.
 * **`reattach`** switches a detached HEAD to the branch at the same commit
   (the default branch if it's one of them; several others are left to you).
   Not in submodules, where a detached HEAD is normal.
+* **Submodules** show in their parent as git shows them: `M` when one is at
+  another commit than the parent records, which `commit` records (and
+  which blocks `switch-default`); ` m` / ` ?` for changes inside one, which
+  are its own to stash, commit or ignore on its own row, not the parent's.
+  No stash takes a submodule (git's doesn't).
+* **Repos nested in the work tree** (untracked, not submodules) get
+  `gitignore` only: git's stash skips them, and `commit` leaves them out
+  rather than add them as embedded repos.
 * **Commits on no branch** (a detached HEAD that moved on) get `b c`: a
   branch there, by the name you give. **No remote** gets `P r`: the URL
   you give, added as `origin`. **Untracked files** get `gitignore`: `i`

@@ -3979,3 +3979,91 @@ fn a_childs_parents_are_refreshed_with_it() {
         [Effect::Refresh(expect)]
     );
 }
+
+/// A repo nested untracked in another's work tree unfolds into its own
+/// details, whose lines act on it; it isn't listed itself.
+#[test]
+fn a_nested_repo_unfolds_into_its_own_details_and_acts_there() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let c = sb.path("dev/clean");
+        for rel in ["nested", "tools/deep"] {
+            let n = c.join(rel);
+            std::fs::create_dir_all(&n).unwrap();
+            git(&n, &["init", "-q"]);
+            write(&n, "a", "1\n");
+            commit(&n, "a");
+            write(&n, "a", "2\n");
+        }
+        // listed, and named like the first: not what that unfolds into
+        let other = sb.init("dev/a/nested");
+        commit(&other, "o");
+    });
+    let listed = names(&app);
+    cursor_on_detail(&mut app, "clean", "    ?? nested");
+    app.act(Action::ToggleExpand);
+    let under = below(&app, "    ?? nested", 4);
+    assert!(under.iter().any(|l| l == "M a"), "{under:?}");
+    let path_of = |under: &[String]| under.iter().find(|l| l.starts_with("path")).cloned();
+    assert!(
+        path_of(&under).unwrap().ends_with("/dev/clean/nested"),
+        "{under:?}"
+    );
+    assert_eq!(names(&app), listed, "not a row of its own");
+    // its file's line acts in it
+    let nested = sb.path("dev/clean/nested").canonicalize().unwrap();
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| {
+            matches!(r, Row::Detail { repo, line }
+                if app.ws.entries[*repo].path == nested && line.file.as_deref() == Some("a"))
+        })
+        .unwrap();
+    match app.act(Action::StageFiles).as_slice() {
+        [Effect::Jobs(j)] => {
+            assert_eq!(j[0].path, nested);
+            assert_eq!(
+                j[0].op,
+                Op::Add {
+                    paths: vec!["a".into()]
+                }
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    // and what changes there is refreshed with the repo it's in
+    let clean = sb.path("dev/clean").canonicalize().unwrap();
+    assert_eq!(
+        app.ws.with_parents(&nested),
+        [nested.clone(), clean.clone()]
+    );
+    // collapsing from its lines collapses the listed repo
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| {
+            matches!(r, Row::Detail { repo, line }
+                if app.ws.entries[*repo].path == nested && line.file.is_none() && line.expand.is_none())
+        })
+        .unwrap();
+    app.act(Action::ToggleExpand);
+    assert_eq!(current(&app), "acme/clean");
+    assert!(matches!(app.rows[app.cursor], Row::Repo(_)));
+    assert!(!app.expanded.contains(&nested));
+    // one inside an untracked directory unfolds from there
+    cursor_on_detail(&mut app, "clean", "    ?? tools/");
+    app.act(Action::ToggleExpand);
+    cursor_on_detail(&mut app, "clean", "      ?? tools/deep");
+    app.act(Action::ToggleExpand);
+    let under = below(&app, "      ?? tools/deep", 6);
+    assert!(under.iter().any(|l| l == "M a"), "{under:?}");
+    // its own, with the other still unfolded
+    assert!(
+        path_of(&under).unwrap().ends_with("/dev/clean/tools/deep"),
+        "{under:?}"
+    );
+    // folded again, its lines go (the entry stays, unlisted)
+    cursor_on_detail(&mut app, "clean", "    ?? nested");
+    app.act(Action::ToggleExpand);
+    assert_eq!(below(&app, "    ?? nested", 4), Vec::<String>::new());
+}

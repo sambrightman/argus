@@ -419,10 +419,21 @@ fn worktrees_and_submodules_listed() {
     assert_eq!(s.submodules, vec![r.join("vendor/lib")]);
     assert!(s.changes.is_clean());
 
-    // dirty submodule makes the parent dirty
+    // changes inside a submodule are listed in the parent, but are the
+    // submodule's to fix
     write(&r.join("vendor/lib"), "README", "changed");
     let s = st(&r);
-    assert_eq!(s.changes.unstaged, 1, "{:?}", s.changes.files);
+    assert_eq!(
+        (
+            s.changes.unstaged,
+            s.changes.submodule_content,
+            s.changes.total()
+        ),
+        (0, 1, 1),
+        "{:?}",
+        s.changes.files
+    );
+    assert!(!s.changes.is_clean());
 
     // worktree status is independent
     let ws = st(&wt);
@@ -936,12 +947,49 @@ fn untracked_listings_say_whether_there_are_more() {
     for f in ["a", "b", "c"] {
         write(&r, &format!("d/{f}"), "x");
     }
-    let list = |limit| argus_core::status::untracked_in(&r, "d/", limit).unwrap();
+    let list = |limit| {
+        let (v, more) = argus_core::status::untracked_in(&r, "d/", limit).unwrap();
+        (v.into_iter().map(|(p, _)| p).collect::<Vec<String>>(), more)
+    };
     assert_eq!(
         list(3),
-        (vec!["d/a".into(), "d/b".into(), "d/c".into()], false)
+        (["d/a", "d/b", "d/c"].map(String::from).to_vec(), false)
     );
-    assert_eq!(list(2), (vec!["d/a".into(), "d/b".into()], true));
+    assert_eq!(list(2), (["d/a", "d/b"].map(String::from).to_vec(), true));
+}
+
+#[test]
+fn nested_repos_are_told_from_files() {
+    use argus_core::status::PathKind;
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    commit(&r, "r");
+    write(&r, "d/file", "x");
+    sb.init("r/d/inner");
+    sb.init("r/top");
+    write(&r, "loose", "x");
+    let (v, _) = argus_core::status::untracked_in(&r, "d/", 10).unwrap();
+    assert_eq!(
+        v,
+        [
+            ("d/file".into(), PathKind::File),
+            ("d/inner".into(), PathKind::Repo),
+        ]
+    );
+    let kinds: Vec<_> = st(&r)
+        .changes
+        .files
+        .into_iter()
+        .map(|f| (f.path, f.kind))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("d/".into(), PathKind::File),
+            ("loose".into(), PathKind::File),
+            ("top".into(), PathKind::Repo),
+        ]
+    );
 }
 
 #[test]

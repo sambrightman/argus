@@ -150,7 +150,11 @@ pub fn plan_tracks(
             }
         }
         if track.team.is_none() {
-            for e in ws.entries.iter().filter(|e| e.kind == RepoKind::Main) {
+            for e in ws
+                .entries
+                .iter()
+                .filter(|e| e.kind == RepoKind::Main && !e.nested)
+            {
                 if let Some(id) = &e.id
                     && id.host.eq_ignore_ascii_case(&track.host)
                     && id.owner.eq_ignore_ascii_case(&track.owner)

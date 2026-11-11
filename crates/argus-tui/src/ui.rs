@@ -75,7 +75,12 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
             format!(" argus  {attn} of {total} repos need attention · a: show all")
         } else {
             let mut s = format!(" argus  {n} repos · {attn} need attention · a: attention only");
-            let hidden = app.ws.entries.iter().filter(|e| e.flags.hidden()).count();
+            let hidden = app
+                .ws
+                .entries
+                .iter()
+                .filter(|e| e.flags.hidden() && !e.nested)
+                .count();
             if !app.view.show_hidden && hidden > 0 {
                 s.push_str(&format!(" · H: show {hidden} hidden"));
             }

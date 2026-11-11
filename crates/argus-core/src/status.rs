@@ -81,6 +81,23 @@ pub struct FileChange {
     /// `git status --short` style codes: index (X) and worktree (Y).
     pub index: char,
     pub worktree: char,
+    #[serde(default)]
+    pub kind: PathKind,
+}
+
+/// What a changed path is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PathKind {
+    #[default]
+    File,
+    /// A submodule: `M` when it's at another commit than recorded, else
+    /// (work tree only, as `git status --short`) `m` for modified content,
+    /// `?` for untracked content.
+    Submodule,
+    /// A repo nested in the work tree, untracked; or an untracked directory
+    /// (`dir/`) holding nothing else. No stash or commit takes them.
+    Repo,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +106,15 @@ pub struct Changes {
     pub unstaged: usize,
     pub untracked: usize,
     pub conflicted: usize,
+    /// Of `staged` and `unstaged`, submodules at another commit than
+    /// recorded: a commit records them, no stash takes them.
+    pub staged_submodules: usize,
+    pub unstaged_submodules: usize,
+    /// Submodules whose only changes are inside them: theirs to fix (on
+    /// their own rows), not counted above.
+    pub submodule_content: usize,
+    /// Of `untracked`, nested repos (see [`PathKind::Repo`]).
+    pub untracked_repos: usize,
     /// Up to [`MAX_FILES`] entries, sorted by path.
     pub files: Vec<FileChange>,
 }
@@ -111,7 +137,20 @@ impl Changes {
     }
     /// Distinct changed paths.
     pub fn total(&self) -> usize {
-        self.staged + self.unstaged + self.untracked + self.conflicted
+        self.uncommitted() + self.conflicted + self.submodule_content
+    }
+    /// Paths a commit of everything would take.
+    pub fn uncommitted(&self) -> usize {
+        self.staged + self.unstaged + self.untracked - self.untracked_repos
+    }
+    /// Paths a stash would take, untracked ones with `untracked`.
+    pub fn stashable(&self, untracked: bool) -> usize {
+        self.staged - self.staged_submodules + self.unstaged - self.unstaged_submodules
+            + if untracked {
+                self.untracked - self.untracked_repos
+            } else {
+                0
+            }
     }
 }
 
@@ -864,13 +903,30 @@ fn branches(
 }
 
 /// The untracked files in `dir` (repo-relative, ending in `/`), which
-/// status shows collapsed, up to `limit`, sorted; and whether there are
-/// more. Ignored files are left out, as git does.
+/// status shows collapsed, up to `limit`, sorted, each a file or a nested
+/// repo; and whether there are more. Ignored files are left out, as git does.
 pub fn untracked_in(
     path: &Path,
     dir: &str,
     limit: usize,
-) -> Result<(Vec<String>, bool), StatusError> {
+) -> Result<(Vec<(String, PathKind)>, bool), StatusError> {
+    let mut v = untracked(path, Some(dir))?;
+    let more = v.len() > limit;
+    v.truncate(limit);
+    Ok((v, more))
+}
+
+/// The repos nested untracked in the work tree, repo-relative.
+pub fn nested_repos(path: &Path) -> Result<Vec<String>, StatusError> {
+    Ok(untracked(path, None)?
+        .into_iter()
+        .filter(|(_, k)| *k == PathKind::Repo)
+        .map(|(p, _)| p)
+        .collect())
+}
+
+/// Every untracked file (in `dir`), sorted.
+fn untracked(path: &Path, dir: Option<&str>) -> Result<Vec<(String, PathKind)>, StatusError> {
     use gix::status::index_worktree::Item as IW;
     let repo = crate::isolation::open(path).map_err(err)?;
     let iter = repo
@@ -881,7 +937,7 @@ pub fn untracked_in(
             ignore: gix::submodule::config::Ignore::All,
             check_dirty: false,
         })
-        .into_iter([gix::bstr::BString::from(dir)])
+        .into_iter(dir.map(gix::bstr::BString::from))
         .map_err(err)?;
     let mut v = vec![];
     for item in iter {
@@ -890,15 +946,17 @@ pub fn untracked_in(
             && entry.status == gix::dir::entry::Status::Untracked
         {
             let p = entry.rela_path.to_str_lossy().into_owned();
-            if p.starts_with(dir) {
-                v.push(p);
+            if p.starts_with(dir.unwrap_or("")) {
+                let kind = match entry.disk_kind {
+                    Some(gix::dir::entry::Kind::Repository) => PathKind::Repo,
+                    _ => PathKind::File,
+                };
+                v.push((p, kind));
             }
         }
     }
-    v.sort();
-    let more = v.len() > limit;
-    v.truncate(limit);
-    Ok((v, more))
+    v.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(v)
 }
 
 /// `head_tree`, when known, saves gix reading HEAD again.
@@ -932,6 +990,7 @@ fn changes(
 
     // path -> (index code, worktree code)
     let mut files: BTreeMap<String, (char, char)> = BTreeMap::new();
+    let mut kinds: HashMap<String, PathKind> = HashMap::new();
     for item in iter {
         let item = item.map_err(err)?;
         match item {
@@ -944,24 +1003,40 @@ fn changes(
                     C::Rewrite { copy: true, .. } => 'C',
                     C::Rewrite { .. } => 'R',
                 };
-                files
-                    .entry(change.location().to_str_lossy().into_owned())
-                    .or_insert((' ', ' '))
-                    .0 = code;
+                let path = change.location().to_str_lossy().into_owned();
+                if change.entry_mode().is_submodule() {
+                    kinds.insert(path.clone(), PathKind::Submodule);
+                }
+                files.entry(path).or_insert((' ', ' ')).0 = code;
             }
             gix::status::Item::IndexWorktree(iw) => {
-                let mut path = iw.rela_path().to_str_lossy().into_owned();
-                if let IW::DirectoryContents { entry, .. } = &iw {
-                    // like `git status`, mark collapsed directories with a slash
-                    if entry.disk_kind == Some(gix::dir::entry::Kind::Directory)
-                        && !path.ends_with('/')
-                    {
-                        path.push('/');
-                    }
+                let path = iw.rela_path().to_str_lossy().into_owned();
+                // files only (see above); directories are collapsed below
+                if let IW::DirectoryContents { entry, .. } = &iw
+                    && entry.disk_kind == Some(gix::dir::entry::Kind::Repository)
+                {
+                    kinds.insert(path.clone(), PathKind::Repo);
                 }
                 let code = match &iw {
                     IW::Modification { status, .. } => match status {
                         EntryStatus::Conflict { .. } => 'U',
+                        EntryStatus::Change(Change::SubmoduleModification(sm)) => {
+                            kinds.insert(path.clone(), PathKind::Submodule);
+                            let code = if sm.checked_out_head_id != sm.index_id {
+                                'M'
+                            } else if sm.changes.iter().flatten().any(|i| {
+                                !matches!(
+                                    i,
+                                    gix::status::Item::IndexWorktree(IW::DirectoryContents { .. })
+                                )
+                            }) {
+                                'm'
+                            } else {
+                                '?'
+                            };
+                            files.entry(path).or_insert((' ', ' ')).1 = code;
+                            continue;
+                        }
                         EntryStatus::Change(Change::Removed) => 'D',
                         EntryStatus::Change(Change::Type { .. }) => 'T',
                         EntryStatus::Change(_) => 'M',
@@ -988,18 +1063,29 @@ fn changes(
         }
     }
 
-    collapse_untracked(repo, &mut files)?;
+    collapse_untracked(repo, &mut files, &mut kinds)?;
     let mut c = Changes::default();
     for (path, (x, y)) in files {
+        let kind = kinds.get(&path).copied().unwrap_or_default();
+        let sub = kind == PathKind::Submodule;
         match (x, y) {
-            ('?', _) => c.untracked += 1,
+            ('?', _) => {
+                c.untracked += 1;
+                c.untracked_repos += usize::from(kind == PathKind::Repo);
+            }
             ('U', _) => c.conflicted += 1,
             _ => {
+                // changes inside a submodule aren't the parent's
+                let inside = sub && matches!(y, 'm' | '?');
                 if x != ' ' {
                     c.staged += 1;
+                    c.staged_submodules += usize::from(sub);
+                } else if inside {
+                    c.submodule_content += 1;
                 }
-                if y != ' ' {
+                if y != ' ' && !inside {
                     c.unstaged += 1;
+                    c.unstaged_submodules += usize::from(sub);
                 }
             }
         }
@@ -1008,6 +1094,7 @@ fn changes(
                 path,
                 index: x,
                 worktree: y,
+                kind,
             });
         }
     }
@@ -1016,9 +1103,11 @@ fn changes(
 
 /// Replace untracked files inside directories with no tracked content by the
 /// outermost such directory (`dir/`), matching `git status` "normal" mode.
+/// A directory holding only nested repos is a [`PathKind::Repo`] too.
 fn collapse_untracked(
     repo: &gix::Repository,
     files: &mut BTreeMap<String, (char, char)>,
+    kinds: &mut HashMap<String, PathKind>,
 ) -> Result<(), StatusError> {
     if !files.values().any(|c| c.0 == '?') {
         return Ok(());
@@ -1050,6 +1139,13 @@ fn collapse_untracked(
         }
         if let Some(dir) = collapsed {
             files.remove(&path);
+            let all_repos = kinds.get(&path) == Some(&PathKind::Repo)
+                && (!files.contains_key(&dir) || kinds.get(&dir) == Some(&PathKind::Repo));
+            if all_repos {
+                kinds.insert(dir.clone(), PathKind::Repo);
+            } else {
+                kinds.remove(&dir);
+            }
             files.insert(dir, ('?', '?'));
         }
     }
@@ -1331,6 +1427,7 @@ mod tests {
             path: path.into(),
             index,
             worktree: index,
+            kind: PathKind::File,
         };
         let c = Changes {
             files: vec![change("build/", '?'), change("src/", 'M')],

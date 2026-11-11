@@ -10,6 +10,7 @@ use argus_core::history::Range;
 use argus_core::icons::Icons;
 use argus_core::ops::Op;
 use argus_core::paths::contract_tilde;
+use argus_core::status::PathKind;
 
 /// A detail line: styled parts. `None` uses the plain detail style.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +58,19 @@ pub enum Expand {
     CommitFile(String, String),
     /// The files of an untracked directory shown collapsed.
     Dir(String),
+    /// A repo nested in the work tree: its own details, acting on it.
+    Repo(String),
+}
+
+/// What an untracked path's line unfolds into, if anything.
+pub fn untracked_expand(path: &str, kind: PathKind) -> Option<Expand> {
+    if path.ends_with('/') {
+        Some(Expand::Dir(path.to_string()))
+    } else if kind == PathKind::Repo {
+        Some(Expand::Repo(path.to_string()))
+    } else {
+        None
+    }
 }
 
 /// What an issue's line unfolds into: the commits behind it.
@@ -354,8 +368,9 @@ pub fn details(
             };
             v.push(DetailLine {
                 file: Some(f.path.clone()),
-                expand: (f.index == '?' && f.path.ends_with('/'))
-                    .then(|| Expand::Dir(f.path.clone())),
+                expand: (f.index == '?')
+                    .then(|| untracked_expand(&f.path, f.kind))
+                    .flatten(),
                 ..line(vec![
                     plain("    "),
                     styled(role, format!("{}{}", f.index, f.worktree)),

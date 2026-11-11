@@ -23,8 +23,11 @@ use crate::status::{self, RepoStatus};
 pub struct Entry {
     pub path: PathBuf,
     pub kind: RepoKind,
-    /// Main repo for worktrees and submodules.
+    /// Main repo for worktrees and submodules, and the repo a nested one is in.
     pub parent: Option<PathBuf>,
+    /// A repo nested untracked in its parent's work tree: shown only under
+    /// its line there, not listed, and left out of everything done to all.
+    pub nested: bool,
     pub id: Option<RepoId>,
     /// Key for marks/snoozes: identity for main clones, path otherwise.
     pub key: String,
@@ -47,6 +50,7 @@ impl Entry {
             path,
             kind,
             parent: None,
+            nested: false,
             id: None,
             key,
             flags: Flags::default(),
@@ -442,6 +446,23 @@ impl Workspace {
         self.index_of(path).map(|i| &self.entries[i])
     }
 
+    /// The repo at `rel` in `parent`'s work tree, as a nested entry (added,
+    /// with its status, the first time); none if there's no repo there.
+    pub fn nested(&mut self, parent: &Path, rel: &str) -> Option<usize> {
+        let path = std::fs::canonicalize(parent.join(rel)).ok()?;
+        if let Some(i) = self.index_of(&path) {
+            return Some(i);
+        }
+        let kind = discover::classify(&path)?;
+        let mut e = Entry::new(path.clone(), kind);
+        e.parent = Some(parent.to_path_buf());
+        e.nested = true;
+        self.entries.push(e);
+        self.entries.sort_by(|a, b| a.path.cmp(&b.path));
+        self.refresh(&path);
+        self.index_of(&path)
+    }
+
     /// `path`, then its parent, grandparent…: what a change in a submodule
     /// or worktree may change the status of.
     pub fn with_parents(&self, path: &Path) -> Vec<PathBuf> {
@@ -459,7 +480,7 @@ impl Workspace {
     /// are learnt from their main repo's status.
     fn add_children(&mut self) {
         let mut extra: BTreeMap<PathBuf, Entry> = BTreeMap::new();
-        for e in &self.entries {
+        for e in self.entries.iter().filter(|e| !e.nested) {
             let Some(s) = e.status() else { continue };
             let kids = s.worktrees.iter().map(|p| (p, RepoKind::Worktree));
             let kids = kids.chain(s.submodules.iter().map(|p| (p, RepoKind::Submodule)));
@@ -565,7 +586,8 @@ impl Workspace {
             (filter.show_hidden || !e.flags.hidden())
                 && (!filter.attention_only || e.needs_attention())
         };
-        let is_top = |e: &Entry| e.parent.as_ref().is_none_or(|p| self.index_of(p).is_none());
+        let is_top =
+            |e: &Entry| !e.nested && e.parent.as_ref().is_none_or(|p| self.index_of(p).is_none());
         let mut top: Vec<usize> = (0..self.entries.len())
             .filter(|&i| is_top(&self.entries[i]))
             .collect();
@@ -604,7 +626,10 @@ impl Workspace {
     fn collect_children(&self, i: usize, out: &mut Vec<usize>, seen: &mut Vec<usize>) {
         let p = &self.entries[i].path;
         let mut kids: Vec<usize> = (0..self.entries.len())
-            .filter(|&c| self.entries[c].parent.as_ref() == Some(p) && !seen.contains(&c))
+            .filter(|&c| {
+                let e = &self.entries[c];
+                !e.nested && e.parent.as_ref() == Some(p) && !seen.contains(&c)
+            })
             .collect();
         kids.sort_by_key(|&c| (self.entries[c].kind, self.entries[c].path.clone()));
         seen.extend(&kids);

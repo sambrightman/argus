@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::StashConfig;
 use crate::ops::{self, Op, OpOutcome};
 use crate::status::{
-    self, BranchInfo, Head, Integration, PullBy, RepoStatus, StatusOptions, Tracking,
+    self, BranchInfo, Changes, Head, Integration, PathKind, PullBy, RepoStatus, StatusOptions,
+    Tracking,
 };
 
 #[derive(
@@ -183,7 +184,7 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
         return v;
     }
     let tracked_dirty = s.changes.staged + s.changes.unstaged > 0;
-    let any_dirty = tracked_dirty || s.changes.untracked > 0;
+    let any_dirty = s.changes.uncommitted() > 0;
     let head_branch = match &s.head {
         Head::Branch(b) => Some(b.as_str()),
         _ => None,
@@ -443,13 +444,7 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
     }
 
     // what a stash would take: untracked files only when asked
-    let stashable = s.changes.staged
-        + s.changes.unstaged
-        + if stash.untracked {
-            s.changes.untracked
-        } else {
-            0
-        };
+    let stashable = s.changes.stashable(stash.untracked);
     if stashable > 0 {
         v.push(Fix {
             blocked: None,
@@ -465,7 +460,7 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
             op: Op::CommitAll {
                 message: String::new(),
             },
-            reason: format!("{} uncommitted path(s)", s.changes.total()),
+            reason: format!("{} uncommitted path(s)", s.changes.uncommitted()),
         });
     }
     let untracked: Vec<String> = s
@@ -621,15 +616,20 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
             if *staged || !paths.is_empty() {
                 return s;
             }
+            // submodules stay, at their commits and with what's inside
+            // them, and so do nested repos
             let c = &mut s.changes;
-            c.unstaged = 0;
+            c.unstaged = c.unstaged_submodules;
             if *untracked {
-                c.untracked = 0;
+                c.untracked = c.untracked_repos;
             }
             if !*keep_index {
-                c.staged = 0;
+                c.staged = c.staged_submodules;
             }
             c.files.retain_mut(|f| {
+                if f.kind != PathKind::File {
+                    return true;
+                }
                 if f.index == '?' {
                     return !*untracked;
                 }
@@ -641,7 +641,24 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
             });
         }
         Op::CommitAll { .. } => {
-            s.changes = Default::default();
+            // what's inside submodules stays theirs (only they have tracked
+            // paths with `m` or `?` in the work tree), and nested repos stay
+            let c = &mut s.changes;
+            c.files.retain(|f| {
+                f.kind == PathKind::Repo || (f.index != '?' && matches!(f.worktree, 'm' | '?'))
+            });
+            let mut content = 0;
+            for f in c.files.iter_mut().filter(|f| f.kind != PathKind::Repo) {
+                f.index = ' ';
+                content += 1;
+            }
+            s.changes = Changes {
+                submodule_content: content,
+                untracked: c.untracked_repos,
+                untracked_repos: c.untracked_repos,
+                files: std::mem::take(&mut c.files),
+                ..Default::default()
+            };
             if let Some(t) = &mut s.upstream {
                 t.ahead += 1;
             }
@@ -811,13 +828,7 @@ pub fn apply_fix(
     allowed: &[FixKind],
     stash: &StashConfig,
 ) -> Result<Option<Applied>, status::StatusError> {
-    let s = status::status(
-        path,
-        StatusOptions {
-            submodules: false,
-            ..Default::default()
-        },
-    )?;
+    let s = status::status(path, StatusOptions::default())?;
     let Some(fix) = choose(&s, allowed, stash) else {
         return Ok(None);
     };

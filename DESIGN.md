@@ -433,6 +433,16 @@ rendering is snapshot-tested via `TestBackend`.
   main checkout reports them). **Submodules don't report detached HEAD**:
   being detached at the pinned commit is normal, and drift shows as a
   modification in the parent.
+* **A submodule's entry in its parent says which change it is**, as `git
+  status --short` does: `M` (at another commit than recorded: the parent
+  commits it) or ` m` / ` ?` (changes inside: the submodule's own row fixes
+  them). Fixes are planned from that, so the preview and the auto-fix agree;
+  git's stash takes neither.
+* **Nested repos are entries only once unfolded.** A repo nested untracked
+  in a work tree unfolds, under its line there, into its own details, whose
+  actions run in it: it's a workspace entry marked `nested`, left out of
+  the list and of everything done to all repos. Stash and commit leave
+  nested repos out (git's stash skips them; `add --all` would embed them).
 * **Detached HEAD commits held by no ref** (garbage-collection risk) are
   their own high-severity issue.
 * **Shell/git-UI hand-off suspends the TUI**, as lazygit does. An embedded pty

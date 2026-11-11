@@ -656,7 +656,14 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
         _ => {}
     }
     if let Op::CommitAll { .. } = op {
-        let add = git(&cwd, &["add".into(), "--all".into()], started);
+        // everything but nested repos, which git would add as embedded ones
+        let mut args: Vec<String> = vec!["add".into(), "--all".into()];
+        let nested = crate::status::nested_repos(&cwd).unwrap_or_default();
+        if !nested.is_empty() {
+            args.extend(["--".into(), ".".into()]);
+            args.extend(nested.iter().map(|p| format!(":(exclude,literal){p}")));
+        }
+        let add = git(&cwd, &args, started);
         if !add.success {
             return add;
         }

@@ -159,8 +159,7 @@ fn unfolded_rows(
     let Some(x) = &line.expand else {
         return vec![];
     };
-    let text: String = line.parts.iter().map(|(_, t)| t.as_str()).collect();
-    let indent = (text.len() - text.trim_start().len() + 2).max(6);
+    let indent = unfold_indent(line);
     if !unfolded.contains(&(repo.to_path_buf(), x.clone())) {
         return vec![];
     }
@@ -168,6 +167,20 @@ fn unfolded_rows(
         .entry((repo.to_path_buf(), x.clone(), indent))
         .or_insert_with(|| unfold(repo, s, x, indent))
         .clone()
+}
+
+/// `line` indented `pad` more spaces.
+fn padded(mut line: DetailLine, pad: usize) -> DetailLine {
+    if pad > 0 {
+        line.parts.insert(0, (None, " ".repeat(pad)));
+    }
+    line
+}
+
+/// How far what `line` unfolds into is indented.
+fn unfold_indent(line: &DetailLine) -> usize {
+    let text: String = line.parts.iter().map(|(_, t)| t.as_str()).collect();
+    (text.len() - text.trim_start().len() + 2).max(6)
 }
 
 /// What `x` unfolds into, read now, indented `indent` spaces.
@@ -300,13 +313,16 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
                 rows
             }
         },
+        // its entry's details, which `rebuild_at` puts there
+        Expand::Repo(_) => vec![],
         Expand::Dir(dir) => match argus_core::status::untracked_in(repo, dir, MAX_DIR_FILES) {
             Err(e) => failed(e.to_string()),
             Ok((files, more)) => {
                 let mut rows: Vec<DetailLine> = files
                     .into_iter()
-                    .map(|f| DetailLine {
+                    .map(|(f, kind)| DetailLine {
                         file: Some(f.clone()),
+                        expand: crate::details::untracked_expand(&f, kind),
                         ..line(vec![
                             (Some(Role::Untracked), "??".into()),
                             (None, format!(" {f}")),
@@ -705,6 +721,20 @@ impl App {
     /// hunk isn't kept), else its file's line, else its repo.
     fn rebuild_at(&mut self, target: Option<RowKey>) {
         let keep = target.as_ref().map(|t| t.0.clone());
+        // nested repos unfolded: entries of their own (again, after a scan)
+        let nested: Vec<(PathBuf, String)> = self
+            .unfolded
+            .iter()
+            .filter_map(|(p, x)| match x {
+                Expand::Repo(rel) => Some((p.clone(), rel.clone())),
+                _ => None,
+            })
+            .collect();
+        for (p, rel) in nested {
+            if self.ws.index_of(&p).is_some() {
+                self.ws.nested(&p, &rel);
+            }
+        }
         let needle = self.filter.to_lowercase();
         let (icons, _) = self.ws.config.ui.icons();
         let mut rows = vec![];
@@ -718,13 +748,16 @@ impl App {
             }
             rows.push(Row::Repo(i));
             if self.expanded.contains(&e.path) {
-                // depth first: each line, its diff, then what it unfolds into
-                let mut stack: Vec<DetailLine> =
+                // depth first: each line, its diff, then what it unfolds
+                // into; a nested repo's lines are its own, indented `pad`
+                let mut stack: Vec<(usize, usize, DetailLine)> =
                     details(e, &self.ws.config.fix.auto, &self.ws.config.stash, &icons)
                         .into_iter()
                         .rev()
+                        .map(|l| (i, 0, l))
                         .collect();
-                while let Some(line) = stack.pop() {
+                while let Some((r, pad, line)) = stack.pop() {
+                    let e = &self.ws.entries[r];
                     let expanded = line.file.as_ref().filter(|f| {
                         self.expanded_files
                             .contains(&(e.path.clone(), f.to_string()))
@@ -747,9 +780,39 @@ impl App {
                         ),
                         None => (vec![], vec![]),
                     };
-                    rows.push(Row::Detail { repo: i, line });
-                    rows.extend(diff.into_iter().map(|line| Row::Detail { repo: i, line }));
-                    stack.extend(below.into_iter().rev());
+                    let inner = match &line.expand {
+                        Some(x @ Expand::Repo(rel))
+                            if self.unfolded.contains(&(e.path.clone(), x.clone())) =>
+                        {
+                            self.ws.entries.iter().position(|n| {
+                                n.nested
+                                    && n.parent.as_ref() == Some(&e.path)
+                                    && n.path.ends_with(rel)
+                            })
+                        }
+                        _ => None,
+                    };
+                    let inner_pad = unfold_indent(&line);
+                    rows.push(Row::Detail { repo: r, line });
+                    rows.extend(diff.into_iter().map(|line| Row::Detail {
+                        repo: r,
+                        line: padded(line, pad),
+                    }));
+                    stack.extend(below.into_iter().rev().map(|l| (r, pad, l)));
+                    if let Some(n) = inner {
+                        let lines = details(
+                            &self.ws.entries[n],
+                            &self.ws.config.fix.auto,
+                            &self.ws.config.stash,
+                            &icons,
+                        );
+                        stack.extend(
+                            lines
+                                .into_iter()
+                                .rev()
+                                .map(|l| (n, inner_pad, padded(l, inner_pad))),
+                        );
+                    }
                 }
             }
         }
@@ -793,6 +856,16 @@ impl App {
 
     fn current_path(&self) -> Option<PathBuf> {
         self.current().map(|e| e.path.clone())
+    }
+
+    /// The listed repo the cursor is in: the current one, or for a nested
+    /// repo's lines, the repo it's in.
+    fn listed_path(&self) -> Option<PathBuf> {
+        let mut e = self.current()?;
+        while e.nested {
+            e = self.ws.get(e.parent.as_ref()?)?;
+        }
+        Some(e.path.clone())
     }
 
     /// Marked repos that are still listed, else the current one.
@@ -1068,7 +1141,7 @@ impl App {
             ToggleExpand if self.on_unfoldable() => return self.toggle_unfold(),
             ToggleExpand if self.on_file_or_diff() => return self.toggle_file_or_hunk(),
             ToggleExpand => {
-                if let Some(p) = self.current_path() {
+                if let Some(p) = self.listed_path() {
                     if !self.expanded.remove(&p) {
                         self.expanded.insert(p.clone());
                     }
