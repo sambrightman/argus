@@ -73,6 +73,11 @@ clone = "auto"                   # or "notify": only report new repos
 # include_archived = false
 # include_forks = true
 
+[[track]]                        # or a directory of repos: <host>/<owner>/<name>
+forge = "dir"                    # mirrors, a file server
+host = "/srv/git"
+owner = "team"
+
 [fix]
 auto = ["push", "push-branches", "switch-default", "reattach"]  # kinds `x x` / `argus fix` apply without asking
 
@@ -178,7 +183,7 @@ argus pull [-n] [--no-clone] [PATTERNS…]
 argus fix [-n] [-F] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine; -F fetches first
 argus mark PATTERNS… [--favourite|--no-favourite] [--pull|--no-pull] [--ignore|--unignore] [--ignore-issue ISSUE [--pin|--no-pin]|--unignore-issue ISSUE] [--snooze 3d|--unsnooze] [--clear]
 argus ack [PATTERNS…]
-argus forge list ORG [--team T]
+argus forge list ORG [--team T] [--forge dir --host DIR]
 argus root add [DIRS…] | remove DIRS… | list
 argus paths                            # config and state file locations
 argus completions bash|zsh|fish|elvish|powershell

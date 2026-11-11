@@ -237,9 +237,12 @@ enum ForgeCmd {
         /// Only this org team's repositories (team slug).
         #[arg(long)]
         team: Option<String>,
-        /// Forge host (GitHub Enterprise: your host).
+        /// Forge host (GitHub Enterprise: your host; `dir`: the directory).
         #[arg(long, default_value = "github.com")]
         host: String,
+        /// Forge kind: `github`, or `dir` for a directory of repos.
+        #[arg(long, default_value = "github")]
+        forge: String,
     },
 }
 
@@ -1450,8 +1453,13 @@ fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> R
 
 fn forge_cmd(cmd: ForgeCmd, json: bool) -> Result<()> {
     match cmd {
-        ForgeCmd::List { owner, team, host } => {
-            let f = argus_forge::for_track("github", &host)?;
+        ForgeCmd::List {
+            owner,
+            team,
+            host,
+            forge,
+        } => {
+            let f = argus_forge::for_track(&forge, &host)?;
             let repos = f.list(&owner, team.as_deref())?;
             if json {
                 print_json(&repos)?;

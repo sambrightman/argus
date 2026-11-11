@@ -1255,3 +1255,34 @@ fn only_successful_clones_are_recorded() {
     assert!(added.is_empty(), "{added:?}");
     assert!(w.state.new.is_empty());
 }
+
+#[test]
+fn clones_of_a_directory_forge_are_known_by_its_identity() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let from = sb.path("forge/acme/w.git");
+    let to = sb.path("dev/w");
+    git(
+        &sb.root(),
+        &["clone", "-q", from.to_str().unwrap(), to.to_str().unwrap()],
+    );
+    sb.init("dev/local");
+    let host = sb.path("forge").display().to_string();
+    let id = format!("{}/acme/w", host.to_lowercase());
+    let tracked = |forge: &str| {
+        let w = ws(
+            &sb,
+            &format!("[[track]]\nforge = '{forge}'\nhost = '{host}'\nowner = 'acme'"),
+        );
+        let key = w.get(&to.canonicalize().unwrap()).unwrap().key.clone();
+        (key, w.repo_names())
+    };
+    let path = |p: &str| sb.path(p).canonicalize().unwrap().display().to_string();
+    let (key, names) = tracked("dir");
+    assert_eq!(key, id);
+    assert_eq!(names, [path("dev/local"), "acme/w".into()]);
+    // inverse: the same directory as another kind of forge is just a path
+    let (key, names) = tracked("github");
+    assert_ne!(key, id);
+    assert_eq!(names, [path("dev/local"), path("dev/w")]);
+}

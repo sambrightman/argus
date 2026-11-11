@@ -1663,3 +1663,123 @@ fn glyph_columns_leave_two_spaces_after_the_widest_entry() {
         .unwrap();
     assert_eq!(second, first_set + widest + 2, "{}", lines[header]);
 }
+
+/// `forge/acme` with `have`, `fresh` and `gone`; `have` and `gone` cloned
+/// from it into `dev/acme`, then `gone` removed from it unless `keep`.
+fn dir_forge(sb: &Sandbox, keep: bool) -> std::path::PathBuf {
+    for n in ["have", "fresh", "gone"] {
+        sb.remote("acme", n);
+    }
+    for n in ["have", "gone"] {
+        let from = sb.path(&format!("forge/acme/{n}.git"));
+        let to = sb.path(&format!("dev/acme/{n}"));
+        git(
+            &sb.root(),
+            &["clone", "-q", from.to_str().unwrap(), to.to_str().unwrap()],
+        );
+    }
+    if !keep {
+        std::fs::remove_dir_all(sb.path("forge/acme/gone.git")).unwrap();
+    }
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "[[track]]\nforge = 'dir'\nhost = '{}'\nowner = 'acme'\n",
+            sb.path("forge").display()
+        ),
+    )
+    .unwrap();
+    cfg
+}
+
+#[test]
+fn pull_reports_what_a_directory_forge_has_and_no_longer_has() {
+    let sb = Sandbox::new();
+    let cfg = dir_forge(&sb, false);
+    let mut notify = std::fs::read_to_string(&cfg).unwrap();
+    notify.push_str("clone = 'notify'\n");
+    std::fs::write(&cfg, notify).unwrap();
+    let out = argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["pull", "--dry-run"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("new on forge: acme/fresh (not cloned)\n"),
+        "{stdout}"
+    );
+    // (the sandbox is home)
+    assert!(
+        stdout.contains("orphan: ~/dev/acme/gone (no longer listed by the forge)\n"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("acme/have ("),
+        "listed and cloned: nothing to say\n{stdout}"
+    );
+    // inverse: JSON has its own fields, not these lines
+    let out = argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--json", "pull", "--dry-run"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        !stdout.contains("new on forge") && !stdout.contains("orphan:"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn pull_clones_what_a_directory_forge_has() {
+    let sb = Sandbox::new();
+    let cfg = dir_forge(&sb, true);
+    let out = argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .arg("pull")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let fresh = sb.path("dev/acme/fresh");
+    assert!(fresh.join("README").exists(), "{stdout}");
+    assert!(stdout.contains("cloned: ~/dev/acme/fresh\n"), "{stdout}");
+    assert!(
+        !stdout.contains("new on forge") && !stdout.contains("orphan:"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn forge_list_reads_a_directory() {
+    let sb = Sandbox::new();
+    dir_forge(&sb, false);
+    let forge = sb.path("forge");
+    argus(&sb)
+        .args([
+            "forge",
+            "list",
+            "--forge",
+            "dir",
+            "--host",
+            forge.to_str().unwrap(),
+            "acme",
+        ])
+        .assert()
+        .success()
+        .stdout("acme/fresh\nacme/have\n");
+}

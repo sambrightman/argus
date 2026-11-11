@@ -12,6 +12,7 @@ use serde::Serialize;
 use crate::attention::{self, Issue};
 use crate::config::{Config, ConfigError};
 use crate::discover::{self, DiscoverOptions, RepoKind, Skip};
+use crate::forge::LocalForges;
 use crate::identity::RepoId;
 use crate::paths::contract_tilde;
 use crate::rules::{self, Flags, IssueList, Mark, RuleSet};
@@ -108,12 +109,12 @@ impl Entry {
         self.status().map_or(0, |s| s.changes.total() + s.ahead())
     }
 
-    fn set_status(&mut self, st: Result<RepoStatus, String>) {
+    fn set_status(&mut self, st: Result<RepoStatus, String>, ids: &LocalForges) {
         if let Ok(s) = &st {
             self.all_issues = attention::issues(s);
             self.issues = self.all_issues.clone();
             if self.id.is_none() {
-                self.id = s.remote_url.as_deref().and_then(RepoId::from_url);
+                self.id = s.remote_url.as_deref().and_then(|u| ids.id(u));
                 if (self.kind == RepoKind::Main || self.kind == RepoKind::Bare)
                     && let Some(id) = &self.id
                 {
@@ -221,6 +222,7 @@ impl Workspace {
     /// forge identity, else the path (`~/…`). Discovery and each repo's
     /// remote only, no status, so it's quick enough to run on every Tab.
     pub fn repo_names(&self) -> Vec<String> {
+        let ids = self.config.local_forges();
         let mut names: Vec<String> = in_pool(self.config.disk_jobs(), || {
             discover::discover_all(&self.config.roots, &self.discover_options())
                 .found
@@ -230,7 +232,7 @@ impl Workspace {
                         RepoKind::Main | RepoKind::Bare => crate::isolation::open(&f.path)
                             .ok()
                             .and_then(|r| status::remote_and_url(&r).1)
-                            .and_then(|u| RepoId::from_url(&u)),
+                            .and_then(|u| ids.id(&u)),
                         _ => None,
                     };
                     id.map_or_else(|| contract_tilde(&f.path), |i| i.slug())
@@ -397,8 +399,9 @@ impl Workspace {
 
     pub fn refresh_all(&mut self) {
         let results = self.statuses(self.entries.iter().map(|e| e.path.as_path()));
+        let ids = self.config.local_forges();
         for (e, r) in self.entries.iter_mut().zip(results) {
-            e.set_status(r);
+            e.set_status(r, &ids);
         }
         self.add_children();
         self.link_parents();
@@ -414,7 +417,8 @@ impl Workspace {
     /// Apply a status computed elsewhere (e.g. on a worker thread).
     pub fn update_status(&mut self, path: &Path, r: Result<RepoStatus, String>) {
         let Some(i) = self.index_of(path) else { return };
-        self.entries[i].set_status(r);
+        let ids = self.config.local_forges();
+        self.entries[i].set_status(r, &ids);
         self.add_children();
         self.link_parents();
         self.resolve_flags();
@@ -462,8 +466,9 @@ impl Workspace {
         }
         let extra: Vec<Entry> = extra.into_values().collect();
         let results = self.statuses(extra.iter().map(|e| e.path.as_path()));
+        let ids = self.config.local_forges();
         for (mut e, r) in extra.into_iter().zip(results) {
-            e.set_status(r);
+            e.set_status(r, &ids);
             self.entries.push(e);
         }
         self.entries.sort_by(|a, b| a.path.cmp(&b.path));

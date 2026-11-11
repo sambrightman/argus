@@ -148,10 +148,11 @@ pub enum CloneMode {
     expecting = "a [[track]] table with owner and its options"
 )]
 pub struct Track {
-    /// Forge kind; only `github` so far.
+    /// Forge kind: `github`, or `dir` for a directory of repos (mirrors, a
+    /// file server): a directory per owner, holding bare or plain repos.
     #[serde(default = "default_forge")]
     pub forge: String,
-    /// Forge host (GitHub Enterprise: your host).
+    /// Forge host (GitHub Enterprise: your host; `dir`: the directory).
     #[serde(default = "default_host")]
     pub host: String,
     /// Org or user.
@@ -722,6 +723,16 @@ impl Config {
         }
         let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
         auto_disk_jobs(performance_cores(), cpus)
+    }
+
+    /// Identities for clones of the directory forges tracked.
+    pub fn local_forges(&self) -> crate::forge::LocalForges {
+        crate::forge::LocalForges::new(
+            self.tracks
+                .iter()
+                .filter(|t| t.forge == crate::forge::DIR)
+                .map(|t| t.host.as_str()),
+        )
     }
 
     /// Directory new clones for `track` land in.

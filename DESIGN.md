@@ -65,7 +65,7 @@ If a job does need interaction, drop into a shell for that repo.
 crates/
   argus-core   library: config, state, discovery, status (gix), ops (git CLI),
                fix planning, pull orchestration, sorting/attention. No UI, no network to forges.
-  argus-forge  library: Forge trait + GitHub implementation. Pluggable: GitLab/Gitea later.
+  argus-forge  library: Forge implementations: GitHub, and `dir` (a directory of owners' repos: mirrors, file servers; tests use it offline). Pluggable: GitLab/Gitea later.
   argus-tui    library: ratatui app (state machine separate from rendering, so it's testable).
   argus-cli    binary `argus`: clap subcommands (status, pull, fix, forge, tui). Default = TUI.
 ```
