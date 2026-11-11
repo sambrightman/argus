@@ -607,13 +607,24 @@ tests without running them:
   mutant. `--baseline=skip` saves the baseline (~30 s) when the tests
   just passed; a full run (~1,700 mutants) is about 3 h.
 
-**CI (planned, none yet).** Different trade-offs from local work:
-incremental off (`CARGO_INCREMENTAL=0`: its caches are large and rarely
-reused), less or no debug info in test builds to keep caches small,
-caching dependencies (e.g. `Swatinem/rust-cache`, or sccache), nextest
-with JUnit output and retries, mold or wild on Linux runners, coverage
-there, and the full cargo-mutants run sharded (`--shard k/n`) weekly or
-before a release.
+**CI** (GitHub Actions, `.github/workflows/`). Different trade-offs from
+local work: incremental off (`CARGO_INCREMENTAL=0`: its caches are large
+and rarely reused), line tables only for debug info, dependencies cached
+with `Swatinem/rust-cache`, and mold as the Linux linker.
+
+* `ci.yml`, on every push to main and every PR: rustfmt, clippy and
+  rustdoc with warnings as errors; the tests with nextest's `ci` profile
+  (no fail-fast, two retries, JUnit uploaded) plus doctests, on Linux and
+  macOS; a check on the MSRV (`rust-version`, 1.90); cargo-deny; and
+  coverage with cargo-llvm-cov (summary on the run's page, lcov
+  uploaded).
+* `mutants.yml`, weekly and on demand: the full cargo-mutants run in 16
+  shards, `--in-place` on the cached build and skipping the baseline (CI
+  has just run the tests). A summary job lists missed mutants and
+  timeouts, and fails if there are any.
+* Dependabot groups cargo and action updates weekly. Actions are pinned
+  to commit hashes, with the version in a comment.
+* Windows isn't covered: parts of argus are Unix-only.
 
 **Release builds (planned).** Measure before choosing: `lto` (thin or
 fat) with `codegen-units = 1` for speed and size, `strip` for size while

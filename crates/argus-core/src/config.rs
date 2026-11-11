@@ -735,7 +735,7 @@ impl Config {
 
 /// Upper bound for automatic concurrency: OpenSSH allows 10 sessions per
 /// multiplexed connection by default, and forges throttle parallel clones.
-const AUTO_MAX_JOBS: usize = 8;
+pub const AUTO_MAX_JOBS: usize = 8;
 
 /// Automatic concurrency: git's `fetch.parallel` when positive (0 there
 /// also means "pick a default"), otherwise the CPU count up to

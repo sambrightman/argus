@@ -1,0 +1,81 @@
+name: Mutants
+
+# The full cargo-mutants run (about 1,700 mutants) takes hours, so it runs
+# weekly and on demand, split into shards that run in parallel.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+jobs:
+  shard:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-mutants,cargo-nextest
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: test
+          save-if: false
+      # The CI workflow already shows the tests pass, so each shard skips
+      # the baseline run; --in-place reuses the cached build instead of
+      # copying the tree. Exit 2 (missed) and 3 (timeouts) still produce a
+      # report: the summary job judges those.
+      - name: Mutants
+        run: |
+          set +e
+          cargo mutants --in-place --baseline=skip --timeout 300 --shard ${{ matrix.shard }}/16
+          rc=$?
+          [ $rc -eq 0 ] || [ $rc -eq 2 ] || [ $rc -eq 3 ] || exit $rc
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: mutants-${{ matrix.shard }}
+          path: mutants.out
+
+  summary:
+    needs: shard
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mutants-*
+      - name: Report
+        run: |
+          for f in caught missed timeout unviable; do
+            cat mutants-*/"$f.txt" 2>/dev/null | sort > "$f.txt"
+          done
+          {
+            echo "caught $(wc -l < caught.txt), missed $(wc -l < missed.txt), timeouts $(wc -l < timeout.txt), unviable $(wc -l < unviable.txt)"
+            for f in missed timeout; do
+              if [ -s "$f.txt" ]; then
+                printf '\n### %s\n\n```\n' "$f"
+                cat "$f.txt"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          ! [ -s missed.txt ] && ! [ -s timeout.txt ]

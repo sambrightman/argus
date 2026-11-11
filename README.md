@@ -1,5 +1,7 @@
 # argus
 
+[![CI](https://github.com/sambrightman/argus/actions/workflows/ci.yml/badge.svg)](https://github.com/sambrightman/argus/actions/workflows/ci.yml)
+
 See which of your many git clones need attention, clean them up, and keep
 them (and whole GitHub orgs) up to date. TUI first, CLI for scripts and cron.
 
