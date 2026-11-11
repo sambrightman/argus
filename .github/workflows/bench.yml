@@ -56,6 +56,8 @@ jobs:
           docker push "$image"
       - uses: bencherdev/bencher@7de3c69a85380826613050826b4bce062be2f07d # v0.6.16
         if: env.BENCHER_API_KEY != ''
+      # A t-test on main's last 10-64 runs: with fewer, run-to-run noise
+      # can't be told from a slowdown (two runs flagged 1.6%), so no alerts.
       - name: Run on bare metal and track
         if: env.BENCHER_API_KEY != ''
         run: |
@@ -70,6 +72,7 @@ jobs:
             --adapter rust_criterion \
             --threshold-measure latency \
             --threshold-test t_test \
+            --threshold-min-sample-size 10 \
             --threshold-max-sample-size 64 \
             --threshold-upper-boundary 0.99 \
             --thresholds-reset \

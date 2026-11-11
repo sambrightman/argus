@@ -25,7 +25,7 @@ toml_edit = "0.25.18"
 serde_json = "1.0.154"
 
 [dev-dependencies]
-argus-git-core = { path = ".", features = ["testkit", "demo"] }
+argus-core = { package = "argus-git-core", path = ".", features = ["testkit", "demo"] }
 criterion = "0.8.2"
 pretty_assertions = "1.4.1"
 proptest = "1.12.0"

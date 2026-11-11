@@ -45,8 +45,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+          # Most tests wait on git processes and the filesystem, which the
+          # 3-core macOS runners are slow at: 12 at once took 53 s, against
+          # 180 s at the default 3 (and 138 s at 6).
+          - os: macos-latest
+            threads: 12
     runs-on: ${{ matrix.os }}
+    env:
+      NEXTEST_TEST_THREADS: ${{ matrix.threads || 'num-cpus' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master

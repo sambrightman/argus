@@ -12,7 +12,7 @@ description = "Internal crate of argus-git (the terminal UI); no stability guara
 name = "argus_tui"
 
 [dependencies]
-argus-git-core = { version = "0.1.0", path = "../argus-core" }
+argus-core = { package = "argus-git-core", version = "0.1.0", path = "../argus-core" }
 crossbeam-channel = "0.5.17"
 crossterm = "0.29.0"
 jiff = "0.2.39"
@@ -22,7 +22,7 @@ similar = "3.2.1"
 unicode-width = "0.2.3"
 
 [dev-dependencies]
-argus-git-core = { path = "../argus-core", features = ["testkit", "demo"] }
+argus-core = { package = "argus-git-core", path = "../argus-core", features = ["testkit", "demo"] }
 criterion = "0.8.2"
 insta = "1.49.0"
 pretty_assertions = "1.4.1"
