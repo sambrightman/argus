@@ -39,11 +39,12 @@ impl PullPlan {
     }
 }
 
-/// Pull/fetch every visible repo marked for pull.
+/// Pull/fetch every repo marked for pull: snoozed ones too (hidden for a
+/// while, still kept up to date); an ignored one never is.
 pub fn plan_updates(ws: &Workspace) -> Vec<Job> {
     let mut jobs = vec![];
     for e in &ws.entries {
-        if !e.flags.pull || e.flags.hidden() {
+        if !e.flags.pull {
             continue;
         }
         let Some(s) = e.status() else { continue };

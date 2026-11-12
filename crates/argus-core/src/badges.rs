@@ -60,8 +60,8 @@ pub fn flags(e: &Entry, i: &Icons) -> Vec<Badge> {
     } else if e.flags.snoozed {
         v.push(b(Role::Hidden, &i.snoozed));
     }
-    // an ignored repo is left out of pulls
-    if e.flags.pull && !e.flags.ignored {
+    // (never with ignored: ignore excludes pull)
+    if e.flags.pull {
         v.push(b(Role::Pull, &i.pull));
     }
     v

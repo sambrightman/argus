@@ -712,6 +712,11 @@ pub fn resolve(
             }
         }
     }
+    // an ignored repo is neither favourite nor pulled, whatever patterns say
+    if f.ignored {
+        f.favourite = false;
+        f.pull = false;
+    }
     f.snoozed = state.is_snoozed(key, now);
     f.new = state.new.contains(key);
     f

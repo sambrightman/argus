@@ -1113,7 +1113,15 @@ fn marks_are_written_to_the_config_lists() {
     let text = std::fs::read_to_string(&cfg).unwrap();
     let c = argus_core::Config::parse(&text).unwrap();
     assert_eq!(c.favourite, ["github.com/acme/clean"]);
-    assert_eq!(c.pull, ["acme/*", "!github.com/acme/dirty"]);
+    // ignoring also turns off pulling, which the pattern gave it
+    assert_eq!(
+        c.pull,
+        [
+            "acme/*",
+            "!github.com/acme/dirty",
+            "!github.com/acme/feature"
+        ]
+    );
     assert_eq!(c.ignore.repos, ["github.com/acme/feature"]);
     assert!(text.starts_with("# mine\n"), "{text}");
     // --clear: the repo's own entries go; what patterns still give is said
@@ -1127,7 +1135,8 @@ fn marks_are_written_to_the_config_lists() {
     };
     assert_eq!(clear("acme/dirty"), "acme/dirty: still pull (acme/*)\n");
     let c = argus_core::Config::parse(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
-    assert_eq!(c.pull, ["acme/*"]);
+    // only acme/dirty's entries went; ignored acme/feature keeps its own
+    assert_eq!(c.pull, ["acme/*", "!github.com/acme/feature"]);
     // inverse: nothing left, nothing said
     std::fs::write(&cfg, "favourite = ['acme/clean']\n").unwrap();
     assert_eq!(clear("acme/clean"), "");

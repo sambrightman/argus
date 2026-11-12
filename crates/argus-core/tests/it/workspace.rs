@@ -239,7 +239,7 @@ fn errors_are_entries_not_failures() {
 }
 
 #[test]
-fn pull_pulls_only_visible_repos_marked_for_pull() {
+fn pull_pulls_repos_marked_for_pull_snoozed_too_but_not_ignored() {
     let sb = Sandbox::new();
     for n in ["s1", "s2", "nopull", "excl"] {
         sb.remote("acme", n);
@@ -247,10 +247,23 @@ fn pull_pulls_only_visible_repos_marked_for_pull() {
         sb.advance_remote("acme", n, "new");
     }
     sb.init("dev/local");
-    let w = ws(
+    let mut w = ws(
         &sb,
         "pull = ['acme/*', '!acme/nopull', '**/local']\nignore.repos = ['acme/excl']",
     );
+    // snoozed: hidden for a while, still kept up to date
+    let s2 = w
+        .entries
+        .iter()
+        .position(|e| e.path.ends_with("s2"))
+        .unwrap();
+    let k = w.entries[s2].key.clone();
+    w.state.snoozed.insert(
+        k,
+        jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
+    );
+    w.resolve_flags();
+    assert!(w.entries[s2].flags.snoozed && w.entries[s2].flags.pull);
     let jobs = plan_updates(&w);
     let mut labels: Vec<_> = jobs.iter().map(|j| j.label.clone()).collect();
     labels.sort();
@@ -1505,4 +1518,56 @@ fn an_issue_state_is_written_to_the_config_and_followed() {
         .unwrap();
     assert!(w.config.ignore.non_default_branch.is_empty());
     assert!(w.entries[0].issues.contains(&Issue::NonDefaultBranch));
+}
+
+/// Ignoring a repo turns off its favourite and pull marks, and marking it
+/// favourite or for pull stops ignoring it: they don't go together. Where
+/// patterns say both, ignore wins.
+#[test]
+fn ignore_excludes_favourite_and_pull() {
+    use argus_core::rules::Mark;
+    let sb = Sandbox::new();
+    for n in ["app", "old"] {
+        sb.remote("acme", n);
+        sb.clone_as_github("acme", n, &format!("dev/{n}"));
+    }
+    let mut w = ws(&sb, "pull = ['acme/*']");
+    let app = w
+        .entries
+        .iter()
+        .position(|e| e.path.ends_with("app"))
+        .unwrap();
+    w.set_mark(&[app], Mark::Favourite, true).unwrap();
+    assert!(w.entries[app].flags.favourite && w.entries[app].flags.pull);
+    // ignoring: favourite's entry goes, pull gets a `!` against the pattern
+    w.set_mark(&[app], Mark::Ignore, true).unwrap();
+    let f = &w.entries[app].flags;
+    assert!(f.ignored && !f.favourite && !f.pull, "{f:?}");
+    assert!(w.config.favourite.is_empty());
+    assert_eq!(w.config.pull, ["acme/*", "!github.com/acme/app"]);
+    // marking for pull stops ignoring it
+    w.set_mark(&[app], Mark::Pull, true).unwrap();
+    let f = &w.entries[app].flags;
+    assert!(f.pull && !f.ignored, "{f:?}");
+    assert!(w.config.ignore.repos.is_empty());
+    // and so does marking favourite
+    w.set_mark(&[app], Mark::Ignore, true).unwrap();
+    w.set_mark(&[app], Mark::Favourite, true).unwrap();
+    let f = &w.entries[app].flags;
+    assert!(f.favourite && !f.ignored, "{f:?}");
+    // inverse: unmarking favourite or pull doesn't touch ignore
+    w.set_mark(&[app], Mark::Favourite, false).unwrap();
+    assert!(!w.entries[app].flags.ignored);
+    // patterns saying both: ignore wins
+    let w = ws(
+        &sb,
+        "favourite = ['acme/*']\npull = ['acme/*']\nignore.repos = ['acme/old']",
+    );
+    let old = w
+        .entries
+        .iter()
+        .position(|e| e.path.ends_with("old"))
+        .unwrap();
+    let f = &w.entries[old].flags;
+    assert!(f.ignored && !f.favourite && !f.pull, "{f:?}");
 }

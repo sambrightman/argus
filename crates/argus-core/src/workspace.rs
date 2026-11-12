@@ -287,16 +287,25 @@ impl Workspace {
 
     /// Mark (or unmark) the repos at `indices` in `config` (see
     /// [`rules::set_mark`]); flags follow. Saving config is the caller's.
+    /// Ignore excludes the others: ignoring turns favourite and pull off,
+    /// and turning either on stops ignoring.
     pub fn set_mark(&mut self, indices: &[usize], m: Mark, on: bool) -> Result<(), ConfigError> {
+        let marks: Vec<(Mark, bool)> = match (m, on) {
+            (Mark::Ignore, true) => vec![(m, on), (Mark::Favourite, false), (Mark::Pull, false)],
+            (_, true) => vec![(m, on), (Mark::Ignore, false)],
+            _ => vec![(m, on)],
+        };
         for &i in indices {
             let e = &self.entries[i];
-            let base = m == Mark::Pull
-                && e.id
-                    .as_ref()
+            let tracked_pull =
+                e.id.as_ref()
                     .and_then(|id| rules::track_for(&self.config, &self.state, id))
                     .is_some_and(|t| t.pull);
             let (id, path, name) = (e.id.clone(), e.path.clone(), Self::mark_name(e));
-            rules::set_mark(&mut self.config, m, id.as_ref(), &path, &name, base, on)?;
+            for &(m, on) in &marks {
+                let base = m == Mark::Pull && tracked_pull;
+                rules::set_mark(&mut self.config, m, id.as_ref(), &path, &name, base, on)?;
+            }
         }
         self.marks_changed()
     }

@@ -122,7 +122,10 @@ Favourite, pull and ignore live in config: marking a repo in the TUI or
 with `argus mark` adds its name to the list (or `!name` to turn off what a
 pattern says) and saves the change, keeping the rest of the file as
 written; clearing removes the repo's own entries, and says which marks
-patterns (or a tracked owner, for pull) still give it. With extended files, an entry is removed from every file that
+patterns (or a tracked owner, for pull) still give it. Ignore excludes the
+other two: ignoring a repo turns its favourite and pull off, marking it
+either stops ignoring it, and where patterns say both, ignore wins. With
+extended files, an entry is removed from every file that
 lists it, and new entries go where roots do: the highest-precedence file
 with the list or its `extend_` form (to keep them in your main file, give
 it e.g. `extend_favourite = []`). Nothing is dropped for
@@ -231,7 +234,8 @@ their parent either way).
 To keep scanning repos but hide them, list them in `[ignore] repos`.
 Hidden repos (ignored or snoozed; `H` shows them) are never part of a
 bulk action such as fetch all or fix all, even while shown; choosing one
-explicitly still works. For a repo that's normally in a state argus
+explicitly still works. Pulls are the exception for snoozed repos: they're
+still kept up to date (an ignored repo is never pulled). For a repo that's normally in a state argus
 would flag (always on a release branch, pinned at a tag), ignore just
 that issue: the repo stays visible, everything else is still flagged,
 the details show the issue dimmed as ignored, and auto-fix leaves that
