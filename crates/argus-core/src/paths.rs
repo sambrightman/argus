@@ -70,6 +70,12 @@ fn state_file_in(env: Env) -> PathBuf {
         .unwrap_or_else(|| xdg(env, "XDG_STATE_HOME", ".local/state").join("argus/state.toml"))
 }
 
+/// TRIAL (not for merging): untested on purpose, so the PR's mutants job
+/// misses mutants here and reviewdog comments on them.
+pub fn is_dotfile(name: &str) -> bool {
+    name.starts_with('.') && name.len() > 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
