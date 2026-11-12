@@ -68,15 +68,20 @@ pub enum FixKind {
     /// Pop the newest stash into a work tree with no tracked changes, if it
     /// applies without conflicts.
     StashPop,
+    /// Check submodules at another commit than recorded out at the
+    /// recorded one, when their commit is on a branch (or other ref) and
+    /// they have no changes of their own: nothing is lost.
+    SubmoduleUpdate,
 }
 
 impl FixKind {
     /// Default priority: clean up uncommitted work, share commits, leave
     /// the branch, then catch up (on the branch you end up on).
-    pub const ALL: [FixKind; 15] = [
+    pub const ALL: [FixKind; 16] = [
         FixKind::Abort,
         FixKind::Stash,
         FixKind::Commit,
+        FixKind::SubmoduleUpdate,
         FixKind::Gitignore,
         FixKind::Branch,
         FixKind::Push,
@@ -127,6 +132,7 @@ impl FixKind {
             FixKind::DeleteBranches => "delete-branches",
             FixKind::StashPop => "stash-pop",
             FixKind::Gitignore => "gitignore",
+            FixKind::SubmoduleUpdate => "submodule-update",
         }
     }
 }
@@ -463,6 +469,12 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
             reason: format!("{} uncommitted path(s)", s.changes.uncommitted()),
         });
     }
+    // or, instead of committing a moved submodule, put it back where
+    // nothing is lost: its commit is held by a ref, and nothing of its own
+    // is in the way
+    if let Some(f) = put_back_submodules(&s.moved_submodules) {
+        v.push(f);
+    }
     let untracked: Vec<String> = s
         .changes
         .files
@@ -798,6 +810,22 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
                 .and_then(|b| b.upstream.clone());
             s.head = Head::Branch(branch.clone());
         }
+        Op::SubmoduleUpdate { paths } => {
+            // their work-tree side goes; a staged side stays
+            let c = &mut s.changes;
+            let mut n = 0;
+            c.files.retain_mut(|f| {
+                if !paths.contains(&f.path) {
+                    return true;
+                }
+                n += 1;
+                f.worktree = ' ';
+                f.index != ' '
+            });
+            c.unstaged -= n;
+            c.unstaged_submodules -= n;
+            s.moved_submodules.retain(|m| !paths.contains(&m.path));
+        }
         // never fixes
         Op::Fetch
         | Op::Clone { .. }
@@ -812,6 +840,43 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
         | Op::Ignore { .. } => {}
     }
     s
+}
+
+/// [`FixKind::SubmoduleUpdate`] for the submodules that can go back to the
+/// recorded commit; blocked, with why, when none can.
+fn put_back_submodules(moved: &[status::MovedSubmodule]) -> Option<Fix> {
+    let first = moved.first()?;
+    let safe: Vec<String> = moved
+        .iter()
+        .filter(|m| m.unreferenced == 0 && !m.changed)
+        .map(|m| m.path.clone())
+        .collect();
+    let blocked = safe.is_empty().then(|| match first {
+        m if m.changed => format!("{} has changes of its own", m.path),
+        m => format!(
+            "{}: {} on no branch would be lost",
+            m.path,
+            match m.unreferenced {
+                1 => "1 commit".to_string(),
+                n => format!("{n} commits"),
+            }
+        ),
+    });
+    let paths = if safe.is_empty() {
+        vec![first.path.clone()]
+    } else {
+        safe
+    };
+    let reason = match paths.len() {
+        1 => format!("{} at another commit than recorded", paths[0]),
+        _ => format!("{} at other commits than recorded", paths.join(", ")),
+    };
+    Some(Fix {
+        blocked,
+        kind: FixKind::SubmoduleUpdate,
+        op: Op::SubmoduleUpdate { paths },
+        reason,
+    })
 }
 
 fn head_info<'a>(s: &'a mut RepoStatus, head: Option<&str>) -> Option<&'a mut BranchInfo> {

@@ -115,6 +115,9 @@ pub struct Changes {
     pub submodule_content: usize,
     /// Of `untracked`, nested repos (see [`PathKind::Repo`]).
     pub untracked_repos: usize,
+    /// Submodules at another commit than recorded, by path.
+    #[serde(skip)]
+    pub(crate) moved: Vec<String>,
     /// Up to [`MAX_FILES`] entries, sorted by path.
     pub files: Vec<FileChange>,
 }
@@ -181,6 +184,10 @@ impl InProgress {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoStatus {
     pub head: Head,
+    /// Submodules at another commit than the repo records (unstaged), and
+    /// what putting them back would cost.
+    #[serde(default)]
+    pub moved_submodules: Vec<MovedSubmodule>,
     /// Id of the commit HEAD points at (none when unborn).
     pub head_commit: Option<String>,
     /// Tags on that commit: annotated first, then newest version first.
@@ -593,6 +600,7 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
             head_commit.as_ref().and_then(|c| c.tree_id().ok()),
         )?
     };
+    let moved_submodules = moved_submodules(repo, &changes.moved);
     let integration = integration(repo, &head, upstream.as_ref());
     let detached_orphans = match &head {
         Head::Detached(_) if repo.kind() != gix::repository::Kind::Submodule => {
@@ -636,6 +644,7 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         branches,
         worktrees: worktrees(repo),
         submodules: submodules(repo),
+        moved_submodules,
         last_fetch: mtime(&repo.git_dir().join("FETCH_HEAD")).or_else(|| {
             (repo.common_dir() != repo.git_dir())
                 .then(|| mtime(&repo.common_dir().join("FETCH_HEAD")))
@@ -991,6 +1000,7 @@ fn changes(
     // path -> (index code, worktree code)
     let mut files: BTreeMap<String, (char, char)> = BTreeMap::new();
     let mut kinds: HashMap<String, PathKind> = HashMap::new();
+    let mut moved = vec![];
     for item in iter {
         let item = item.map_err(err)?;
         match item {
@@ -1023,6 +1033,7 @@ fn changes(
                         EntryStatus::Change(Change::SubmoduleModification(sm)) => {
                             kinds.insert(path.clone(), PathKind::Submodule);
                             let code = if sm.checked_out_head_id != sm.index_id {
+                                moved.push(path.clone());
                                 'M'
                             } else if sm.changes.iter().flatten().any(|i| {
                                 !matches!(
@@ -1064,7 +1075,10 @@ fn changes(
     }
 
     collapse_untracked(repo, &mut files, &mut kinds)?;
-    let mut c = Changes::default();
+    let mut c = Changes {
+        moved,
+        ..Default::default()
+    };
     for (path, (x, y)) in files {
         let kind = kinds.get(&path).copied().unwrap_or_default();
         let sub = kind == PathKind::Submodule;
@@ -1396,6 +1410,49 @@ fn worktrees(repo: &gix::Repository) -> Vec<PathBuf> {
     };
     let mut v: Vec<PathBuf> = wts.iter().filter_map(|p| p.base().ok()).collect();
     v.sort();
+    v
+}
+
+/// A submodule checked out at another commit than its repo records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MovedSubmodule {
+    /// Repo-relative.
+    pub path: String,
+    /// Commits at its HEAD that no branch, remote branch or tag holds:
+    /// what checking it out at the recorded commit would lose.
+    pub unreferenced: usize,
+    /// Changes to its tracked files, which a checkout could clash with.
+    pub changed: bool,
+}
+
+/// The submodules at `moved` (gix doesn't look inside a submodule once its
+/// commit differs, so its changes are asked here).
+fn moved_submodules(repo: &gix::Repository, moved: &[String]) -> Vec<MovedSubmodule> {
+    if moved.is_empty() {
+        return vec![];
+    }
+    let Ok(Some(sms)) = repo.submodules() else {
+        return vec![];
+    };
+    let mut v: Vec<MovedSubmodule> = sms
+        .filter_map(|sm| {
+            let path = sm.path().ok()?.to_str_lossy().into_owned();
+            moved.contains(&path).then_some(())?;
+            let r = sm.open().ok()??;
+            let changed = r.is_dirty().unwrap_or(true);
+            let head = r.head_id().ok().map(|id| id.detach());
+            // unreadable counts as unsafe
+            let unreferenced = Refs::read(&r)
+                .and_then(|refs| detached_orphans(&r, &refs, head))
+                .unwrap_or(usize::MAX);
+            Some(MovedSubmodule {
+                path,
+                unreferenced,
+                changed,
+            })
+        })
+        .collect();
+    v.sort_by(|a, b| a.path.cmp(&b.path));
     v
 }
 

@@ -260,6 +260,7 @@ enum FixArg {
     StashPop,
     Abort,
     DeleteBranches,
+    SubmoduleUpdate,
 }
 
 impl From<FixArg> for FixKind {
@@ -274,6 +275,7 @@ impl From<FixArg> for FixKind {
             FixArg::Pull => FixKind::Pull,
             FixArg::Stash => FixKind::Stash,
             FixArg::StashPop => FixKind::StashPop,
+            FixArg::SubmoduleUpdate => FixKind::SubmoduleUpdate,
             FixArg::Abort => FixKind::Abort,
             FixArg::DeleteBranches => FixKind::DeleteBranches,
         }

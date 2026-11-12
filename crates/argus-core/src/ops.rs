@@ -126,6 +126,11 @@ pub enum Op {
     Clean {
         paths: Vec<String>,
     },
+    /// `git submodule update`: check submodules out at the commits the
+    /// repo records (theirs too, recursively).
+    SubmoduleUpdate {
+        paths: Vec<String>,
+    },
     /// Add ignore rules for untracked `paths` to `file` (see
     /// [`crate::gitignore`]): a file edit, not a git command.
     Ignore {
@@ -276,6 +281,9 @@ impl Op {
                 with_paths(v(&["rm", "-q", how]), paths)
             }
             Op::Clean { paths } => with_paths(v(&["clean", "-f", "-q"]), paths),
+            Op::SubmoduleUpdate { paths } => {
+                with_paths(v(&["submodule", "update", "--recursive"]), paths)
+            }
             // not a git command (see `run`)
             Op::Ignore { .. } => vec![],
         }
@@ -359,6 +367,9 @@ impl Op {
                 format!("discard {}", files(paths))
             }
             Op::Clean { paths } => format!("delete untracked {}", files(paths)),
+            Op::SubmoduleUpdate { paths } => {
+                format!("check out {} at its recorded commit", files(paths))
+            }
             Op::Ignore { file, paths, .. } => {
                 use crate::gitignore::IgnoreFile::*;
                 let to = match file {

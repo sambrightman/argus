@@ -1585,3 +1585,61 @@ fn a_nested_repo_is_ignored_not_stashed_or_committed() {
     assert_eq!(git(&r, &["ls-files", "--", "top", "tools"]), "");
     assert_eq!(git(&r, &["status", "--short"]), "?? tools/\n?? top/\n");
 }
+
+/// A submodule at another commit than recorded can also be put back:
+/// offered when its commit is held by a ref (nothing is lost), shown
+/// blocked when it isn't or the submodule has changes of its own.
+#[test]
+fn a_moved_submodule_is_put_back_only_when_nothing_is_lost() {
+    let sb = Sandbox::new();
+    let (r, lib) = with_submodule(&sb);
+    let recorded = git(&lib, &["rev-parse", "HEAD"]);
+    let fix = |r: &std::path::Path| {
+        let s = status(r, StatusOptions::default()).unwrap();
+        plan(&s, &StashConfig::default())
+            .into_iter()
+            .find(|f| f.kind == FixKind::SubmoduleUpdate)
+    };
+    // the new commit on a branch in it: safe
+    git(&lib, &["switch", "-q", "-c", "work"]);
+    commit(&lib, "l2");
+    let f = fix(&r).expect("offered");
+    assert_eq!(f.blocked, None);
+    assert_eq!(
+        f.op,
+        Op::SubmoduleUpdate {
+            paths: vec!["lib".into()]
+        }
+    );
+    assert_eq!(f.reason, "lib at another commit than recorded");
+    // the preview: the submodule's entry goes, an ordinary change stays
+    write(&r, "README", "changed\n");
+    let after = simulate(&status(&r, StatusOptions::default()).unwrap(), &f);
+    let c = &after.changes;
+    assert_eq!((c.unstaged, c.unstaged_submodules), (1, 0));
+    let left: Vec<&str> = c.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(left, ["README"]);
+    assert!(after.moved_submodules.is_empty());
+    git(&r, &["checkout", "-q", "--", "README"]);
+    let out = argus_core::ops::run(&r, &f.op);
+    assert!(out.success, "{}", out.output);
+    assert_eq!(git(&lib, &["rev-parse", "HEAD"]), recorded);
+    assert_eq!(fix(&r), None, "nothing left to put back");
+    // the commit on no ref: it'd be lost
+    git(&lib, &["switch", "-q", "--detach"]);
+    commit(&lib, "only here");
+    let f = fix(&r).expect("shown");
+    assert_eq!(
+        f.blocked.as_deref(),
+        Some("lib: 1 commit on no branch would be lost")
+    );
+    // changes of its own: they'd be in the way
+    git(&lib, &["switch", "-q", "work"]);
+    write(&lib, "README", "changed\n");
+    let f = fix(&r).expect("shown");
+    assert_eq!(f.blocked.as_deref(), Some("lib has changes of its own"));
+    // inverse: a staged move is recorded, nothing to put back
+    git(&lib, &["checkout", "-q", "--", "."]);
+    git(&r, &["add", "lib"]);
+    assert_eq!(fix(&r), None);
+}

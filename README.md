@@ -280,8 +280,11 @@ Nothing is offered during a conflict.
   (the default branch if it's one of them; several others are left to you).
   Not in submodules, where a detached HEAD is normal.
 * **Submodules** show in their parent as git shows them: `M` when one is at
-  another commit than the parent records, which `commit` records (and
-  which blocks `switch-default`); ` m` / ` ?` for changes inside one, which
+  another commit than the parent records, which `commit` records, or
+  `submodule-update` puts back (`git submodule update`): offered only when
+  nothing is lost, its commit held by a branch or other ref and no changes
+  of its own in the way, else shown blocked with why. It also blocks
+  `switch-default`. ` m` / ` ?` for changes inside one, which
   are its own to stash, commit or ignore on its own row, not the parent's.
   No stash takes a submodule (git's doesn't).
 * **Repos nested in the work tree** (untracked, not submodules) get

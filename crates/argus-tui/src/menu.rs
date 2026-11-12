@@ -312,6 +312,7 @@ pub fn fix_key(kind: argus_core::fix::FixKind) -> char {
         FastForward => 'f',
         DeleteBranches => 'D',
         StashPop => 'z',
+        SubmoduleUpdate => 'S',
     }
 }
 
