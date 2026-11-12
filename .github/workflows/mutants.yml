@@ -121,11 +121,27 @@ jobs:
                 echo '```'
               fi
             done
+            # A failed shard's mutants are absent from its platform's
+            # lists, which would hide them from the intersection.
+            if [ "$SHARDS" != success ]; then
+              echo
+              echo "Some shards didn't finish: the result is incomplete."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
-          # A failed shard's mutants are absent from its platform's lists,
-          # which would hide them from the intersection.
+      # The report is written either way (on the run's summary page); this
+      # says whether it passes, and why not.
+      - name: Check
+        env:
+          SHARDS: ${{ needs.shard.result }}
+        run: |
           if [ "$SHARDS" != success ]; then
-            echo "Some shards failed: the intersection is incomplete." >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Some shards didn't finish (e.g. no runner): the result is incomplete"
             exit 1
           fi
-          ! [ -s missed.txt ] && ! [ -s timeout.txt ]
+          missed=$(wc -l < missed.txt) timeouts=$(wc -l < timeout.txt)
+          if [ "$missed" -gt 0 ] || [ "$timeouts" -gt 0 ]; then
+            echo "::error::$missed missed and $timeouts timed out (listed on the summary page)"
+            exit 1
+          fi
+          echo "every mutant caught"
+
