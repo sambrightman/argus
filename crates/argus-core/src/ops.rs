@@ -91,6 +91,15 @@ pub enum Op {
     Commit {
         message: String,
     },
+    /// `git apply` a patch (a hunk or lines of one, see [`crate::diff::patch`])
+    /// to the index (`index`) or the work tree, backwards with `reverse`.
+    /// `what` says what it does, for its label.
+    Apply {
+        patch: String,
+        index: bool,
+        reverse: bool,
+        what: String,
+    },
     /// Spin-off (as magit's): a new branch `name` at the current one, with
     /// the commits its upstream doesn't have; the current branch goes back
     /// to the last commit it shares with its upstream. Checked out, or with
@@ -265,6 +274,18 @@ impl Op {
             }
             Op::Amend { message: None } => v(&["commit", "--amend", "--no-edit"]),
             Op::Amend { message: Some(m) } => v(&["commit", "--amend", "--message", m]),
+            // the patch goes on stdin
+            Op::Apply { index, reverse, .. } => {
+                let mut a = v(&["apply", "--recount", "--whitespace=nowarn"]);
+                if *index {
+                    a.push("--cached".into());
+                }
+                if *reverse {
+                    a.push("--reverse".into());
+                }
+                a.push("-".into());
+                a
+            }
             // run in steps by spin_off; this is its first
             Op::SpinOff { name, .. } => v(&["switch", "-c", name]),
             Op::Fixup { commit, squash, .. } => {
@@ -406,6 +427,7 @@ impl Op {
                 if squash.is_some() { "squash" } else { "fixup" },
                 &commit[..commit.len().min(7)]
             ),
+            Op::Apply { what, .. } => what.clone(),
             Op::SpinOff { name, stay: false } => format!("spin off {name}"),
             Op::SpinOff { name, stay: true } => format!("spin out {name}"),
             Op::CommitAll { .. } => "commit".into(),
@@ -711,6 +733,7 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
         Op::Pull => return pull(&cwd, started),
         Op::Switch { .. } | Op::SwitchTrack { .. } => return switch(&cwd, op, started),
         Op::SpinOff { name, stay } => return spin_off(&cwd, name, *stay, started),
+        Op::Apply { patch, .. } => return git_stdin(&cwd, &op.args(), patch, started),
         Op::Fixup {
             commit,
             instant: true,
@@ -906,6 +929,39 @@ fn switch(cwd: &Path, op: &Op, started: Instant) -> OpOutcome {
         o.duration = started.elapsed();
     }
     o
+}
+
+/// `git` with `input` on its stdin.
+fn git_stdin(cwd: &Path, args: &[String], input: &str, started: Instant) -> OpOutcome {
+    use std::io::Write;
+    let child = Command::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .envs(crate::isolation::git_env().iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let out = child.and_then(|mut c| {
+        c.stdin.take().expect("piped").write_all(input.as_bytes())?;
+        c.wait_with_output()
+    });
+    match out {
+        Ok(o) => OpOutcome {
+            success: o.status.success(),
+            code: o.status.code(),
+            output: format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            )
+            .trim()
+            .to_string(),
+            duration: started.elapsed(),
+        },
+        Err(e) => refused(format!("failed to run git: {e}"), started),
+    }
 }
 
 /// An instant [`Op::Fixup`]: refused for a commit on a remote, then the

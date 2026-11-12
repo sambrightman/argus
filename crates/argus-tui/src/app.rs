@@ -398,10 +398,18 @@ fn diff_rows(
         ),
     ];
     let indent = || (None, "      ".to_string());
-    let row = |parts: Vec<(Option<Role>, String)>, side, hunk, line| DetailLine {
+    let row = |parts: Vec<(Option<Role>, String)>,
+               side,
+               hunk,
+               line: Option<(usize, &argus_core::diff::Line)>| DetailLine {
         parts,
         file: Some(file.to_string()),
-        diff: Some(DiffRef { side, hunk, line }),
+        diff: Some(Box::new(DiffRef {
+            side,
+            hunk,
+            line: line.map(|(_, l)| l.clone()),
+            at: line.map(|(i, _)| i),
+        })),
         issue: None,
         ignored: false,
         stash: None,
@@ -445,7 +453,7 @@ fn diff_rows(
                     if folded.contains(&(repo.to_path_buf(), file.to_string(), side, h)) {
                         continue;
                     }
-                    for l in &hunk.lines {
+                    for (i, l) in hunk.lines.iter().enumerate() {
                         let (role, mark) = match l.kind {
                             LineKind::Add => (Some(Role::DiffAdd), '+'),
                             LineKind::Remove => (Some(Role::DiffRemove), '-'),
@@ -455,7 +463,7 @@ fn diff_rows(
                         if l.no_newline {
                             parts.push((Some(Role::Dim), "  (no newline at end of file)".into()));
                         }
-                        v.push(row(parts, side, Some(h), Some(l.clone())));
+                        v.push(row(parts, side, Some(h), Some((i, l))));
                     }
                 }
             }
@@ -1338,8 +1346,19 @@ impl App {
                 return self.start_jobs(jobs);
             }
             Stash(kind) => return self.stash_action(kind),
-            StageFiles => return self.file_op(ops::stage_ops, "stage"),
-            UnstageFiles => return self.file_op(ops::unstage_ops, "unstage"),
+            StageFiles => {
+                if let Some(fx) = self.hunk_op(HunkVerb::Stage) {
+                    return fx;
+                }
+                return self.file_op(ops::stage_ops, "stage");
+            }
+            UnstageFiles => {
+                if let Some(fx) = self.hunk_op(HunkVerb::Unstage) {
+                    return fx;
+                }
+                return self.file_op(ops::unstage_ops, "unstage");
+            }
+            DiscardFiles if let Some(fx) = self.hunk_op(HunkVerb::Discard) => return fx,
             DiscardFiles => {
                 let targets = self.file_targets();
                 if targets.is_empty() {
@@ -2685,6 +2704,80 @@ impl App {
         jobs
     }
 
+    /// `s`/`u`/`K` in a diff, nothing marked: the hunk under the cursor (its
+    /// header or a context line), or the one added or removed line under
+    /// it. `None` elsewhere, for the file operation (and for an untracked
+    /// file, which is staged or discarded whole).
+    fn hunk_op(&mut self, verb: HunkVerb) -> Option<Vec<Effect>> {
+        use argus_core::diff::{self, FileDiff, LineKind, Side};
+        if !self.marked_files.is_empty() {
+            return None;
+        }
+        let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor) else {
+            return None;
+        };
+        let (d, file) = (line.diff.as_ref()?, line.file.clone()?);
+        let e = &self.ws.entries[*repo];
+        if e.status()?
+            .changes
+            .entry(&file)
+            .is_some_and(|c| c.index == '?')
+        {
+            return None;
+        }
+        let key = (e.path.clone(), file.clone(), d.side);
+        let Some(Ok(FileDiff::Text(hunks))) = self.diffs.get(&key) else {
+            return None;
+        };
+        let hunk = hunks.get(d.hunk?)?;
+        let at = d.at.filter(|&i| {
+            hunk.lines
+                .get(i)
+                .is_some_and(|l| l.kind != LineKind::Context)
+        });
+        let path = e.path.clone();
+        let what = |verb: &str| {
+            let part = if at.is_some() { "line" } else { "hunk" };
+            format!("{verb} a {part} of {file}")
+        };
+        let wrong = match (verb, d.side) {
+            (HunkVerb::Stage, Side::Staged) => Some("that's staged already: u unstages it"),
+            (HunkVerb::Unstage, Side::Unstaged) => Some("that's not staged: s stages it"),
+            (HunkVerb::Discard, Side::Staged) => {
+                Some("that's staged: u unstages it, then K discards it")
+            }
+            _ => None,
+        };
+        if let Some(why) = wrong {
+            self.info(why);
+            return Some(vec![]);
+        }
+        let (index, reverse, label) = match verb {
+            HunkVerb::Stage => (true, false, what("stage")),
+            HunkVerb::Unstage => (true, true, what("unstage")),
+            HunkVerb::Discard => (false, true, what("discard")),
+        };
+        let only = at.map(|i| vec![i]);
+        let op = Op::Apply {
+            patch: diff::patch(&file, hunk, only.as_deref(), reverse),
+            index,
+            reverse,
+            what: label.clone(),
+        };
+        if verb == HunkVerb::Discard {
+            self.mode = Mode::Confirm {
+                question: format!(
+                    "{}? It's lost.",
+                    capitalised(&label.replacen("a ", "this ", 1))
+                ),
+                then: Confirmed::Ops(vec![(path, op)]),
+            };
+            return Some(vec![]);
+        }
+        let jobs = self.job(&path, op).into_iter().collect();
+        Some(self.start_jobs(jobs))
+    }
+
     fn file_op(&mut self, plan: fn(&RepoStatus, &[String]) -> Vec<Op>, verb: &str) -> Vec<Effect> {
         let targets = self.file_targets();
         if targets.is_empty() {
@@ -3205,6 +3298,14 @@ struct CommitPick {
     name: String,
     purpose: Pick,
     commits: Vec<argus_core::history::CommitLine>,
+}
+
+/// What `s`/`u`/`K` do to a hunk or line.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HunkVerb {
+    Stage,
+    Unstage,
+    Discard,
 }
 
 /// What a picked commit is for.

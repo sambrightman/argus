@@ -17,8 +17,6 @@ deferred.
 - **Embedded terminal pane** (alacritty_terminal / tui-term) instead of
   suspending the TUI for a shell or git UI.
 - **Auto-fix all, chaining** fixes until nothing more applies.
-- **Staging by hunk and by line** (magit-style); today whole files. They'd
-  build on the same diff rows.
 - **Glyph font gaps:** `◆` is missing from SF Mono, `✓` from Hack, `✗` from
   Fira Code, Hack and Source Code Pro; Monaco and kitty's default font
   aren't checked. Rerun the counts once the other fonts are installed, and

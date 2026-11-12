@@ -1553,10 +1553,16 @@ fn stage_and_unstage_the_file_under_the_cursor() {
         }]
     );
     app.running.clear();
-    // on a diff line of a file: that file
+    // on a side's heading in a file's diff: that file (a hunk or line is
+    // just that: see hunks_and_lines_are_staged_unstaged_and_discarded)
     to_file(&mut app, "both");
     app.on_key(code(KeyCode::Tab));
-    app.cursor += 3;
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Detail { line, .. } if line.file.as_deref() == Some("both")
+            && line.diff.as_ref().is_some_and(|d| d.hunk.is_none() && d.side == argus_core::diff::Side::Staged)))
+        .unwrap();
     let fx = app.on_key(key('u'));
     assert_eq!(
         job_ops(&fx),
@@ -4546,4 +4552,83 @@ fn instant_fixups_and_squashes_from_the_commit_menu() {
         }
         app.running.clear();
     }
+}
+
+/// In a diff, `s`/`u`/`K` act on the hunk under the cursor (its header or
+/// a context line), or on the one added or removed line under it.
+#[test]
+fn hunks_and_lines_are_staged_unstaged_and_discarded() {
+    use argus_core::diff::LineKind;
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "README");
+    app.act(Action::ToggleExpand);
+    let at = |app: &App, f: &dyn Fn(&argus_tui::details::DiffRef) -> bool| {
+        app.rows
+            .iter()
+            .position(|r| matches!(r, Row::Detail { line, .. } if line.file.as_deref() == Some("README") && line.diff.as_deref().is_some_and(f)))
+            .expect("row")
+    };
+    let apply = |fx: Vec<Effect>| match fx.as_slice() {
+        [Effect::Jobs(j)] => match &j[0].op {
+            Op::Apply {
+                patch,
+                index,
+                reverse,
+                what,
+            } => (patch.clone(), *index, *reverse, what.clone()),
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    };
+    // the hunk's header: the whole hunk
+    app.cursor = at(&app, &|d| d.hunk.is_some() && d.line.is_none());
+    let (patch, index, reverse, what) = apply(app.act(Action::StageFiles));
+    assert!((index, reverse) == (true, false), "{patch}");
+    assert!(patch.contains("-hello world\n+hello there\n"), "{patch}");
+    assert_eq!(what, "stage a hunk of README");
+    app.running.clear();
+    // the added line alone: the removed one stays as context
+    app.cursor = at(&app, &|d| {
+        d.line.as_ref().is_some_and(|l| l.kind == LineKind::Add)
+    });
+    let (patch, _, _, what) = apply(app.act(Action::StageFiles));
+    assert!(patch.contains(" hello world\n+hello there\n"), "{patch}");
+    assert_eq!(what, "stage a line of README");
+    app.running.clear();
+    // discarding asks first
+    app.cursor = at(&app, &|d| d.hunk.is_some() && d.line.is_none());
+    assert!(app.act(Action::DiscardFiles).is_empty());
+    assert!(
+        matches!(&app.mode, Mode::Confirm { question, .. } if question.contains("hunk of README"))
+    );
+    let (_, index, reverse, _) = apply(app.on_key(key('y')));
+    assert_eq!(
+        (index, reverse),
+        (false, true),
+        "from the work tree, backwards"
+    );
+    app.running.clear();
+    // unstaging an unstaged hunk says what to do instead
+    assert!(app.act(Action::UnstageFiles).is_empty());
+    assert!(app.message.as_ref().unwrap().0.contains("not staged"));
+    // and staging or discarding a staged one
+    to_file(&mut app, "both");
+    app.act(Action::ToggleExpand);
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Detail { line, .. } if line.file.as_deref() == Some("both")
+            && line.diff.as_deref().is_some_and(|d| d.hunk.is_some() && d.side == argus_core::diff::Side::Staged)))
+        .unwrap();
+    assert!(app.act(Action::StageFiles).is_empty());
+    assert!(app.message.as_ref().unwrap().0.contains("staged already"));
+    assert!(app.act(Action::DiscardFiles).is_empty());
+    assert!(
+        app.message
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("u unstages it, then K")
+    );
+    assert!(!matches!(app.mode, Mode::Confirm { .. }));
 }

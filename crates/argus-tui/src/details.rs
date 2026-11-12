@@ -19,7 +19,7 @@ pub struct DetailLine {
     /// The changed file this line shows (repo-relative), for marking.
     pub file: Option<String>,
     /// Part of that file's diff (see [`DiffRef`]).
-    pub diff: Option<DiffRef>,
+    pub diff: Option<Box<DiffRef>>,
     /// The issue this line shows, for ignoring it.
     pub issue: Option<Issue>,
     /// That issue is ignored: toggling stops ignoring it. (A repo can show
@@ -103,6 +103,8 @@ pub struct DiffRef {
     pub hunk: Option<usize>,
     /// The line (lines only).
     pub line: Option<argus_core::diff::Line>,
+    /// The line's index in its hunk (lines only).
+    pub at: Option<usize>,
 }
 
 const MAX_FILES: usize = 25;

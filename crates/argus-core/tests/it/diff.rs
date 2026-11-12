@@ -467,3 +467,98 @@ fn staging_leaves_nested_repos_out() {
     );
     assert!(git(&r, &["ls-files", "--", "mixed"]).contains("mixed/file"));
 }
+
+fn hunks(r: &Path, file: &str, side: Side) -> Vec<argus_core::diff::Hunk> {
+    match file_diff(r, file, side).unwrap() {
+        FileDiff::Text(h) => h,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// What `apply` of part of a hunk does to the index (`index`) or the work
+/// tree, then the file's contents in each.
+fn apply(
+    r: &Path,
+    file: &str,
+    side: Side,
+    hunk: usize,
+    only: Option<&[usize]>,
+    index: bool,
+    reverse: bool,
+) {
+    let h = &hunks(r, file, side)[hunk];
+    let op = ops::Op::Apply {
+        patch: argus_core::diff::patch(file, h, only, reverse),
+        index,
+        reverse,
+        what: "test".into(),
+    };
+    let o = ops::run(r, &op);
+    assert!(o.success, "{}", o.output);
+}
+
+/// Staging, unstaging and discarding a hunk, or single lines of one.
+#[test]
+fn hunks_and_lines_stage_unstage_and_discard() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "f", &lines(30));
+    commit(&r, "lines");
+    // three changes far enough apart for three hunks
+    let changed = lines(30)
+        .replace("line 2\n", "line two\n")
+        .replace("line 15\n", "line fifteen\n")
+        .replace("line 28\n", "line 28\nadded\n");
+    write(&r, "f", &changed);
+    assert_eq!(hunks(&r, "f", Side::Unstaged).len(), 3);
+    // stage the middle hunk
+    apply(&r, "f", Side::Unstaged, 1, None, true, false);
+    let staged = git(&r, &["diff", "--cached", "-U0", "--", "f"]);
+    assert!(
+        staged.contains("+line fifteen") && !staged.contains("line two"),
+        "{staged}"
+    );
+    assert_eq!(hunks(&r, "f", Side::Unstaged).len(), 2);
+    // unstage it again
+    apply(&r, "f", Side::Staged, 0, None, true, true);
+    assert_eq!(git(&r, &["diff", "--cached", "--", "f"]), "");
+    // one line of a replacement: just the added line, the removed one kept
+    let h = &hunks(&r, "f", Side::Unstaged)[0];
+    let add = h
+        .lines
+        .iter()
+        .position(|l| l.kind == LineKind::Add)
+        .unwrap();
+    apply(&r, "f", Side::Unstaged, 0, Some(&[add]), true, false);
+    let index = git(&r, &["show", ":f"]);
+    assert!(index.contains("line 2\nline two\nline 3\n"), "{index}");
+    // discard a hunk from the work tree: the last one (the added line)
+    let n = hunks(&r, "f", Side::Unstaged).len();
+    apply(&r, "f", Side::Unstaged, n - 1, None, false, true);
+    let work = std::fs::read_to_string(r.join("f")).unwrap();
+    assert!(
+        !work.contains("added") && work.contains("line fifteen"),
+        "{work}"
+    );
+    // unstage just the removed line of the staged replacement (none was
+    // staged: the index keeps line 2 and gained line two)
+    let h = &hunks(&r, "f", Side::Staged)[0];
+    let added = h
+        .lines
+        .iter()
+        .position(|l| l.kind == LineKind::Add)
+        .unwrap();
+    apply(&r, "f", Side::Staged, 0, Some(&[added]), true, true);
+    assert_eq!(git(&r, &["diff", "--cached", "--", "f"]), "");
+}
+
+#[test]
+fn a_hunk_at_the_end_without_a_newline_stages() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "f", "a\nb");
+    commit(&r, "f");
+    write(&r, "f", "a\nc");
+    apply(&r, "f", Side::Unstaged, 0, None, true, false);
+    assert_eq!(git(&r, &["show", ":f"]), "a\nc");
+}
