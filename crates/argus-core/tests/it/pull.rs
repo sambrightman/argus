@@ -167,6 +167,20 @@ fn diverged_without_pull_config_is_refused_as_git_would() {
     }
     git(&r, &["config", "pull.ff", "only"]);
     assert!(matches!(st(&r).integration, Some(Integration::Refused(_))));
+    // with a rebase setting too: git still refuses (only `--rebase` on the
+    // command line would override it), and so does argus
+    for (k, v) in [("pull.rebase", "true"), ("branch.feat.rebase", "true")] {
+        git(&r, &["config", k, v]);
+        assert!(
+            matches!(st(&r).integration, Some(Integration::Refused(_))),
+            "{k}={v}"
+        );
+        assert!(
+            !argus_core::testkit::git_may_fail(&r, &["pull", "-q"]),
+            "git refuses too: {k}={v}"
+        );
+        git(&r, &["config", "--unset", k]);
+    }
 }
 
 #[test]

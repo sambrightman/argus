@@ -710,8 +710,9 @@ fn integration(
 
 /// How `git pull` would reconcile a diverged branch, or why it would
 /// refuse: without `branch.<b>.rebase`, `pull.rebase` or `pull.ff` it asks
-/// how to, and `pull.ff = only` refuses outright. (Conservative: `only` is
-/// treated as refusing even alongside a rebase setting.) The branch's
+/// how to, and `pull.ff = only` refuses outright, even alongside a rebase
+/// setting, as git does (only `--rebase` on its command line overrides
+/// it, and argus doesn't pass that). The branch's
 /// setting wins over `pull.rebase`; any non-boolean value (`merges`,
 /// `interactive`) is a kind of rebase.
 fn pull_by(repo: &gix::Repository, branch: &str) -> Result<PullBy, String> {
