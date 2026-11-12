@@ -4423,3 +4423,32 @@ fn branches_are_checked_out_from_a_list_or_the_previous_one() {
         other => panic!("{other:?}"),
     }
 }
+
+/// `b c` creates a branch at HEAD and checks it out, on any branch, not
+/// only a detached HEAD (the branch fix).
+#[test]
+fn a_branch_is_created_from_any_head() {
+    let (_sb, mut app) = setup("");
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("clean")))
+        .unwrap();
+    app.on_key(key('b'));
+    assert!(
+        menu_items(&app)
+            .iter()
+            .any(|l| l == "c create a branch at HEAD and check it out…"),
+        "{:?}",
+        menu_items(&app)
+    );
+    app.on_key(key('c'));
+    assert!(matches!(app.mode, Mode::Input { .. }));
+    for c in "wip".chars() {
+        app.on_key(key(c));
+    }
+    match app.on_key(code(KeyCode::Enter)).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(j[0].op, Op::CreateBranch { name: "wip".into() }),
+        other => panic!("{other:?}"),
+    }
+}

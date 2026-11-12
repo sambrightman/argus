@@ -91,6 +91,9 @@ pub enum Action {
     /// Ask for a name, then create a branch at each selected detached HEAD
     /// that has commits on no branch.
     CreateBranch,
+    /// A new branch at HEAD, checked out, in any repo with a work tree
+    /// (`b c`); CreateBranch is the fix naming a detached HEAD's commits.
+    NewBranch,
     /// Ask for a URL, then add it as `origin` to the current repo, if it
     /// has no remote.
     AddRemote,
@@ -1446,6 +1449,22 @@ impl App {
                         editor: LineEditor::default(),
                     };
                 }
+            }
+            NewBranch => {
+                let targets: Vec<PathBuf> = self
+                    .selected()
+                    .into_iter()
+                    .map(|i| &self.ws.entries[i])
+                    .filter(|e| e.kind != argus_core::discover::RepoKind::Bare)
+                    .map(|e| e.path.clone())
+                    .collect();
+                if targets.is_empty() {
+                    return self.not_applicable("a bare repo has no HEAD to branch from");
+                }
+                self.mode = Mode::Input {
+                    prompt: Prompt::BranchName(targets),
+                    editor: LineEditor::default(),
+                };
             }
             AbortOperation => {
                 let p = self.planned(FixKind::Abort);

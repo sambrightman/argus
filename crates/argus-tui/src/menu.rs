@@ -208,8 +208,8 @@ impl MenuId {
                     ),
                     item(
                         'c',
-                        "create a branch at detached HEAD…",
-                        Action::CreateBranch,
+                        "create a branch at HEAD and check it out…",
+                        Action::NewBranch,
                     ),
                     item(
                         'x',

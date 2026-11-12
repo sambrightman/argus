@@ -517,7 +517,8 @@ mod tests {
                 FixKind::Abort => Action::AbortOperation,
                 FixKind::Commit => Action::Commit { all: true },
                 FixKind::Gitignore => Action::GitignoreMenu,
-                FixKind::Branch => Action::CreateBranch,
+                // a branch at HEAD names a detached HEAD's commits
+                FixKind::Branch => Action::NewBranch,
                 FixKind::AddRemote => Action::AddRemote,
                 FixKind::DeleteBranches => Action::DeleteMergedBranches,
                 k => panic!("{k:?} isn't manual"),
