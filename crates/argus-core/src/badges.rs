@@ -16,6 +16,7 @@ pub enum Role {
     Favourite,
     New,
     Hidden,
+    Pull,
     Branch,
     DefaultBranch,
     Detached,
@@ -40,7 +41,8 @@ pub struct Badge {
     pub text: String,
 }
 
-/// Flag badges (favourite, new, hidden, pull), shown before the name.
+/// Flag badges (favourite, new, hidden, pull), shown before the name, in
+/// that order: the commonest, pull, last.
 pub fn flags(e: &Entry, i: &Icons) -> Vec<Badge> {
     let mut v = vec![];
     let b = |role, text: &str| Badge {
@@ -57,6 +59,9 @@ pub fn flags(e: &Entry, i: &Icons) -> Vec<Badge> {
         v.push(b(Role::Hidden, &i.ignored));
     } else if e.flags.snoozed {
         v.push(b(Role::Hidden, &i.snoozed));
+    }
+    if e.flags.pull {
+        v.push(b(Role::Pull, &i.pull));
     }
     v
 }

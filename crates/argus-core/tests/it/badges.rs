@@ -61,7 +61,7 @@ fn commits_only_on_a_detached_head_have_their_own_icon() {
 }
 
 #[test]
-fn flag_badges_show_favourite_new_and_ignored_or_snoozed() {
+fn flag_badges_show_favourite_new_ignored_or_snoozed_and_pull() {
     let sb = Sandbox::new();
     let r = sb.init("dev/r");
     let cfg = |extra: &str| format!("roots = ['{}']\n{extra}", r.parent().unwrap().display());
@@ -82,6 +82,15 @@ fn flag_badges_show_favourite_new_and_ignored_or_snoozed() {
     assert_eq!(
         texts(&format!("ignore.repos = ['{path}']")),
         [UNICODE.ignored.to_string()]
+    );
+    // pulled by `argus pull`: after the others, being the most common
+    assert_eq!(
+        texts(&format!("pull = ['{path}']")),
+        [UNICODE.pull.to_string()]
+    );
+    assert_eq!(
+        texts(&format!("pull = ['{path}']\nfavourite = ['{path}']")),
+        [UNICODE.favourite.to_string(), UNICODE.pull.to_string()]
     );
 }
 

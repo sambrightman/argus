@@ -4119,3 +4119,33 @@ fn clearing_marks_says_what_patterns_still_give() {
         menu_items(&app)
     );
 }
+
+/// The flag column: favourite, then pull (the commonest, last); names stay
+/// aligned however many flags a row has, in every icon set.
+#[test]
+fn rows_show_the_pull_mark_and_names_stay_aligned() {
+    let (_sb, mut app) = setup("favourite = ['acme/clean']\npull = ['acme/clean', 'acme/dirty']");
+    for icons in [
+        argus_core::icons::UNICODE,
+        argus_core::icons::NERD,
+        argus_core::icons::ASCII,
+    ] {
+        let (fav, pull) = (icons.favourite.to_string(), icons.pull.to_string());
+        let screen = render_with(&mut app, 100, 8, icons);
+        let row = |name: &str| {
+            screen
+                .lines()
+                .find(|l| l.contains(name))
+                .unwrap_or_else(|| panic!("{name} in {screen}"))
+                .to_string()
+        };
+        let (clean, dirty, feature) = (row("acme/clean"), row("acme/dirty"), row("acme/feature"));
+        assert!(clean.contains(&format!("{fav}{pull}")), "{clean}");
+        assert!(dirty.contains(&pull) && !dirty.contains(&fav), "{dirty}");
+        assert!(!feature.contains(&pull), "{feature}");
+        let col =
+            |l: &str, n: &str| unicode_width::UnicodeWidthStr::width(&l[..l.find(n).unwrap()]);
+        assert_eq!(col(&clean, "acme/"), col(&feature, "acme/"), "{screen}");
+        assert_eq!(col(&dirty, "acme/"), col(&feature, "acme/"), "{screen}");
+    }
+}

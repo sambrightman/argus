@@ -704,6 +704,7 @@ impl Paint {
             Role::Favourite => "33",
             Role::New => "1;36",
             Role::Hidden | Role::Dim => "2",
+            Role::Pull => "34",
             Role::Branch => "35",
             Role::DefaultBranch => "2;35",
             Role::Detached => "1;35",

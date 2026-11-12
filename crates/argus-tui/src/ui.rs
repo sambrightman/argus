@@ -265,14 +265,16 @@ fn repo_line<'a>(app: &App, v: &View, i: usize, name_w: usize, branch_w: usize) 
     } else {
         Span::raw(" ")
     });
-    // flags: fixed 2-cell column
+    // flags: a fixed column for up to three (pull, the commonest, last)
     let flags = badges::flags(e, &v.icons);
     let mut fw = 0;
-    for b in flags.iter().take(2) {
+    for b in flags.iter().take(FLAGS) {
         fw += UnicodeWidthStr::width(b.text.as_str());
         spans.push(Span::styled(b.text.clone(), t.role(b.role)));
     }
-    spans.push(Span::raw(" ".repeat(3usize.saturating_sub(fw))));
+    spans.push(Span::raw(
+        " ".repeat(flags_width(&v.icons).saturating_sub(fw)),
+    ));
 
     let depth = app.ws.depth(i);
     let tree = match e.kind {
@@ -587,6 +589,19 @@ pub fn help_lines() -> Vec<(String, String)> {
     v
 }
 
+/// How many flag badges a row shows.
+const FLAGS: usize = 3;
+
+/// The flag column's width: room for the widest flag icons, and a space.
+fn flags_width(i: &Icons) -> usize {
+    let w = [&i.favourite, &i.new, &i.ignored, &i.snoozed, &i.pull]
+        .map(|s| UnicodeWidthStr::width(s.as_ref()))
+        .into_iter()
+        .max()
+        .unwrap_or(1);
+    FLAGS * w + 1
+}
+
 /// Every icon in `i` with its meaning and colour role, for the help legend.
 pub fn legend(i: &Icons) -> Vec<(&str, Role, &'static str)> {
     vec![
@@ -597,6 +612,7 @@ pub fn legend(i: &Icons) -> Vec<(&str, Role, &'static str)> {
             "new (cloned or found, not yet acknowledged)",
         ),
         (&i.ignored, Role::Hidden, "ignored"),
+        (&i.pull, Role::Pull, "pulled by argus pull (and F a)"),
         (&i.snoozed, Role::Hidden, "snoozed"),
         (
             &i.branch,
