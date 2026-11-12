@@ -4222,12 +4222,6 @@ fn staging_a_nested_repo_explains_itself() {
 #[test]
 fn an_owner_is_marked_from_the_mark_menu() {
     let (_sb, mut app) = setup("");
-    let msg = |app: &App| {
-        app.message
-            .as_ref()
-            .map(|m| m.0.clone())
-            .unwrap_or_default()
-    };
     app.on_key(key('m'));
     app.on_key(key('o'));
     match &app.mode {
@@ -4254,7 +4248,7 @@ fn an_owner_is_marked_from_the_mark_menu() {
         menu_items(&app)
     );
     app.on_key(ctrl('g'));
-    // a repo without an identity has no owner
+    // a repo without an identity has no owner: not offered
     let (_sb, mut app) = setup_with("", |sb| {
         sb.init("dev/zlocal");
     });
@@ -4265,7 +4259,10 @@ fn an_owner_is_marked_from_the_mark_menu() {
         .unwrap();
     assert!(app.current().unwrap().id.is_none());
     app.on_key(key('m'));
-    app.on_key(key('o'));
-    assert!(matches!(app.mode, Mode::Normal));
-    assert!(msg(&app).contains("no owner"), "{}", msg(&app));
+    let items = menu_items(&app);
+    assert!(
+        !items.iter().any(|l| l.starts_with("o ")),
+        "not offered: {items:?}"
+    );
+    assert!(items.iter().any(|l| l.starts_with("f ")), "{items:?}");
 }

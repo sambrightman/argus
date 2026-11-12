@@ -1262,9 +1262,6 @@ impl App {
                     then: Confirmed::Discard(then),
                 };
             }
-            OpenMenu(MenuId::Owner) if self.owner().is_none() => {
-                return self.not_applicable("no owner: the repo has no forge identity");
-            }
             OpenMenu(m) => {
                 let mut menu = m.menu();
                 self.state_labels(&mut menu);
@@ -2193,6 +2190,11 @@ impl App {
         if !staged {
             menu.items
                 .retain(|it| it.action != Action::Commit { all: false });
+        }
+        // a repo without a forge identity has no owner to mark
+        if self.owner().is_none() {
+            menu.items
+                .retain(|it| it.action != Action::OpenMenu(MenuId::Owner));
         }
     }
 
