@@ -1660,6 +1660,8 @@ fn a_fixup_commits_whats_staged_for_a_later_autosquash() {
         &r,
         &Op::Fixup {
             commit: target.trim().into(),
+            squash: None,
+            instant: false,
         },
     );
     assert!(o.success, "{}", o.output);
@@ -1674,4 +1676,100 @@ fn a_fixup_commits_whats_staged_for_a_later_autosquash() {
         (0, 1),
         "only what was staged"
     );
+}
+
+/// A squash commit (`squash! …`, with a message to add), and the instant
+/// kinds, folded in at once by a non-interactive autosquash rebase.
+#[test]
+fn squash_and_instant_fixups_fold_in() {
+    let run = |r: &std::path::Path, commit: &str, squash: Option<&str>, instant| {
+        argus_core::ops::run(
+            r,
+            &Op::Fixup {
+                commit: commit.into(),
+                squash: squash.map(String::from),
+                instant,
+            },
+        )
+    };
+    let rev = |r: &std::path::Path, x: &str| git(r, &["rev-parse", x]).trim().to_string();
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "a", "1\n");
+    commit(&r, "add a");
+    write(&r, "b", "1\n");
+    commit(&r, "add b");
+    let target = rev(&r, "HEAD~1");
+    // squash: a commit to fold in later, with its message
+    write(&r, "a", "2\n");
+    git(&r, &["add", "a"]);
+    let o = run(&r, &target, Some("also a"), false);
+    assert!(o.success, "{}", o.output);
+    assert_eq!(
+        git(&r, &["log", "-1", "--format=%B"]).trim(),
+        "squash! add a\n\nalso a"
+    );
+    git(&r, &["reset", "-q", "--hard", "HEAD~1"]);
+    // instant fixup: folded into the target, uncommitted work kept
+    write(&r, "a", "3\n");
+    git(&r, &["add", "a"]);
+    write(&r, "b", "unstaged\n");
+    let o = run(&r, &target, None, true);
+    assert!(o.success, "{}", o.output);
+    assert_eq!(
+        git(&r, &["log", "-2", "--format=%s"]).trim(),
+        "add b\nadd a",
+        "no fixup! left"
+    );
+    assert_eq!(git(&r, &["rev-list", "--count", "HEAD"]).trim(), "3");
+    assert_eq!(git(&r, &["show", "HEAD~1:a"]), "3\n");
+    assert_eq!(std::fs::read_to_string(r.join("b")).unwrap(), "unstaged\n");
+    git(&r, &["checkout", "-q", "--", "b"]);
+    // instant squash: the messages combined
+    let target = rev(&r, "HEAD~1");
+    write(&r, "a", "4\n");
+    git(&r, &["add", "a"]);
+    let o = run(&r, &target, Some("and more"), true);
+    assert!(o.success, "{}", o.output);
+    assert_eq!(
+        git(&r, &["log", "-1", "--format=%B", "HEAD~1"]).trim(),
+        "add a\n\nand more"
+    );
+    // the first commit has no parent: --root
+    let first = rev(&r, "HEAD~2");
+    write(&r, "c", "new\n");
+    git(&r, &["add", "c"]);
+    let o = run(&r, &first, None, true);
+    assert!(o.success, "{}", o.output);
+    assert_eq!(git(&r, &["rev-list", "--count", "HEAD"]).trim(), "3");
+    assert_eq!(git(&r, &["show", "HEAD~2:c"]), "new\n");
+}
+
+/// An instant fixup rewrites history: refused for a commit already on a
+/// remote (a plain fixup still works).
+#[test]
+fn an_instant_fixup_of_a_pushed_commit_is_refused() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    let pushed = git(&r, &["rev-parse", "HEAD"]).trim().to_string();
+    write(&r, "README", "fix\n");
+    git(&r, &["add", "README"]);
+    let op = |instant| Op::Fixup {
+        commit: pushed.clone(),
+        squash: None,
+        instant,
+    };
+    let o = argus_core::ops::run(&r, &op(true));
+    assert!(
+        !o.success && o.output.contains("on a remote"),
+        "{}",
+        o.output
+    );
+    assert_eq!(
+        git(&r, &["rev-parse", "HEAD"]).trim(),
+        pushed,
+        "nothing committed"
+    );
+    assert!(argus_core::ops::run(&r, &op(false)).success);
 }

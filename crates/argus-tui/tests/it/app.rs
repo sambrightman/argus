@@ -433,7 +433,10 @@ fn c_c_commits_only_whats_staged() {
             "c commit staged changes…",
             "A commit all changes…",
             "a amend the last commit…",
-            "f fixup a commit with what's staged…"
+            "f fixup a commit with what's staged…",
+            "F instant fixup: fold what's staged into a commit…",
+            "s squash: a squash! commit of a commit, adding a message…",
+            "S instant squash: fold what's staged and a message into a commit…"
         ]
     );
     app.on_key(key('c'));
@@ -4323,7 +4326,9 @@ fn a_fixup_is_made_of_a_picked_commit() {
         [Effect::Jobs(j)] => assert_eq!(
             j[0].op,
             Op::Fixup {
-                commit: head.clone()
+                commit: head.clone(),
+                squash: None,
+                instant: false,
             }
         ),
         other => panic!("{other:?}"),
@@ -4477,6 +4482,65 @@ fn spin_off_and_spin_out_ask_for_the_name() {
                     name: "feat".into(),
                     stay
                 }
+            ),
+            other => panic!("{k}: {other:?}"),
+        }
+        app.running.clear();
+    }
+}
+
+/// `c F` instant fixup, `c s` squash (asking for its message), `c S`
+/// instant squash: the same commit list as `c f`.
+#[test]
+fn instant_fixups_and_squashes_from_the_commit_menu() {
+    let (sb, mut app) = setup_with("", |sb| {
+        git(&sb.path("dev/dirty"), &["add", "README"]);
+    });
+    let head = git(&sb.path("dev/dirty"), &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+    let to_dirty = |app: &mut App| {
+        app.cursor = app
+            .rows
+            .iter()
+            .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("dirty")))
+            .unwrap();
+    };
+    let title = |app: &App| match &app.mode {
+        Mode::Menu { menu, .. } => menu.title.clone(),
+        _ => panic!("no commit list"),
+    };
+    for (k, squash, instant, want) in [
+        ('F', false, true, "Instant fixup"),
+        ('s', true, false, "Squash"),
+        ('S', true, true, "Instant squash"),
+    ] {
+        to_dirty(&mut app);
+        app.on_key(key('c'));
+        app.on_key(key(k));
+        assert!(title(&app).starts_with(want), "{k}: {}", title(&app));
+        let fx = app.on_key(code(KeyCode::Enter));
+        let fx = if squash {
+            assert!(
+                fx.is_empty() && matches!(app.mode, Mode::Input { .. }),
+                "{k}: asks"
+            );
+            for c in "why".chars() {
+                app.on_key(key(c));
+            }
+            app.on_key(code(KeyCode::Enter))
+        } else {
+            fx
+        };
+        match fx.as_slice() {
+            [Effect::Jobs(j)] => assert_eq!(
+                j[0].op,
+                Op::Fixup {
+                    commit: head.clone(),
+                    squash: squash.then(|| "why".to_string()),
+                    instant,
+                },
+                "{k}"
             ),
             other => panic!("{k}: {other:?}"),
         }

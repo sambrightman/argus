@@ -470,6 +470,11 @@ fn draw_status(f: &mut Frame, app: &App, v: &View, area: Rect) {
                 ),
                 Prompt::StashMessage(p) => format!("stash message ({} repo(s)): ", p.len()),
                 Prompt::BranchName(p) => format!("new branch at HEAD ({} repo(s)): ", p.len()),
+                Prompt::SquashMessage(_, c, instant) => format!(
+                    "{}squash into {} (message to add; empty for none): ",
+                    if *instant { "instant " } else { "" },
+                    &c[..c.len().min(7)]
+                ),
                 Prompt::SpinOffName(p, stay) => format!(
                     "spin {} the unpushed commits to a new branch ({} repo(s)): ",
                     if *stay { "out" } else { "off" },

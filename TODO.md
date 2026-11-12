@@ -26,10 +26,6 @@ deferred.
 
 ## Offered, not decided
 
-- **Instant fixup** (magit's `c F`): the fixup commit, then at once a
-  non-interactive `git rebase --autosquash` folding it in (rewriting
-  history: refuse or warn when the commits are on a remote). And the
-  squash pair, `c s` / `c S` (`squash!` commits, editing the message).
 - **Terminals drawing ambiguous-width symbols two cells wide** (CJK
   setting): detect it and swap those icons. Today `demo --glyphs` marks
   them with `*`.

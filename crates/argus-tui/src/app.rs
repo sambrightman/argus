@@ -133,8 +133,13 @@ pub enum Action {
     /// In the reset menu: reset to that commit (by its place).
     /// The `n`th commit of the commit list (reset to it, or fix it up).
     PickCommit(usize),
-    /// Commit what's staged as a fixup of a commit picked from a list.
-    Fixup,
+    /// Commit what's staged as a fixup (or a squash commit, its message
+    /// asked for) of a commit picked from a list, folded in at once with
+    /// `instant`.
+    Fixup {
+        squash: bool,
+        instant: bool,
+    },
     /// Check out a branch picked from a list.
     Checkout,
     /// The `n`th branch of the branch list.
@@ -562,6 +567,8 @@ pub enum Prompt {
     AmendMessage(PathBuf, String, bool),
     StashMessage(Vec<PathBuf>),
     BranchName(Vec<PathBuf>),
+    /// The message a squash commit of the commit adds (`true`: instant).
+    SquashMessage(PathBuf, String, bool),
     /// The new branch's name for a spin-off (`true`: spin-out).
     SpinOffName(Vec<PathBuf>, bool),
     RemoteUrl(PathBuf),
@@ -1308,7 +1315,9 @@ impl App {
                 };
             }
             PickCommit(n) => return self.pick_commit(n),
-            Fixup => return self.open_commit_pick(Pick::Fixup),
+            Fixup { squash, instant } => {
+                return self.open_commit_pick(Pick::Fixup { squash, instant });
+            }
             Checkout => return self.open_branch_pick(),
             PickBranch(n) => {
                 if let Some((path, mut ops)) = self.branches.take()
@@ -1923,7 +1932,8 @@ impl App {
         use argus_core::history::{self, Range};
         let verb = match purpose {
             Pick::Reset(_) => "reset",
-            Pick::Fixup => "fix up",
+            Pick::Fixup { squash: false, .. } => "fix up",
+            Pick::Fixup { squash: true, .. } => "squash into",
         };
         let [i] = self.selected()[..] else {
             self.error(format!("{verb} one repo at a time"));
@@ -1935,7 +1945,7 @@ impl App {
         {
             return self.not_applicable(match purpose {
                 Pick::Reset(_) => "no commits to reset to",
-                Pick::Fixup => "no commits to fix up",
+                Pick::Fixup { .. } => "no commits to fix up",
             });
         }
         let head = Range::Ancestors { tip: "HEAD".into() };
@@ -1986,7 +1996,16 @@ impl App {
                 mode.flag(),
                 e.display_name()
             ),
-            Pick::Fixup => format!("Fixup · {} · of which commit?", e.display_name()),
+            Pick::Fixup { squash, instant } => format!(
+                "{} · {} · of which commit?",
+                match (instant, squash) {
+                    (false, false) => "Fixup",
+                    (true, false) => "Instant fixup",
+                    (false, true) => "Squash",
+                    (true, true) => "Instant squash",
+                },
+                e.display_name()
+            ),
         };
         let menu = Menu {
             id: MenuId::PickCommit,
@@ -2045,9 +2064,22 @@ impl App {
         };
         let mode = match purpose {
             Pick::Reset(mode) => mode,
-            Pick::Fixup => {
+            // a squash commit's message is asked for first
+            Pick::Fixup {
+                squash: true,
+                instant,
+            } => {
+                self.mode = Mode::Input {
+                    prompt: Prompt::SquashMessage(path, c.id.clone(), instant),
+                    editor: LineEditor::default(),
+                };
+                return vec![];
+            }
+            Pick::Fixup { instant, .. } => {
                 let op = Op::Fixup {
                     commit: c.id.clone(),
+                    squash: None,
+                    instant,
                 };
                 let jobs = self.job(&path, op).into_iter().collect();
                 return self.start_jobs(jobs);
@@ -2393,7 +2425,8 @@ impl App {
         });
         if !staged {
             menu.items.retain(|it| {
-                it.action != Action::Commit { all: false } && it.action != Action::Fixup
+                it.action != Action::Commit { all: false }
+                    && !matches!(it.action, Action::Fixup { .. })
             });
         }
         // a repo without a forge identity has no owner to mark
@@ -2941,6 +2974,15 @@ impl App {
                     .collect();
                 self.start_jobs(jobs)
             }
+            Prompt::SquashMessage(path, commit, instant) => {
+                let op = Op::Fixup {
+                    commit,
+                    squash: Some(text),
+                    instant,
+                };
+                let jobs = self.job(&path, op).into_iter().collect();
+                self.start_jobs(jobs)
+            }
             Prompt::SpinOffName(paths, stay) => {
                 let name = text.trim().to_string();
                 let jobs = paths
@@ -3169,7 +3211,7 @@ struct CommitPick {
 #[derive(Clone, Copy)]
 enum Pick {
     Reset(ResetMode),
-    Fixup,
+    Fixup { squash: bool, instant: bool },
 }
 
 /// The untracked files a gitignore menu is for, by repo, and whether its

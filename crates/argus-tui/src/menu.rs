@@ -188,7 +188,38 @@ impl MenuId {
                     item('c', "commit staged changes…", Action::Commit { all: false }),
                     item('A', "commit all changes…", Action::Commit { all: true }),
                     item('a', "amend the last commit…", Action::Amend),
-                    item('f', "fixup a commit with what's staged…", Action::Fixup),
+                    item(
+                        'f',
+                        "fixup a commit with what's staged…",
+                        Action::Fixup {
+                            squash: false,
+                            instant: false,
+                        },
+                    ),
+                    item(
+                        'F',
+                        "instant fixup: fold what's staged into a commit…",
+                        Action::Fixup {
+                            squash: false,
+                            instant: true,
+                        },
+                    ),
+                    item(
+                        's',
+                        "squash: a squash! commit of a commit, adding a message…",
+                        Action::Fixup {
+                            squash: true,
+                            instant: false,
+                        },
+                    ),
+                    item(
+                        'S',
+                        "instant squash: fold what's staged and a message into a commit…",
+                        Action::Fixup {
+                            squash: true,
+                            instant: true,
+                        },
+                    ),
                 ],
             ),
             MenuId::Branch => (

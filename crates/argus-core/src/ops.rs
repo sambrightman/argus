@@ -101,9 +101,15 @@ pub enum Op {
         stay: bool,
     },
     /// Commit what's staged as a fixup of `commit` (`fixup! <its subject>`),
-    /// for `git rebase --autosquash` to fold in.
+    /// or with `squash` a squash commit adding that message (`squash!`),
+    /// for `git rebase --autosquash` to fold in. `instant` folds it in at
+    /// once (a non-interactive autosquash rebase from `commit`'s parent,
+    /// uncommitted changes stashed around it); refused when `commit` is
+    /// on a remote, as that rewrites pushed history.
     Fixup {
         commit: String,
+        squash: Option<String>,
+        instant: bool,
     },
     /// Stage everything (including untracked) and commit.
     CommitAll {
@@ -261,11 +267,22 @@ impl Op {
             Op::Amend { message: Some(m) } => v(&["commit", "--amend", "--message", m]),
             // run in steps by spin_off; this is its first
             Op::SpinOff { name, .. } => v(&["switch", "-c", name]),
-            Op::Fixup { commit } => vec![
-                "commit".into(),
-                "--quiet".into(),
-                format!("--fixup={commit}"),
-            ],
+            Op::Fixup { commit, squash, .. } => {
+                let mut a = vec!["commit".to_string(), "--quiet".to_string()];
+                match squash.as_deref().map(str::trim) {
+                    None => a.push(format!("--fixup={commit}")),
+                    Some(m) => {
+                        a.push(format!("--squash={commit}"));
+                        // no message: no editor either
+                        a.extend(if m.is_empty() {
+                            v(&["--no-edit"])
+                        } else {
+                            v(&["--message", m])
+                        });
+                    }
+                }
+                a
+            }
             Op::Commit { message } | Op::CommitAll { message } => {
                 v(&["commit", "--message", message])
             }
@@ -379,7 +396,16 @@ impl Op {
             }
             Op::Amend { .. } => "amend".into(),
             Op::Commit { .. } => "commit staged".into(),
-            Op::Fixup { commit } => format!("fixup {}", &commit[..commit.len().min(7)]),
+            Op::Fixup {
+                commit,
+                squash,
+                instant,
+            } => format!(
+                "{}{} {}",
+                if *instant { "instant " } else { "" },
+                if squash.is_some() { "squash" } else { "fixup" },
+                &commit[..commit.len().min(7)]
+            ),
             Op::SpinOff { name, stay: false } => format!("spin off {name}"),
             Op::SpinOff { name, stay: true } => format!("spin out {name}"),
             Op::CommitAll { .. } => "commit".into(),
@@ -685,6 +711,11 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
         Op::Pull => return pull(&cwd, started),
         Op::Switch { .. } | Op::SwitchTrack { .. } => return switch(&cwd, op, started),
         Op::SpinOff { name, stay } => return spin_off(&cwd, name, *stay, started),
+        Op::Fixup {
+            commit,
+            instant: true,
+            ..
+        } => return instant_fixup(&cwd, op, commit, started),
         Op::Ignore {
             file,
             paths,
@@ -875,6 +906,48 @@ fn switch(cwd: &Path, op: &Op, started: Instant) -> OpOutcome {
         o.duration = started.elapsed();
     }
     o
+}
+
+/// An instant [`Op::Fixup`]: refused for a commit on a remote, then the
+/// commit, then a non-interactive autosquash rebase folding it in. A
+/// conflict leaves the rebase in progress, as git does, for the user (or
+/// the abort fix) to finish.
+fn instant_fixup(cwd: &Path, op: &Op, commit: &str, started: Instant) -> OpOutcome {
+    let on_remote = git_in(cwd, &["branch", "--remotes", "--contains", commit]);
+    if !on_remote.success || !on_remote.output.trim().is_empty() {
+        return refused(
+            format!(
+                "{} is on a remote: folding a fixup in would rewrite pushed history \
+                 (a plain fixup commit doesn't)",
+                &commit[..commit.len().min(7)]
+            ),
+            started,
+        );
+    }
+    let c = git(cwd, &op.args(), started);
+    if !c.success {
+        return c;
+    }
+    let parent = format!("{commit}^");
+    let has_parent = git_in(cwd, &["rev-parse", "--verify", "--quiet", &parent]).success;
+    // the todo list and messages taken as they are
+    let mut rebase: Vec<String> = [
+        "-c",
+        "sequence.editor=true",
+        "-c",
+        "core.editor=true",
+        "rebase",
+        "--quiet",
+        "--interactive",
+        "--autosquash",
+        "--autostash",
+    ]
+    .map(String::from)
+    .to_vec();
+    rebase.push(if has_parent { parent } else { "--root".into() });
+    let mut r = git(cwd, &rebase, started);
+    r.output = format!("{}\n{}", c.output, r.output).trim().to_string();
+    r
 }
 
 /// [`Op::SpinOff`], in steps, as magit's `magit--branch-spinoff`.
