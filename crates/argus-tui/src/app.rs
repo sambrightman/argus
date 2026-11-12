@@ -571,6 +571,16 @@ pub enum Mode {
     Help {
         scroll: u16,
     },
+    /// Picking from a list by typing: `names` matched fuzzily against the
+    /// query, `shown` their indices best first, `cursor` into `shown`.
+    Pick {
+        title: String,
+        editor: LineEditor,
+        labels: Vec<String>,
+        names: Vec<String>,
+        shown: Vec<usize>,
+        cursor: usize,
+    },
     /// A permanently destructive action waiting for `y`; any other key
     /// cancels it.
     Confirm {
@@ -939,6 +949,43 @@ impl App {
                 Some(a) => self.act(a),
                 None => vec![],
             },
+            Mode::Pick {
+                editor,
+                names,
+                shown,
+                cursor,
+                ..
+            } => {
+                let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+                let last = shown.len().saturating_sub(1);
+                match k.code {
+                    KeyCode::Down => *cursor = (*cursor + 1).min(last),
+                    KeyCode::Char('n') if ctrl => *cursor = (*cursor + 1).min(last),
+                    KeyCode::Up => *cursor = cursor.saturating_sub(1),
+                    KeyCode::Char('p') if ctrl => *cursor = cursor.saturating_sub(1),
+                    _ => match editor.handle(k) {
+                        Edit::Cancel => {
+                            self.branches = None;
+                            self.mode = Mode::Normal;
+                        }
+                        Edit::Submit => {
+                            let picked = shown.get(*cursor).copied();
+                            self.mode = Mode::Normal;
+                            if let Some(i) = picked {
+                                return self.act(Action::PickBranch(i));
+                            }
+                            self.branches = None;
+                        }
+                        Edit::Changed => {
+                            let mut f = crate::fuzzy::Fuzzy::new(&editor.text());
+                            *shown = f.rank(names.iter().map(String::as_str));
+                            *cursor = 0;
+                        }
+                        _ => {}
+                    },
+                }
+                vec![]
+            }
             Mode::Help { scroll } => {
                 match k.code {
                     // n/p with or without Ctrl, as Emacs's C-n/C-p
@@ -1781,7 +1828,8 @@ impl App {
         let Some(s) = e.status() else {
             return vec![];
         };
-        let mut lines: Vec<(String, Op)> = s
+        // (name, label, what checking it out runs)
+        let mut lines: Vec<(String, String, Op)> = s
             .branches
             .iter()
             .filter(|b| !b.is_head)
@@ -1789,13 +1837,13 @@ impl App {
                 let op = Op::Switch {
                     branch: b.name.clone(),
                 };
-                (b.name.clone(), op)
+                (b.name.clone(), b.name.clone(), op)
             })
             .collect();
         match argus_core::status::remote_only_branches(&e.path) {
             Ok(remote) => lines.extend(remote.into_iter().map(|r| {
                 let label = format!("{r} (creates a local branch tracking it)");
-                (label, Op::SwitchTrack { remote_branch: r })
+                (r.clone(), label, Op::SwitchTrack { remote_branch: r })
             })),
             Err(err) => {
                 self.error(err.to_string());
@@ -1805,29 +1853,23 @@ impl App {
         if lines.is_empty() {
             return self.not_applicable("no other branch to check out");
         }
-        let shown = lines.len().min(menu::LIST_KEYS.len());
-        let more = if lines.len() > shown {
-            format!(" (the first {shown} of {})", lines.len())
-        } else {
-            String::new()
+        let title = format!("Checkout · {}", e.display_name());
+        let path = e.path.clone();
+        let (mut names, mut labels, mut ops) = (vec![], vec![], vec![]);
+        for (n, l, op) in lines {
+            names.push(n);
+            labels.push(l);
+            ops.push(op);
+        }
+        self.branches = Some((path, ops));
+        self.mode = Mode::Pick {
+            title,
+            editor: LineEditor::new(""),
+            shown: (0..names.len()).collect(),
+            labels,
+            names,
+            cursor: 0,
         };
-        lines.truncate(shown);
-        let items = lines
-            .iter()
-            .zip(menu::LIST_KEYS.chars())
-            .enumerate()
-            .map(|(n, ((label, _), key))| menu::item(key, label.clone(), Action::PickBranch(n)))
-            .collect();
-        let menu = Menu {
-            id: MenuId::PickBranch,
-            title: format!("Checkout · {} · which branch?{more}", e.display_name()),
-            items,
-        };
-        self.branches = Some((
-            e.path.clone(),
-            lines.into_iter().map(|(_, op)| op).collect(),
-        ));
-        self.mode = Mode::Menu { menu, cursor: 0 };
         vec![]
     }
 

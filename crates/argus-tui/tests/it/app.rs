@@ -4372,19 +4372,33 @@ fn branches_are_checked_out_from_a_list_or_the_previous_one() {
             .any(|l| l.starts_with("- checkout the previous")),
         "{items:?}"
     );
+    // `b` again: pick by typing
     app.on_key(key('b'));
-    let title = match &app.mode {
-        Mode::Menu { menu, .. } => menu.title.clone(),
-        _ => panic!("no branch list"),
+    let shown = |app: &App| match &app.mode {
+        Mode::Pick {
+            labels,
+            shown,
+            title,
+            ..
+        } => {
+            assert!(title.contains("acme/feature"), "{title}");
+            shown.iter().map(|&i| labels[i].clone()).collect::<Vec<_>>()
+        }
+        _ => panic!("no picker"),
     };
-    assert!(title.contains("acme/feature"), "{title}");
-    let items = menu_items(&app);
     assert_eq!(
-        items.iter().map(|l| &l[2..]).collect::<Vec<_>>(),
+        shown(&app),
         ["main", "origin/topic (creates a local branch tracking it)"],
-        "not the current branch"
+        "all to start with; not the current branch"
     );
-    match app.on_key(key('2')).as_slice() {
+    for c in "tpc".chars() {
+        app.on_key(key(c));
+    }
+    assert_eq!(
+        shown(&app),
+        ["origin/topic (creates a local branch tracking it)"]
+    );
+    match app.on_key(code(KeyCode::Enter)).as_slice() {
         [Effect::Jobs(j)] => assert_eq!(
             j[0].op,
             Op::SwitchTrack {
@@ -4393,6 +4407,15 @@ fn branches_are_checked_out_from_a_list_or_the_previous_one() {
         ),
         other => panic!("{other:?}"),
     }
+    assert!(matches!(app.mode, Mode::Normal));
+    // C-n moves down the matches, C-g cancels without a job
+    app.running.clear();
+    app.on_key(key('b'));
+    app.on_key(key('b'));
+    app.on_key(ctrl('n'));
+    assert!(matches!(&app.mode, Mode::Pick { cursor: 1, .. }));
+    assert!(app.on_key(ctrl('g')).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
     app.running.clear();
     app.on_key(key('b'));
     match app.on_key(key('-')).as_slice() {

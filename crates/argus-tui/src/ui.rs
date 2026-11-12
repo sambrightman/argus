@@ -47,8 +47,69 @@ pub fn draw(f: &mut Frame, app: &mut App, v: &View) {
     match &app.mode {
         Mode::Menu { .. } => app.menu_shown = draw_menu(f, app, v, main),
         Mode::Help { scroll } => draw_help(f, v, main, *scroll),
+        Mode::Pick { .. } => draw_pick(f, app, v, main),
         _ => {}
     }
+}
+
+/// A list picked from by typing (its query on the status line), as many of
+/// the matches as fit, best first.
+fn draw_pick(f: &mut Frame, app: &App, v: &View, area: Rect) {
+    let Mode::Pick {
+        title,
+        labels,
+        shown,
+        cursor,
+        ..
+    } = &app.mode
+    else {
+        return;
+    };
+    let t = v.theme;
+    let room = (area.height as usize).saturating_sub(3).max(1);
+    let start = cursor.saturating_sub(room.saturating_sub(1));
+    let mut lines: Vec<Line> = shown
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(room)
+        .map(|(n, &i)| {
+            let l = Line::from(Span::raw(format!(" {}", labels[i])));
+            if n == *cursor {
+                l.patch_style(t.ui(Ui::Selection))
+            } else {
+                l
+            }
+        })
+        .collect();
+    if shown.is_empty() {
+        lines.push(Line::from(Span::styled(" no match", t.ui(Ui::Dim))));
+    }
+    let footer = format!(
+        " {} of {} · type to narrow · ↑↓ C-n C-p · Enter · Esc/C-g cancel",
+        shown.len(),
+        labels.len()
+    );
+    let w = labels
+        .iter()
+        .map(|l| UnicodeWidthStr::width(l.as_str()))
+        .chain([UnicodeWidthStr::width(footer.as_str()), title.len()])
+        .max()
+        .unwrap_or(20) as u16
+        + 4;
+    lines.push(Line::from(Span::styled(footer, t.ui(Ui::Dim))));
+    let r = popup(area, w, lines.len() as u16 + 2);
+    f.render_widget(Clear, r);
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(t.ui(Ui::Border))
+                .title(Span::styled(format!(" {title} "), t.ui(Ui::Title))),
+        ),
+        r,
+    );
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
@@ -419,6 +480,15 @@ fn draw_status(f: &mut Frame, app: &App, v: &View, area: Rect) {
                 Span::raw(editor.text()),
             ])
         }
+        Mode::Pick { editor, .. } => {
+            let label = "checkout: ";
+            let x = area.x + (UnicodeWidthStr::width(label) + editor.cursor()) as u16;
+            f.set_cursor_position((x.min(area.right().saturating_sub(1)), area.y));
+            Line::from(vec![
+                Span::styled(label, t.ui(Ui::Key)),
+                Span::raw(editor.text()),
+            ])
+        }
         Mode::Confirm { question, .. } => Line::from(vec![
             Span::styled(format!(" {question}"), t.ui(Ui::Failed)),
             Span::styled(" (y/n)", t.ui(Ui::Key)),
@@ -473,8 +543,7 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) -> Option<std::ops:
         // names its repo
         crate::menu::MenuId::Ignore
         | crate::menu::MenuId::Gitignore
-        | crate::menu::MenuId::PickCommit
-        | crate::menu::MenuId::PickBranch => {
+        | crate::menu::MenuId::PickCommit => {
             format!(" {} ", menu.title)
         }
         _ => format!(
