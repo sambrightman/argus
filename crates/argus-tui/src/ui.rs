@@ -470,6 +470,11 @@ fn draw_status(f: &mut Frame, app: &App, v: &View, area: Rect) {
                 ),
                 Prompt::StashMessage(p) => format!("stash message ({} repo(s)): ", p.len()),
                 Prompt::BranchName(p) => format!("new branch at HEAD ({} repo(s)): ", p.len()),
+                Prompt::SpinOffName(p, stay) => format!(
+                    "spin {} the unpushed commits to a new branch ({} repo(s)): ",
+                    if *stay { "out" } else { "off" },
+                    p.len()
+                ),
                 Prompt::RemoteUrl(_) => "URL of the remote to add as origin: ".to_string(),
                 Prompt::SnoozeDuration(k) => format!("snooze {} repo(s) for: ", k.len()),
             };

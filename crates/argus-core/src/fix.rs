@@ -832,6 +832,7 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
         | Op::Commit { .. }
         | Op::Fixup { .. }
         | Op::SwitchTrack { .. }
+        | Op::SpinOff { .. }
         | Op::Reset { .. }
         | Op::Amend { .. }
         | Op::Add { .. }

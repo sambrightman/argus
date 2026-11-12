@@ -91,6 +91,15 @@ pub enum Op {
     Commit {
         message: String,
     },
+    /// Spin-off (as magit's): a new branch `name` at the current one, with
+    /// the commits its upstream doesn't have; the current branch goes back
+    /// to the last commit it shares with its upstream. Checked out, or with
+    /// `stay` (spin-out) the current branch stays checked out, unless
+    /// uncommitted changes would be lost.
+    SpinOff {
+        name: String,
+        stay: bool,
+    },
     /// Commit what's staged as a fixup of `commit` (`fixup! <its subject>`),
     /// for `git rebase --autosquash` to fold in.
     Fixup {
@@ -250,6 +259,8 @@ impl Op {
             }
             Op::Amend { message: None } => v(&["commit", "--amend", "--no-edit"]),
             Op::Amend { message: Some(m) } => v(&["commit", "--amend", "--message", m]),
+            // run in steps by spin_off; this is its first
+            Op::SpinOff { name, .. } => v(&["switch", "-c", name]),
             Op::Fixup { commit } => vec![
                 "commit".into(),
                 "--quiet".into(),
@@ -369,6 +380,8 @@ impl Op {
             Op::Amend { .. } => "amend".into(),
             Op::Commit { .. } => "commit staged".into(),
             Op::Fixup { commit } => format!("fixup {}", &commit[..commit.len().min(7)]),
+            Op::SpinOff { name, stay: false } => format!("spin off {name}"),
+            Op::SpinOff { name, stay: true } => format!("spin out {name}"),
             Op::CommitAll { .. } => "commit".into(),
             Op::FastForward { branch, .. } => format!("fast-forward {branch}"),
             Op::Clone { .. } => "clone".into(),
@@ -671,6 +684,7 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
     match op {
         Op::Pull => return pull(&cwd, started),
         Op::Switch { .. } | Op::SwitchTrack { .. } => return switch(&cwd, op, started),
+        Op::SpinOff { name, stay } => return spin_off(&cwd, name, *stay, started),
         Op::Ignore {
             file,
             paths,
@@ -861,6 +875,84 @@ fn switch(cwd: &Path, op: &Op, started: Instant) -> OpOutcome {
         o.duration = started.elapsed();
     }
     o
+}
+
+/// [`Op::SpinOff`], in steps, as magit's `magit--branch-spinoff`.
+fn spin_off(cwd: &Path, name: &str, stay: bool, started: Instant) -> OpOutcome {
+    let out = |args: &[&str]| {
+        let o = git_in(cwd, args);
+        o.success.then(|| o.output.trim().to_string())
+    };
+    let Some(current) = out(&["symbolic-ref", "--short", "--quiet", "HEAD"]) else {
+        return refused("not on a branch: nothing to spin off".into(), started);
+    };
+    if out(&[
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        &format!("refs/heads/{name}"),
+    ])
+    .is_some()
+    {
+        return refused(format!("a branch {name} already exists"), started);
+    }
+    let head = out(&["rev-parse", "HEAD"]).unwrap_or_default();
+    // where the branch goes back to: what it shares with its upstream
+    let base = out(&[
+        "rev-parse",
+        "--abbrev-ref",
+        &format!("{current}@{{upstream}}"),
+    ])
+    .and_then(|up| out(&["merge-base", &current, &up]))
+    .filter(|b| *b != head);
+    let mut notes = vec![];
+    let dirty =
+        out(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
+    let stay = if stay && dirty && base.is_some() {
+        notes.push("uncommitted changes: switched to the new branch to keep them".to_string());
+        false
+    } else {
+        stay
+    };
+    let step = |args: &[&str]| -> Result<(), OpOutcome> {
+        let o = git_in(cwd, args);
+        if o.success { Ok(()) } else { Err(o) }
+    };
+    let run = || -> Result<(), OpOutcome> {
+        if stay {
+            step(&["branch", "--no-track", name, &current])?;
+        } else {
+            step(&["switch", "--no-track", "-c", name, &current])?;
+        }
+        if let Some(base) = &base {
+            if stay {
+                step(&["reset", "--hard", base])?;
+            } else {
+                let refname = format!("refs/heads/{current}");
+                let msg = format!("spin off {name}: moving to {base}");
+                step(&["update-ref", "-m", &msg, &refname, base])?;
+            }
+        }
+        Ok(())
+    };
+    match run() {
+        Ok(()) => {
+            notes.push(match &base {
+                Some(b) => format!("{current} reset to {}", &b[..b.len().min(7)]),
+                None => format!("{current} unchanged: nothing it has that its upstream hasn't"),
+            });
+            OpOutcome {
+                success: true,
+                code: Some(0),
+                output: notes.join("\n"),
+                duration: started.elapsed(),
+            }
+        }
+        Err(mut o) => {
+            o.duration = started.elapsed();
+            o
+        }
+    }
 }
 
 /// Each checked-out submodule's HEAD, nested ones after their parent.

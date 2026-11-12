@@ -200,6 +200,16 @@ impl MenuId {
                         "checkout the previous branch",
                         Action::CheckoutPrevious,
                     ),
+                    item(
+                        's',
+                        "spin off: unpushed commits to a new branch, checked out…",
+                        Action::SpinOff { stay: false },
+                    ),
+                    item(
+                        'S',
+                        "spin out: unpushed commits to a new branch, staying here…",
+                        Action::SpinOff { stay: true },
+                    ),
                     item('d', "switch to default branch", Action::SwitchDefault),
                     item(
                         'r',

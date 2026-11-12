@@ -982,7 +982,8 @@ fn view_menu_cycles_themes_and_icon_sets_for_this_session() {
 fn help_has_a_legend_of_every_icon() {
     let (_sb, mut app) = setup("");
     app.on_key(key('?'));
-    let out = render(&mut app, 100, 80);
+    // tall enough for all of the help
+    let out = render(&mut app, 100, 160);
     for (icon, meaning) in [
         ("◆", "favourite"),
         ("±", "unstaged changes"),
@@ -4450,5 +4451,35 @@ fn a_branch_is_created_from_any_head() {
     match app.on_key(code(KeyCode::Enter)).as_slice() {
         [Effect::Jobs(j)] => assert_eq!(j[0].op, Op::CreateBranch { name: "wip".into() }),
         other => panic!("{other:?}"),
+    }
+}
+
+/// `b s` / `b S`: spin-off and spin-out, asking for the new branch's name.
+#[test]
+fn spin_off_and_spin_out_ask_for_the_name() {
+    let (_sb, mut app) = setup("");
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("clean")))
+        .unwrap();
+    for (k, stay) in [('s', false), ('S', true)] {
+        app.on_key(key('b'));
+        app.on_key(key(k));
+        assert!(matches!(app.mode, Mode::Input { .. }), "{k}");
+        for c in "feat".chars() {
+            app.on_key(key(c));
+        }
+        match app.on_key(code(KeyCode::Enter)).as_slice() {
+            [Effect::Jobs(j)] => assert_eq!(
+                j[0].op,
+                Op::SpinOff {
+                    name: "feat".into(),
+                    stay
+                }
+            ),
+            other => panic!("{k}: {other:?}"),
+        }
+        app.running.clear();
     }
 }

@@ -91,6 +91,11 @@ pub enum Action {
     /// Ask for a name, then create a branch at each selected detached HEAD
     /// that has commits on no branch.
     CreateBranch,
+    /// Move the unpushed commits to a new branch (asked for), checked out
+    /// or (`stay`) not.
+    SpinOff {
+        stay: bool,
+    },
     /// A new branch at HEAD, checked out, in any repo with a work tree
     /// (`b c`); CreateBranch is the fix naming a detached HEAD's commits.
     NewBranch,
@@ -557,6 +562,8 @@ pub enum Prompt {
     AmendMessage(PathBuf, String, bool),
     StashMessage(Vec<PathBuf>),
     BranchName(Vec<PathBuf>),
+    /// The new branch's name for a spin-off (`true`: spin-out).
+    SpinOffName(Vec<PathBuf>, bool),
     RemoteUrl(PathBuf),
     SnoozeDuration(Vec<String>),
 }
@@ -1449,6 +1456,22 @@ impl App {
                         editor: LineEditor::default(),
                     };
                 }
+            }
+            SpinOff { stay } => {
+                let targets: Vec<PathBuf> = self
+                    .selected()
+                    .into_iter()
+                    .map(|i| &self.ws.entries[i])
+                    .filter(|e| e.status().is_some_and(|s| s.head.branch().is_some()))
+                    .map(|e| e.path.clone())
+                    .collect();
+                if targets.is_empty() {
+                    return self.not_applicable("not on a branch: nothing to spin off");
+                }
+                self.mode = Mode::Input {
+                    prompt: Prompt::SpinOffName(targets, stay),
+                    editor: LineEditor::default(),
+                };
             }
             NewBranch => {
                 let targets: Vec<PathBuf> = self
@@ -2915,6 +2938,20 @@ impl App {
                 let jobs = paths
                     .iter()
                     .filter_map(|p| self.job(p, Op::CreateBranch { name: name.clone() }))
+                    .collect();
+                self.start_jobs(jobs)
+            }
+            Prompt::SpinOffName(paths, stay) => {
+                let name = text.trim().to_string();
+                let jobs = paths
+                    .iter()
+                    .filter_map(|p| {
+                        let op = Op::SpinOff {
+                            name: name.clone(),
+                            stay,
+                        };
+                        self.job(p, op)
+                    })
                     .collect();
                 self.start_jobs(jobs)
             }

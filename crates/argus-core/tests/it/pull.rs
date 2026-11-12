@@ -753,3 +753,81 @@ fn switching_to_a_remote_branch_or_the_previous_one() {
         "switch to the previous branch"
     );
 }
+
+/// Spin-off: the unpushed commits go to a new branch, checked out, and the
+/// branch is put back where its upstream has it. Spin-out: the same,
+/// staying on the branch (unless uncommitted changes would be lost).
+#[test]
+fn spinning_off_moves_the_unpushed_commits_to_a_new_branch() {
+    let rev = |r: &std::path::Path, x: &str| git(r, &["rev-parse", x]).trim().to_string();
+    let current = |r: &std::path::Path| git(r, &["branch", "--show-current"]).trim().to_string();
+    let spin = |r: &std::path::Path, name: &str, stay| {
+        ops::run(
+            r,
+            &Op::SpinOff {
+                name: name.into(),
+                stay,
+            },
+        )
+    };
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    commit(&r, "one");
+    commit(&r, "two");
+    let head = rev(&r, "HEAD");
+    let o = spin(&r, "feat", false);
+    assert!(o.success, "{}", o.output);
+    assert_eq!(current(&r), "feat");
+    assert_eq!(rev(&r, "feat"), head);
+    assert_eq!(
+        rev(&r, "main"),
+        rev(&r, "origin/main"),
+        "main back where origin has it"
+    );
+    // spin-out: stays on main, which goes back
+    git(&r, &["switch", "-q", "main"]);
+    git(&r, &["reset", "-q", "--hard", &head]);
+    let o = spin(&r, "feat2", true);
+    assert!(o.success, "{}", o.output);
+    assert_eq!(current(&r), "main");
+    assert_eq!(rev(&r, "HEAD"), rev(&r, "origin/main"));
+    assert_eq!(rev(&r, "feat2"), head);
+    // spin-out with uncommitted changes: spins off instead, keeping them
+    git(&r, &["reset", "-q", "--hard", &head]);
+    write(&r, "README", "uncommitted\n");
+    let o = spin(&r, "feat3", true);
+    assert!(o.success, "{}", o.output);
+    assert!(o.output.contains("uncommitted"), "{}", o.output);
+    assert_eq!(current(&r), "feat3");
+    assert_eq!(
+        std::fs::read_to_string(r.join("README")).unwrap(),
+        "uncommitted\n"
+    );
+    git(&r, &["checkout", "-q", "--", "README"]);
+    // an existing name: refused, nothing changed
+    let o = spin(&r, "feat", false);
+    assert!(
+        !o.success && o.output.contains("already exists"),
+        "{}",
+        o.output
+    );
+    assert_eq!(current(&r), "feat3");
+    // nothing unpushed (or no upstream): the branch is made, the old one kept
+    git(&r, &["switch", "-q", "-c", "local"]);
+    let before = rev(&r, "HEAD");
+    let o = spin(&r, "local2", false);
+    assert!(o.success, "{}", o.output);
+    assert_eq!(
+        (current(&r), rev(&r, "local")),
+        ("local2".to_string(), before)
+    );
+    // a detached HEAD: refused
+    git(&r, &["switch", "-q", "--detach"]);
+    let o = spin(&r, "x", false);
+    assert!(
+        !o.success && o.output.contains("not on a branch"),
+        "{}",
+        o.output
+    );
+}
