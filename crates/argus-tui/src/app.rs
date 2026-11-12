@@ -123,7 +123,10 @@ pub enum Action {
     /// Offer the current repo's commits to reset to, this way.
     Reset(ResetMode),
     /// In the reset menu: reset to that commit (by its place).
-    ResetTo(usize),
+    /// The `n`th commit of the commit list (reset to it, or fix it up).
+    PickCommit(usize),
+    /// Commit what's staged as a fixup of a commit picked from a list.
+    Fixup,
     /// In the gitignore menu: add the rules to that file.
     Gitignore(IgnoreFile),
     Snooze,
@@ -637,7 +640,7 @@ pub struct App {
     /// whether rules are anchored.
     gitignore: Option<GitignoreTargets>,
     /// The repo, mode and commits the open reset menu offers.
-    reset: Option<ResetPick>,
+    pick: Option<CommitPick>,
     pub log: Vec<LogEntry>,
     pub show_log: bool,
     pub message: Option<(String, bool)>,
@@ -680,7 +683,7 @@ impl App {
             auto_fixes: (0, String::new()),
             ignore_menu: None,
             gitignore: None,
-            reset: None,
+            pick: None,
             log: vec![],
             show_log: false,
             message: None,
@@ -1225,7 +1228,7 @@ impl App {
                     .collect();
                 return self.start_jobs(jobs);
             }
-            Reset(mode) => return self.open_reset_menu(mode),
+            Reset(mode) => return self.open_commit_pick(Pick::Reset(mode)),
             Amend => return self.start_amend(),
             ApplyFix(kind) => {
                 return match kind {
@@ -1238,7 +1241,8 @@ impl App {
                     k => self.fix_ops(k),
                 };
             }
-            ResetTo(n) => return self.reset_to(n),
+            PickCommit(n) => return self.pick_commit(n),
+            Fixup => return self.open_commit_pick(Pick::Fixup),
             Stash(kind) => return self.stash_action(kind),
             StageFiles => return self.file_op(ops::stage_ops, "stage"),
             UnstageFiles => return self.file_op(ops::unstage_ops, "unstage"),
@@ -1737,17 +1741,28 @@ impl App {
     /// The current repo's recent commits to reset to: HEAD first, each
     /// marked when it's on a remote. The cursor starts on the commit before
     /// HEAD, or before the commit under the cursor in the details.
-    fn open_reset_menu(&mut self, mode: ResetMode) -> Vec<Effect> {
+    /// The list of HEAD's recent commits to reset to or fix up: from the
+    /// commit under the cursor in the details if there is one (for a
+    /// reset, its parent: what's left without it), else HEAD's parent for
+    /// a reset and HEAD for a fixup.
+    fn open_commit_pick(&mut self, purpose: Pick) -> Vec<Effect> {
         use argus_core::history::{self, Range};
+        let verb = match purpose {
+            Pick::Reset(_) => "reset",
+            Pick::Fixup => "fix up",
+        };
         let [i] = self.selected()[..] else {
-            self.error("reset one repo at a time");
+            self.error(format!("{verb} one repo at a time"));
             return vec![];
         };
         let e = &self.ws.entries[i];
         if e.status()
             .is_some_and(|s| matches!(s.head, argus_core::status::Head::Unborn(_)))
         {
-            return self.not_applicable("no commits to reset to");
+            return self.not_applicable(match purpose {
+                Pick::Reset(_) => "no commits to reset to",
+                Pick::Fixup => "no commits to fix up",
+            });
         }
         let head = Range::Ancestors { tip: "HEAD".into() };
         // HEAD's history: never empty
@@ -1772,8 +1787,9 @@ impl App {
             },
             _ => None,
         };
+        let after = usize::from(matches!(purpose, Pick::Reset(_)));
         let cursor = under
-            .map_or(1, |n| n + 1)
+            .map_or(after, |n| n + after)
             .min(commits.len().saturating_sub(1));
         let items = commits
             .iter()
@@ -1787,22 +1803,26 @@ impl App {
                 if !local.contains(&c.id) {
                     label.push_str(" · on a remote");
                 }
-                menu::item(key, label, Action::ResetTo(n))
+                menu::item(key, label, Action::PickCommit(n))
             })
             .collect();
-        let menu = Menu {
-            id: MenuId::ResetTo,
-            title: format!(
+        let title = match purpose {
+            Pick::Reset(mode) => format!(
                 "Reset {} · {} · to which commit?",
                 mode.flag(),
                 e.display_name()
             ),
+            Pick::Fixup => format!("Fixup · {} · of which commit?", e.display_name()),
+        };
+        let menu = Menu {
+            id: MenuId::PickCommit,
+            title,
             items,
         };
-        self.reset = Some(ResetPick {
+        self.pick = Some(CommitPick {
             path: e.path.clone(),
             name: e.display_name(),
-            mode,
+            purpose,
             commits,
         });
         self.mode = Mode::Menu { menu, cursor };
@@ -1836,18 +1856,28 @@ impl App {
     }
 
     /// Reset to the reset menu's commit `n`; a hard reset asks first.
-    fn reset_to(&mut self, n: usize) -> Vec<Effect> {
-        let Some(ResetPick {
+    fn pick_commit(&mut self, n: usize) -> Vec<Effect> {
+        let Some(CommitPick {
             path,
             name,
-            mode,
+            purpose,
             commits,
-        }) = self.reset.take()
+        }) = self.pick.take()
         else {
             return vec![];
         };
         let Some(c) = commits.get(n) else {
             return vec![];
+        };
+        let mode = match purpose {
+            Pick::Reset(mode) => mode,
+            Pick::Fixup => {
+                let op = Op::Fixup {
+                    commit: c.id.clone(),
+                };
+                let jobs = self.job(&path, op).into_iter().collect();
+                return self.start_jobs(jobs);
+            }
         };
         let op = Op::Reset {
             mode,
@@ -2188,8 +2218,9 @@ impl App {
                 .is_some_and(|s| s.changes.staged > 0)
         });
         if !staged {
-            menu.items
-                .retain(|it| it.action != Action::Commit { all: false });
+            menu.items.retain(|it| {
+                it.action != Action::Commit { all: false } && it.action != Action::Fixup
+            });
         }
         // a repo without a forge identity has no owner to mark
         if self.owner().is_none() {
@@ -2938,12 +2969,19 @@ impl App {
     }
 }
 
-/// What a reset menu offers: the repo, how, and its recent commits.
-struct ResetPick {
+/// What a commit list offers: the repo, what for, and its recent commits.
+struct CommitPick {
     path: PathBuf,
     name: String,
-    mode: ResetMode,
+    purpose: Pick,
     commits: Vec<argus_core::history::CommitLine>,
+}
+
+/// What a picked commit is for.
+#[derive(Clone, Copy)]
+enum Pick {
+    Reset(ResetMode),
+    Fixup,
 }
 
 /// The untracked files a gitignore menu is for, by repo, and whether its

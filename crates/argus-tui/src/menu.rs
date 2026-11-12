@@ -22,8 +22,8 @@ pub enum MenuId {
     Gitignore,
     /// How to reset the current branch.
     Reset,
-    /// Which commit to reset to, built when opened.
-    ResetTo,
+    /// A commit to reset to or fix up, built when opened.
+    PickCommit,
     /// The Mark menu's marks for the selected repo's owner as a whole.
     Owner,
 }
@@ -89,7 +89,7 @@ impl MenuId {
             MenuId::Ignore => 'I',
             MenuId::Gitignore => 'i',
             MenuId::Reset => 'X',
-            MenuId::ResetTo => 'X',
+            MenuId::PickCommit => 'X',
             MenuId::Owner => 'm',
         }
     }
@@ -112,7 +112,7 @@ impl MenuId {
     /// through it and are never its keys. A new list goes here, with its
     /// items keyed from [`LIST_KEYS`].
     pub fn is_list(self) -> bool {
-        matches!(self, MenuId::ResetTo)
+        matches!(self, MenuId::PickCommit)
     }
 
     pub fn from_key(c: char) -> Option<Self> {
@@ -188,6 +188,7 @@ impl MenuId {
                     item('c', "commit staged changes…", Action::Commit { all: false }),
                     item('A', "commit all changes…", Action::Commit { all: true }),
                     item('a', "amend the last commit…", Action::Amend),
+                    item('f', "fixup a commit with what's staged…", Action::Fixup),
                 ],
             ),
             MenuId::Branch => (
@@ -272,7 +273,7 @@ impl MenuId {
                     ),
                 ],
             ),
-            MenuId::ResetTo => ("Reset", vec![]),
+            MenuId::PickCommit => ("Commits", vec![]),
             // titled with the owner and labelled as toggled when opened
             MenuId::Owner => (
                 "Owner",

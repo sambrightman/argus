@@ -86,6 +86,11 @@ pub enum Op {
     Commit {
         message: String,
     },
+    /// Commit what's staged as a fixup of `commit` (`fixup! <its subject>`),
+    /// for `git rebase --autosquash` to fold in.
+    Fixup {
+        commit: String,
+    },
     /// Stage everything (including untracked) and commit.
     CommitAll {
         message: String,
@@ -239,6 +244,11 @@ impl Op {
             }
             Op::Amend { message: None } => v(&["commit", "--amend", "--no-edit"]),
             Op::Amend { message: Some(m) } => v(&["commit", "--amend", "--message", m]),
+            Op::Fixup { commit } => vec![
+                "commit".into(),
+                "--quiet".into(),
+                format!("--fixup={commit}"),
+            ],
             Op::Commit { message } | Op::CommitAll { message } => {
                 v(&["commit", "--message", message])
             }
@@ -350,6 +360,7 @@ impl Op {
             }
             Op::Amend { .. } => "amend".into(),
             Op::Commit { .. } => "commit staged".into(),
+            Op::Fixup { commit } => format!("fixup {}", &commit[..commit.len().min(7)]),
             Op::CommitAll { .. } => "commit".into(),
             Op::FastForward { branch, .. } => format!("fast-forward {branch}"),
             Op::Clone { .. } => "clone".into(),

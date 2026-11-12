@@ -8,8 +8,6 @@ deferred.
 
 - **Snoozing per issue** (and per repo, as now): today a snooze hides the
   whole repo until it expires.
-- **Fixup commits** (`c f`, as in magit): commit what's staged as a fixup
-  of a commit picked like reset's, for a later autosquash.
 - **Stable machine-readable output.** `--json` works for every command;
   pull, fix, mark, ack, root and paths build their documents explicitly in
   the CLI, but `status` and `forge list` still serialise internal structs

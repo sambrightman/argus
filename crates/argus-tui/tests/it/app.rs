@@ -413,7 +413,8 @@ fn c_c_commits_only_whats_staged() {
         [
             "c commit staged changes…",
             "A commit all changes…",
-            "a amend the last commit…"
+            "a amend the last commit…",
+            "f fixup a commit with what's staged…"
         ]
     );
     app.on_key(key('c'));
@@ -4265,4 +4266,60 @@ fn an_owner_is_marked_from_the_mark_menu() {
         "not offered: {items:?}"
     );
     assert!(items.iter().any(|l| l.starts_with("f ")), "{items:?}");
+}
+
+/// `c f`: what's staged as a fixup of a commit picked from HEAD's history,
+/// starting at HEAD; offered only when something is staged.
+#[test]
+fn a_fixup_is_made_of_a_picked_commit() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let d = sb.path("dev/dirty");
+        git(&d, &["add", "README"]);
+    });
+    let dirty = sb.path("dev/dirty");
+    let head = git(&dirty, &["rev-parse", "HEAD"]).trim().to_string();
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("dirty")))
+        .unwrap();
+    app.on_key(key('c'));
+    assert!(
+        menu_items(&app).iter().any(|l| l.starts_with("f fixup")),
+        "{:?}",
+        menu_items(&app)
+    );
+    app.on_key(key('f'));
+    let (title, at) = match &app.mode {
+        Mode::Menu { menu, cursor } => (menu.title.clone(), *cursor),
+        _ => panic!("no commit list"),
+    };
+    assert!(
+        title.contains("Fixup") && title.contains("acme/dirty"),
+        "{title}"
+    );
+    assert_eq!(at, 0, "starts at HEAD");
+    match app.on_key(code(KeyCode::Enter)).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(
+            j[0].op,
+            Op::Fixup {
+                commit: head.clone()
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
+    // inverse: nothing staged, not offered
+    app.running.clear();
+    let clean = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("clean")))
+        .unwrap();
+    app.cursor = clean;
+    app.on_key(key('c'));
+    assert!(
+        !menu_items(&app).iter().any(|l| l.starts_with("f fixup")),
+        "{:?}",
+        menu_items(&app)
+    );
 }

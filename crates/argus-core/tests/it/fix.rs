@@ -1643,3 +1643,35 @@ fn a_moved_submodule_is_put_back_only_when_nothing_is_lost() {
     git(&r, &["add", "lib"]);
     assert_eq!(fix(&r), None);
 }
+
+#[test]
+fn a_fixup_commits_whats_staged_for_a_later_autosquash() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "a", "1\n");
+    commit(&r, "add a");
+    let target = git(&r, &["rev-parse", "HEAD"]);
+    write(&r, "b", "1\n");
+    commit(&r, "add b");
+    write(&r, "a", "2\n");
+    git(&r, &["add", "a"]);
+    write(&r, "unstaged", "x");
+    let o = argus_core::ops::run(
+        &r,
+        &Op::Fixup {
+            commit: target.trim().into(),
+        },
+    );
+    assert!(o.success, "{}", o.output);
+    assert_eq!(
+        git(&r, &["log", "-1", "--format=%s"]).trim(),
+        "fixup! add a"
+    );
+    assert_eq!(git(&r, &["show", "HEAD:a"]), "2\n");
+    let s = status(&r, StatusOptions::default()).unwrap();
+    assert_eq!(
+        (s.changes.staged, s.changes.untracked),
+        (0, 1),
+        "only what was staged"
+    );
+}
