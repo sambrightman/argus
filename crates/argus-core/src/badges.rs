@@ -134,6 +134,9 @@ pub fn state(e: &Entry, i: &Icons) -> Vec<Badge> {
             push(Role::Behind, format!("{}{}", i.behind, t.behind));
         }
     }
+    if e.issues.contains(&Issue::NoRemote) {
+        push(Role::Warning, i.no_remote.to_string());
+    }
     if e.issues.contains(&Issue::NoUpstream) {
         push(Role::Warning, i.no_upstream.to_string());
     }

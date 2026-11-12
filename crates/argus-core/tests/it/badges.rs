@@ -152,19 +152,21 @@ fn change_badges_count_each_kind_and_only_when_there_are_some() {
     let sb = Sandbox::new();
     let r = sb.init("dev/w");
     let i = &UNICODE;
-    assert_eq!(state_badges(&r, ""), Vec::<String>::new(), "clean");
+    // (a local repo: its having no remote isn't what's counted here)
+    let local = "[ignore]\nno_remote = ['**']";
+    assert_eq!(state_badges(&r, local), Vec::<String>::new(), "clean");
     argus_core::testkit::write(&r, "README", "staged\n");
     git(&r, &["add", "README"]);
     argus_core::testkit::write(&r, "a", "x");
     argus_core::testkit::write(&r, "b", "x");
     assert_eq!(
-        state_badges(&r, ""),
+        state_badges(&r, local),
         [format!("{}1", i.staged), format!("{}2", i.untracked),]
     );
     git(&r, &["add", "a", "b"]);
     commit(&r, "ab");
     argus_core::testkit::write(&r, "a", "changed");
-    assert_eq!(state_badges(&r, ""), [format!("{}1", i.unstaged)]);
+    assert_eq!(state_badges(&r, local), [format!("{}1", i.unstaged)]);
 }
 
 #[test]
@@ -193,4 +195,19 @@ fn ahead_and_behind_badges_show_only_when_not_zero() {
     assert_eq!(state_badges(&r, ""), Vec::<String>::new(), "level");
     commit(&r, "mine");
     assert_eq!(state_badges(&r, ""), [format!("{}1", UNICODE.ahead)]);
+}
+
+#[test]
+fn a_repo_without_a_remote_says_so_unless_that_is_ignored() {
+    let sb = Sandbox::new();
+    let r = sb.init("dev/local");
+    assert_eq!(state_badges(&r, ""), [UNICODE.no_remote.to_string()]);
+    assert_eq!(
+        state_badges(&r, "[ignore]\nno_remote = ['**']"),
+        Vec::<String>::new()
+    );
+    // inverse: with a remote, nothing
+    sb.remote("acme", "w");
+    let w = sb.clone_as_github("acme", "w", "other/w");
+    assert!(!state_badges(&w, "").contains(&UNICODE.no_remote.to_string()));
 }

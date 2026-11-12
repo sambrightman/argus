@@ -650,6 +650,7 @@ pub fn legend(i: &Icons) -> Vec<(&str, Role, &'static str)> {
         (&i.stash, Role::Stash, "stashes"),
         (&i.gone, Role::Warning, "upstream branch deleted"),
         (&i.no_upstream, Role::Warning, "branch has no upstream"),
+        (&i.no_remote, Role::Warning, "no remote"),
         (
             &i.branches,
             Role::Warning,

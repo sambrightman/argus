@@ -386,7 +386,7 @@ pub struct UiConfig {
     pub icons: String,
     /// Per-icon overrides on top of the set, by name: favourite, new,
     /// ignored, snoozed, branch, detached, detached_commits, ahead, behind, staged, unstaged,
-    /// untracked, conflict, stash, in_progress, gone, no_upstream, branches,
+    /// untracked, conflict, stash, in_progress, gone, no_upstream, no_remote, branches,
     /// error, pull, worktree, submodule; and in the interface: spinner (one
     /// frame per character), marked, ok, failed, celebrate, and the ignore
     /// menu's issue states issue_counted, issue_pinned, issue_ignored.

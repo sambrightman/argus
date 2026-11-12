@@ -29,6 +29,7 @@ pub struct Icons {
     pub in_progress: Cow<'static, str>,
     pub gone: Cow<'static, str>,
     pub no_upstream: Cow<'static, str>,
+    pub no_remote: Cow<'static, str>,
     pub branches: Cow<'static, str>,
     pub error: Cow<'static, str>,
     pub pull: Cow<'static, str>,
@@ -96,6 +97,7 @@ icon_names!(
     in_progress,
     gone,
     no_upstream,
+    no_remote,
     branches,
     error,
     pull,
@@ -162,6 +164,7 @@ pub const UNICODE: Icons = Icons {
     in_progress: s("!"),
     gone: s("×"),
     no_upstream: s("↑?"),
+    no_remote: s("↑×"),
     branches: s("»"),
     error: s("!!"),
     pull: s("~"),
@@ -197,6 +200,7 @@ pub const NERD: Icons = Icons {
     in_progress: s("\u{ea6c} "),      // cod-warning
     gone: s("\u{eac1} "),             // cod-close_all
     no_upstream: s("\u{ead0} "),      // cod-debug_disconnect
+    no_remote: s("\u{f4ad} "),        // oct-cloud_offline
     branches: s("\u{ea63} "),         // cod-repo_forked
     error: s("\u{ea87} "),            // cod-error
     pull: s("\u{ea77} "),             // cod-sync
@@ -241,6 +245,7 @@ pub const ASCII: Icons = Icons {
     in_progress: s("!!"),
     gone: s("gone"),
     no_upstream: s("-u"),
+    no_remote: s("-r"),
     branches: s("b"),
     error: s("ERR"),
     pull: s("~"),

@@ -22,6 +22,7 @@ fn icons(set: &Icons) -> Vec<(&'static str, &str)> {
         ("in_progress", &*set.in_progress),
         ("gone", &*set.gone),
         ("no_upstream", &*set.no_upstream),
+        ("no_remote", &*set.no_remote),
         ("branches", &*set.branches),
         ("error", &*set.error),
         ("pull", &*set.pull),
