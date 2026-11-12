@@ -129,6 +129,12 @@ mod tests {
         assert_eq!(config_file_in(&none), p("./argus/config.toml"));
         assert_eq!(home_in(&env(&[])), None);
         // and the public ones read the process's environment
+        assert_eq!(real("HOME"), env::var_os("HOME"));
+        assert!(
+            real("HOME").is_some_and(|h| !h.is_empty()),
+            "tests run with a HOME"
+        );
+        assert_eq!(real("ARGUS_NO_SUCH_VARIABLE"), None);
         assert_eq!(config_file(), config_file_in(&real));
         assert_eq!(state_file(), state_file_in(&real));
         assert_eq!(home(), home_in(&real));

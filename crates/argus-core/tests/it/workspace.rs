@@ -1483,3 +1483,26 @@ fn fetches_are_one_per_family_and_only_with_a_remote() {
     assert_eq!(jobs[0].op, Op::Fetch);
     assert_eq!(jobs[0].family, app.canonicalize().unwrap());
 }
+
+#[test]
+fn an_issue_state_is_written_to_the_config_and_followed() {
+    use argus_core::attention::Issue;
+    use argus_core::rules::{IgnoreState, IssueList};
+    let sb = Sandbox::new();
+    sb.remote("acme", "app");
+    let r = sb.clone_as_github("acme", "app", "dev/app");
+    git(&r, &["switch", "-q", "-c", "feat"]);
+    let mut w = ws(&sb, "");
+    assert!(w.entries[0].issues.contains(&Issue::NonDefaultBranch));
+    w.set_issue_state(&[0], IssueList::NonDefaultBranch, IgnoreState::Pinned)
+        .unwrap();
+    assert_eq!(
+        w.config.ignore.non_default_branch,
+        ["github.com/acme/app@feat"]
+    );
+    assert!(!w.entries[0].issues.contains(&Issue::NonDefaultBranch));
+    w.set_issue_state(&[0], IssueList::NonDefaultBranch, IgnoreState::Counted)
+        .unwrap();
+    assert!(w.config.ignore.non_default_branch.is_empty());
+    assert!(w.entries[0].issues.contains(&Issue::NonDefaultBranch));
+}

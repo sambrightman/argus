@@ -919,6 +919,15 @@ mod tests {
     }
 
     #[test]
+    fn paths_in_the_config_expand_a_tilde() {
+        let c = Config::parse("roots = ['~/dev', '/abs']\n[[track]]\nowner = 'o'\ninto = '~/o'")
+            .unwrap();
+        let home = crate::paths::home().expect("tests run with a HOME");
+        assert_eq!(c.roots, [home.join("dev"), PathBuf::from("/abs")]);
+        assert_eq!(c.tracks[0].into, Some(home.join("o")));
+    }
+
+    #[test]
     fn cores_of_one_kind_have_no_fastest_kind() {
         assert_eq!(fastest_kind(Some(2), || Some(4)), Some(4));
         assert_eq!(fastest_kind(Some(3), || Some(6)), Some(6));
