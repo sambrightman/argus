@@ -81,10 +81,6 @@ jobs:
   # (mutants.yml). Skips the baseline, as the test job runs alongside.
   mutants:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      # missed mutants as review comments on the PR's lines
-      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -110,24 +106,26 @@ jobs:
           if ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then BASE=HEAD~1; fi
           git diff "$(git merge-base "$BASE" HEAD)" HEAD > ../changes.diff
           git diff --stat "$(git merge-base "$BASE" HEAD)" HEAD | tail -1
-      # On a PR, reviewdog comments instead of cargo-mutants' warnings.
+      # On a PR, review comments (mutants-review.yml) instead of
+      # cargo-mutants' warnings.
       - run: >-
           cargo mutants --in-place --baseline=skip --timeout 300 --in-diff ../changes.diff
           ${{ github.event_name == 'pull_request' && '--annotations=none' || '' }}
-      - uses: reviewdog/action-setup@d8a7baabd7f3e8544ee4dbde3ee41d0011c3a93f # v1.5.0
+      # This job's token can't comment on a PR from a fork (it's read-only
+      # there), so the misses and the PR's number go to a workflow that can.
+      - name: Missed mutants for review
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          PR: ${{ github.event.number }}
+        run: |
+          mkdir review
+          cp mutants.out/missed.txt review/
+          echo "$PR" > review/pr
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ failure() && github.event_name == 'pull_request' }}
         with:
-          reviewdog_version: v0.21.3
-      - name: Missed mutants as review comments
-        if: ${{ failure() && github.event_name == 'pull_request' }}
-        # a PR from a fork gets a read-only token: no comments, the job
-        # still fails on its misses
-        continue-on-error: true
-        env:
-          REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
-        run: |
-          reviewdog -efm='%f:%l:%c: %m' -name=mutants -reporter=github-pr-review \
-            -filter-mode=added -fail-level=none < mutants.out/missed.txt
+          name: mutants-review
+          path: review
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ failure() }}
         with:
