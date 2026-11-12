@@ -203,6 +203,25 @@ fn filter_narrows_and_escape_restores() {
     assert_eq!(names(&app).len(), 3);
 }
 
+/// `/` matches fuzzily, as the branch picker does: the letters in order,
+/// not necessarily together.
+#[test]
+fn the_filter_matches_fuzzily() {
+    let (_sb, mut app) = setup("");
+    app.on_key(key('/'));
+    for c in "acln".chars() {
+        app.on_key(key(c));
+    }
+    assert_eq!(names(&app), vec!["acme/clean"]);
+    app.on_key(ctrl('g'));
+    // inverse: letters out of order don't match
+    app.on_key(key('/'));
+    for c in "naelc".chars() {
+        app.on_key(key(c));
+    }
+    assert!(names(&app).is_empty(), "{:?}", names(&app));
+}
+
 #[test]
 fn transient_menu_by_key_and_by_arrows() {
     let (_sb, mut app) = setup("");

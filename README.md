@@ -164,7 +164,7 @@ again runs it.
 | `Space` / `U` | mark / unmark (actions apply to marked repos, else current); on a file in the details, marks the file |
 | `s` `u` `K` | stage / unstage / discard files: the marked ones, else the one under the cursor in the details. Discard returns them to HEAD (deleting untracked files) and always asks first |
 | `i` | **Gitignore** the untracked files marked, else under the cursor, else all of the selected repos': `t` top-level `.gitignore`, `d` their directory's, `p` `.git/info/exclude` (this clone), `g` global excludes. `a` switches between anchored (`/build/`: this path only, the default) and unanchored (`build/`: the name anywhere); each item shows the rules it adds |
-| `/` `C-s` | filter (readline editing) |
+| `/` `C-s` | filter, fuzzily: the letters in order, not necessarily together (`acln` finds `acme/clean`; fzf's `^`, `$`, `'` and `!` work; readline editing) |
 | `a` / `H` | show all / attention only (the default, `[ui] attention_only`); show hidden |
 | `g` `C-l` / `R` | refresh statuses / rescan roots |
 | `!` | shell in repo, a login shell as in a new terminal tab (TUI suspends; `exit` returns) |

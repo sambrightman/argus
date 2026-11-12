@@ -16,6 +16,7 @@ argus-core = { package = "argus-git-core", version = "0.1.0", path = "../argus-c
 crossbeam-channel = "0.5.17"
 crossterm = "0.29.0"
 jiff = "0.2.39"
+nucleo-matcher = "0.3.1"
 ratatui = "0.30.2"
 rayon = "1.12.0"
 similar = "3.2.1"

@@ -103,7 +103,8 @@ allow = [
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
-    # weak, per-file copyleft: fine to ship unmodified (uluru, via gix)
+    # weak, per-file copyleft: fine to ship unmodified (uluru, via gix;
+    # nucleo-matcher)
     "MPL-2.0",
 ]
 # The confidence threshold for detecting a license from license text.

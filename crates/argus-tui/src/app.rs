@@ -749,14 +749,14 @@ impl App {
                 self.ws.nested(&p, &rel);
             }
         }
-        let needle = self.filter.to_lowercase();
+        let mut fuzzy = (!self.filter.is_empty()).then(|| crate::fuzzy::Fuzzy::new(&self.filter));
         let (icons, _) = self.ws.config.ui.icons();
         let mut rows = vec![];
         for i in self.ws.ordered(self.view) {
             let e = &self.ws.entries[i];
-            if !needle.is_empty()
-                && !e.display_name().to_lowercase().contains(&needle)
-                && !e.key.to_lowercase().contains(&needle)
+            if let Some(f) = &mut fuzzy
+                && f.score(&e.display_name()).is_none()
+                && f.score(&e.key).is_none()
             {
                 continue;
             }
