@@ -96,21 +96,31 @@ jobs:
           toolchain: stable
       - if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: cargo publish --workspace --locked --dry-run
-      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+      # dependencies first; a token only if something is left to publish
+      - name: What's left to publish
         if: startsWith(github.ref, 'refs/tags/')
-        id: auth
-      - name: Publish
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        id: left
         run: |
           version=${GITHUB_REF_NAME#v}
-          # dependencies first
+          left=""
           for p in argus-git-core argus-git-forge argus-git-tui argus-git; do
             if curl -sf -A "argus-git release (github.com/$GITHUB_REPOSITORY)" \
                 "https://crates.io/api/v1/crates/$p/$version" >/dev/null; then
               echo "$p $version is already on crates.io"
             else
-              cargo publish --locked --package "$p"
+              left="$left $p"
             fi
+          done
+          echo "crates=$left" >> "$GITHUB_OUTPUT"
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        if: steps.left.outputs.crates != ''
+        id: auth
+      - name: Publish
+        if: steps.left.outputs.crates != ''
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CRATES: ${{ steps.left.outputs.crates }}
+        run: |
+          for p in $CRATES; do
+            cargo publish --locked --package "$p"
           done
