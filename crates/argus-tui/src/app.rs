@@ -107,6 +107,8 @@ pub enum Action {
     ToggleFavourite,
     TogglePull,
     ToggleIgnore,
+    /// A mark for the selected repo's owner as a whole.
+    ToggleOwnerMark(Mark),
     /// Open the ignore menu for the repo under the cursor: its issues that
     /// can be ignored, each with its state.
     IgnoreIssues,
@@ -1260,6 +1262,9 @@ impl App {
                     then: Confirmed::Discard(then),
                 };
             }
+            OpenMenu(MenuId::Owner) if self.owner().is_none() => {
+                return self.not_applicable("no owner: the repo has no forge identity");
+            }
             OpenMenu(m) => {
                 let mut menu = m.menu();
                 self.state_labels(&mut menu);
@@ -1519,6 +1524,7 @@ impl App {
             ToggleFavourite => return self.toggle_mark(Mark::Favourite),
             TogglePull => return self.toggle_mark(Mark::Pull),
             ToggleIgnore => return self.toggle_mark(Mark::Ignore),
+            ToggleOwnerMark(m) => return self.toggle_owner_mark(m),
             IgnoreIssues => return self.open_ignore_menu(),
             ClearMarks => {
                 let keys = self.selected_keys();
@@ -1618,6 +1624,27 @@ impl App {
             .into_iter()
             .map(|i| self.ws.entries[i].key.clone())
             .collect()
+    }
+
+    /// The first selected repo's owner (`github.com/acme`), if it has one.
+    fn owner(&self) -> Option<String> {
+        let id = self.ws.entries[*self.selected().first()?].id.as_ref()?;
+        Some(format!("{}/{}", id.host, id.owner))
+    }
+
+    fn toggle_owner_mark(&mut self, m: Mark) -> Vec<Effect> {
+        // relative to the first selected repo's owner, as toggle_mark goes
+        let sel = self.selected();
+        let Some(on) = sel.first().and_then(|&i| self.ws.owner_marked(i, m)) else {
+            return vec![];
+        };
+        let before = self.ws.config.clone();
+        if let Err(e) = self.ws.set_owner_mark(&sel, m, !on) {
+            self.error(e.to_string());
+            return vec![];
+        }
+        self.rebuild();
+        vec![Effect::SaveMarks(Box::new(before))]
     }
 
     fn toggle_mark(&mut self, m: Mark) -> Vec<Effect> {
@@ -2194,6 +2221,26 @@ impl App {
         for (it, l) in menu.items.iter_mut().zip(labels) {
             if let Some(l) = l {
                 it.label = l.to_string();
+            }
+        }
+        if menu.id == MenuId::Owner
+            && let (Some(owner), Some(&i)) = (self.owner(), self.selected().first())
+        {
+            menu.title = format!("Owner {owner} (all its repos)");
+            for it in &mut menu.items {
+                let Action::ToggleOwnerMark(m) = it.action else {
+                    continue;
+                };
+                let on = self.ws.owner_marked(i, m) == Some(true);
+                it.label = match (m, on) {
+                    (Mark::Favourite, true) => "unfavourite",
+                    (Mark::Favourite, false) => "favourite",
+                    (Mark::Pull, true) => "stop pulling",
+                    (Mark::Pull, false) => "pull",
+                    (Mark::Ignore, true) => "unignore",
+                    (Mark::Ignore, false) => "ignore",
+                }
+                .to_string();
             }
         }
     }

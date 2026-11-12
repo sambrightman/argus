@@ -205,6 +205,11 @@ struct MarkArgs {
     /// End a snooze early.
     #[arg(long)]
     unsnooze: bool,
+    /// Mark the repos' owners as a whole (their `github.com/acme/*`
+    /// pattern) instead: with --favourite, --pull, --ignore and their
+    /// opposites only.
+    #[arg(long)]
+    owner: bool,
     /// Remove the repos' own entries from the favourite, pull and ignore
     /// lists and end any snooze. Marks that patterns (or a tracked owner)
     /// still give are noted.
@@ -1380,6 +1385,15 @@ fn issue_list(s: &str) -> std::result::Result<IssueList, String> {
 }
 
 fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> Result<()> {
+    if m.owner
+        && (m.clear
+            || m.snooze.is_some()
+            || m.unsnooze
+            || !m.ignore_issue.is_empty()
+            || !m.unignore_issue.is_empty())
+    {
+        bail!("--owner marks owners with --favourite, --pull, --ignore and their opposites only");
+    }
     // patterns are required, and they reach hidden repos whatever the filter
     let sel = ws.select(&m.patterns, ViewFilter::default());
     if sel.is_empty() {
@@ -1421,7 +1435,11 @@ fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> R
         (Mark::Ignore, m.ignore, m.unignore),
     ] {
         if on || off {
-            ws.set_mark(&sel, mark, on)?;
+            if m.owner {
+                ws.set_owner_mark(&sel, mark, on)?;
+            } else {
+                ws.set_mark(&sel, mark, on)?;
+            }
         }
     }
     for (lists, on) in [(&m.ignore_issue, true), (&m.unignore_issue, false)] {

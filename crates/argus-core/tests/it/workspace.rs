@@ -1571,3 +1571,63 @@ fn ignore_excludes_favourite_and_pull() {
     let f = &w.entries[old].flags;
     assert!(f.ignored && !f.favourite && !f.pull, "{f:?}");
 }
+
+/// Marking a repo's owner writes the owner's pattern, so every repo of its
+/// (and future clones) follows; ignore excludes the others there too.
+#[test]
+fn an_owner_can_be_marked_as_a_whole() {
+    use argus_core::rules::Mark;
+    let sb = Sandbox::new();
+    for (o, n) in [("acme", "app"), ("acme", "lib"), ("other", "x")] {
+        sb.remote(o, n);
+        sb.clone_as_github(o, n, &format!("dev/{n}"));
+    }
+    let mut w = ws(&sb, "");
+    let at = |w: &Workspace, n: &str| w.entries.iter().position(|e| e.path.ends_with(n)).unwrap();
+    let (app, lib, x) = (at(&w, "app"), at(&w, "lib"), at(&w, "x"));
+    assert_eq!(w.owner_marked(app, Mark::Favourite), Some(false));
+    w.set_owner_mark(&[app], Mark::Favourite, true).unwrap();
+    assert_eq!(w.config.favourite, ["github.com/acme/*"]);
+    assert!(w.entries[app].flags.favourite && w.entries[lib].flags.favourite);
+    assert!(!w.entries[x].flags.favourite, "another owner");
+    assert_eq!(w.owner_marked(lib, Mark::Favourite), Some(true));
+    // off again: the pattern goes
+    w.set_owner_mark(&[lib], Mark::Favourite, false).unwrap();
+    assert!(w.config.favourite.is_empty());
+    // against a wider pattern: a `!` for the owner
+    let mut w = ws(&sb, "pull = ['**']");
+    w.set_owner_mark(&[app], Mark::Pull, false).unwrap();
+    assert_eq!(w.config.pull, ["**", "!github.com/acme/*"]);
+    assert!(!w.entries[app].flags.pull && w.entries[x].flags.pull);
+    // a tracked owner is pulled by default: off is a `!` too
+    let mut w = ws(&sb, "[[track]]\nowner = 'acme'");
+    assert_eq!(w.owner_marked(app, Mark::Pull), Some(true));
+    w.set_owner_mark(&[app], Mark::Pull, false).unwrap();
+    assert_eq!(w.config.pull, ["!github.com/acme/*"]);
+    // ignoring the owner turns its favourite and pull off
+    let mut w = ws(&sb, "");
+    w.set_owner_mark(&[app], Mark::Favourite, true).unwrap();
+    w.set_owner_mark(&[app], Mark::Pull, true).unwrap();
+    w.set_owner_mark(&[app], Mark::Ignore, true).unwrap();
+    assert!(w.config.favourite.is_empty() && w.config.pull.is_empty());
+    assert_eq!(w.config.ignore.repos, ["github.com/acme/*"]);
+    // and favouriting it stops ignoring it
+    w.set_owner_mark(&[app], Mark::Favourite, true).unwrap();
+    assert!(w.config.ignore.repos.is_empty());
+    // patterns saying both for the owner: ignore wins
+    let w = ws(
+        &sb,
+        "favourite = ['github.com/acme/*']\nignore.repos = ['github.com/acme/*']",
+    );
+    assert_eq!(w.owner_marked(app, Mark::Ignore), Some(true));
+    assert_eq!(w.owner_marked(app, Mark::Favourite), Some(false));
+    assert_eq!(
+        w.owner_marked(x, Mark::Favourite),
+        Some(false),
+        "another owner"
+    );
+    // a repo without an identity has no owner
+    sb.init("dev/local");
+    let w = ws(&sb, "");
+    assert_eq!(w.owner_marked(at(&w, "local"), Mark::Favourite), None);
+}

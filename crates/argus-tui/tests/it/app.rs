@@ -4217,3 +4217,55 @@ fn staging_a_nested_repo_explains_itself() {
     assert!(app.act(Action::UnstageFiles).is_empty());
     assert_eq!(app.message.as_ref().unwrap().0, "nothing to unstage");
 }
+
+/// `m o` marks the selected repo's owner as a whole, with the same keys.
+#[test]
+fn an_owner_is_marked_from_the_mark_menu() {
+    let (_sb, mut app) = setup("");
+    let msg = |app: &App| {
+        app.message
+            .as_ref()
+            .map(|m| m.0.clone())
+            .unwrap_or_default()
+    };
+    app.on_key(key('m'));
+    app.on_key(key('o'));
+    match &app.mode {
+        Mode::Menu { menu, .. } => {
+            assert!(menu.title.contains("github.com/acme"), "{}", menu.title)
+        }
+        _ => panic!("no menu"),
+    }
+    assert!(
+        menu_items(&app).iter().any(|l| l == "f favourite"),
+        "{:?}",
+        menu_items(&app)
+    );
+    let before = app.ws.config.clone();
+    let fx = app.on_key(key('f'));
+    assert!(fx.contains(&Effect::SaveMarks(Box::new(before))), "{fx:?}");
+    assert_eq!(app.ws.config.favourite, ["github.com/acme/*"]);
+    assert!(app.ws.entries.iter().all(|e| e.flags.favourite));
+    app.on_key(key('m'));
+    app.on_key(key('o'));
+    assert!(
+        menu_items(&app).iter().any(|l| l == "f unfavourite"),
+        "{:?}",
+        menu_items(&app)
+    );
+    app.on_key(ctrl('g'));
+    // a repo without an identity has no owner
+    let (_sb, mut app) = setup_with("", |sb| {
+        sb.init("dev/zlocal");
+    });
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("zlocal")))
+        .unwrap();
+    assert!(app.current().unwrap().id.is_none());
+    app.on_key(key('m'));
+    app.on_key(key('o'));
+    assert!(matches!(app.mode, Mode::Normal));
+    assert!(msg(&app).contains("no owner"), "{}", msg(&app));
+}

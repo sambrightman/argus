@@ -466,6 +466,39 @@ impl RuleSet {
     }
 }
 
+/// The pattern naming every repo of an owner: `github.com/acme/*`.
+pub fn owner_pattern(id: &RepoId) -> String {
+    format!("{}/{}/*", id.host, id.owner)
+}
+
+/// What `m`'s list says for `id`'s owner as a whole: as for a repo of its
+/// with no entries of its own (`None` when nothing matches).
+pub fn owner_decides(config: &Config, m: Mark, id: &RepoId) -> Result<Option<bool>, ConfigError> {
+    // a name no repo has
+    let probe = RepoId::new(&id.host, &id.owner, "\u{0}");
+    Ok(RuleSet::new(config)?.decide(m, Some(&probe), Path::new("")))
+}
+
+/// Edit `m`'s list so `id`'s owner as a whole ends up `on`, as [`set_mark`]
+/// does for a repo: drop the owner pattern's entries, then add it (or `!`
+/// it) only if what's left (or `base`) doesn't already give `on`.
+pub fn set_owner_mark(
+    config: &mut Config,
+    m: Mark,
+    id: &RepoId,
+    base: bool,
+    on: bool,
+) -> Result<(), ConfigError> {
+    let pattern = owner_pattern(id);
+    m.list_mut(config)
+        .retain(|e| e.strip_prefix('!').unwrap_or(e) != pattern);
+    if owner_decides(config, m, id)?.unwrap_or(base) != on {
+        let entry = if on { pattern } else { format!("!{pattern}") };
+        m.list_mut(config).push(entry);
+    }
+    Ok(())
+}
+
 /// Edit `m`'s list in `config` so the repo ends up `on`: drop the entries
 /// naming it, then add `name` (or `!name`) only if what's left (patterns,
 /// or `base` when nothing matches) doesn't already give `on`.

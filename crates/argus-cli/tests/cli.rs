@@ -1803,3 +1803,35 @@ fn forge_list_reads_a_directory() {
         .success()
         .stdout("acme/fresh\nacme/have\n");
 }
+
+#[test]
+fn mark_owner_marks_the_repos_owners_as_a_whole() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "").unwrap();
+    let mark = |args: &[&str]| {
+        argus(&sb)
+            .arg("--config")
+            .arg(&cfg)
+            .arg("mark")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    assert!(
+        mark(&["acme/clean", "--owner", "--favourite"])
+            .status
+            .success()
+    );
+    let c = argus_core::Config::parse(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+    assert_eq!(c.favourite, ["github.com/acme/*"]);
+    assert!(mark(&["acme/*", "--owner", "--ignore"]).status.success());
+    let c = argus_core::Config::parse(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+    assert!(c.favourite.is_empty(), "ignore excludes favourite");
+    assert_eq!(c.ignore.repos, ["github.com/acme/*"]);
+    // only with favourite, pull and ignore
+    let o = mark(&["acme/clean", "--owner", "--snooze", "1d"]);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("--owner"));
+}

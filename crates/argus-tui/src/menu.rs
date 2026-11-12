@@ -24,6 +24,8 @@ pub enum MenuId {
     Reset,
     /// Which commit to reset to, built when opened.
     ResetTo,
+    /// The Mark menu's marks for the selected repo's owner as a whole.
+    Owner,
 }
 
 pub struct Item {
@@ -88,6 +90,7 @@ impl MenuId {
             MenuId::Gitignore => 'i',
             MenuId::Reset => 'X',
             MenuId::ResetTo => 'X',
+            MenuId::Owner => 'm',
         }
     }
 
@@ -226,6 +229,11 @@ impl MenuId {
                     item('u', "unsnooze", Action::Unsnooze),
                     item('a', "acknowledge new", Action::Ack),
                     item('c', "clear marks", Action::ClearMarks),
+                    item(
+                        'o',
+                        "the owner (all its repos)…",
+                        Action::OpenMenu(MenuId::Owner),
+                    ),
                 ],
             ),
             MenuId::Open => (
@@ -265,6 +273,27 @@ impl MenuId {
                 ],
             ),
             MenuId::ResetTo => ("Reset", vec![]),
+            // titled with the owner and labelled as toggled when opened
+            MenuId::Owner => (
+                "Owner",
+                vec![
+                    item(
+                        'f',
+                        "toggle favourite",
+                        Action::ToggleOwnerMark(argus_core::rules::Mark::Favourite),
+                    ),
+                    item(
+                        'p',
+                        "toggle pull",
+                        Action::ToggleOwnerMark(argus_core::rules::Mark::Pull),
+                    ),
+                    item(
+                        'I',
+                        "toggle ignoring",
+                        Action::ToggleOwnerMark(argus_core::rules::Mark::Ignore),
+                    ),
+                ],
+            ),
             MenuId::View => (
                 "View",
                 vec![

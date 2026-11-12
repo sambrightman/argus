@@ -290,11 +290,7 @@ impl Workspace {
     /// Ignore excludes the others: ignoring turns favourite and pull off,
     /// and turning either on stops ignoring.
     pub fn set_mark(&mut self, indices: &[usize], m: Mark, on: bool) -> Result<(), ConfigError> {
-        let marks: Vec<(Mark, bool)> = match (m, on) {
-            (Mark::Ignore, true) => vec![(m, on), (Mark::Favourite, false), (Mark::Pull, false)],
-            (_, true) => vec![(m, on), (Mark::Ignore, false)],
-            _ => vec![(m, on)],
-        };
+        let marks = exclusive(m, on);
         for &i in indices {
             let e = &self.entries[i];
             let tracked_pull =
@@ -388,6 +384,54 @@ impl Workspace {
             }
         }
         self.marks_changed()
+    }
+
+    /// Mark (or unmark) the owners of the repos at `indices` as a whole,
+    /// with their pattern (`github.com/acme/*`), ignore excluding the
+    /// others as for a repo. Repos without an identity have no owner.
+    pub fn set_owner_mark(
+        &mut self,
+        indices: &[usize],
+        m: Mark,
+        on: bool,
+    ) -> Result<(), ConfigError> {
+        // (an owner several repos share gets the same edit again: a no-op)
+        let owners: Vec<RepoId> = indices
+            .iter()
+            .filter_map(|&i| self.entries[i].id.clone())
+            .collect();
+        for id in &owners {
+            for (m, on) in exclusive(m, on) {
+                let base = m == Mark::Pull && self.tracked_pull(id);
+                rules::set_owner_mark(&mut self.config, m, id, base, on)?;
+            }
+        }
+        self.marks_changed()
+    }
+
+    /// Whether the owner of the repo at `i` is marked `m` as a whole;
+    /// `None` for a repo without an identity.
+    pub fn owner_marked(&self, i: usize, m: Mark) -> Option<bool> {
+        let id = self.entries[i].id.as_ref()?;
+        let decided = |m: Mark| -> Option<bool> {
+            let base = m == Mark::Pull && self.tracked_pull(id);
+            Some(
+                rules::owner_decides(&self.config, m, id)
+                    .ok()?
+                    .unwrap_or(base),
+            )
+        };
+        let ignored = decided(Mark::Ignore)?;
+        // ignore wins, as for a repo
+        Some(match m {
+            Mark::Ignore => ignored,
+            _ => decided(m)? && !ignored,
+        })
+    }
+
+    /// Whether `id`'s owner is tracked with pulls on.
+    fn tracked_pull(&self, id: &RepoId) -> bool {
+        rules::track_for(&self.config, &self.state, id).is_some_and(|t| t.pull)
     }
 
     /// The marks the repo at `i` has without entries of its own (as after
@@ -731,6 +775,15 @@ impl Workspace {
                     })
             })
             .collect()
+    }
+}
+
+/// The marks to set for `m` `on`: ignore excludes favourite and pull.
+fn exclusive(m: Mark, on: bool) -> Vec<(Mark, bool)> {
+    match (m, on) {
+        (Mark::Ignore, true) => vec![(m, on), (Mark::Favourite, false), (Mark::Pull, false)],
+        (_, true) => vec![(m, on), (Mark::Ignore, false)],
+        _ => vec![(m, on)],
     }
 }
 

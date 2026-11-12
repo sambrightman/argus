@@ -124,7 +124,10 @@ pattern says) and saves the change, keeping the rest of the file as
 written; clearing removes the repo's own entries, and says which marks
 patterns (or a tracked owner, for pull) still give it. Ignore excludes the
 other two: ignoring a repo turns its favourite and pull off, marking it
-either stops ignoring it, and where patterns say both, ignore wins. With
+either stops ignoring it, and where patterns say both, ignore wins. A
+repo's owner can be marked as a whole (`m o` in the TUI, `argus mark
+--owner`): that writes its pattern, `github.com/acme/*`, so every repo of
+its follows, clones to come included. With
 extended files, an entry is removed from every file that
 lists it, and new entries go where roots do: the highest-precedence file
 with the list or its `extend_` form (to keep them in your main file, give
@@ -185,7 +188,7 @@ again runs it.
 argus status [-a|--all] [--hidden]     # repos needing attention; -a: clean too
 argus pull [-n] [--no-clone] [PATTERNS…]
 argus fix [-n] [-F] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine; -F fetches first
-argus mark PATTERNS… [--favourite|--no-favourite] [--pull|--no-pull] [--ignore|--unignore] [--ignore-issue ISSUE [--pin|--no-pin]|--unignore-issue ISSUE] [--snooze 3d|--unsnooze] [--clear]
+argus mark PATTERNS… [--favourite|--no-favourite] [--pull|--no-pull] [--ignore|--unignore] [--ignore-issue ISSUE [--pin|--no-pin]|--unignore-issue ISSUE] [--snooze 3d|--unsnooze] [--clear] [--owner]
 argus ack [PATTERNS…]
 argus forge list ORG [--team T] [--forge dir --host DIR]
 argus root add [DIRS…] | remove DIRS… | list
