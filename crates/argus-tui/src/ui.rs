@@ -146,6 +146,14 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
         .max()
         .unwrap_or(10)
         .min(body.width as usize / 2);
+    // as wide as the row with the most flags
+    let flags_w = app
+        .rows
+        .iter()
+        .filter_map(|r| if let Row::Repo(i) = r { Some(*i) } else { None })
+        .map(|i| flags_width(&app.ws.entries[i], &v.icons))
+        .max()
+        .unwrap_or(0);
     let branch_w = app
         .rows
         .iter()
@@ -161,9 +169,10 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
     for (row_idx, row) in app.rows.iter().enumerate().skip(app.scroll).take(height) {
         let selected = row_idx == app.cursor;
         let mut line = match row {
-            Row::Repo(i) => repo_line(app, v, *i, name_w, branch_w),
+            Row::Repo(i) => repo_line(app, v, *i, flags_w, name_w, branch_w),
             Row::Detail { repo, line } => {
-                let indent = "  ".repeat(app.ws.depth(*repo)) + "      ";
+                // two in from the name: past the marker, flags and a space
+                let indent = "  ".repeat(app.ws.depth(*repo)) + &" ".repeat(flags_w + 4);
                 let marked = line.diff.is_none()
                     && line.file.as_ref().is_some_and(|f| {
                         app.marked_files
@@ -253,7 +262,14 @@ fn refined_rows(app: &App, visible: std::ops::Range<usize>) -> HashMap<usize, re
     out
 }
 
-fn repo_line<'a>(app: &App, v: &View, i: usize, name_w: usize, branch_w: usize) -> Line<'a> {
+fn repo_line<'a>(
+    app: &App,
+    v: &View,
+    i: usize,
+    flags_w: usize,
+    name_w: usize,
+    branch_w: usize,
+) -> Line<'a> {
     let t = v.theme;
     let e = &app.ws.entries[i];
     let mut spans: Vec<Span> = vec![];
@@ -265,15 +281,13 @@ fn repo_line<'a>(app: &App, v: &View, i: usize, name_w: usize, branch_w: usize) 
     } else {
         Span::raw(" ")
     });
-    // flags: a fixed column for up to three (pull, the commonest, last)
+    // flags, then a space, in a column as wide as the most of them
     let flags = badges::flags(e, &v.icons);
-    let mut fw = 0;
-    for b in flags.iter().take(FLAGS) {
-        fw += UnicodeWidthStr::width(b.text.as_str());
+    for b in &flags {
         spans.push(Span::styled(b.text.clone(), t.role(b.role)));
     }
     spans.push(Span::raw(
-        " ".repeat(flags_width(&v.icons).saturating_sub(fw)),
+        " ".repeat(flags_w + 1 - flags_width(e, &v.icons)),
     ));
 
     let depth = app.ws.depth(i);
@@ -589,17 +603,12 @@ pub fn help_lines() -> Vec<(String, String)> {
     v
 }
 
-/// How many flag badges a row shows.
-const FLAGS: usize = 3;
-
-/// The flag column's width: room for the widest flag icons, and a space.
-fn flags_width(i: &Icons) -> usize {
-    let w = [&i.favourite, &i.new, &i.ignored, &i.snoozed, &i.pull]
-        .map(|s| UnicodeWidthStr::width(s.as_ref()))
-        .into_iter()
-        .max()
-        .unwrap_or(1);
-    FLAGS * w + 1
+/// How wide a repo's flag badges are.
+fn flags_width(e: &argus_core::Entry, i: &Icons) -> usize {
+    badges::flags(e, i)
+        .iter()
+        .map(|b| UnicodeWidthStr::width(b.text.as_str()))
+        .sum()
 }
 
 /// Every icon in `i` with its meaning and colour role, for the help legend.

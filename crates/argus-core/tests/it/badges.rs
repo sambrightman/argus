@@ -92,6 +92,11 @@ fn flag_badges_show_favourite_new_ignored_or_snoozed_and_pull() {
         texts(&format!("pull = ['{path}']\nfavourite = ['{path}']")),
         [UNICODE.favourite.to_string(), UNICODE.pull.to_string()]
     );
+    // an ignored repo isn't pulled, so it shows no pull mark
+    assert_eq!(
+        texts(&format!("pull = ['{path}']\nignore.repos = ['{path}']")),
+        [UNICODE.ignored.to_string()]
+    );
 }
 
 fn state_badges(r: &std::path::Path, extra: &str) -> Vec<String> {

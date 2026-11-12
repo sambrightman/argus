@@ -4148,4 +4148,46 @@ fn rows_show_the_pull_mark_and_names_stay_aligned() {
         assert_eq!(col(&clean, "acme/"), col(&feature, "acme/"), "{screen}");
         assert_eq!(col(&dirty, "acme/"), col(&feature, "acme/"), "{screen}");
     }
+    // the column is as wide as the row with the most flags: all of them
+    // show (favourite, new, snoozed, pull for acme/clean), names align
+    let clean = app
+        .ws
+        .entries
+        .iter()
+        .position(|e| e.path.ends_with("clean"))
+        .unwrap();
+    let k = app.ws.entries[clean].key.clone();
+    app.ws.state.new.insert(k.clone());
+    app.ws.state.snoozed.insert(
+        k,
+        jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
+    );
+    app.ws.resolve_flags();
+    app.view.show_hidden = true;
+    app.rebuild();
+    let i = argus_core::icons::UNICODE;
+    let screen = render_with(&mut app, 100, 12, i.clone());
+    let all = format!("{}{}{}{}", i.favourite, i.new, i.snoozed, i.pull);
+    assert!(screen.contains(&all), "{screen}");
+    let start = |l: &str, s: &str| unicode_width::UnicodeWidthStr::width(&l[..l.find(s).unwrap()]);
+    let names: Vec<usize> = screen
+        .lines()
+        .filter(|l| l.contains("acme/"))
+        .map(|l| start(l, "acme/"))
+        .collect();
+    assert_eq!(names.len(), 3, "{screen}");
+    assert!(names.iter().all(|&s| s == names[0]), "{screen}");
+    // details sit two in from the names, as with the narrower column
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(x) if *x == clean))
+        .unwrap();
+    app.act(Action::ToggleExpand);
+    let screen = render_with(&mut app, 100, 30, i);
+    let path = screen
+        .lines()
+        .find(|l| l.trim_start().starts_with("path"))
+        .expect("details");
+    assert_eq!(start(path, "path"), names[0] + 2, "{screen}");
 }
