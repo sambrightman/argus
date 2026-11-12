@@ -1007,6 +1007,14 @@ mod tests {
         let mut c = Config::default();
         assert_eq!(go(&mut c, IssueList::Behind, &[], Pinned), Ignored);
         assert_eq!(c.ignore.behind, ["acme/widget"]);
+        // ignored by a pattern alone: ignored, not pinned, and asking for
+        // ignored writes nothing more
+        let mut c = Config::default();
+        c.ignore.non_default_branch = vec!["acme/*".into()];
+        let rules = RuleSet::new(&c).unwrap();
+        assert_eq!(rules.issue_state(nd, id.as_ref(), path, &branch), Ignored);
+        assert_eq!(go(&mut c, nd, &branch, Ignored), Ignored);
+        assert_eq!(c.ignore.non_default_branch, ["acme/*"]);
     }
 
     #[test]

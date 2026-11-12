@@ -2340,6 +2340,7 @@ fn help_scrolls_with_arrows_vi_and_emacs_keys_and_any_other_key_closes_it() {
         (code(KeyCode::Down), code(KeyCode::Up)),
         (key('j'), key('k')),
         (ctrl('n'), ctrl('p')),
+        (key('n'), key('p')),
     ] {
         app.on_key(down);
         app.on_key(down);
@@ -2350,10 +2351,12 @@ fn help_scrolls_with_arrows_vi_and_emacs_keys_and_any_other_key_closes_it() {
         app.on_key(up);
         assert_eq!(scroll(&app), 0, "stops at the top");
     }
-    for k in ['n', 'p'] {
-        app.on_key(key('?'));
+    // help is open here: any other key closes it
+    for k in ['x', 'q', '?'] {
+        assert!(matches!(app.mode, Mode::Help { .. }), "open before {k}");
         app.on_key(key(k));
-        assert!(matches!(app.mode, Mode::Normal), "plain {k} closes it");
+        assert!(matches!(app.mode, Mode::Normal), "{k} closes it");
+        app.on_key(key('?'));
     }
 }
 

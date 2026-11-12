@@ -26,4 +26,9 @@ exclude_re = [
     'crates/argus-core/src/status\.rs:\d+:\d+: replace match guard h\.kind\(\) == gix::object::Kind::Tag with true in head_tags$',
     # HTTPS is also Protocol's Default, so the replacement is the same
     'crates/argus-core/src/forge\.rs:\d+:\d+: replace Forge::protocol -> Protocol with Default::default\(\)$',
+    # reading the core kinds from sysctl: macOS only (not compiled on
+    # Linux), and the hosted macOS VMs have one kind, for which None is
+    # right; `performance_cores_agree_with_sysctl` checks it on Apple
+    # silicon, and `fastest_kind` (tested everywhere) decides
+    'crates/argus-core/src/config\.rs:\d+:\d+: replace performance_cores -> Option<usize> with ',
 ]

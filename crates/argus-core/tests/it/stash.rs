@@ -256,6 +256,10 @@ fn staged_only_stashes_are_refused_when_git_would_fail() {
     assert!(stash_problem(&r, &s, true, true, &["both".into()]).is_some());
     // inverse: other stashes don't care
     assert_eq!(stash_problem(&r, &s, true, false, &[]), None);
+    // files with only unstaged changes (README) aren't checked: with
+    // `both` staged only, nothing stands in the way
+    git(&r, &["restore", "--worktree", "both"]);
+    assert_eq!(stash_problem(&r, &st(&r), true, true, &[]), None);
     // nothing to stash at all
     let clean = sb.init("clean");
     let p = stash_problem(&clean, &st(&clean), true, false, &[]).unwrap();

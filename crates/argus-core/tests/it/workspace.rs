@@ -644,6 +644,9 @@ fn unmarking_a_tracked_repo_for_pull_writes_a_bang() {
     sb.clone_as_github("acme", "app", "dev/app");
     let mut w = ws(&sb, "[[track]]\nowner='acme'");
     assert!(w.entries[0].flags.pull, "tracked: pulled by default");
+    // tracking's default is pull's only: favourite gets an entry as usual
+    w.set_mark(&[0], Mark::Favourite, true).unwrap();
+    assert_eq!(w.config.favourite, ["github.com/acme/app"]);
     w.set_mark(&[0], Mark::Pull, false).unwrap();
     assert_eq!(w.config.pull, ["!github.com/acme/app"]);
     assert!(!w.entries[0].flags.pull);
@@ -1198,6 +1201,12 @@ fn a_repo_can_be_picked_by_its_name_or_identity() {
             .collect();
         assert_eq!(picked, ["acme/app"], "{p}");
     }
+    // by path, and with no patterns every listed repo, in order
+    let other = w.select(&[sb.path("dev/other").display().to_string()], ALL);
+    assert_eq!(other.len(), 1);
+    assert!(w.entries[other[0]].path.ends_with("dev/other"));
+    assert_eq!(w.select(&[], ALL), w.ordered(ALL));
+    assert_eq!(w.select(&[], ALL).len(), 2);
 }
 
 #[test]
@@ -1409,4 +1418,68 @@ fn marks_left_after_clearing_say_what_gives_them() {
     w.set_mark(&[app], Mark::Favourite, true).unwrap();
     w.clear_marks(&[app]).unwrap();
     assert_eq!(w.remaining_marks(app), Vec::<String>::new());
+}
+
+#[test]
+fn change_count_is_changed_files_and_unpushed_commits() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "app");
+    let r = sb.clone_as_github("acme", "app", "dev/app");
+    commit(&r, "one");
+    commit(&r, "two");
+    write(&r, "new", "x");
+    let w = ws(&sb, "");
+    assert_eq!(w.entries[0].change_count(), 3);
+}
+
+#[test]
+fn directories_below_max_depth_are_named_in_a_warning() {
+    let sb = Sandbox::new();
+    sb.init("dev/a/b/deep");
+    let w = ws(&sb, "max_depth = 1");
+    assert_eq!(
+        w.truncation_warning().unwrap(),
+        format!(
+            "1 directory below max_depth (1) not scanned, e.g. {}; raise max_depth to include it",
+            contract_tilde(&sb.path("dev/a").canonicalize().unwrap())
+        )
+    );
+    sb.init("dev/c/d/deep");
+    let w = ws(&sb, "max_depth = 1");
+    assert!(
+        w.truncation_warning()
+            .unwrap()
+            .starts_with("2 directories below max_depth (1)"),
+        "{:?}",
+        w.truncation_warning()
+    );
+    assert!(w.truncation_warning().unwrap().ends_with("to include them"));
+    // inverse: deep enough, nothing to say
+    assert_eq!(ws(&sb, "max_depth = 0").truncation_warning(), None);
+}
+
+#[test]
+fn fetches_are_one_per_family_and_only_with_a_remote() {
+    use argus_core::pull::plan_fetches;
+    let sb = Sandbox::new();
+    sb.remote("acme", "app");
+    let app = sb.clone_as_github("acme", "app", "dev/app");
+    let wt = sb.path("dev/app-wt");
+    git(
+        &app,
+        &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()],
+    );
+    sb.init("dev/local");
+    let w = ws(&sb, "");
+    let all: Vec<usize> = (0..w.entries.len()).collect();
+    assert_eq!(all.len(), 3);
+    let jobs = plan_fetches(&w, &all);
+    let labels: Vec<&str> = jobs.iter().map(|j| j.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        ["fetch acme/app"],
+        "the worktree shares its refs; local has no remote"
+    );
+    assert_eq!(jobs[0].op, Op::Fetch);
+    assert_eq!(jobs[0].family, app.canonicalize().unwrap());
 }

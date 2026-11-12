@@ -940,6 +940,14 @@ mod tests {
     }
 
     #[test]
+    fn comments_wrap_to_the_width_less_their_prefix() {
+        // `## ` takes 3 of the width
+        let lines = wrap(&"word ".repeat(60));
+        assert!(lines.iter().all(|l| l.len() <= WIDTH - 3), "{lines:?}");
+        assert!(lines[0].len() > WIDTH - 3 - 5, "{lines:?}");
+    }
+
+    #[test]
     fn wrapping_fills_lines_exactly() {
         assert_eq!(wrap_to("aa bb", 5), ["aa bb"]);
         assert_eq!(wrap_to("aa bb", 4), ["aa", "bb"]);
@@ -962,6 +970,13 @@ mod tests {
         for l in ex.lines() {
             assert!(l.chars().count() <= WIDTH, "too long: {l}");
         }
+        // and prose fills them: the longest comment line uses the width
+        let longest = ex
+            .lines()
+            .filter(|l| l.starts_with("## "))
+            .map(|l| l.chars().count())
+            .max();
+        assert!(longest > Some(WIDTH - 8), "{longest:?}");
         assert!(
             ex.contains("# exclude_paths = [\n#   \"node_modules\",\n"),
             "{ex}"

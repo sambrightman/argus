@@ -678,7 +678,7 @@ fn draw_help(f: &mut Frame, v: &View, area: Rect, scroll: u16) {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .border_style(t.ui(Ui::Border))
-                    .title(Span::styled(" keys (any key closes) ", t.ui(Ui::Title))),
+                    .title(Span::styled(" keys (j k n p ↑ ↓ scroll; any other key closes) ", t.ui(Ui::Title))),
             ),
         r,
     );

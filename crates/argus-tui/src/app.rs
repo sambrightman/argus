@@ -927,14 +927,9 @@ impl App {
             },
             Mode::Help { scroll } => {
                 match k.code {
-                    KeyCode::Down | KeyCode::Char('j') => *scroll = scroll.saturating_add(1),
-                    KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.saturating_sub(1),
-                    KeyCode::Char('n') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        *scroll = scroll.saturating_add(1)
-                    }
-                    KeyCode::Char('p') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        *scroll = scroll.saturating_sub(1)
-                    }
+                    // n/p with or without Ctrl, as Emacs's C-n/C-p
+                    KeyCode::Down | KeyCode::Char('j' | 'n') => *scroll = scroll.saturating_add(1),
+                    KeyCode::Up | KeyCode::Char('k' | 'p') => *scroll = scroll.saturating_sub(1),
                     _ => self.mode = Mode::Normal,
                 }
                 vec![]

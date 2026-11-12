@@ -177,6 +177,15 @@ fn icons_can_be_looked_up_by_name() {
             .collect();
         assert_eq!(looked_up, listed);
     }
+    // each set by its name; an unknown name is the default
+    for (name, set) in [
+        ("unicode", &UNICODE),
+        ("nerd", &NERD),
+        ("ascii", &ASCII),
+        ("bogus", &UNICODE),
+    ] {
+        assert_eq!(icons(&icons::by_name(name)), icons(set), "{name}");
+    }
     // inverse: unknown names
     assert_eq!(UNICODE.get("favourit"), None);
     assert_eq!(UNICODE.get(""), None);

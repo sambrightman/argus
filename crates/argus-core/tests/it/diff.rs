@@ -203,6 +203,11 @@ fn stage_and_unstage_files() {
             .to_vec()
             .tap_sort()
     );
+    // files with nothing staged (unstaged or untracked) need no unstaging
+    assert_eq!(
+        ops::unstage_ops(&st(&r), &["README".into(), "new".into()]),
+        []
+    );
     // only the files given
     run_all(&r, ops::stage_ops(&st(&r), &["README".into()]));
     assert!(codes(&r).contains(&"M  README".into()), "{:?}", codes(&r));

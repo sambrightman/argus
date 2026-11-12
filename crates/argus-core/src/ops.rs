@@ -894,18 +894,19 @@ fn git(cwd: &Path, args: &[String], started: Instant) -> OpOutcome {
         .output();
     match out {
         Ok(o) => {
-            let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
-            let err = String::from_utf8_lossy(&o.stderr);
-            if !err.trim().is_empty() {
-                if !text.trim().is_empty() {
-                    text.push('\n');
-                }
-                text.push_str(&err);
-            }
+            // stdout, then stderr
+            let (out, err) = (
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr),
+            );
+            let output: Vec<&str> = [out.trim(), err.trim()]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect();
             OpOutcome {
                 success: o.status.success(),
                 code: o.status.code(),
-                output: text.trim().to_string(),
+                output: output.join("\n"),
                 duration: started.elapsed(),
             }
         }

@@ -791,10 +791,17 @@ fn performance_cores() -> Option<usize> {
             .parse()
             .ok()
     };
-    if read("hw.nperflevels")? < 2 {
+    fastest_kind(read("hw.nperflevels"), || read("hw.perflevel0.logicalcpu"))
+}
+
+/// With cores of several kinds (`kinds` above 1), how many of the fastest
+/// kind there are (`count`).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn fastest_kind(kinds: Option<usize>, count: impl FnOnce() -> Option<usize>) -> Option<usize> {
+    if kinds? < 2 {
         return None;
     }
-    read("hw.perflevel0.logicalcpu")
+    count()
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -909,6 +916,15 @@ mod tests {
             assert_eq!(p, sysctl("hw.perflevel0.logicalcpu"));
             assert_eq!(Config::default().disk_jobs(), p);
         }
+    }
+
+    #[test]
+    fn cores_of_one_kind_have_no_fastest_kind() {
+        assert_eq!(fastest_kind(Some(2), || Some(4)), Some(4));
+        assert_eq!(fastest_kind(Some(3), || Some(6)), Some(6));
+        assert_eq!(fastest_kind(Some(1), || Some(8)), None);
+        assert_eq!(fastest_kind(None, || Some(8)), None);
+        assert_eq!(fastest_kind(Some(2), || None), None);
     }
 
     #[test]
