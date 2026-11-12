@@ -1831,7 +1831,20 @@ fn mark_owner_marks_the_repos_owners_as_a_whole() {
     assert!(c.favourite.is_empty(), "ignore excludes favourite");
     assert_eq!(c.ignore.repos, ["github.com/acme/*"]);
     // only with favourite, pull and ignore
-    let o = mark(&["acme/clean", "--owner", "--snooze", "1d"]);
-    assert!(!o.status.success());
-    assert!(String::from_utf8_lossy(&o.stderr).contains("--owner"));
+    for other in [
+        &["--snooze", "1d"][..],
+        &["--unsnooze"],
+        &["--clear"],
+        &["--ignore-issue", "behind"],
+        &["--unignore-issue", "behind"],
+    ] {
+        let mut args = vec!["acme/clean", "--owner"];
+        args.extend_from_slice(other);
+        let o = mark(&args);
+        assert!(!o.status.success(), "{other:?}");
+        assert!(
+            String::from_utf8_lossy(&o.stderr).contains("--owner"),
+            "{other:?}"
+        );
+    }
 }
