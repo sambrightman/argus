@@ -4177,6 +4177,17 @@ fn rows_show_the_pull_mark_and_names_stay_aligned() {
         .collect();
     assert_eq!(names.len(), 3, "{screen}");
     assert!(names.iter().all(|&s| s == names[0]), "{screen}");
+    // hidden repos count too, so the column doesn't move as they come and go
+    app.view.show_hidden = false;
+    app.rebuild();
+    let hiding = render_with(&mut app, 100, 12, i.clone());
+    let dirty = hiding
+        .lines()
+        .find(|l| l.contains("acme/dirty"))
+        .expect("listed");
+    assert_eq!(start(dirty, "acme/"), names[0], "{hiding}");
+    app.view.show_hidden = true;
+    app.rebuild();
     // details sit two in from the names, as with the narrower column
     app.cursor = app
         .rows

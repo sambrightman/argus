@@ -146,12 +146,14 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
         .max()
         .unwrap_or(10)
         .min(body.width as usize / 2);
-    // as wide as the row with the most flags
+    // as wide as the repo with the most flags, listed or not (hidden, or
+    // not needing attention), so the column stays put as the view changes
     let flags_w = app
-        .rows
+        .ws
+        .entries
         .iter()
-        .filter_map(|r| if let Row::Repo(i) = r { Some(*i) } else { None })
-        .map(|i| flags_width(&app.ws.entries[i], &v.icons))
+        .filter(|e| !e.nested)
+        .map(|e| flags_width(e, &v.icons))
         .max()
         .unwrap_or(0);
     let branch_w = app
