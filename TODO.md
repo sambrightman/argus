@@ -47,9 +47,6 @@ deferred.
   flag column (which widens as needed, an ellipsis if ever capped); owner
   marks carry over. Decide the config format, filtering, and whether some
   change behaviour (as pull and ignore do) or only label. Design first.
-- **Switching to any branch.** Today only the fixes switch: to the default
-  branch, or a detached HEAD onto its branch. Perhaps from the details'
-  branch list, as reset picks a commit.
 - **Pull requests:** fetched with the remote, shown per branch; a merged PR
   makes a branch safe to delete, squash-merged ones included.
 - **Worktree pruning.**

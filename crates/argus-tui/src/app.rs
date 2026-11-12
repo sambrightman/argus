@@ -127,6 +127,12 @@ pub enum Action {
     PickCommit(usize),
     /// Commit what's staged as a fixup of a commit picked from a list.
     Fixup,
+    /// Check out a branch picked from a list.
+    Checkout,
+    /// The `n`th branch of the branch list.
+    PickBranch(usize),
+    /// Check out the branch checked out before (`git switch -`).
+    CheckoutPrevious,
     /// In the gitignore menu: add the rules to that file.
     Gitignore(IgnoreFile),
     Snooze,
@@ -641,6 +647,8 @@ pub struct App {
     gitignore: Option<GitignoreTargets>,
     /// The repo, mode and commits the open reset menu offers.
     pick: Option<CommitPick>,
+    /// What each line of an open branch list checks out, and where.
+    branches: Option<(PathBuf, Vec<Op>)>,
     pub log: Vec<LogEntry>,
     pub show_log: bool,
     pub message: Option<(String, bool)>,
@@ -684,6 +692,7 @@ impl App {
             ignore_menu: None,
             gitignore: None,
             pick: None,
+            branches: None,
             log: vec![],
             show_log: false,
             message: None,
@@ -1243,6 +1252,25 @@ impl App {
             }
             PickCommit(n) => return self.pick_commit(n),
             Fixup => return self.open_commit_pick(Pick::Fixup),
+            Checkout => return self.open_branch_pick(),
+            PickBranch(n) => {
+                if let Some((path, mut ops)) = self.branches.take()
+                    && n < ops.len()
+                {
+                    let jobs = self.job(&path, ops.swap_remove(n)).into_iter().collect();
+                    return self.start_jobs(jobs);
+                }
+            }
+            CheckoutPrevious => {
+                let [i] = self.selected()[..] else {
+                    self.error("check out one repo at a time");
+                    return vec![];
+                };
+                let path = self.ws.entries[i].path.clone();
+                let op = Op::Switch { branch: "-".into() };
+                let jobs = self.job(&path, op).into_iter().collect();
+                return self.start_jobs(jobs);
+            }
             Stash(kind) => return self.stash_action(kind),
             StageFiles => return self.file_op(ops::stage_ops, "stage"),
             UnstageFiles => return self.file_op(ops::unstage_ops, "unstage"),
@@ -1741,6 +1769,68 @@ impl App {
     /// The current repo's recent commits to reset to: HEAD first, each
     /// marked when it's on a remote. The cursor starts on the commit before
     /// HEAD, or before the commit under the cursor in the details.
+    /// The branches to check out: local ones but the current, then remote
+    /// ones with no local copy (switching to one creates a local branch
+    /// tracking it).
+    fn open_branch_pick(&mut self) -> Vec<Effect> {
+        let [i] = self.selected()[..] else {
+            self.error("check out one repo at a time");
+            return vec![];
+        };
+        let e = &self.ws.entries[i];
+        let Some(s) = e.status() else {
+            return vec![];
+        };
+        let mut lines: Vec<(String, Op)> = s
+            .branches
+            .iter()
+            .filter(|b| !b.is_head)
+            .map(|b| {
+                let op = Op::Switch {
+                    branch: b.name.clone(),
+                };
+                (b.name.clone(), op)
+            })
+            .collect();
+        match argus_core::status::remote_only_branches(&e.path) {
+            Ok(remote) => lines.extend(remote.into_iter().map(|r| {
+                let label = format!("{r} (creates a local branch tracking it)");
+                (label, Op::SwitchTrack { remote_branch: r })
+            })),
+            Err(err) => {
+                self.error(err.to_string());
+                return vec![];
+            }
+        }
+        if lines.is_empty() {
+            return self.not_applicable("no other branch to check out");
+        }
+        let shown = lines.len().min(menu::LIST_KEYS.len());
+        let more = if lines.len() > shown {
+            format!(" (the first {shown} of {})", lines.len())
+        } else {
+            String::new()
+        };
+        lines.truncate(shown);
+        let items = lines
+            .iter()
+            .zip(menu::LIST_KEYS.chars())
+            .enumerate()
+            .map(|(n, ((label, _), key))| menu::item(key, label.clone(), Action::PickBranch(n)))
+            .collect();
+        let menu = Menu {
+            id: MenuId::PickBranch,
+            title: format!("Checkout · {} · which branch?{more}", e.display_name()),
+            items,
+        };
+        self.branches = Some((
+            e.path.clone(),
+            lines.into_iter().map(|(_, op)| op).collect(),
+        ));
+        self.mode = Mode::Menu { menu, cursor: 0 };
+        vec![]
+    }
+
     /// The list of HEAD's recent commits to reset to or fix up: from the
     /// commit under the cursor in the details if there is one (for a
     /// reset, its parent: what's left without it), else HEAD's parent for

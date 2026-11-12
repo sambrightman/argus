@@ -4323,3 +4323,61 @@ fn a_fixup_is_made_of_a_picked_commit() {
         menu_items(&app)
     );
 }
+
+/// `b b` checks out a branch picked from a list (local ones, then remote
+/// ones without a local copy); `b -` the previous one.
+#[test]
+fn branches_are_checked_out_from_a_list_or_the_previous_one() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let f = sb.path("dev/feature");
+        git(&f, &["switch", "-q", "-c", "topic"]);
+        commit(&f, "topic");
+        git(&f, &["push", "-q", "-u", "origin", "topic"]);
+        git(&f, &["switch", "-q", "feat"]);
+        git(&f, &["branch", "-q", "-D", "topic"]);
+    });
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("feature")))
+        .unwrap();
+    app.on_key(key('b'));
+    let items = menu_items(&app);
+    assert!(
+        items.iter().any(|l| l.starts_with("b checkout")),
+        "{items:?}"
+    );
+    assert!(
+        items
+            .iter()
+            .any(|l| l.starts_with("- checkout the previous")),
+        "{items:?}"
+    );
+    app.on_key(key('b'));
+    let title = match &app.mode {
+        Mode::Menu { menu, .. } => menu.title.clone(),
+        _ => panic!("no branch list"),
+    };
+    assert!(title.contains("acme/feature"), "{title}");
+    let items = menu_items(&app);
+    assert_eq!(
+        items.iter().map(|l| &l[2..]).collect::<Vec<_>>(),
+        ["main", "origin/topic (creates a local branch tracking it)"],
+        "not the current branch"
+    );
+    match app.on_key(key('2')).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(
+            j[0].op,
+            Op::SwitchTrack {
+                remote_branch: "origin/topic".into()
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
+    app.running.clear();
+    app.on_key(key('b'));
+    match app.on_key(key('-')).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(j[0].op, Op::Switch { branch: "-".into() }),
+        other => panic!("{other:?}"),
+    }
+}

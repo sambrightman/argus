@@ -473,7 +473,8 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) -> Option<std::ops:
         // names its repo
         crate::menu::MenuId::Ignore
         | crate::menu::MenuId::Gitignore
-        | crate::menu::MenuId::PickCommit => {
+        | crate::menu::MenuId::PickCommit
+        | crate::menu::MenuId::PickBranch => {
             format!(" {} ", menu.title)
         }
         _ => format!(

@@ -24,6 +24,8 @@ pub enum MenuId {
     Reset,
     /// A commit to reset to or fix up, built when opened.
     PickCommit,
+    /// A branch to check out, built when opened.
+    PickBranch,
     /// The Mark menu's marks for the selected repo's owner as a whole.
     Owner,
 }
@@ -90,6 +92,7 @@ impl MenuId {
             MenuId::Gitignore => 'i',
             MenuId::Reset => 'X',
             MenuId::PickCommit => 'X',
+            MenuId::PickBranch => 'b',
             MenuId::Owner => 'm',
         }
     }
@@ -112,7 +115,7 @@ impl MenuId {
     /// through it and are never its keys. A new list goes here, with its
     /// items keyed from [`LIST_KEYS`].
     pub fn is_list(self) -> bool {
-        matches!(self, MenuId::PickCommit)
+        matches!(self, MenuId::PickCommit | MenuId::PickBranch)
     }
 
     pub fn from_key(c: char) -> Option<Self> {
@@ -194,6 +197,12 @@ impl MenuId {
             MenuId::Branch => (
                 "Branch",
                 vec![
+                    item('b', "checkout a branch…", Action::Checkout),
+                    item(
+                        '-',
+                        "checkout the previous branch",
+                        Action::CheckoutPrevious,
+                    ),
                     item('d', "switch to default branch", Action::SwitchDefault),
                     item(
                         'r',
@@ -274,6 +283,7 @@ impl MenuId {
                 ],
             ),
             MenuId::PickCommit => ("Commits", vec![]),
+            MenuId::PickBranch => ("Branches", vec![]),
             // titled with the owner and labelled as toggled when opened
             MenuId::Owner => (
                 "Owner",

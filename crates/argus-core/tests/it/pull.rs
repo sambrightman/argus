@@ -708,3 +708,48 @@ fn a_failed_switch_leaves_submodules_where_they_are() {
     assert!(!out.output.contains("switched"), "{}", out.output);
     assert_eq!(git(&lib, &["rev-parse", "HEAD"]), new);
 }
+
+/// Remote branches with no local copy, as a branch list offers them, and
+/// switching: to one (a local branch tracking it), and back (`-`).
+#[test]
+fn switching_to_a_remote_branch_or_the_previous_one() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    git(&r, &["switch", "-q", "-c", "topic"]);
+    commit(&r, "topic");
+    git(&r, &["push", "-q", "-u", "origin", "topic"]);
+    git(&r, &["switch", "-q", "main"]);
+    git(&r, &["branch", "-q", "-D", "topic"]);
+    git(&r, &["switch", "-q", "-c", "local-only"]);
+    // origin/main has a local main, origin/HEAD isn't a branch
+    assert_eq!(
+        argus_core::status::remote_only_branches(&r).unwrap(),
+        ["origin/topic"]
+    );
+    let o = ops::run(
+        &r,
+        &Op::SwitchTrack {
+            remote_branch: "origin/topic".into(),
+        },
+    );
+    assert!(o.success, "{}", o.output);
+    assert_eq!(git(&r, &["branch", "--show-current"]).trim(), "topic");
+    assert_eq!(
+        git(&r, &["rev-parse", "--abbrev-ref", "@{u}"]).trim(),
+        "origin/topic"
+    );
+    assert!(
+        argus_core::status::remote_only_branches(&r)
+            .unwrap()
+            .is_empty()
+    );
+    // and back to where it was
+    let o = ops::run(&r, &Op::Switch { branch: "-".into() });
+    assert!(o.success, "{}", o.output);
+    assert_eq!(git(&r, &["branch", "--show-current"]).trim(), "local-only");
+    assert_eq!(
+        Op::Switch { branch: "-".into() }.label(),
+        "switch to the previous branch"
+    );
+}

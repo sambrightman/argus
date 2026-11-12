@@ -926,6 +926,31 @@ pub fn untracked_in(
     Ok((v, more))
 }
 
+/// Remote branches (`origin/x`) with no local branch of the same name, for
+/// a list of branches to switch to; a remote's `HEAD` isn't one.
+pub fn remote_only_branches(path: &Path) -> Result<Vec<String>, StatusError> {
+    let repo = crate::isolation::open(path).map_err(err)?;
+    let refs = repo.references().map_err(err)?;
+    let names = |prefix: &str| -> Result<Vec<String>, StatusError> {
+        Ok(refs
+            .prefixed(prefix)
+            .map_err(err)?
+            .filter_map(|r| r.ok())
+            .map(|r| r.name().shorten().to_str_lossy().into_owned())
+            .collect())
+    };
+    let local = names("refs/heads/")?;
+    let mut v: Vec<String> = names("refs/remotes/")?
+        .into_iter()
+        .filter(|n| {
+            let short = n.split_once('/').map_or(n.as_str(), |(_, b)| b);
+            short != "HEAD" && !local.iter().any(|l| l == short)
+        })
+        .collect();
+    v.sort();
+    Ok(v)
+}
+
 /// The repos nested untracked in the work tree, repo-relative.
 pub fn nested_repos(path: &Path) -> Result<Vec<String>, StatusError> {
     Ok(untracked(path, None)?

@@ -35,6 +35,11 @@ pub enum Op {
     Switch {
         branch: String,
     },
+    /// `git switch --track`: a new local branch for a remote one (`origin/x`
+    /// gives `x`), its upstream set, checked out.
+    SwitchTrack {
+        remote_branch: String,
+    },
     /// `git switch -c`: a new branch at HEAD, checked out.
     CreateBranch {
         name: String,
@@ -204,6 +209,7 @@ impl Op {
                 vec!["push".into(), remote.clone(), format!("{r}:{r}")]
             }
             Op::Switch { branch } => v(&["switch", branch]),
+            Op::SwitchTrack { remote_branch } => v(&["switch", "--track", remote_branch]),
             Op::Abort { what } => match what {
                 InProgress::Bisect => v(&["bisect", "reset"]),
                 w => v(&[w.label(), "--abort"]),
@@ -319,7 +325,9 @@ impl Op {
             Op::Push => "push".into(),
             Op::PushSetUpstream { remote, branch } => format!("push -u {remote} {branch}"),
             Op::PushTo { remote, branch } => format!("push {branch} to {remote}/{branch}"),
+            Op::Switch { branch } if branch == "-" => "switch to the previous branch".into(),
             Op::Switch { branch } => format!("switch {branch}"),
+            Op::SwitchTrack { remote_branch } => format!("switch to {remote_branch}, tracking it"),
             Op::Abort {
                 what: InProgress::Bisect,
             } => "end bisect".into(),
@@ -662,7 +670,7 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
     };
     match op {
         Op::Pull => return pull(&cwd, started),
-        Op::Switch { .. } => return switch(&cwd, op, started),
+        Op::Switch { .. } | Op::SwitchTrack { .. } => return switch(&cwd, op, started),
         Op::Ignore {
             file,
             paths,
