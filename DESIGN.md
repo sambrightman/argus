@@ -659,33 +659,15 @@ with `Swatinem/rust-cache`, and mold as the Linux linker.
   pinned to commit hashes, with the version in a comment.
 * Windows isn't covered: parts of argus are Unix-only.
 
-**Release builds (planned).** Measure before choosing: `lto` (thin or
-fat) with `codegen-units = 1` for speed and size, `strip` for size while
-keeping split, packed debug info (a `.dSYM` on macOS) aside to symbolicate
-crash reports, and possibly `panic = "abort"` (the TUI restores the
-terminal from its panic hook, which still runs). argus is mostly bound by
-file-system calls and git processes, so expect size to change more than
-speed.
+**Release builds.** The release workflow builds with a `dist` profile:
+`release` plus thin LTO and `codegen-units = 1`, slower to build for a
+faster binary. Symbols are kept (only debug info is stripped, as in any
+release build), so a panic's backtrace names functions; stripping them
+too saved 2.2 MB of 12.5 MB, not worth unreadable bug reports. argus is
+mostly bound by file-system calls and git processes, so the profile
+matters more for size than speed. Fat LTO, `panic = "abort"` and split,
+packed debug info kept aside are unmeasured (TODO.md).
 
 ## 9. Not done yet / next steps
 
-* Embedded terminal pane; worktree pruning.
-* Snoozing per issue (and per repo, as now): today a snooze hides the
-  whole repo until it expires.
-* Fixup commits (`c f`, as in magit): commit what's staged as a fixup
-  of a commit picked like reset's, for a later autosquash.
-* Pull requests: fetched with the remote, shown per branch; a merged PR
-  makes a squash-merged branch safe to delete.
-* Orphans (local clones the forge no longer lists): reported only, no
-  archive/move action.
-* GitLab/Gitea forges (implement `argus_core::forge::Forge`); jj backend.
-* `argus-server` (axum, JSON over the same `Workspace`).
-* Filesystem watching for live refresh. Today: `g`, and after each operation.
-* Stable machine-readable output. `--json` works for every command; pull,
-  fix, mark, ack, root and paths build their documents explicitly in the
-  CLI, but `status` and `forge list` still serialise internal structs
-  (`Entry`, `RemoteRepo`), which isn't a stable contract. Consider a
-  versioned schema and/or a line-oriented `--porcelain` format (like
-  `git status --porcelain=v2`).
-* Python bindings to `argus-core` (pyo3/maturin), for scripting over the
-  same workspace, status and fix planning.
+In [TODO.md](TODO.md).

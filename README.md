@@ -392,8 +392,9 @@ warn (no upstream, unpushed branches) go when their issue is ignored.
 ## Development
 
 ```sh
-cargo nextest run --workspace     # the tests (~310; real git repos in temp dirs)
+cargo nextest run --workspace     # the tests (~600; real git repos in temp dirs)
 cargo clippy --workspace --all-targets
+scripts/prune-objects.sh          # macOS: delete the stale debug object files cargo leaves
 cargo run -p argus-git-tui --example snapshot -- ~/dev 'jj\t'   # render a frame as text
 
 # after a sizeable batch of work: mutation-test what changed

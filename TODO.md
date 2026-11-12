@@ -1,0 +1,78 @@
+# To do
+
+What's been asked for, offered or noticed and not done yet. Remove an item
+when it's done (the commit says what changed); add one when something is
+deferred.
+
+## Asked for
+
+- **Snoozing per issue** (and per repo, as now): today a snooze hides the
+  whole repo until it expires.
+- **Fixup commits** (`c f`, as in magit): commit what's staged as a fixup
+  of a commit picked like reset's, for a later autosquash.
+- **Stable machine-readable output.** `--json` works for every command;
+  pull, fix, mark, ack, root and paths build their documents explicitly in
+  the CLI, but `status` and `forge list` still serialise internal structs
+  (`Entry`, `RemoteRepo`), which isn't a stable contract. Consider a
+  versioned schema and/or a line-oriented `--porcelain` format (like
+  `git status --porcelain=v2`).
+- **Embedded terminal pane** (alacritty_terminal / tui-term) instead of
+  suspending the TUI for a shell or git UI.
+- **Auto-fix all, chaining** fixes until nothing more applies.
+- **Staging by hunk and by line** (magit-style); today whole files. They'd
+  build on the same diff rows.
+- **Glyph font gaps:** `◆` is missing from SF Mono, `✓` from Hack, `✗` from
+  Fira Code, Hack and Source Code Pro; Monaco and kitty's default font
+  aren't checked. Rerun the counts once the other fonts are installed, and
+  decide whether to change those icons.
+
+## Offered, not decided
+
+- **Terminals drawing ambiguous-width symbols two cells wide** (CJK
+  setting): detect it and swap those icons. Today `demo --glyphs` marks
+  them with `*`.
+- **The build folder:** rename `target` to `target.noindex` (Spotlight
+  skips it), or a global `build-dir`; `scripts/prune-objects.sh` covers
+  the space for now.
+- **The Ignore menu as a list**, so `n`/`p` move through it (its `n none`
+  would need another key).
+- **Release profile options not measured:** fat LTO, `panic = "abort"`
+  (the TUI's panic hook still restores the terminal), and split, packed
+  debug info (a `.dSYM`) kept aside to symbolicate crash reports.
+- **Caching the pruning checks** for trees with many symlinks, if they
+  ever show up as slow.
+
+## Next steps
+
+- **Custom marks:** marks you define, combinable and usable for filtering
+  in the TUI and CLI; favourite becomes one of them; their icons in the
+  flag column (which widens as needed, an ellipsis if ever capped); owner
+  marks carry over. Decide the config format, filtering, and whether some
+  change behaviour (as pull and ignore do) or only label. Design first.
+- **Switching to any branch.** Today only the fixes switch: to the default
+  branch, or a detached HEAD onto its branch. Perhaps from the details'
+  branch list, as reset picks a commit.
+- **Pull requests:** fetched with the remote, shown per branch; a merged PR
+  makes a branch safe to delete, squash-merged ones included.
+- **Worktree pruning.**
+- **Orphans** (local clones the forge no longer lists): reported only, no
+  archive/move action.
+- **GitLab/Gitea forges** (implement `argus_core::forge::Forge`); a **jj
+  backend**.
+- **`argus-server`** (axum, JSON over the same `Workspace`).
+- **Filesystem watching** for live refresh (not for now). Today: `g`, and
+  after each operation.
+- **Python bindings** to `argus-core` (pyo3/maturin), for scripting over
+  the same workspace, status and fix planning.
+
+## Known gaps
+
+- A git config include file created after a repo was opened isn't noticed
+  until the including file changes.
+- Shell completion ignores a `--root` given earlier on the same line.
+- Diffs don't apply textconv.
+- `git clone` in a test's setup once failed copying `maintenance.lock`
+  (rerun passed): watch for it.
+- For a submodule with both modified and untracked files, whether its
+  entry shows ` m` or ` ?` depends on which gix finds first; the order
+  isn't confirmed in gix's code.
