@@ -446,3 +446,24 @@ fn a_commits_changes_to_a_file() {
     // inverse: an unknown commit is an error
     assert!(commit_file_diff(&r, "nope", "a.txt").is_err());
 }
+
+/// Staging never adds a nested repo (git would embed it): its own line is
+/// skipped, and a directory holding it and files stages just the files.
+#[test]
+fn staging_leaves_nested_repos_out() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    sb.init("r/top");
+    write(&r, "mixed/file", "x\n");
+    sb.init("r/mixed/inner");
+    let s = st(&r);
+    assert_eq!(ops::stage_ops(&s, &["top".into()]), []);
+    run_all(&r, ops::stage_ops(&s, &["mixed/".into()]));
+    assert_eq!(
+        git(&r, &["ls-files", "--stage", "--", "mixed", "top"])
+            .lines()
+            .count(),
+        1
+    );
+    assert!(git(&r, &["ls-files", "--", "mixed"]).contains("mixed/file"));
+}

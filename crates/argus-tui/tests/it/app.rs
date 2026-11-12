@@ -4202,3 +4202,18 @@ fn rows_show_the_pull_mark_and_names_stay_aligned() {
         .expect("details");
     assert_eq!(start(path, "path"), names[0] + 2, "{screen}");
 }
+
+/// Staging a nested repo's line says why nothing happens.
+#[test]
+fn staging_a_nested_repo_explains_itself() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        sb.init("dev/clean/nested");
+    });
+    cursor_on_detail(&mut app, "clean", "    ?? nested");
+    assert!(app.act(Action::StageFiles).is_empty());
+    let msg = app.message.as_ref().unwrap().0.clone();
+    assert!(msg.contains("nested") && msg.contains("embedded"), "{msg}");
+    // inverse: unstaging it is just nothing to do
+    assert!(app.act(Action::UnstageFiles).is_empty());
+    assert_eq!(app.message.as_ref().unwrap().0, "nothing to unstage");
+}

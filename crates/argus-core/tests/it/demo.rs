@@ -69,6 +69,17 @@ fn demo_covers_every_state() {
         ("no remote", issue(|i| matches!(i, Issue::NoRemote))),
         ("worktree", has(&|e| e.kind == RepoKind::Worktree)),
         ("submodule", has(&|e| e.kind == RepoKind::Submodule)),
+        (
+            "nested repo",
+            has(&|e| {
+                e.status().is_some_and(|s| {
+                    s.changes
+                        .files
+                        .iter()
+                        .any(|f| f.kind == argus_core::status::PathKind::Repo)
+                })
+            }),
+        ),
         ("bare", has(&|e| e.kind == RepoKind::Bare)),
         ("error", has(&|e| e.error().is_some())),
         ("favourite", has(&|e| e.flags.favourite)),

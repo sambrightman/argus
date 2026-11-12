@@ -430,9 +430,12 @@ fn codes<'a>(
 }
 
 /// Stage `files` (changes, new files and deletions): tracked ones, then
-/// untracked ones.
+/// untracked ones. Never a nested repo: git would add it as an embedded
+/// repo (see [`nested_repos_in`]).
 pub fn stage_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
-    let (untracked, tracked): (Vec<_>, Vec<_>) = codes(s, files).partition(|(_, c)| *c == '?');
+    let (untracked, tracked): (Vec<_>, Vec<_>) = codes(s, files)
+        .filter(|(f, _)| nested_repos_in(s, std::slice::from_ref(f)).is_empty())
+        .partition(|(_, c)| *c == '?');
     let paths = |v: Vec<(&String, char)>| v.into_iter().map(|(f, _)| f.clone()).collect();
     let mut ops = vec![];
     if !tracked.is_empty() {
@@ -446,6 +449,19 @@ pub fn stage_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
         });
     }
     ops
+}
+
+/// Which of `files` are repos nested in the work tree (or directories of
+/// nothing else), which staging leaves out.
+pub fn nested_repos_in<'f>(s: &crate::status::RepoStatus, files: &'f [String]) -> Vec<&'f String> {
+    files
+        .iter()
+        .filter(|f| {
+            s.changes
+                .entry(f)
+                .is_some_and(|c| c.kind == crate::status::PathKind::Repo)
+        })
+        .collect()
 }
 
 /// Unstage `files`, keeping the work tree: `git restore --staged` for files
@@ -685,18 +701,25 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
     }
     if let Op::CommitAll { .. } = op {
         // everything but nested repos, which git would add as embedded ones
-        let mut args: Vec<String> = vec!["add".into(), "--all".into()];
-        let nested = crate::status::nested_repos(&cwd).unwrap_or_default();
-        if !nested.is_empty() {
-            args.extend(["--".into(), ".".into()]);
-            args.extend(nested.iter().map(|p| format!(":(exclude,literal){p}")));
-        }
-        let add = git(&cwd, &args, started);
+        let add = vec!["add".into(), "--all".into(), "--".into(), ".".into()];
+        let add = git(&cwd, &without_nested(&cwd, add), started);
         if !add.success {
             return add;
         }
     }
+    if let Op::Add { .. } = op {
+        // a directory holding a nested repo: its files only
+        return git(&cwd, &without_nested(&cwd, op.args()), started);
+    }
     git(&cwd, &op.args(), started)
+}
+
+/// `args` (ending in pathspecs) leaving out the repos nested in the work
+/// tree, which `git add` would add as embedded repos.
+fn without_nested(cwd: &Path, mut args: Vec<String>) -> Vec<String> {
+    let nested = crate::status::nested_repos(cwd).unwrap_or_default();
+    args.extend(nested.iter().map(|p| format!(":(exclude,literal){p}")));
+    args
 }
 
 fn refused(output: String, started: Instant) -> OpOutcome {

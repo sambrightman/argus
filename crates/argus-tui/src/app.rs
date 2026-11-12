@@ -2404,9 +2404,21 @@ impl App {
             self.info(FILE_HINT);
             return vec![];
         }
+        // what staging leaves out, to say why when that's everything
+        let nested: Vec<String> = targets
+            .iter()
+            .filter_map(|(i, files)| Some((self.ws.entries[*i].status()?, files)))
+            .flat_map(|(s, files)| ops::nested_repos_in(s, files).into_iter().cloned())
+            .collect();
         let jobs = self.file_jobs(targets, plan);
         if jobs.is_empty() {
-            self.info(format!("nothing to {verb}"));
+            match nested.first() {
+                Some(one) if verb == "stage" => self.info(format!(
+                    "{one} is a repo of its own: staging would add it as an embedded repo \
+                     (gitignore it, or make it a submodule)"
+                )),
+                _ => self.info(format!("nothing to {verb}")),
+            }
             return vec![];
         }
         self.start_jobs(jobs)

@@ -126,6 +126,13 @@ pub fn build() -> Demo {
         Box::new(|| {
             sb.init("repos/local-only");
         }),
+        // a repo nested in another's work tree, untracked, with a change of
+        // its own: it unfolds there into its own details
+        Box::new(|| {
+            clone("with-nested");
+            let n = sb.init("repos/with-nested/tools/vendored");
+            write(&n, "README", "patched\n");
+        }),
         Box::new(|| {
             let r = clone("worktrees");
             let wt = sb.path("repos/worktrees-feat");
