@@ -1,9 +1,11 @@
 name: Mutants
 
 # The full cargo-mutants run (about 2,500 mutants) takes hours, so it runs
-# weekly and on demand, split into shards that run in parallel, on Linux
-# and macOS. cargo-mutants doesn't evaluate #[cfg], so code for the other
-# platform always looks untested: only mutants missed on both count.
+# weekly and on demand, split into shards that run in parallel, on Linux.
+# cargo-mutants doesn't evaluate #[cfg], so code for another platform looks
+# untested there: the files with such code (MACOS_FILES) are mutated on
+# macOS too, and their mutants count only if missed on both. macOS runners
+# are slow and few, so it does just those.
 on:
   schedule:
     - cron: "17 3 * * 1"
@@ -19,20 +21,27 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # files with code for one platform only (#[cfg(target_os/unix)])
+  MACOS_FILES: >-
+    crates/argus-core/src/config.rs
+    crates/argus-core/src/discover.rs
+    crates/argus-tui/src/lib.rs
 
 jobs:
   shard:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        of: [16]
+        include:
+          - { os: macos-latest, shard: 0, of: 4 }
+          - { os: macos-latest, shard: 1, of: 4 }
+          - { os: macos-latest, shard: 2, of: 4 }
+          - { os: macos-latest, shard: 3, of: 4 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 300
-    env:
-      # as in CI's test job: the tests mostly wait on git and the
-      # filesystem, which the 3-core macOS runners are slow at
-      NEXTEST_TEST_THREADS: ${{ matrix.os == 'macos-latest' && '12' || 'num-cpus' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -52,9 +61,16 @@ jobs:
       # copying the tree. Exit 2 (missed) and 3 (timeouts) still produce a
       # report: the summary job judges those.
       - name: Mutants
+        env:
+          SHARD: ${{ matrix.shard }}/${{ matrix.of }}
         run: |
+          files=()
+          if [ "$RUNNER_OS" = macOS ]; then
+            read -ra macos <<< "$MACOS_FILES"
+            for f in "${macos[@]}"; do files+=(-f "$f"); done
+          fi
           set +e
-          cargo mutants --in-place --baseline=skip --timeout 300 --shard ${{ matrix.shard }}/16
+          cargo mutants --in-place --baseline=skip --timeout 300 --shard "$SHARD" "${files[@]}"
           rc=$?
           [ $rc -eq 0 ] || [ $rc -eq 2 ] || [ $rc -eq 3 ] || exit $rc
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -71,8 +87,8 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: mutants-*
-      # Missed (or timed out) on both platforms; a mutant caught on either
-      # is covered.
+      # Uncaught on Linux, and for MACOS_FILES on macOS too: a mutant caught
+      # on either is covered.
       - name: Report
         env:
           SHARDS: ${{ needs.shard.result }}
@@ -83,7 +99,13 @@ jobs:
             done
             sort -u "$os-missed.txt" "$os-timeout.txt" > "$os-uncaught.txt"
           done
-          comm -12 Linux-uncaught.txt macOS-uncaught.txt > uncaught.txt
+          read -ra macos <<< "$MACOS_FILES"
+          both=$(printf '%s\n' "${macos[@]}" | sed 's/[.]/\\./g; s/^/^/; s/$/:/' | paste -sd '|' -)
+          # (grep finding nothing is fine: GitHub runs this with pipefail)
+          {
+            grep -vE "$both" Linux-uncaught.txt || true
+            { grep -E "$both" Linux-uncaught.txt || true; } | comm -12 - macOS-uncaught.txt
+          } | sort > uncaught.txt
           comm -12 uncaught.txt <(sort -u Linux-missed.txt macOS-missed.txt) > missed.txt
           comm -23 uncaught.txt missed.txt > timeout.txt
           {
@@ -91,7 +113,7 @@ jobs:
               echo "$os: caught $(wc -l < "$os-caught.txt"), missed $(wc -l < "$os-missed.txt"), timeouts $(wc -l < "$os-timeout.txt"), unviable $(wc -l < "$os-unviable.txt")"
               echo
             done
-            echo "uncaught on both: missed $(wc -l < missed.txt), timeouts $(wc -l < timeout.txt)"
+            echo "uncaught: missed $(wc -l < missed.txt), timeouts $(wc -l < timeout.txt)"
             for f in missed timeout; do
               if [ -s "$f.txt" ]; then
                 printf '\n### %s\n\n```\n' "$f"
