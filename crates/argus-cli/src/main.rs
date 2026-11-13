@@ -1,7 +1,7 @@
 //! `argus`: the command-line front-end. With no subcommand it starts the TUI.
 
 use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context, Result, bail};
@@ -650,12 +650,41 @@ fn confirm_with(
 /// Completes repo patterns with the names of the repos argus finds, using
 /// the config named by `ARGUS_CONFIG` or the default one (options like
 /// `--root` aren't seen while completing).
-/// The config completion sees: `$ARGUS_CONFIG`'s, else the default file's.
+/// The values of option `name` on the command line being completed (the
+/// shell runs `argus -- argus <words…>`), as `--name v` or `--name=v`.
+fn line_values(name: &str) -> Vec<String> {
+    let words: Vec<String> = std::env::args().skip_while(|a| a != "--").skip(2).collect();
+    let prefix = format!("{name}=");
+    let mut values = vec![];
+    let mut it = words.iter();
+    while let Some(w) = it.next() {
+        if w == name {
+            values.extend(it.next().cloned());
+        } else if let Some(v) = w.strip_prefix(&prefix) {
+            values.push(v.to_string());
+        }
+    }
+    values
+}
+
+/// The config completion sees: `--config` on the line, else
+/// `$ARGUS_CONFIG`'s, else the default file's; `--root` on the line
+/// replacing its roots, as when argus runs.
 fn completion_config() -> Config {
-    let path = std::env::var_os("ARGUS_CONFIG")
-        .map(PathBuf::from)
+    let path = line_values("--config")
+        .pop()
+        .map(|p| paths::expand_tilde(Path::new(&p)))
+        .or_else(|| std::env::var_os("ARGUS_CONFIG").map(PathBuf::from))
         .unwrap_or_else(paths::config_file);
-    Config::load(&path).unwrap_or_default()
+    let mut c = Config::load(&path).unwrap_or_default();
+    let roots = line_values("--root");
+    if !roots.is_empty() {
+        c.roots = roots
+            .iter()
+            .map(|r| paths::expand_tilde(Path::new(r)))
+            .collect();
+    }
+    c
 }
 
 /// Completes `names` that start with what's typed.

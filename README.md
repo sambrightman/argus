@@ -227,8 +227,9 @@ Completions cover commands, options, marks, issues and your repos' names
 script fresh at shell startup, where it always matches the installed argus:
 `source <(argus completions zsh)` in `~/.zshrc` (likewise bash), or
 `argus completions fish | source` in `~/.config/fish/config.fish`. Repo
-names come from your config (or `ARGUS_CONFIG`); `--root` on the command
-line isn't seen while completing.
+names and marks come from your config (`ARGUS_CONFIG`, or `--config`
+earlier on the line), and `--root` earlier on the line replaces its roots,
+as when the command runs.
 
 Every command takes `--config FILE` / `--state FILE`, or the environment
 variables `ARGUS_CONFIG` / `ARGUS_STATE`, and `--root DIR` (repeatable)

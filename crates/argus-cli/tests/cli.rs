@@ -2062,3 +2062,27 @@ fn glyphs_list_marks_by_set() {
     assert_eq!(v["sets"]["unicode"]["mark.work"], "W");
     assert_eq!(v["sets"]["yours"]["mark.work"], "w");
 }
+
+/// Completion follows `--root` and `--config` given earlier on the line:
+/// repos from that root, marks from that config.
+#[test]
+fn completion_follows_root_and_config_on_the_line() {
+    let sb = Sandbox::new();
+    three(&sb);
+    sb.remote("other", "elsewhere");
+    sb.clone_as_github("other", "elsewhere", "far/elsewhere");
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, format!("roots = ['{}']\n", sb.path("dev").display())).unwrap();
+    let far = sb.path("far").display().to_string();
+    assert!(complete(&sb, &cfg, &["ack", "other/"]).is_empty(), "not in the configured roots");
+    assert_eq!(complete(&sb, &cfg, &["--root", &far, "ack", "other/"]), ["other/elsewhere"]);
+    assert_eq!(complete(&sb, &cfg, &[&format!("--root={far}"), "ack", "other/"]), ["other/elsewhere"]);
+    assert!(
+        complete(&sb, &cfg, &["--root", &far, "ack", "acme/"]).is_empty(),
+        "the configured roots replaced, as when running"
+    );
+    let mine = sb.path("mine.toml");
+    std::fs::write(&mine, "[marks.work]\n").unwrap();
+    assert_eq!(complete(&sb, &cfg, &["--config", mine.to_str().unwrap(), "mark", "w"]), ["work"]);
+    assert!(complete(&sb, &cfg, &["mark", "w"]).is_empty());
+}

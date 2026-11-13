@@ -25,9 +25,6 @@ deferred.
 - **Terminals drawing ambiguous-width symbols two cells wide** (CJK
   setting): detect it and swap those icons. Today `demo --glyphs` marks
   them with `*`.
-- **The build folder:** rename `target` to `target.noindex` (Spotlight
-  skips it), or a global `build-dir`; `scripts/prune-objects.sh` covers
-  the space for now.
 - **The Ignore menu as a list**, so `n`/`p` move through it (its `n none`
   would need another key).
 - **Release profile options not measured:** fat LTO, `panic = "abort"`
@@ -62,7 +59,6 @@ deferred.
 
 - A git config include file created after a repo was opened isn't noticed
   until the including file changes.
-- Shell completion ignores a `--root` given earlier on the same line.
 - Diffs don't apply textconv.
 - `git clone` in a test's setup once failed copying `maintenance.lock`
   (rerun passed): watch for it.
