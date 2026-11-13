@@ -58,6 +58,9 @@ pub enum Action {
     ExpandAll,
     CollapseAll,
     ToggleMark,
+    /// Start a region of diff lines at the cursor (`C-space`), or end it,
+    /// keeping its lines as marks.
+    ToggleRegion,
     UnmarkAll,
     OpenMenu(MenuId),
     StartFilter,
@@ -660,7 +663,10 @@ pub struct App {
     pub marked_files: BTreeMap<PathBuf, BTreeSet<String>>,
     /// Added or removed lines marked in diffs: repo, file, side, hunk and
     /// line index. They go when the repo's status (so its diff) changes.
-    pub marked_lines: BTreeSet<(PathBuf, String, argus_core::diff::Side, usize, usize)>,
+    pub marked_lines: BTreeSet<MarkedLine>,
+    /// Where a region (`C-space`) starts: a diff row's repo, file, side,
+    /// hunk and line. Its lines run to the cursor.
+    pub region: Option<RegionStart>,
     /// Files whose diff is shown, by repo path and file.
     pub expanded_files: BTreeSet<(PathBuf, String)>,
     /// Folded hunks: repo, file, side, hunk index.
@@ -720,6 +726,7 @@ impl App {
             marked: BTreeSet::new(),
             marked_files: BTreeMap::new(),
             marked_lines: BTreeSet::new(),
+            region: None,
             expanded_files: BTreeSet::new(),
             folded_hunks: BTreeSet::new(),
             diffs: HashMap::new(),
@@ -1126,7 +1133,10 @@ impl App {
                     UnmarkAll
                 }
             }
+            // C-space (C-@; some terminals send NUL)
+            KeyCode::Null => ToggleRegion,
             KeyCode::Char(c) if ctrl => match c {
+                ' ' | '@' => ToggleRegion,
                 'n' => Down,
                 'p' => Up,
                 'v' => PageDown,
@@ -1298,6 +1308,22 @@ impl App {
                 self.marked.clear();
                 self.marked_files.clear();
                 self.marked_lines.clear();
+                self.region = None;
+            }
+            ToggleRegion => {
+                if self.region.is_some() {
+                    // ended: its lines kept as marks
+                    let lines = self.region_lines();
+                    self.marked_lines.extend(lines);
+                    self.region = None;
+                } else if let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor)
+                    && let (Some(f), Some(d)) = (&line.file, line.diff.as_deref())
+                {
+                    let path = self.ws.entries[*repo].path.clone();
+                    self.region = Some((path, f.clone(), d.side, d.hunk, d.at));
+                } else {
+                    self.info("C-space starts a region in a file's diff");
+                }
             }
             Toggle(Switch::Untracked) => self.stash.untracked = !self.stash.untracked,
             Toggle(Switch::KeepIndex) => self.stash.keep_index = !self.stash.keep_index,
@@ -2734,6 +2760,11 @@ impl App {
     /// file, which is staged or discarded whole).
     fn hunk_op(&mut self, verb: HunkVerb) -> Option<Vec<Effect>> {
         use argus_core::diff::{self, FileDiff, LineKind, Side};
+        if self.region.is_some() {
+            let lines = self.region_lines();
+            self.marked_lines.extend(lines);
+            self.region = None;
+        }
         if !self.marked_lines.is_empty() {
             return Some(self.marked_lines_op(verb));
         }
@@ -2803,6 +2834,47 @@ impl App {
         }
         let jobs = self.job(&path, op).into_iter().collect();
         Some(self.start_jobs(jobs))
+    }
+
+    /// The added and removed lines of a region: those of its file and side
+    /// between where it starts and the cursor (unchanged lines ignored).
+    pub fn region_lines(&self) -> Vec<MarkedLine> {
+        let Some((repo, file, side, hunk, at)) = &self.region else {
+            return vec![];
+        };
+        let in_file = |r: &Row| -> Option<(usize, usize, bool)> {
+            let Row::Detail { repo: i, line } = r else {
+                return None;
+            };
+            let d = line.diff.as_deref()?;
+            let same = &self.ws.entries[*i].path == repo
+                && line.file.as_ref() == Some(file)
+                && d.side == *side;
+            let changed = d
+                .line
+                .as_ref()
+                .is_some_and(|l| l.kind != argus_core::diff::LineKind::Context);
+            Some((d.hunk?, d.at?, same && changed))
+        };
+        let Some(start) = self.rows.iter().position(|r| match r {
+            Row::Detail { repo: i, line } => line.diff.as_deref().is_some_and(|d| {
+                &self.ws.entries[*i].path == repo
+                    && line.file.as_ref() == Some(file)
+                    && d.side == *side
+                    && d.hunk == *hunk
+                    && d.at == *at
+            }),
+            _ => false,
+        }) else {
+            return vec![];
+        };
+        let (lo, hi) = (start.min(self.cursor), start.max(self.cursor));
+        self.rows[lo..=hi.min(self.rows.len().saturating_sub(1))]
+            .iter()
+            .filter_map(in_file)
+            .filter(|&(_, _, take)| take)
+            .map(|(h, a, _)| (repo.clone(), file.clone(), *side, h, a))
+            .collect()
     }
 
     /// `s`/`u`/`K` on the marked lines: one patch per file and side, its
@@ -3399,6 +3471,20 @@ struct CommitPick {
     purpose: Pick,
     commits: Vec<argus_core::history::CommitLine>,
 }
+
+/// An added or removed line marked in a diff: repo, file, side, hunk and
+/// the line's index in it.
+pub type MarkedLine = (PathBuf, String, argus_core::diff::Side, usize, usize);
+
+/// Where a region starts: a diff row's repo, file, side, hunk and line
+/// (none on a side's heading or a hunk's header).
+pub type RegionStart = (
+    PathBuf,
+    String,
+    argus_core::diff::Side,
+    Option<usize>,
+    Option<usize>,
+);
 
 /// What `s`/`u`/`K` do to a hunk or line.
 #[derive(Clone, Copy, PartialEq, Eq)]

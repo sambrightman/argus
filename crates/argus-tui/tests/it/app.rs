@@ -4695,3 +4695,101 @@ fn marked_lines_are_staged_together() {
     }
     assert!(app.marked_lines.is_empty(), "acted on, unmarked");
 }
+
+/// `C-space` starts a region in a diff: the added and removed lines
+/// between it and the cursor (unchanged ones ignored) are acted on with the
+/// marked ones; `C-space` again keeps them as marks, `C-g` drops it.
+#[test]
+fn a_region_of_diff_lines_is_staged() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let d = sb.path("dev/dirty");
+        let lines: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+        write(&d, "f", &lines);
+        commit(&d, "f");
+        let changed = lines
+            .replace("line 3\n", "line three\n")
+            .replace("line 28\n", "line 28\nadded\n");
+        write(&d, "f", &changed);
+    });
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    let row_of = |app: &App, text: &str| {
+        app.rows
+            .iter()
+            .position(|r| matches!(r, Row::Detail { line, .. }
+                if line.diff.as_deref().and_then(|d| d.line.as_ref()).is_some_and(|l| l.text == text)))
+            .unwrap_or_else(|| panic!("{text}"))
+    };
+    // from "line three" down to "added", past unchanged lines and a header
+    app.cursor = row_of(&app, "line three");
+    app.on_key(ctrl(' '));
+    while app.cursor < row_of(&app, "added") {
+        app.on_key(code(KeyCode::Down));
+    }
+    match app.act(Action::StageFiles).as_slice() {
+        [Effect::Jobs(j)] => match &j[0].op {
+            Op::Apply { patch, what, .. } => {
+                assert_eq!(what, "stage 2 lines of f");
+                assert!(
+                    patch.contains("+line three") && patch.contains("+added"),
+                    "{patch}"
+                );
+                assert!(
+                    patch.contains(" line 3\n"),
+                    "the line above the region left out: {patch}"
+                );
+            }
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        app.region.is_none() && app.marked_lines.is_empty(),
+        "acted on, gone"
+    );
+    app.running.clear();
+    // C-space again keeps the region's lines as marks
+    app.cursor = row_of(&app, "line 3");
+    app.on_key(ctrl(' '));
+    app.on_key(code(KeyCode::Down));
+    app.on_key(ctrl(' '));
+    assert!(app.region.is_none());
+    assert_eq!(app.marked_lines.len(), 2, "line 3 and line three");
+    // C-g drops a region (and the marks)
+    app.on_key(ctrl(' '));
+    app.on_key(ctrl('g'));
+    assert!(app.region.is_none() && app.marked_lines.is_empty());
+}
+
+/// A region keeps to its file and side: lines of the other side (or file)
+/// it runs over aren't in it.
+#[test]
+fn a_region_keeps_to_its_file_and_side() {
+    use argus_core::diff::{LineKind, Side};
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    // README's unstaged lines and both's staged ones are around it
+    for f in ["README", "both"] {
+        to_file(&mut app, f);
+        app.act(Action::ToggleExpand);
+    }
+    let changed = |app: &App, file: &str, side| -> Vec<usize> {
+        (0..app.rows.len())
+            .filter(|&i| {
+                matches!(&app.rows[i], Row::Detail { line, .. } if line.file.as_deref() == Some(file)
+                && line.diff.as_deref().is_some_and(|d| d.side == side
+                    && d.line.as_ref().is_some_and(|l| l.kind != LineKind::Context)))
+            })
+            .collect()
+    };
+    let own = changed(&app, "both", Side::Unstaged);
+    assert!(!changed(&app, "README", Side::Unstaged).is_empty());
+    assert!(!changed(&app, "both", Side::Staged).is_empty());
+    app.cursor = own[0];
+    app.on_key(ctrl(' '));
+    // to either end, over the other side's lines and the other file's
+    // up: only the first is in range; down: all of them
+    for (end, n) in [(0, 1), (app.rows.len() - 1, own.len())] {
+        app.cursor = end;
+        assert_eq!(app.region_lines().len(), n, "to row {end}");
+    }
+}

@@ -228,6 +228,7 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
         .min(30);
 
     let refined = refined_rows(app, app.scroll..app.scroll + height);
+    let region: std::collections::BTreeSet<_> = app.region_lines().into_iter().collect();
     let mut lines = vec![];
     for (row_idx, row) in app.rows.iter().enumerate().skip(app.scroll).take(height) {
         let selected = row_idx == app.cursor;
@@ -240,8 +241,8 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
                 let marked = match (line.diff.as_deref(), &line.file) {
                     (None, Some(f)) => app.marked_files.get(path).is_some_and(|m| m.contains(f)),
                     (Some(d), Some(f)) => d.hunk.zip(d.at).is_some_and(|(h, at)| {
-                        app.marked_lines
-                            .contains(&(path.clone(), f.clone(), d.side, h, at))
+                        let key = (path.clone(), f.clone(), d.side, h, at);
+                        app.marked_lines.contains(&key) || region.contains(&key)
                     }),
                     _ => false,
                 };
