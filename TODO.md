@@ -35,6 +35,8 @@ deferred.
 - **Release profile options not measured:** fat LTO, `panic = "abort"`
   (the TUI's panic hook still restores the terminal), and split, packed
   debug info (a `.dSYM`) kept aside to symbolicate crash reports.
+- **Editing a patch to discard** (`K` after `e`): reversed in the work
+  tree, so it can't be undone; it would confirm after the editor closes.
 - **Caching the pruning checks** for trees with many symlinks, if they
   ever show up as slow.
 
