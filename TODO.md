@@ -25,8 +25,6 @@ deferred.
 - **Terminals drawing ambiguous-width symbols two cells wide** (CJK
   setting): detect it and swap those icons. Today `demo --glyphs` marks
   them with `*`.
-- **The Ignore menu as a list**, so `n`/`p` move through it (its `n none`
-  would need another key).
 - **Release profile options not measured:** fat LTO, `panic = "abort"`
   (the TUI's panic hook still restores the terminal), and split, packed
   debug info (a `.dSYM`) kept aside to symbolicate crash reports.
