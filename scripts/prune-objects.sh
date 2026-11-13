@@ -1,5 +1,7 @@
 #!/bin/bash
-# Delete object files in target/debug/deps that no binary points at.
+# Delete object files in the build folder's debug/deps that no binary
+# points at (the build folder: target/, or wherever `build.build-dir` puts
+# intermediate files, e.g. target.noindex/).
 #
 # On macOS, debug builds leave each binary's debug info in its object files
 # (split-debuginfo=unpacked), and cargo never deletes the old ones: every
@@ -8,7 +10,10 @@
 # the object files it uses; anything else is garbage, so this costs no rebuild.
 # Library code lives inside its .rlib, so only binaries need checking.
 set -euo pipefail
-deps=${CARGO_TARGET_DIR:-$(cd "$(dirname "$0")/.." && pwd)/target}/debug/deps
+root=$(cd "$(dirname "$0")/.." && pwd)
+build=$(cd "$root" && cargo metadata --format-version 1 --no-deps 2>/dev/null \
+    | grep -o '"build_directory":"[^"]*"' | cut -d'"' -f4)
+deps=${build:-${CARGO_TARGET_DIR:-$root/target}}/debug/deps
 [ -d "$deps" ] || exit 0
 cd "$deps"
 used=$(mktemp)
