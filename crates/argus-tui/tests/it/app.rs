@@ -4426,6 +4426,36 @@ fn branches_are_checked_out_from_a_list_or_the_previous_one() {
     app.on_key(key('b'));
     app.on_key(ctrl('n'));
     assert!(matches!(&app.mode, Mode::Pick { cursor: 1, .. }));
+    let at = |app: &App| match &app.mode {
+        Mode::Pick { cursor, .. } => *cursor,
+        _ => panic!("no picker"),
+    };
+    // the arrows too, kept to the list
+    for (k, want) in [
+        (code(KeyCode::Down), 1),
+        (code(KeyCode::Up), 0),
+        (code(KeyCode::Up), 0),
+        (code(KeyCode::Down), 1),
+        (ctrl('p'), 0),
+        (ctrl('n'), 1),
+        (ctrl('n'), 1),
+    ] {
+        app.on_key(k);
+        assert_eq!(at(&app), want, "{k:?}");
+    }
+    // n and p alone are typed, narrowing
+    app.on_key(key('p'));
+    assert_eq!(
+        shown(&app),
+        ["origin/topic (creates a local branch tracking it)"]
+    );
+    app.on_key(code(KeyCode::Backspace));
+    app.on_key(key('n'));
+    assert!(matches!(&app.mode, Mode::Pick { editor, .. } if editor.text() == "n"));
+    assert_eq!(
+        shown(&app),
+        ["main", "origin/topic (creates a local branch tracking it)"]
+    );
     assert!(app.on_key(ctrl('g')).is_empty());
     assert!(matches!(app.mode, Mode::Normal));
     app.running.clear();
@@ -5392,4 +5422,137 @@ fn pruning_from_the_main_repo_drops_the_stale_rows() {
     assert_eq!((&path, &op), (&main, &Op::PruneWorktrees));
     assert!(finish(&mut app, path, op));
     assert_eq!(rows(&app), 0);
+}
+
+/// The picker: a box over the list, the matches with the cursor's
+/// highlighted, a footer that fits; the query on the status line.
+#[test]
+fn the_branch_picker_draws_its_matches_and_query() {
+    use argus_tui::theme::Ui;
+    let (_sb, mut app) = setup_with("", |sb| {
+        let f = sb.path("dev/feature");
+        git(&f, &["branch", "-q", "mother"]);
+    });
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("feature")))
+        .unwrap();
+    app.act(Action::Checkout);
+    app.on_key(key('m'));
+    let (theme, _) = Theme::build("mono", &Default::default());
+    let (w, h) = (100, 30);
+    let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+    let view = ui::View {
+        theme: &theme,
+        icons: argus_core::icons::UNICODE,
+        tick: 0,
+    };
+    t.draw(|f| ui::draw(f, &mut app, &view)).unwrap();
+    let buf = t.backend().buffer().clone();
+    let lines: Vec<String> = (0..h)
+        .map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect())
+        .collect();
+    let row = |text: &str| {
+        lines
+            .iter()
+            .position(|l| l.contains(text))
+            .unwrap_or_else(|| panic!("{text}:\n{}", lines.join("\n")))
+    };
+    // the query, cursor after it
+    let status = lines
+        .iter()
+        .position(|l| l.starts_with("checkout: m"))
+        .unwrap();
+    assert_eq!(t.get_cursor_position().unwrap(), (11, status as u16).into());
+    // matches, the first under the cursor
+    let first = row("│ main");
+    let second = row("│ mother");
+    assert_eq!(second, first + 1);
+    let x = lines[first].find("main").unwrap();
+    let x = lines[first][..x].chars().count() as u16;
+    let sel = theme.ui(Ui::Selection);
+    assert!(!sel.add_modifier.is_empty());
+    assert!(
+        buf[(x, first as u16)].modifier.contains(sel.add_modifier),
+        "highlighted"
+    );
+    assert!(!buf[(x, second as u16)].modifier.contains(sel.add_modifier));
+    // the footer fits the box, which ends below it
+    let foot = row(" of ");
+    assert!(lines[foot].contains("Esc/C-g cancel  │"), "{}", lines[foot]);
+    assert!(lines[foot + 1].contains('╰'), "{}", lines[foot + 1]);
+}
+
+/// Some terminals send C-space as NUL: it starts a region too.
+#[test]
+fn nul_starts_a_region() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "README");
+    app.act(Action::ToggleExpand);
+    app.cursor = diff_row(&app, "hello there");
+    app.on_key(code(KeyCode::Null));
+    assert!(app.region.is_some());
+}
+
+/// Space on a diff line marks it and moves down a line, as magit does.
+#[test]
+fn marking_a_diff_line_moves_down() {
+    let (_sb, mut app) = setup_with("", edit_fixture);
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    let at = diff_row(&app, "line three");
+    app.cursor = at;
+    app.on_key(key(' '));
+    assert_eq!(app.cursor, at + 1);
+    assert_eq!(app.marked_lines.len(), 1);
+}
+
+/// A repo's line marks go when its status (so its diff) changes; other
+/// repos' stay.
+#[test]
+fn line_marks_go_with_their_repos_status() {
+    let (sb, mut app) = setup_with("", |sb| {
+        edit_fixture(sb);
+        write(&sb.path("dev/clean"), "README", "changed\n");
+    });
+    for (repo, file, text) in [
+        ("dev/dirty", "f", "line three"),
+        ("dev/clean", "README", "changed"),
+    ] {
+        let p = sb.path(repo);
+        app.cursor = repo_row(&app, &p);
+        to_file(&mut app, file);
+        app.act(Action::ToggleExpand);
+        app.cursor = diff_row(&app, text);
+        app.on_key(key(' '));
+    }
+    assert_eq!(app.marked_lines.len(), 2);
+    let dirty = sb.path("dev/dirty");
+    refreshed(&mut app, &dirty);
+    let left: Vec<_> = app.marked_lines.iter().map(|k| k.0.clone()).collect();
+    assert_eq!(left, [sb.path("dev/clean")]);
+}
+
+/// A branch number past the list does nothing.
+#[test]
+fn picking_past_the_branch_list_does_nothing() {
+    let (_sb, mut app) = setup("");
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("feature")))
+        .unwrap();
+    app.act(Action::Checkout);
+    let n = match &app.mode {
+        Mode::Pick { labels, .. } => labels.len(),
+        _ => panic!("no picker"),
+    };
+    assert!(app.act(Action::PickBranch(n)).is_empty());
+    app.act(Action::Checkout);
+    assert!(
+        app.act(Action::PickBranch(n - 1))
+            .iter()
+            .any(|e| matches!(e, Effect::Jobs(_)))
+    );
 }

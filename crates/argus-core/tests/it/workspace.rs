@@ -1766,6 +1766,7 @@ fn a_snoozed_issue_does_not_count_until_it_ends() {
     assert!(w.entries[i].snoozed_issues.is_empty());
     // ending now is ended; a later one stays
     w.state.snooze_issue(&key, Issue::Dirty(1), now);
+    assert!(!w.state.is_issue_snoozed(&key, Issue::Dirty(1), now));
     w.state.snooze_issue("other", Issue::Behind(1), later);
     assert!(w.state.expire_snoozes(now));
     assert!(!w.state.snoozed_issues.contains_key(&key));
