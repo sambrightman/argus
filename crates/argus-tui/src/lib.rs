@@ -80,9 +80,12 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
     app.scanning = true;
     rt.exec(&mut app, Effect::Scan);
     let mut tick = 0usize;
+    // Drawn only when something may have changed, or while the spinner
+    // turns: even a frame that changes nothing writes to the terminal,
+    // which terminals show as activity (iTerm's tab spinner).
+    let mut dirty = true;
     let result = (|| -> Result<(), Error> {
         while !app.quit {
-            tick = tick.wrapping_add(1);
             // The View menu can switch theme and icons for the session.
             if app.ws.config.ui.theme != theme_name {
                 theme_name = app.ws.config.ui.theme.clone();
@@ -97,18 +100,27 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
                 icons: icons.clone(),
                 tick,
             };
-            terminal.draw(|f| ui::draw(f, &mut app, &view))?;
             let busy = app.scanning || !app.running.is_empty();
+            if dirty || busy {
+                tick = tick.wrapping_add(1);
+                terminal.draw(|f| ui::draw(f, &mut app, &view))?;
+            }
+            dirty = false;
             let mut left = vec![];
-            if event::poll(Duration::from_millis(if busy { 80 } else { 250 }))?
-                && let Event::Key(k) = event::read()?
-                && k.kind != KeyEventKind::Release
-            {
-                for e in app.on_key(k) {
-                    left.extend(rt.exec(&mut app, e));
+            if event::poll(Duration::from_millis(if busy { 80 } else { 250 }))? {
+                // a resize too
+                dirty = true;
+                if let Event::Key(k) = event::read()?
+                    && k.kind != KeyEventKind::Release
+                {
+                    for e in app.on_key(k) {
+                        left.extend(rt.exec(&mut app, e));
+                    }
                 }
             }
-            left.extend(rt.drain(&mut app));
+            let (effects, received) = rt.drain(&mut app);
+            left.extend(effects);
+            dirty |= received;
             // only suspending is left: it needs the terminal
             while let Some(e) = left.pop() {
                 if let Effect::Suspend {
@@ -128,6 +140,7 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
                         argus_core::paths::contract_tilde(&cwd)
                     );
                     let r = run_suspended(&program, &args, &cwd, login_shell);
+                    dirty = true;
                     terminal = ratatui::init();
                     let _ = terminal.clear();
                     for e in app.on_msg(Msg::Suspended(r)) {
@@ -212,16 +225,19 @@ impl Runtime {
     }
 
     /// Handle messages that have arrived (a bounded number, so a flood
-    /// can't starve input handling). Returns effects needing the terminal.
-    pub fn drain(&mut self, app: &mut App) -> Vec<Effect> {
+    /// can't starve input handling). Returns effects needing the terminal,
+    /// and whether any arrived (the screen may have changed).
+    pub fn drain(&mut self, app: &mut App) -> (Vec<Effect>, bool) {
         let mut left = vec![];
+        let mut received = false;
         for _ in 0..512 {
             let Ok(m) = self.rx.try_recv() else { break };
+            received = true;
             for e in app.on_msg(m) {
                 left.extend(self.exec(app, e));
             }
         }
-        left
+        (left, received)
     }
 
     /// Handle messages until no background work is left, or `timeout`
