@@ -2074,15 +2074,31 @@ fn completion_follows_root_and_config_on_the_line() {
     let cfg = sb.path("cfg.toml");
     std::fs::write(&cfg, format!("roots = ['{}']\n", sb.path("dev").display())).unwrap();
     let far = sb.path("far").display().to_string();
-    assert!(complete(&sb, &cfg, &["ack", "other/"]).is_empty(), "not in the configured roots");
-    assert_eq!(complete(&sb, &cfg, &["--root", &far, "ack", "other/"]), ["other/elsewhere"]);
-    assert_eq!(complete(&sb, &cfg, &[&format!("--root={far}"), "ack", "other/"]), ["other/elsewhere"]);
+    assert!(
+        complete(&sb, &cfg, &["ack", "other/"]).is_empty(),
+        "not in the configured roots"
+    );
+    assert_eq!(
+        complete(&sb, &cfg, &["--root", &far, "ack", "other/"]),
+        ["other/elsewhere"]
+    );
+    assert_eq!(
+        complete(&sb, &cfg, &[&format!("--root={far}"), "ack", "other/"]),
+        ["other/elsewhere"]
+    );
     assert!(
         complete(&sb, &cfg, &["--root", &far, "ack", "acme/"]).is_empty(),
         "the configured roots replaced, as when running"
     );
     let mine = sb.path("mine.toml");
     std::fs::write(&mine, "[marks.work]\n").unwrap();
-    assert_eq!(complete(&sb, &cfg, &["--config", mine.to_str().unwrap(), "mark", "w"]), ["work"]);
+    assert_eq!(
+        complete(
+            &sb,
+            &cfg,
+            &["--config", mine.to_str().unwrap(), "mark", "w"]
+        ),
+        ["work"]
+    );
     assert!(complete(&sb, &cfg, &["mark", "w"]).is_empty());
 }
