@@ -147,13 +147,28 @@ fn ago_since(t: jiff::Timestamp, now: jiff::Timestamp) -> String {
     }
 }
 
+/// How long from `now` until `t`, in [`ago_since`]'s units, to the
+/// nearest (a snooze for 3d has `3d left`, not 2d and change).
+fn left_until(t: jiff::Timestamp, now: jiff::Timestamp) -> String {
+    let secs = (t - now).get_seconds().max(0);
+    let near = |unit: i64| (secs + unit / 2) / unit;
+    match secs {
+        s if s < 90 => format!("{s}s left"),
+        s if s < 90 * 60 => format!("{}m left", near(60)),
+        s if s < 36 * 3600 => format!("{}h left", near(3600)),
+        _ => format!("{}d left", near(86_400)),
+    }
+}
+
 /// Detail lines for `e`, with `icons` for ahead/behind. Fixes: the auto-fix (by `priority`, i.e. `[fix]
 /// auto`), what later auto-fixes would apply, then the other fixes.
+/// `state` has when its issue snoozes end.
 pub fn details(
     e: &Entry,
     priority: &[FixKind],
     stash: &StashConfig,
     icons: &Icons,
+    state: &argus_core::State,
 ) -> Vec<DetailLine> {
     let mut v = vec![line(vec![
         styled(Role::Dim, "path      "),
@@ -248,6 +263,24 @@ pub fn details(
             ..line(vec![
                 styled(Role::Dim, "issue     "),
                 styled(Role::Dim, format!("{text}  (ignored)")),
+            ])
+        });
+    }
+    let now = jiff::Timestamp::now();
+    for issue in &e.snoozed_issues {
+        let (_, text) = describe(issue, s.default_branch.as_deref());
+        let left = state
+            .snoozed_issues
+            .get(&e.key)
+            .and_then(|m| m.get(issue.name()))
+            .map(|t| format!(", {}", left_until(*t, now)))
+            .unwrap_or_default();
+        v.push(DetailLine {
+            issue: Some(*issue),
+            expand: issue_expand(issue, s),
+            ..line(vec![
+                styled(Role::Dim, "issue     "),
+                styled(Role::Dim, format!("{text}  (snoozed{left})")),
             ])
         });
     }
@@ -506,6 +539,25 @@ mod tests {
             (-5, "0s ago"),
         ] {
             assert_eq!(ago(secs), want, "{secs}");
+        }
+    }
+
+    #[test]
+    fn left_until_rounds_to_the_nearest_unit() {
+        let now = jiff::Timestamp::from_second(1_000_000_000).unwrap();
+        let left = |secs: i64| left_until(now + jiff::SignedDuration::from_secs(secs), now);
+        for (secs, want) in [
+            (0, "0s left"),
+            (89, "89s left"),
+            (90, "2m left"),
+            (90 * 60 - 1, "90m left"),
+            (90 * 60, "2h left"),
+            (36 * 3600 - 1, "36h left"),
+            (36 * 3600, "2d left"),
+            (3 * 86_400 - 1, "3d left"),
+            (-5, "0s left"),
+        ] {
+            assert_eq!(left(secs), want, "{secs}");
         }
     }
 

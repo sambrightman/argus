@@ -37,6 +37,8 @@ pub struct Entry {
     pub issues: Vec<Issue>,
     /// Issues the status shows that `[ignore]` turns off for this repo.
     pub ignored_issues: Vec<Issue>,
+    /// Issues the status shows that are snoozed (until their snooze ends).
+    pub snoozed_issues: Vec<Issue>,
     /// For each of the status's stashes, whether `[ignore] stashes` covers it.
     pub stash_ignored: Vec<bool>,
     /// Every issue of the status, before ignoring.
@@ -57,6 +59,7 @@ impl Entry {
             status: None,
             issues: vec![],
             ignored_issues: vec![],
+            snoozed_issues: vec![],
             stash_ignored: vec![],
             all_issues: vec![],
         }
@@ -103,9 +106,16 @@ impl Entry {
     }
 
     /// The kinds of fix auto-fix may use here: `kinds`, less those that
-    /// would undo an ignored state (see [`crate::fix::turned_off_by`]).
+    /// would undo an ignored or snoozed state (see
+    /// [`crate::fix::turned_off_by`]).
     pub fn fix_kinds(&self, kinds: &[crate::fix::FixKind]) -> Vec<crate::fix::FixKind> {
-        let off = crate::fix::turned_off_by(&self.ignored_issues);
+        let both: Vec<Issue> = self
+            .ignored_issues
+            .iter()
+            .chain(&self.snoozed_issues)
+            .copied()
+            .collect();
+        let off = crate::fix::turned_off_by(&both);
         kinds.iter().copied().filter(|k| !off.contains(k)).collect()
     }
 
@@ -130,6 +140,7 @@ impl Entry {
             self.issues.clear();
         }
         self.ignored_issues.clear();
+        self.snoozed_issues.clear();
         self.stash_ignored.clear();
         self.status = Some(st);
     }
@@ -651,8 +662,12 @@ impl Workspace {
                     _ => on.push(issue),
                 }
             }
+            let (snoozed, on): (Vec<Issue>, Vec<Issue>) = on
+                .into_iter()
+                .partition(|&i| self.state.is_issue_snoozed(&e.key, i, now));
             e.issues = on;
             e.ignored_issues = off;
+            e.snoozed_issues = snoozed;
         }
     }
 

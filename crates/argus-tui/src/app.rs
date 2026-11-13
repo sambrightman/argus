@@ -588,6 +588,8 @@ pub enum Prompt {
     SpinOffName(Vec<PathBuf>, bool),
     RemoteUrl(PathBuf),
     SnoozeDuration(Vec<String>),
+    /// How long to snooze one issue (of the repo with that key) for.
+    SnoozeIssue(String, Issue),
 }
 
 pub enum Mode {
@@ -819,12 +821,17 @@ impl App {
             if self.expanded.contains(&e.path) {
                 // depth first: each line, its diff, then what it unfolds
                 // into; a nested repo's lines are its own, indented `pad`
-                let mut stack: Vec<(usize, usize, DetailLine)> =
-                    details(e, &self.ws.config.fix.auto, &self.ws.config.stash, &icons)
-                        .into_iter()
-                        .rev()
-                        .map(|l| (i, 0, l))
-                        .collect();
+                let mut stack: Vec<(usize, usize, DetailLine)> = details(
+                    e,
+                    &self.ws.config.fix.auto,
+                    &self.ws.config.stash,
+                    &icons,
+                    &self.ws.state,
+                )
+                .into_iter()
+                .rev()
+                .map(|l| (i, 0, l))
+                .collect();
                 while let Some((r, pad, line)) = stack.pop() {
                     let e = &self.ws.entries[r];
                     let expanded = line.file.as_ref().filter(|f| {
@@ -874,6 +881,7 @@ impl App {
                             &self.ws.config.fix.auto,
                             &self.ws.config.stash,
                             &icons,
+                            &self.ws.state,
                         );
                         stack.extend(
                             lines
@@ -1751,6 +1759,20 @@ impl App {
                 }
                 return self.confirmed(Confirmed::ClearMarks(keys));
             }
+            Snooze if let Some((key, issue, ignored)) = self.issue_under_cursor() => {
+                if ignored {
+                    self.info("that issue is ignored: m i stops ignoring it");
+                } else {
+                    self.mode = Mode::Input {
+                        prompt: Prompt::SnoozeIssue(key, issue),
+                        editor: LineEditor::new("3d"),
+                    };
+                }
+            }
+            Unsnooze if let Some((key, issue, _)) = self.issue_under_cursor() => {
+                self.ws.state.unsnooze_issue(&key, issue);
+                return self.flags_changed();
+            }
             Snooze => {
                 let keys = self.selected_keys();
                 if !keys.is_empty() {
@@ -1762,7 +1784,7 @@ impl App {
             }
             Unsnooze => {
                 for k in self.selected_keys() {
-                    self.ws.state.snoozed.remove(&k);
+                    self.ws.state.unsnooze_all(&k);
                 }
                 return self.flags_changed();
             }
@@ -2662,6 +2684,19 @@ impl App {
         p
     }
 
+    /// The issue on the details line under the cursor: its repo's key, the
+    /// issue, and whether it's ignored.
+    fn issue_under_cursor(&self) -> Option<(String, Issue, bool)> {
+        let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor) else {
+            return None;
+        };
+        Some((
+            self.ws.entries[*repo].key.clone(),
+            line.issue?,
+            line.ignored,
+        ))
+    }
+
     fn not_applicable(&mut self, why: &str) -> Vec<Effect> {
         self.info(why.to_string());
         vec![]
@@ -3491,6 +3526,21 @@ impl App {
                 let message = (!text.trim().is_empty()).then_some(text);
                 self.stash_jobs(targets, false, message)
             }
+            Prompt::SnoozeIssue(key, issue) => match argus_core::state::parse_duration(&text) {
+                Some(secs) => {
+                    let until = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(secs);
+                    self.ws.state.snooze_issue(&key, issue, until);
+                    self.info(format!(
+                        "snoozed {} for {text}",
+                        issue.name().replace('_', " ")
+                    ));
+                    self.flags_changed()
+                }
+                None => {
+                    self.error(format!("bad duration {text:?} (try 90m, 12h, 3d, 2w)"));
+                    vec![]
+                }
+            },
             Prompt::SnoozeDuration(keys) => match argus_core::state::parse_duration(&text) {
                 Some(secs) => {
                     let until = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(secs);

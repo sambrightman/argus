@@ -486,6 +486,7 @@ fn draw_status(f: &mut Frame, app: &App, v: &View, area: Rect) {
                 ),
                 Prompt::RemoteUrl(_) => "URL of the remote to add as origin: ".to_string(),
                 Prompt::SnoozeDuration(k) => format!("snooze {} repo(s) for: ", k.len()),
+                Prompt::SnoozeIssue(_, i) => format!("snooze {} for: ", i.name().replace('_', " ")),
             };
             let x = area.x + (UnicodeWidthStr::width(label.as_str()) + editor.cursor()) as u16;
             f.set_cursor_position((x.min(area.right().saturating_sub(1)), area.y));

@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::attention::Issue;
+
 /// Marks as older versions of argus kept them, per repo key. They now live
 /// in config (`favourite`, `pull`, `ignore`); see
 /// [`State::old_marks_as_config`].
@@ -38,6 +40,12 @@ pub struct State {
     pub marks: BTreeMap<String, Marks>,
     /// Temporarily hidden until the timestamp.
     pub snoozed: BTreeMap<String, Timestamp>,
+    /// Issues snoozed by repo key, by name ([`Issue::name`]), until the
+    /// timestamp: they don't count until then.
+    ///
+    /// [`Issue::name`]: crate::attention::Issue::name
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub snoozed_issues: BTreeMap<String, BTreeMap<String, Timestamp>>,
     /// Repos (by key) cloned or discovered by argus and not yet acknowledged.
     pub new: BTreeSet<String>,
     pub tracks: BTreeMap<String, TrackState>,
@@ -95,11 +103,49 @@ impl State {
         self.snoozed.get(key).is_some_and(|until| *until > now)
     }
 
-    /// Drop expired snoozes; returns whether anything changed.
+    /// Whether `issue` (of that kind) of the repo is snoozed.
+    pub fn is_issue_snoozed(&self, key: &str, issue: Issue, now: Timestamp) -> bool {
+        self.snoozed_issues
+            .get(key)
+            .and_then(|m| m.get(issue.name()))
+            .is_some_and(|until| *until > now)
+    }
+
+    pub fn snooze_issue(&mut self, key: &str, issue: Issue, until: Timestamp) {
+        self.snoozed_issues
+            .entry(key.to_string())
+            .or_default()
+            .insert(issue.name().to_string(), until);
+    }
+
+    pub fn unsnooze_issue(&mut self, key: &str, issue: Issue) {
+        if let Some(m) = self.snoozed_issues.get_mut(key) {
+            m.remove(issue.name());
+            if m.is_empty() {
+                self.snoozed_issues.remove(key);
+            }
+        }
+    }
+
+    /// End the repo's snooze and its issues'.
+    pub fn unsnooze_all(&mut self, key: &str) {
+        self.snoozed.remove(key);
+        self.snoozed_issues.remove(key);
+    }
+
+    /// Drop expired snoozes, of repos and of issues; returns whether
+    /// anything changed.
     pub fn expire_snoozes(&mut self, now: Timestamp) -> bool {
-        let before = self.snoozed.len();
+        let count = |s: &Self| {
+            s.snoozed.len() + s.snoozed_issues.values().map(BTreeMap::len).sum::<usize>()
+        };
+        let before = count(self);
         self.snoozed.retain(|_, until| *until > now);
-        before != self.snoozed.len()
+        for m in self.snoozed_issues.values_mut() {
+            m.retain(|_, until| *until > now);
+        }
+        self.snoozed_issues.retain(|_, m| !m.is_empty());
+        before != count(self)
     }
 
     /// Marks from an older version (see `marks`) as config lines to copy,

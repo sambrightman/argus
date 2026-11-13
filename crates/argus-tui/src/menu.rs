@@ -273,8 +273,16 @@ impl MenuId {
                     item('p', "toggle pull", Action::TogglePull),
                     item('i', "ignore issues…", Action::IgnoreIssues),
                     item('I', "toggle ignoring the repo", Action::ToggleIgnore),
-                    item('z', "snooze for…", Action::Snooze),
-                    item('u', "unsnooze", Action::Unsnooze),
+                    item(
+                        'z',
+                        "snooze for… (on an issue line: that issue)",
+                        Action::Snooze,
+                    ),
+                    item(
+                        'u',
+                        "unsnooze (on an issue line: that issue)",
+                        Action::Unsnooze,
+                    ),
                     item('a', "acknowledge new", Action::Ack),
                     item('c', "clear marks", Action::ClearMarks),
                     item(

@@ -1655,3 +1655,87 @@ fn a_repo_whose_folder_is_gone_leaves_the_list() {
     w.refresh(&app);
     assert!(w.get(&app).is_some_and(|e| e.error().is_some()));
 }
+
+/// One issue snoozed: it doesn't count (nor turn on its fixes) until the
+/// snooze ends; the repo's other issues still do. Ignoring wins.
+#[test]
+fn a_snoozed_issue_does_not_count_until_it_ends() {
+    use argus_core::fix::FixKind;
+    let sb = Sandbox::new();
+    sb.remote("acme", "app");
+    let app = sb.clone_as_github("acme", "app", "dev/app");
+    write(&app, "f", "one\n");
+    commit(&app, "f");
+    // argus's own stashes count by default
+    let argus_stash = format!("{} test", argus_core::ops::STASH_PREFIX);
+    write(&app, "f", "stashed\n");
+    git(&app, &["stash", "push", "-q", "-m", &argus_stash]);
+    write(&app, "f", "dirty\n");
+    let mut w = ws(&sb, "");
+    let i = w.index_of(&app).unwrap();
+    let key = w.entries[i].key.clone();
+    assert!(w.entries[i].issues.contains(&Issue::Stashes(1)));
+    assert!(w.entries[i].fix_kinds(&[FixKind::StashPop]) == [FixKind::StashPop]);
+
+    let now = jiff::Timestamp::now();
+    let later = now + jiff::SignedDuration::from_hours(48);
+    w.state.snooze_issue(&key, Issue::Stashes(1), later);
+    w.resolve_flags();
+    let e = &w.entries[i];
+    assert!(
+        !e.issues.iter().any(|i| matches!(i, Issue::Stashes(_))),
+        "{:?}",
+        e.issues
+    );
+    assert_eq!(e.snoozed_issues, [Issue::Stashes(1)]);
+    assert!(
+        e.issues.contains(&Issue::Dirty(1)),
+        "the others still count"
+    );
+    assert!(
+        e.fix_kinds(&[FixKind::StashPop]).is_empty(),
+        "its fix turned off"
+    );
+    assert!(!e.flags.snoozed, "the repo isn't snoozed");
+
+    // by kind: another stash is still snoozed
+    git(&app, &["stash", "push", "-q", "-m", &argus_stash]);
+    write(&app, "f", "dirty\n");
+    w.refresh(&app);
+    assert_eq!(w.entries[i].snoozed_issues, [Issue::Stashes(2)]);
+
+    // ignored wins: listed as ignored, not snoozed
+    let mut ign = ws(&sb, "[ignore]\nstashes = ['acme/app']");
+    ign.state.snooze_issue(&key, Issue::Stashes(1), later);
+    ign.resolve_flags();
+    let e = &ign.entries[ign.index_of(&app).unwrap()];
+    assert!(e.snoozed_issues.is_empty() && e.ignored_issues == [Issue::Stashes(2)]);
+
+    // ended: counts again, and expiring drops it from state
+    w.state.snooze_issue(
+        &key,
+        Issue::Stashes(1),
+        now - jiff::SignedDuration::from_secs(1),
+    );
+    w.resolve_flags();
+    assert!(w.entries[i].issues.contains(&Issue::Stashes(2)));
+    assert!(w.entries[i].snoozed_issues.is_empty());
+    // ending now is ended; a later one stays
+    w.state.snooze_issue(&key, Issue::Dirty(1), now);
+    w.state.snooze_issue("other", Issue::Behind(1), later);
+    assert!(w.state.expire_snoozes(now));
+    assert!(!w.state.snoozed_issues.contains_key(&key));
+    assert!(w.state.is_issue_snoozed("other", Issue::Behind(3), now));
+    w.state.unsnooze_all("other");
+
+    // unsnoozing one, or all of a repo's
+    w.state.snooze_issue(&key, Issue::Stashes(1), later);
+    w.state.snooze_issue(&key, Issue::Dirty(1), later);
+    w.state.unsnooze_issue(&key, Issue::Dirty(3));
+    assert_eq!(
+        w.state.snoozed_issues[&key].keys().collect::<Vec<_>>(),
+        ["stashes"]
+    );
+    w.state.unsnooze_all(&key);
+    assert!(w.state.snoozed_issues.is_empty());
+}

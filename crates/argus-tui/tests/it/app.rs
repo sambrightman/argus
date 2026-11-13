@@ -5172,3 +5172,88 @@ fn removing_a_finished_worktree_asks_first() {
         other => panic!("{other:?}"),
     }
 }
+
+fn issue_row(app: &App, name: &str) -> usize {
+    app.rows
+        .iter()
+        .position(|r| {
+            matches!(r, Row::Detail { line, .. }
+            if line.issue.is_some_and(|i| i.name() == name))
+        })
+        .unwrap_or_else(|| panic!("{name}: {:?}", trimmed(app)))
+}
+
+/// `m z` on an issue line snoozes that issue only; `m u` there ends it,
+/// and on the repo ends the repo's snooze and its issues'.
+#[test]
+fn an_issue_is_snoozed_from_its_line() {
+    let (_sb, mut app) = setup("");
+    app.cursor = app
+        .rows
+        .iter()
+        .position(
+            |r| matches!(r, Row::Repo(i) if app.ws.entries[*i].display_name() == "acme/dirty"),
+        )
+        .unwrap();
+    app.on_key(code(KeyCode::Tab));
+    let key = app.current().unwrap().key.clone();
+    app.cursor = issue_row(&app, "dirty");
+    app.act(Action::Snooze);
+    assert!(
+        matches!(&app.mode, Mode::Input { prompt: Prompt::SnoozeIssue(k, i), .. }
+            if *k == key && i.name() == "dirty")
+    );
+    app.on_key(code(KeyCode::Enter)); // the default, 3d
+    assert!(app.ws.state.snoozed_issues[&key].contains_key("dirty"));
+    assert!(!app.ws.state.snoozed.contains_key(&key), "not the repo");
+    let e = app.current().unwrap();
+    assert!(e.issues.is_empty() && e.snoozed_issues.len() == 1);
+    let Row::Detail { line, .. } = &app.rows[issue_row(&app, "dirty")] else {
+        unreachable!()
+    };
+    let line: String = line.parts.iter().map(|p| p.1.as_str()).collect();
+    assert!(line.ends_with("(snoozed, 3d left)"), "{line}");
+
+    // m u on its line
+    app.cursor = issue_row(&app, "dirty");
+    app.act(Action::Unsnooze);
+    assert!(app.ws.state.snoozed_issues.is_empty());
+    assert!(!app.current().unwrap().issues.is_empty());
+
+    // m u on the repo: its issues' snoozes too
+    app.cursor = issue_row(&app, "dirty");
+    app.act(Action::Snooze);
+    app.on_key(code(KeyCode::Enter));
+    app.ws.state.snoozed.insert(
+        key.clone(),
+        jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
+    );
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].key == key))
+        .unwrap();
+    app.act(Action::Unsnooze);
+    assert!(app.ws.state.snoozed_issues.is_empty() && app.ws.state.snoozed.is_empty());
+}
+
+/// A snoozed issue's line still unfolds, as it did before.
+#[test]
+fn a_snoozed_issue_still_unfolds() {
+    let (_sb, mut app) = setup_with("", |sb| commit(&sb.path("dev/dirty"), "local"));
+    app.cursor = app
+        .rows
+        .iter()
+        .position(
+            |r| matches!(r, Row::Repo(i) if app.ws.entries[*i].display_name() == "acme/dirty"),
+        )
+        .unwrap();
+    app.on_key(code(KeyCode::Tab));
+    app.cursor = issue_row(&app, "unpushed");
+    app.act(Action::Snooze);
+    app.on_key(code(KeyCode::Enter));
+    let Row::Detail { line, .. } = &app.rows[issue_row(&app, "unpushed")] else {
+        unreachable!()
+    };
+    assert!(line.expand.is_some(), "{line:?}");
+}

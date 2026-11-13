@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context, Result, bail};
+use argus_core::attention::Issue;
 use argus_core::badges::{self, Badge, Role};
 use argus_core::fix::{self, FixKind};
 use argus_core::icons::{self, Icons};
@@ -202,9 +203,14 @@ struct MarkArgs {
     /// Hide temporarily, e.g. `3d`, `12h`, `2w`.
     #[arg(long, value_name = "DURATION")]
     snooze: Option<String>,
-    /// End a snooze early.
+    /// End a snooze early: the repo's, and its issues'.
     #[arg(long)]
     unsnooze: bool,
+    /// With `--snooze` or `--unsnooze`: that issue of the repos instead,
+    /// which doesn't count until the snooze ends (`dirty`, `unpushed`,
+    /// `behind`, `stashes`…).
+    #[arg(long, value_name = "ISSUE", value_parser = issue_name)]
+    issue: Vec<Issue>,
     /// Mark the repos' owners as a whole (their `github.com/acme/*`
     /// pattern) instead: with --favourite, --pull, --ignore and their
     /// opposites only.
@@ -1388,7 +1394,21 @@ fn issue_list(s: &str) -> std::result::Result<IssueList, String> {
     })
 }
 
+/// Any issue by name (`non-default-branch` or `non_default_branch`).
+fn issue_name(s: &str) -> std::result::Result<Issue, String> {
+    Issue::from_name(s).ok_or_else(|| {
+        let names: Vec<String> = Issue::ALL
+            .iter()
+            .map(|i| i.name().replace('_', "-"))
+            .collect();
+        format!("{s:?} isn't an issue; these are: {}", names.join(", "))
+    })
+}
+
 fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> Result<()> {
+    if !m.issue.is_empty() && m.snooze.is_none() && !m.unsnooze {
+        bail!("--issue goes with --snooze or --unsnooze");
+    }
     if m.owner
         && (m.clear
             || m.snooze.is_some()
@@ -1459,11 +1479,23 @@ fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> R
     let mut records = vec![];
     for i in sel {
         let key = ws.entries[i].key.clone();
-        if let Some(t) = snooze_until {
-            ws.state.snoozed.insert(key.clone(), t);
+        match (snooze_until, m.issue.as_slice()) {
+            (Some(t), []) => {
+                ws.state.snoozed.insert(key.clone(), t);
+            }
+            (Some(t), issues) => {
+                for &i in issues {
+                    ws.state.snooze_issue(&key, i, t);
+                }
+            }
+            (None, _) => {}
         }
-        if m.unsnooze || m.clear {
-            ws.state.snoozed.remove(&key);
+        if m.unsnooze && !m.issue.is_empty() {
+            for &i in &m.issue {
+                ws.state.unsnooze_issue(&key, i);
+            }
+        } else if m.unsnooze || m.clear {
+            ws.state.unsnooze_all(&key);
         }
         if json {
             let f = &ws.entries[i].flags;
@@ -1479,6 +1511,7 @@ fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> R
                     .filter_map(|i| IssueList::of(*i).map(|l| l.name()))
                     .collect::<Vec<_>>(),
                 "snoozed_until": ws.state.snoozed.get(&key),
+                "snoozed_issues": ws.state.snoozed_issues.get(&key).cloned().unwrap_or_default(),
             }));
         } else {
             println!("{}", ws.entries[i].display_name());

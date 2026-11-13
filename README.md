@@ -180,7 +180,7 @@ again runs it.
 | `X` | **Reset** the current branch (one repo at a time): `s` soft (changes stay staged), `m` mixed (unstaged), `k` keep (drops the commits' changes, refusing if uncommitted ones are in the way), `h` hard (drops uncommitted changes too; asks first). Then pick the commit from HEAD's recent history, those on a remote marked; the cursor starts on the commit before HEAD, or, pressed on a commit in the details, on the one before it |
 | `b` | **Branch**: `b` checkout a branch: type to narrow the list fuzzily, as `/` does (local branches, then remote ones without a local copy, which creates a local branch tracking it), `C-n`/`C-p` to move, Enter to check it out, `-` checkout the previous branch, `s` spin off (as magit's: the commits the branch's upstream doesn't have go to a new branch, checked out, and the branch goes back to what it shares with its upstream; nothing unpushed, the new branch is made anyway), `S` spin out (the same, staying on the branch; if uncommitted changes would be lost, it spins off instead), `d` switch to default, `r` reattach detached HEAD, `c` create a branch at HEAD and check it out… (on a detached HEAD, that names its commits), `x` delete merged branches…, `f` fast-forward stale branches |
 | `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden, each saying what it would do (and left out when it would do nothing); then every fix that applies to the selection, with its reason (or how many repos it applies to): `s` stash, `c` commit…, `i` gitignore…, `b` branch…, `p` push, `u` publish, `R` add-remote…, `P` push-branches, `d` switch-default, `r` reattach, `F` pull, `f` fast-forward, `D` delete-branches…, `S` submodule-update, `w` prune-worktrees, `W` remove-worktree…, `z` stash-pop, `A` abort…. Those marked … ask first. Opened on a fix line in the details, it starts on that fix |
-| `m` | **Mark**: `f` favourite, `p` pull, `i` ignore issues (a menu of the repo's issues and their state), `I` ignore or unignore the repo, `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
+| `m` | **Mark**: `f` favourite, `p` pull, `i` ignore issues (a menu of the repo's issues and their state), `I` ignore or unignore the repo, `z` snooze (on an issue line in the details, just that issue), `u` unsnooze (on an issue line, just that issue; else the repo and its issues), `a` ack new, `c` clear |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page |
 | `v` | **View**: toggles, expand/collapse all, log |
 
@@ -190,7 +190,7 @@ again runs it.
 argus status [-a|--all] [--hidden]     # repos needing attention; -a: clean too
 argus pull [-n] [--no-clone] [PATTERNS…]
 argus fix [-n] [-F] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine; -F fetches first
-argus mark PATTERNS… [--favourite|--no-favourite] [--pull|--no-pull] [--ignore|--unignore] [--ignore-issue ISSUE [--pin|--no-pin]|--unignore-issue ISSUE] [--snooze 3d|--unsnooze] [--clear] [--owner]
+argus mark PATTERNS… [--favourite|--no-favourite] [--pull|--no-pull] [--ignore|--unignore] [--ignore-issue ISSUE [--pin|--no-pin]|--unignore-issue ISSUE] [--snooze 3d|--unsnooze] [--issue ISSUE] [--clear] [--owner]
 argus ack [PATTERNS…]
 argus forge list ORG [--team T] [--forge dir --host DIR]
 argus root add [DIRS…] | remove DIRS… | list
@@ -246,6 +246,14 @@ that issue: the repo stays visible, everything else is still flagged,
 the details show the issue dimmed as ignored, and auto-fix leaves that
 state alone. Conflicts, operations in progress and commits only a
 detached HEAD holds can't be ignored.
+
+Or snooze just one issue for a while: `m z` on its line in the details,
+or `argus mark acme/app --snooze 3d --issue dirty` (any issue, by kind, so
+more stashes or commits stay snoozed). It doesn't count until the snooze
+ends, shows dimmed with the time left, and auto-fix leaves its state
+alone, as for an ignored one; the repo and its other issues are still
+shown. `m u` on the line, or `--unsnooze --issue dirty`, ends it early;
+plain `--unsnooze` (or `m u` on the repo) ends the repo's issue snoozes too.
 
 A daily crontab entry:
 

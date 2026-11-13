@@ -35,6 +35,52 @@ pub enum Issue {
 }
 
 impl Issue {
+    /// Every kind, counts left at 0.
+    pub const ALL: [Issue; 15] = [
+        Issue::Conflicts(0),
+        Issue::InProgress,
+        Issue::Dirty(0),
+        Issue::Unpushed(0),
+        Issue::UpstreamGone,
+        Issue::NoUpstream,
+        Issue::UnpushedBranches(0),
+        Issue::Detached,
+        Issue::DetachedCommits(0),
+        Issue::NonDefaultBranch,
+        Issue::Stashes(0),
+        Issue::Behind(0),
+        Issue::NoRemote,
+        Issue::StaleWorktrees(0),
+        Issue::FinishedWorktree,
+    ];
+
+    /// The kind's name, without its count (snoozes are kept by it).
+    pub fn name(self) -> &'static str {
+        match self {
+            Issue::Conflicts(_) => "conflicts",
+            Issue::InProgress => "in_progress",
+            Issue::Dirty(_) => "dirty",
+            Issue::Unpushed(_) => "unpushed",
+            Issue::UpstreamGone => "upstream_gone",
+            Issue::NoUpstream => "no_upstream",
+            Issue::UnpushedBranches(_) => "unpushed_branches",
+            Issue::Detached => "detached",
+            Issue::DetachedCommits(_) => "detached_commits",
+            Issue::NonDefaultBranch => "non_default_branch",
+            Issue::Stashes(_) => "stashes",
+            Issue::Behind(_) => "behind",
+            Issue::NoRemote => "no_remote",
+            Issue::StaleWorktrees(_) => "stale_worktrees",
+            Issue::FinishedWorktree => "finished_worktree",
+        }
+    }
+
+    /// The kind named (`-` or `_` between words), its count 0.
+    pub fn from_name(name: &str) -> Option<Self> {
+        let name = name.replace('-', "_");
+        Self::ALL.into_iter().find(|i| i.name() == name)
+    }
+
     /// Higher is more urgent.
     pub fn severity(self) -> u32 {
         match self {
@@ -141,6 +187,24 @@ pub fn needs_attention(issues: &[Issue]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Names leave the count out, read back, and are all different.
+    #[test]
+    fn issues_have_names_without_their_count() {
+        assert_eq!(Issue::Stashes(3).name(), "stashes");
+        assert_eq!(Issue::NonDefaultBranch.name(), "non_default_branch");
+        assert_eq!(
+            Issue::from_name("non-default-branch"),
+            Some(Issue::NonDefaultBranch)
+        );
+        assert_eq!(Issue::from_name("stashes"), Some(Issue::Stashes(0)));
+        assert_eq!(Issue::from_name("nope"), None);
+        for i in Issue::ALL {
+            assert_eq!(Issue::from_name(i.name()), Some(i), "{i:?}");
+        }
+        let names: std::collections::BTreeSet<&str> = Issue::ALL.iter().map(|i| i.name()).collect();
+        assert_eq!(names.len(), Issue::ALL.len());
+    }
 
     #[test]
     fn only_being_behind_is_for_a_pull() {

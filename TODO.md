@@ -6,8 +6,6 @@ deferred.
 
 ## Asked for
 
-- **Snoozing per issue** (and per repo, as now): today a snooze hides the
-  whole repo until it expires.
 - **Stable machine-readable output.** `--json` works for every command;
   pull, fix, mark, ack, root and paths build their documents explicitly in
   the CLI, but `status` and `forge list` still serialise internal structs

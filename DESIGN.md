@@ -152,6 +152,14 @@ Two findings:
   silence. Ignored issues don't count towards attention, show dimmed in
   the details, and turn off the auto-fix that would undo them
   (`fix::turned_off_by`).
+* **Snoozing one issue** is ignoring it for a while: state keeps, per
+  repo key, the issue's name (`Issue::name`, without its count, so a snooze
+  holds as stashes or commits are added) and when it ends. Until then it
+  moves from `issues` to `snoozed_issues`: no attention, shown dimmed with
+  the time left, and its fix turned off as an ignored one's. An ignored
+  issue stays ignored. A repo's snooze hides the repo; an issue's doesn't.
+  Unsnoozing a repo (`m u` on it, `--unsnooze`, `--clear`) ends its issue
+  snoozes too; on an issue line, or with `--issue`, just that one.
 * **Stashes are ignored one by one, and argus's own aren't by default.**
   A detached HEAD's tags, describe and commit are names for one thing, so
   an entry matching any of them covers it; stashes are separate things, so
@@ -245,7 +253,7 @@ Two findings:
 * **No forgetting.** Nothing about a repo is dropped because scans no
   longer find it (an earlier version dropped marks after 30 days; that
   broke the rule that permanent loss needs confirmation). Expired snoozes
-  are removed, as they end by design. Marks an older version kept in state
+  (of repos and of issues) are removed, as they end by design. Marks an older version kept in state
   are left there and shown as config lines to copy.
 * **Tracked owners.** `[[track]] forge="github" owner="acme" [team="platform"] into="~/dev/acme" clone="auto"|"notify"`.
   `argus pull` lists the forge, diffs it against local clones, and clones missing repos

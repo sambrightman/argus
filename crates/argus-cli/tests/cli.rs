@@ -1848,3 +1848,55 @@ fn mark_owner_marks_the_repos_owners_as_a_whole() {
         );
     }
 }
+
+/// `--snooze` / `--unsnooze` with `--issue` act on that issue only; plain
+/// `--unsnooze` ends the repo's issue snoozes too.
+#[test]
+fn mark_snoozes_one_issue() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let json = |args: &[&str]| -> serde_json::Value {
+        let out = argus(&sb).args(args).arg("--json").output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let v = json(&["mark", "acme/dirty", "--snooze", "2d", "--issue", "dirty"]);
+    assert!(v[0]["snoozed_issues"]["dirty"].is_string(), "{v}");
+    assert!(v[0]["snoozed_until"].is_null(), "not the repo: {v}");
+    // its only issue snoozed: off the default list, not hidden
+    argus(&sb)
+        .arg("status")
+        .assert()
+        .stdout(predicate::str::contains("acme/dirty").not())
+        .stdout(predicate::str::contains("hidden (--hidden)").not());
+    let v = json(&["mark", "acme/dirty", "--unsnooze", "--issue", "dirty"]);
+    assert!(
+        v[0]["snoozed_issues"].as_object().unwrap().is_empty(),
+        "{v}"
+    );
+    argus(&sb)
+        .arg("status")
+        .assert()
+        .stdout(predicate::str::contains("acme/dirty"));
+    json(&["mark", "acme/dirty", "--snooze", "2d", "--issue", "dirty"]);
+    let v = json(&["mark", "acme/dirty", "--unsnooze"]);
+    assert!(
+        v[0]["snoozed_issues"].as_object().unwrap().is_empty(),
+        "{v}"
+    );
+
+    argus(&sb)
+        .args(["mark", "acme/dirty", "--snooze", "2d", "--issue", "grumpy"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("non-default-branch"));
+    argus(&sb)
+        .args(["mark", "acme/dirty", "--issue", "dirty"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--snooze or --unsnooze"));
+}
