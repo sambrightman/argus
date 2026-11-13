@@ -35,6 +35,10 @@ deferred.
   debug info (a `.dSYM`) kept aside to symbolicate crash reports.
 - **Editing a patch to discard** (`K` after `e`): reversed in the work
   tree, so it can't be undone; it would confirm after the editor closes.
+- **`argus status --details`:** the TUI's details lines under each repo
+  (today: one line per repo; `--json` and `argus fix -n` have the rest).
+- **A row icon for worktree issues:** a warning mark on the main repo for
+  stale records, and on a finished worktree's own row.
 - **Caching the pruning checks** for trees with many symlinks, if they
   ever show up as slow.
 
