@@ -47,7 +47,6 @@ deferred.
   change behaviour (as pull and ignore do) or only label. Design first.
 - **Pull requests:** fetched with the remote, shown per branch; a merged PR
   makes a branch safe to delete, squash-merged ones included.
-- **Worktree pruning.**
 - **Orphans** (local clones the forge no longer lists): reported only, no
   archive/move action.
 - **GitLab/Gitea forges** (implement `argus_core::forge::Forge`); a **jj
