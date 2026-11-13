@@ -222,6 +222,10 @@ pub struct RepoStatus {
     pub branches: Vec<BranchInfo>,
     /// Linked worktrees (excluding the main one).
     pub worktrees: Vec<PathBuf>,
+    /// Records of linked worktrees whose folder is gone (and that aren't
+    /// locked), by name: `git worktree prune` deletes them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stale_worktrees: Vec<String>,
     /// Checked-out submodule work trees.
     pub submodules: Vec<PathBuf>,
     pub last_fetch: Option<Timestamp>,
@@ -625,6 +629,7 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         }
         _ => (None, false),
     };
+    let worktrees = worktrees(repo);
     Ok(RepoStatus {
         describe,
         describe_gave_up,
@@ -642,7 +647,8 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         at_head,
         in_progress: repo.state().map(map_state),
         branches,
-        worktrees: worktrees(repo),
+        worktrees: worktrees.0,
+        stale_worktrees: worktrees.1,
         submodules: submodules(repo),
         moved_submodules,
         last_fetch: mtime(&repo.git_dir().join("FETCH_HEAD")).or_else(|| {
@@ -1425,18 +1431,26 @@ pub(crate) fn map_state(s: gix::state::InProgress) -> InProgress {
     }
 }
 
-fn worktrees(repo: &gix::Repository) -> Vec<PathBuf> {
+/// The linked worktrees, and the names of stale records (folder gone, not
+/// locked).
+fn worktrees(repo: &gix::Repository) -> (Vec<PathBuf>, Vec<String>) {
     // A linked worktree sees all of its siblings (and itself); only the main
     // work tree reports them, so that each is listed exactly once.
     if repo.kind() == gix::repository::Kind::LinkedWorkTree {
-        return vec![];
+        return (vec![], vec![]);
     }
     let Ok(wts) = repo.worktrees() else {
-        return vec![];
+        return (vec![], vec![]);
     };
-    let mut v: Vec<PathBuf> = wts.iter().filter_map(|p| p.base().ok()).collect();
+    let (stale, live): (Vec<_>, Vec<_>) = wts.iter().partition(|p| p.is_prunable());
+    let mut v: Vec<PathBuf> = live.iter().filter_map(|p| p.base().ok()).collect();
     v.sort();
-    v
+    let mut gone: Vec<String> = stale
+        .iter()
+        .filter_map(|p| Some(p.id().ok()?.to_string()))
+        .collect();
+    gone.sort();
+    (v, gone)
 }
 
 /// A submodule checked out at another commit than its repo records.

@@ -454,6 +454,12 @@ pub fn describe(i: &Issue, default: Option<&str>) -> (Role, String) {
             format!("{n} commit(s) on detached HEAD in no branch: create one before switching"),
         ),
         Issue::NoRemote => (Role::Dim, "no remote".into()),
+        Issue::StaleWorktrees(n) => (
+            Role::Warning,
+            format!(
+                "{n} worktree record(s) whose folder is gone: their branches count as checked out"
+            ),
+        ),
     }
 }
 

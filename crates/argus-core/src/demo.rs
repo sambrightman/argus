@@ -138,6 +138,20 @@ pub fn build() -> Demo {
             let wt = sb.path("repos/worktrees-feat");
             let wt = wt.to_str().unwrap();
             git(&r, &["worktree", "add", "-q", "-b", "wt-feat", wt]);
+            // one whose folder was deleted by hand: its record stays
+            let gone = sb.path("repos/worktrees-gone");
+            git(
+                &r,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    "wt-gone",
+                    gone.to_str().unwrap(),
+                ],
+            );
+            std::fs::remove_dir_all(&gone).unwrap();
         }),
         Box::new(|| {
             let r = clone("with-submodule");

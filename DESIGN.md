@@ -253,8 +253,8 @@ Two findings:
   marked + new until acknowledged. Tracked owners' repos are pulled by default.
 * **Attention.** A repo needs attention if it has any of: conflicts or an
   in-progress operation, uncommitted changes, unpushed commits, a non-default
-  branch, detached HEAD, stashes, a gone upstream, or no upstream for the
-  current branch. Sort order: needing attention before clean, then
+  branch, detached HEAD, stashes, a gone upstream, no upstream for the
+  current branch, or records of worktrees whose folder is gone. Sort order: needing attention before clean, then
   favourites, then severity, then amount of change, then name.
 * **Auto-fixes** (planned and shown first, then executed; never destructive:
   the destructive kinds, `abort` and `delete-branches`, are confirmed
@@ -311,6 +311,11 @@ Two findings:
   * `delete-branches`: other branches merged into the default branch,
     upstream gone or none → `git branch -d`, which refuses what it doesn't
     see as merged. Confirmed first.
+  * `prune-worktrees`: records of linked worktrees whose folder was
+    deleted by hand (gix's `is_prunable`: folder gone, not locked) →
+    `git worktree prune`. Their branches count as checked out there until
+    then (`git switch` refuses). Only the main checkout reports them, as it
+    lists the worktrees. Nothing on disk is lost; the branches stay.
   * `stash-pop`: stashes, no tracked changes → `git stash pop --index`,
     after `git merge-tree` of the stash into HEAD finds no conflicts
     (checked when it runs). Turned off for auto-fix while any stash is

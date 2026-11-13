@@ -72,12 +72,15 @@ pub enum FixKind {
     /// recorded one, when their commit is on a branch (or other ref) and
     /// they have no changes of their own: nothing is lost.
     SubmoduleUpdate,
+    /// Delete the records of linked worktrees whose folder is gone (not
+    /// locked ones): nothing on disk is lost.
+    PruneWorktrees,
 }
 
 impl FixKind {
     /// Default priority: clean up uncommitted work, share commits, leave
     /// the branch, then catch up (on the branch you end up on).
-    pub const ALL: [FixKind; 16] = [
+    pub const ALL: [FixKind; 17] = [
         FixKind::Abort,
         FixKind::Stash,
         FixKind::Commit,
@@ -93,6 +96,7 @@ impl FixKind {
         FixKind::Pull,
         FixKind::FastForward,
         FixKind::DeleteBranches,
+        FixKind::PruneWorktrees,
         FixKind::StashPop,
     ];
 
@@ -133,6 +137,7 @@ impl FixKind {
             FixKind::StashPop => "stash-pop",
             FixKind::Gitignore => "gitignore",
             FixKind::SubmoduleUpdate => "submodule-update",
+            FixKind::PruneWorktrees => "prune-worktrees",
         }
     }
 }
@@ -175,6 +180,14 @@ pub fn turned_off_by(ignored: &[crate::attention::Issue]) -> Vec<FixKind> {
 
 pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
     let mut v = vec![];
+    if !s.stale_worktrees.is_empty() {
+        v.push(Fix {
+            blocked: None,
+            kind: FixKind::PruneWorktrees,
+            op: Op::PruneWorktrees,
+            reason: format!("folder gone: {}", s.stale_worktrees.join(", ")),
+        });
+    }
     if s.bare {
         return v;
     }
@@ -766,6 +779,7 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
             s.in_progress = None;
         }
         Op::DeleteBranch { branch } => s.branches.retain(|b| &b.name != branch),
+        Op::PruneWorktrees => s.stale_worktrees.clear(),
         Op::StashPop => {
             s.stashes.remove(0);
             s.stash_ids.remove(0);

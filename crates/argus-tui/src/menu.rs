@@ -390,6 +390,7 @@ pub fn fix_key(kind: argus_core::fix::FixKind) -> char {
         DeleteBranches => 'D',
         StashPop => 'z',
         SubmoduleUpdate => 'S',
+        PruneWorktrees => 'w',
     }
 }
 

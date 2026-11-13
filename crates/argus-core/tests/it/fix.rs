@@ -1773,3 +1773,78 @@ fn an_instant_fixup_of_a_pushed_commit_is_refused() {
     );
     assert!(argus_core::ops::run(&r, &op(false)).success);
 }
+
+/// A main repo with a linked worktree `wt` beside it.
+fn with_worktree(sb: &Sandbox) -> (std::path::PathBuf, std::path::PathBuf) {
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    let wt = sb.path("wt");
+    git(
+        &r,
+        &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()],
+    );
+    (r, wt)
+}
+
+/// A worktree's folder deleted by hand leaves its record in the main
+/// repo: flagged there, and pruned (its branch stays).
+#[test]
+fn stale_worktree_records_are_pruned() {
+    let sb = Sandbox::new();
+    let (r, wt) = with_worktree(&sb);
+    let s = st(&r);
+    assert!(s.stale_worktrees.is_empty() && s.worktrees == [wt.clone()]);
+    assert!(
+        !attention::issues(&s)
+            .iter()
+            .any(|i| matches!(i, Issue::StaleWorktrees(_)))
+    );
+    assert!(of_kind(&r, FixKind::PruneWorktrees).is_empty());
+
+    std::fs::remove_dir_all(&wt).unwrap();
+    let s = st(&r);
+    assert_eq!(s.stale_worktrees, ["wt"]);
+    assert!(s.worktrees.is_empty(), "not listed as a worktree");
+    assert!(attention::issues(&s).contains(&Issue::StaleWorktrees(1)));
+    assert_eq!(
+        of_kind(&r, FixKind::PruneWorktrees),
+        [("prune stale worktree records".to_string(), None)]
+    );
+    assert!(!FixKind::PruneWorktrees.manual(), "nothing on disk is lost");
+    assert_chain_matches_reality(&r, &[FixKind::PruneWorktrees], &[FixKind::PruneWorktrees]);
+    let s = st(&r);
+    assert!(s.stale_worktrees.is_empty());
+    assert!(
+        s.branches.iter().any(|b| b.name == "wt"),
+        "the branch stays"
+    );
+}
+
+/// A locked worktree (on a removable drive, say) isn't stale while its
+/// folder is away; a living worktree doesn't report its siblings.
+#[test]
+fn locked_or_seen_from_a_worktree_is_not_stale() {
+    let sb = Sandbox::new();
+    let (r, wt) = with_worktree(&sb);
+    let other = sb.path("other");
+    git(
+        &r,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "other",
+            other.to_str().unwrap(),
+        ],
+    );
+    git(&r, &["worktree", "lock", wt.to_str().unwrap()]);
+    std::fs::remove_dir_all(&wt).unwrap();
+    assert!(st(&r).stale_worktrees.is_empty(), "locked");
+    git(&r, &["worktree", "unlock", wt.to_str().unwrap()]);
+    assert_eq!(st(&r).stale_worktrees, ["wt"]);
+    assert!(
+        st(&other).stale_worktrees.is_empty(),
+        "the main repo reports it"
+    );
+}

@@ -26,6 +26,9 @@ pub enum Issue {
     Stashes(usize),
     Behind(usize),
     NoRemote,
+    /// Records of linked worktrees whose folder was deleted: their
+    /// branches still count as checked out there.
+    StaleWorktrees(usize),
 }
 
 impl Issue {
@@ -41,6 +44,7 @@ impl Issue {
             Issue::UnpushedBranches(_) => 30,
             Issue::Detached => 25,
             Issue::NonDefaultBranch => 20,
+            Issue::StaleWorktrees(_) => 15,
             Issue::Stashes(_) => 10,
             Issue::NoRemote => 8,
             Issue::Behind(_) => 5,
@@ -103,6 +107,9 @@ pub fn issues(s: &RepoStatus) -> Vec<Issue> {
     }
     if !s.stashes.is_empty() {
         v.push(Issue::Stashes(s.stashes.len()));
+    }
+    if !s.stale_worktrees.is_empty() {
+        v.push(Issue::StaleWorktrees(s.stale_worktrees.len()));
     }
     if s.remote.is_none() && !s.bare {
         v.push(Issue::NoRemote);

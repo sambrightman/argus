@@ -265,7 +265,8 @@ ref › **unpushed** work (on *no* remote, so a fork branch pushed to `origin`
 while tracking `upstream/main` is fine, and work merged into a `main` that
 isn't on the remote isn't) › uncommitted changes › upstream
 deleted with unmerged work › unpublished branch › other local branches with
-unpushed work › detached HEAD › not on default branch › stashes › no remote ›
+unpushed work › detached HEAD › not on default branch › worktree records whose
+folder is gone › stashes › no remote ›
 behind upstream (on its own, not counted as needing attention: a pull fixes it).
 
 Fixes are planned from status. Automatic ones are never destructive; the
@@ -296,6 +297,10 @@ Nothing is offered during a conflict.
   `switch-default`. ` m` / ` ?` for changes inside one, which
   are its own to stash, commit or ignore on its own row, not the parent's.
   No stash takes a submodule (git's doesn't).
+* **A worktree folder deleted by hand** leaves git's record of it in the
+  main repo, and its branch still counts as checked out there (`git
+  switch` refuses it): `prune-worktrees` deletes such records (`git
+  worktree prune`; locked worktrees are left alone).
 * **Repos nested in the work tree** (untracked, not submodules) get
   `gitignore` only: git's stash skips them, and `commit` leaves them out
   rather than add them as embedded repos.

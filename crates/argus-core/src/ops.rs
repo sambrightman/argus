@@ -59,6 +59,9 @@ pub enum Op {
     DeleteBranch {
         branch: String,
     },
+    /// `git worktree prune`: delete the records of linked worktrees whose
+    /// folder is gone (not locked ones).
+    PruneWorktrees,
     /// `git stash pop --index`, only when a trial merge says it applies
     /// without conflicts.
     StashPop,
@@ -239,6 +242,7 @@ impl Op {
                 w => v(&[w.label(), "--abort"]),
             },
             Op::DeleteBranch { branch } => v(&["branch", "-d", "--", branch]),
+            Op::PruneWorktrees => v(&["worktree", "prune"]),
             Op::StashPop => v(&["stash", "pop", "--index"]),
             Op::StashDrop { index, .. } => {
                 vec!["stash".into(), "drop".into(), format!("stash@{{{index}}}")]
@@ -382,6 +386,7 @@ impl Op {
             } => "end bisect".into(),
             Op::Abort { what } => format!("abort {}", what.label()),
             Op::DeleteBranch { branch } => format!("delete branch {branch}"),
+            Op::PruneWorktrees => "prune stale worktree records".into(),
             Op::StashPop => "pop stash".into(),
             Op::StashDrop { index, .. } => format!("drop stash@{{{index}}}"),
             Op::CreateBranch { name } => format!("create branch {name}"),

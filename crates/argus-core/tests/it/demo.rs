@@ -68,6 +68,10 @@ fn demo_covers_every_state() {
         ),
         ("no remote", issue(|i| matches!(i, Issue::NoRemote))),
         ("worktree", has(&|e| e.kind == RepoKind::Worktree)),
+        (
+            "stale worktree record",
+            issue(|i| matches!(i, Issue::StaleWorktrees(_))),
+        ),
         ("submodule", has(&|e| e.kind == RepoKind::Submodule)),
         (
             "nested repo",
