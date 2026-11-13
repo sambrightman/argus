@@ -14,7 +14,7 @@ use argus_core::ops::{self, Op, OpOutcome, ResetMode};
 use argus_core::pull::{self, Job, PullPlan};
 use argus_core::rules::{IgnoreState, IssueList, Mark};
 use argus_core::status::RepoStatus;
-use argus_core::{Entry, ViewFilter, Workspace, paths};
+use argus_core::{Entry, ViewFilter, Workspace, paths, plural};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::details::{DetailLine, DiffRef, Expand, ago, describe, details};
@@ -3569,9 +3569,10 @@ impl App {
                 self.ws.truncated = truncated;
                 self.ws.resolve_flags();
                 let hidden = self.ws.entries.iter().filter(|e| e.flags.hidden()).count();
+                let n = self.ws.entries.len();
                 let mut parts = vec![match hidden {
-                    0 => format!("{} repos", self.ws.entries.len()),
-                    h => format!("{} repos, {h} hidden", self.ws.entries.len()),
+                    0 => format!("{n} {}", plural(n, "repo", "repos")),
+                    h => format!("{n} {}, {h} hidden", plural(n, "repo", "repos")),
                 }];
                 parts.extend(self.notices.iter().cloned());
                 parts.extend(self.ws.truncation_warning());

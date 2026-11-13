@@ -39,7 +39,7 @@ fn status_text_and_json() {
         .stdout(predicate::str::contains("acme/dirty").and(predicate::str::contains("±1")))
         .stdout(predicate::str::contains("acme/clean").not())
         .stdout(predicate::str::contains(
-            "2 of 3 repos need attention; 1 not shown need no attention (--all)",
+            "2 of 3 repos need attention; 1 not shown needs no attention (--all)",
         ))
         .stdout(predicate::str::contains("\x1b[").not());
     // inverse: --all / -a includes them
@@ -79,7 +79,7 @@ fn status_when_everything_is_clean() {
         .arg("status")
         .assert()
         .success()
-        .stdout("0 of 1 repos need attention; 1 not shown need no attention (--all)\n");
+        .stdout("0 of 1 repo need attention; 1 not shown needs no attention (--all)\n");
 }
 
 /// argus with an isolated environment but no `--root`, run from `cwd`.
@@ -214,7 +214,7 @@ fn warns_when_max_depth_stops_the_scan() {
         .arg("status")
         .assert()
         .success()
-        .stdout(predicate::str::contains("1 repos, 1 need attention"))
+        .stdout(predicate::str::contains("1 repo, 1 needs attention"))
         .stderr(predicate::str::contains("max_depth").not());
     // --max-depth overrides the config, both ways
     argus(&sb)
@@ -232,7 +232,7 @@ fn warns_when_max_depth_stops_the_scan() {
         .args(["status", "--max-depth", "4"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("1 repos, 1 need attention"))
+        .stdout(predicate::str::contains("1 repo, 1 needs attention"))
         .stderr(predicate::str::contains("max_depth").not());
     // 0: no limit
     argus(&sb)
@@ -241,7 +241,7 @@ fn warns_when_max_depth_stops_the_scan() {
         .args(["status", "--max-depth", "0"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("1 repos, 1 need attention"))
+        .stdout(predicate::str::contains("1 repo, 1 needs attention"))
         .stderr(predicate::str::contains("max_depth").not());
 }
 
@@ -717,13 +717,13 @@ fn follow_symlinks_flag_and_config() {
     assert!(status(&[]).contains("0 repos"));
     for flag in ["-L", "--follow-symlinks"] {
         assert!(
-            status(&[flag]).contains("1 repos, 1 need attention"),
+            status(&[flag]).contains("1 repo, 1 needs attention"),
             "{flag}"
         );
     }
     let cfg = sb.path("cfg.toml");
     std::fs::write(&cfg, "follow_symlinks = true\n").unwrap();
-    assert!(status(&["--config", cfg.to_str().unwrap()]).contains("1 repos, 1 need attention"));
+    assert!(status(&["--config", cfg.to_str().unwrap()]).contains("1 repo, 1 needs attention"));
 }
 
 #[cfg(target_os = "macos")]
@@ -787,7 +787,7 @@ fn one_file_system_stays_off_other_mounts() {
         .output()
         .unwrap();
     let out = String::from_utf8_lossy(&o.stdout);
-    assert!(out.contains("1 repos"), "{o:?}");
+    assert!(out.contains("1 repo,"), "{o:?}");
 }
 
 #[test]

@@ -32,6 +32,22 @@ pub mod testkit;
 pub mod demo;
 
 pub use config::Config;
+
+/// `one` for a count of 1, else `many`: "1 repo", "0 repos", "1 needs".
+pub fn plural(n: usize, one: &'static str, many: &'static str) -> &'static str {
+    if n == 1 { one } else { many }
+}
 pub use identity::RepoId;
 pub use state::State;
 pub use workspace::{Entry, ViewFilter, Workspace};
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn plural_is_for_every_count_but_one() {
+        assert_eq!(super::plural(1, "repo", "repos"), "repo");
+        for n in [0, 2, 10] {
+            assert_eq!(super::plural(n, "repo", "repos"), "repos");
+        }
+    }
+}

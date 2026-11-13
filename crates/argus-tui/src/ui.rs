@@ -2,12 +2,12 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use argus_core::ViewFilter;
 use argus_core::badges::{self, Role};
 use argus_core::config::Refine;
 use argus_core::diff::LineKind;
 use argus_core::discover::RepoKind;
 use argus_core::icons::Icons;
+use argus_core::{ViewFilter, plural};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Modifier;
@@ -133,9 +133,17 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
                     ..app.view
                 })
                 .len();
-            format!(" argus  {attn} of {total} repos need attention · a: show all")
+            format!(
+                " argus  {attn} of {total} {} {} attention · a: show all",
+                plural(total, "repo", "repos"),
+                plural(attn, "needs", "need"),
+            )
         } else {
-            let mut s = format!(" argus  {n} repos · {attn} need attention · a: attention only");
+            let mut s = format!(
+                " argus  {n} {} · {attn} {} attention · a: attention only",
+                plural(n, "repo", "repos"),
+                plural(attn, "needs", "need"),
+            );
             let hidden = app
                 .ws
                 .entries

@@ -12,7 +12,7 @@ use argus_core::icons::{self, Icons};
 use argus_core::pull;
 use argus_core::rules::{IssueList, Mark};
 use argus_core::runner::{self, Event};
-use argus_core::{Config, State, ViewFilter, Workspace, configfile, paths};
+use argus_core::{Config, State, ViewFilter, Workspace, configfile, paths, plural};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use unicode_width::UnicodeWidthStr;
 
@@ -833,10 +833,17 @@ fn status_summary(ws: &Workspace, filter: ViewFilter) -> String {
     let fine = total - attention;
     let mut s = if filter.attention_only && fine > 0 {
         format!(
-            "{attention} of {total} repos need attention; {fine} not shown need no attention (--all)"
+            "{attention} of {total} {} {} attention; {fine} not shown {} no attention (--all)",
+            plural(total, "repo", "repos"),
+            plural(attention, "needs", "need"),
+            plural(fine, "needs", "need"),
         )
     } else {
-        format!("{total} repos, {attention} need attention")
+        format!(
+            "{total} {}, {attention} {} attention",
+            plural(total, "repo", "repos"),
+            plural(attention, "needs", "need"),
+        )
     };
     let hidden = ws.entries.len() - total;
     if hidden > 0 {

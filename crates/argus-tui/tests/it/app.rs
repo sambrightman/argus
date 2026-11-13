@@ -763,7 +763,7 @@ fn starts_showing_only_repos_needing_attention() {
         out.lines()
             .next()
             .unwrap()
-            .contains("1 of 2 repos need attention · a: show all"),
+            .contains("1 of 2 repos needs attention · a: show all"),
         "{out}"
     );
     // inverse: `a` shows everything, and the header says so
@@ -774,7 +774,7 @@ fn starts_showing_only_repos_needing_attention() {
         out.lines()
             .next()
             .unwrap()
-            .contains("2 repos · 1 need attention · a: attention only"),
+            .contains("2 repos · 1 needs attention · a: attention only"),
         "{out}"
     );
     assert!(!out.contains("H: "), "nothing hidden: {out}");
@@ -793,14 +793,14 @@ fn starts_showing_only_repos_needing_attention() {
     let header = |app: &mut App| render(app, 100, 6).lines().next().unwrap().to_string();
     assert!(
         header(&mut app)
-            .ends_with("1 repos · 1 need attention · a: attention only · H: show 1 hidden"),
+            .ends_with("1 repo · 1 needs attention · a: attention only · H: show 1 hidden"),
         "{}",
         header(&mut app)
     );
     app.act(Action::ToggleHidden);
     assert!(
         header(&mut app).contains(
-            "2 repos · 1 need attention · a: attention only · showing hidden · H: hide them"
+            "2 repos · 1 needs attention · a: attention only · showing hidden · H: hide them"
         ),
         "{}",
         header(&mut app)
