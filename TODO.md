@@ -44,11 +44,7 @@ deferred.
 
 ## Next steps
 
-- **Custom marks:** marks you define, combinable and usable for filtering
-  in the TUI and CLI; favourite becomes one of them; their icons in the
-  flag column (which widens as needed, an ellipsis if ever capped); owner
-  marks carry over. Decide the config format, filtering, and whether some
-  change behaviour (as pull and ignore do) or only label. Design first.
+- **Custom marks:** agreed, not built: the plan is in DESIGN.md §9.
 - **Pull requests:** fetched with the remote, shown per branch; a merged PR
   makes a branch safe to delete, squash-merged ones included.
 - **Orphans** (local clones the forge no longer lists): reported only, no

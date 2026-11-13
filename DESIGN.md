@@ -710,4 +710,52 @@ packed debug info kept aside are unmeasured (TODO.md).
 
 ## 9. Not done yet / next steps
 
-In [TODO.md](TODO.md).
+In [TODO.md](TODO.md). Planned in detail:
+
+### Custom marks (agreed, not built)
+
+The aim: built-in marks aren't special. All of a mark's style and
+behaviour could come from config, though the defaults stay in code like
+every other default; favourite is the first to be unified, pull and
+ignore later.
+
+* **A table per mark**, favourite included (its defaults in code, any
+  field overridable):
+  ```toml
+  [marks.work]
+  key = "w"                     # in the Mark menu
+  icon = "W"                    # or by icon set: { unicode = "◆", nerd = "…", ascii = "*" }
+  color = "cyan"
+  sort = 1                      # sort points; none: a pure label
+  repos = ["acme/*", "!acme/old"]
+  ```
+  Entries as today's lists: identity, `owner/name`, path or glob; the
+  last match wins, `!` turns it off. A top-level `favourite = [...]` is an
+  error saying to move it to `[marks.favourite] repos` (no compatibility).
+* **Behaviour: labels plus filtering, and sort points.** Repos sort by
+  attention, then the *sum* of their marks' `sort`, then severity and the
+  rest. pull and ignore keep their own rules (ignore turns off favourite
+  and pull) until they become marks with behaviour fields.
+* **Theming.** A mark's colour: `[ui] colors` naming it (`"mark.work" =
+  "bold cyan"`), else the theme's own entry for it (built-in themes keep
+  favourite's as `mark.favourite`), else the mark's `color`, else the
+  theme's flag colour. Its icon: the mark's, one string or one per set.
+* **Flag column:** each mark's icon in its colour, in config order, then
+  the states (new, hidden, pull). new, snoozed and ignored stay states,
+  not marks: they come from state or behaviour, not lists you write.
+* **Filtering**, fzf's extended syntax, which `/` already follows:
+  `#work` has the mark, `!#work` hasn't, space is AND (`#work api`: marked
+  work and fuzzily "api"), `|` is OR (`#work | #home`). The CLI takes the
+  same: `argus status --filter '#work !#old'`, and `--mark work`
+  (repeatable, AND) as shorthand.
+* **Setting them:** the Mark menu has an item per mark by its `key` (a
+  clash with the menu's own keys warns at load); `m o`, the owner's menu,
+  lists them too. CLI: `argus mark` and `argus unmark`, with `--owner` for
+  the owner's pattern; written back into `[marks.X] repos` in place, as
+  `configfile` edits the lists today.
+* **Open:** the CLI's shape. `argus mark <mark> PATTERNS…` / `argus
+  unmark <mark> PATTERNS…` for marks; then today's other `argus mark`
+  flags need homes: pull and ignore could be names in the same commands
+  (`argus mark pull …`, `argus unmark ignore …`); snoozes and ignored
+  issues aren't marks, so `argus snooze PATTERNS --for 3d [--issue
+  dirty]`, `argus unsnooze`, and `argus ignore-issue` / `unignore-issue`.
