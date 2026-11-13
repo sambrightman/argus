@@ -1633,6 +1633,13 @@ fn a_moved_submodule_is_put_back_only_when_nothing_is_lost() {
         f.blocked.as_deref(),
         Some("lib: 1 commit on no branch would be lost")
     );
+    assert_eq!(
+        f.op,
+        Op::SubmoduleUpdate {
+            paths: vec!["lib".into()]
+        },
+        "shown for lib"
+    );
     // changes of its own: they'd be in the way
     git(&lib, &["switch", "-q", "work"]);
     write(&lib, "README", "changed\n");
@@ -1803,7 +1810,7 @@ fn stale_worktree_records_are_pruned() {
 
     std::fs::remove_dir_all(&wt).unwrap();
     let s = st(&r);
-    assert_eq!(s.stale_worktrees, ["wt"]);
+    assert_eq!(s.stale_worktrees, std::slice::from_ref(&wt));
     assert!(s.worktrees.is_empty(), "not listed as a worktree");
     assert!(attention::issues(&s).contains(&Issue::StaleWorktrees(1)));
     assert_eq!(
@@ -1842,11 +1849,27 @@ fn locked_or_seen_from_a_worktree_is_not_stale() {
     std::fs::remove_dir_all(&wt).unwrap();
     assert!(st(&r).stale_worktrees.is_empty(), "locked");
     git(&r, &["worktree", "unlock", wt.to_str().unwrap()]);
-    assert_eq!(st(&r).stale_worktrees, ["wt"]);
+    assert_eq!(st(&r).stale_worktrees, std::slice::from_ref(&wt));
     assert!(
         st(&other).stale_worktrees.is_empty(),
         "the main repo reports it"
     );
+    // pruning one record (from its row) leaves the others, predicted too
+    std::fs::remove_dir_all(&other).unwrap();
+    let s = st(&r);
+    assert_eq!(s.stale_worktrees.len(), 2);
+    let one = argus_core::fix::Fix {
+        kind: FixKind::PruneWorktrees,
+        op: Op::PruneWorktree { path: wt.clone() },
+        reason: String::new(),
+        blocked: None,
+    };
+    assert_eq!(
+        simulate(&s, &one).stale_worktrees,
+        std::slice::from_ref(&other)
+    );
+    assert!(argus_core::ops::run(&r, &one.op).success);
+    assert_eq!(st(&r).stale_worktrees, std::slice::from_ref(&other));
 }
 
 /// `wt`'s branch pushed, merged into main (pushed) and deleted on the
@@ -1935,4 +1958,91 @@ fn unfinished_worktrees_are_left_alone() {
     assert!(!finished_issue(&wt), "new, no upstream");
     git(&wt, &["push", "-q", "-u", "origin", "wt"]);
     assert!(!finished_issue(&wt), "upstream still there");
+}
+
+/// An app with submodule `lib` (committed).
+fn app_with_submodule(sb: &Sandbox) -> std::path::PathBuf {
+    let lib = sb.init("libsrc");
+    write(&lib, "f", "lib\n");
+    commit(&lib, "lib");
+    let app = sb.init("app");
+    commit(&app, "app");
+    git(
+        &app,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            lib.to_str().unwrap(),
+            "lib",
+        ],
+    );
+    commit(&app, "sub");
+    app
+}
+
+/// A submodule whose folder was deleted is a submodule change (no stash
+/// takes it), listed as missing, and put back: nothing can be lost.
+#[test]
+fn a_missing_submodule_folder_is_put_back() {
+    let sb = Sandbox::new();
+    let app = app_with_submodule(&sb);
+    std::fs::remove_dir_all(app.join("lib")).unwrap();
+    let s = st(&app);
+    assert_eq!(s.missing_submodules, ["lib"]);
+    assert_eq!(
+        s.changes
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f.worktree, f.kind))
+            .collect::<Vec<_>>(),
+        [("lib", 'D', PathKind::Submodule)]
+    );
+    assert_eq!(s.changes.unstaged_submodules, 1);
+    assert_eq!(
+        of_kind(&app, FixKind::SubmoduleUpdate),
+        [("check out lib at its recorded commit".to_string(), None)]
+    );
+    let reason = plan(&s, &StashConfig::default())
+        .into_iter()
+        .find(|f| f.kind == FixKind::SubmoduleUpdate)
+        .unwrap()
+        .reason;
+    assert_eq!(reason, "lib's folder is missing");
+    let f = plan(&s, &StashConfig::default())
+        .into_iter()
+        .find(|f| f.kind == FixKind::SubmoduleUpdate)
+        .unwrap();
+    let after = simulate(&s, &f);
+    assert!(
+        after.missing_submodules.is_empty() && after.changes.is_clean(),
+        "{after:?}"
+    );
+    assert_chain_matches_reality(
+        &app,
+        &[FixKind::SubmoduleUpdate],
+        &[FixKind::SubmoduleUpdate],
+    );
+    assert!(app.join("lib/f").exists());
+    let s = st(&app);
+    assert!(s.missing_submodules.is_empty() && s.changes.is_clean());
+}
+
+/// An empty folder is a submodule not checked out (a clone without
+/// `--recursive`): normal, not missing.
+#[test]
+fn an_uninitialised_submodule_is_not_missing() {
+    let sb = Sandbox::new();
+    let app = app_with_submodule(&sb);
+    git(&app, &["submodule", "deinit", "-q", "-f", "lib"]);
+    assert!(app.join("lib").is_dir());
+    let s = st(&app);
+    assert!(
+        s.missing_submodules.is_empty(),
+        "{:?}",
+        s.missing_submodules
+    );
+    assert!(of_kind(&app, FixKind::SubmoduleUpdate).is_empty());
 }

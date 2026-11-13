@@ -194,7 +194,17 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
             blocked: None,
             kind: FixKind::PruneWorktrees,
             op: Op::PruneWorktrees,
-            reason: format!("folder gone: {}", s.stale_worktrees.join(", ")),
+            reason: format!(
+                "folder gone: {}",
+                s.stale_worktrees
+                    .iter()
+                    .map(|p| p.file_name().map_or_else(
+                        || p.display().to_string(),
+                        |n| n.to_string_lossy().into_owned()
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         });
     }
     if s.bare {
@@ -506,8 +516,8 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
     }
     // or, instead of committing a moved submodule, put it back where
     // nothing is lost: its commit is held by a ref, and nothing of its own
-    // is in the way
-    if let Some(f) = put_back_submodules(&s.moved_submodules) {
+    // is in the way; or its folder is gone
+    if let Some(f) = put_back_submodules(&s.moved_submodules, &s.missing_submodules) {
         v.push(f);
     }
     let untracked: Vec<String> = s
@@ -802,6 +812,7 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
         }
         Op::DeleteBranch { branch } => s.branches.retain(|b| &b.name != branch),
         Op::PruneWorktrees => s.stale_worktrees.clear(),
+        Op::PruneWorktree { path } => s.stale_worktrees.retain(|p| p != path),
         Op::StashPop => {
             s.stashes.remove(0);
             s.stash_ids.remove(0);
@@ -861,6 +872,7 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
             c.unstaged -= n;
             c.unstaged_submodules -= n;
             s.moved_submodules.retain(|m| !paths.contains(&m.path));
+            s.missing_submodules.retain(|p| !paths.contains(p));
         }
         // never fixes
         Op::Fetch
@@ -884,39 +896,55 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
 }
 
 /// [`FixKind::SubmoduleUpdate`] for the submodules that can go back to the
-/// recorded commit; blocked, with why, when none can.
-fn put_back_submodules(moved: &[status::MovedSubmodule]) -> Option<Fix> {
-    let first = moved.first()?;
-    let safe: Vec<String> = moved
+/// recorded commit, and those whose folder is gone (nothing to lose);
+/// blocked, with why, when none can.
+fn put_back_submodules(moved: &[status::MovedSubmodule], missing: &[String]) -> Option<Fix> {
+    let back: Vec<String> = moved
         .iter()
         .filter(|m| m.unreferenced == 0 && !m.changed)
         .map(|m| m.path.clone())
         .collect();
-    let blocked = safe.is_empty().then(|| match first {
-        m if m.changed => format!("{} has changes of its own", m.path),
-        m => format!(
-            "{}: {} on no branch would be lost",
-            m.path,
-            match m.unreferenced {
-                1 => "1 commit".to_string(),
-                n => format!("{n} commits"),
-            }
-        ),
-    });
-    let paths = if safe.is_empty() {
-        vec![first.path.clone()]
-    } else {
-        safe
+    let blocked = match moved.first() {
+        Some(first) if back.is_empty() && missing.is_empty() => Some(match first {
+            m if m.changed => format!("{} has changes of its own", m.path),
+            m => format!(
+                "{}: {} on no branch would be lost",
+                m.path,
+                match m.unreferenced {
+                    1 => "1 commit".to_string(),
+                    n => format!("{n} commits"),
+                }
+            ),
+        }),
+        None if missing.is_empty() => return None,
+        _ => None,
     };
-    let reason = match paths.len() {
-        1 => format!("{} at another commit than recorded", paths[0]),
-        _ => format!("{} at other commits than recorded", paths.join(", ")),
+    let back = match (&blocked, moved.first()) {
+        (Some(_), Some(first)) => vec![first.path.clone()],
+        _ => back,
     };
+    let mut reasons = vec![];
+    match back.len() {
+        0 => {}
+        1 => reasons.push(format!("{} at another commit than recorded", back[0])),
+        _ => reasons.push(format!(
+            "{} at other commits than recorded",
+            back.join(", ")
+        )),
+    }
+    match missing {
+        [] => {}
+        [one] => reasons.push(format!("{one}'s folder is missing")),
+        all => reasons.push(format!("folders missing: {}", all.join(", "))),
+    }
+    let mut paths = back;
+    paths.extend(missing.iter().cloned());
+    paths.sort();
     Some(Fix {
         blocked,
         kind: FixKind::SubmoduleUpdate,
         op: Op::SubmoduleUpdate { paths },
-        reason,
+        reason: reasons.join("; "),
     })
 }
 

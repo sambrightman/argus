@@ -502,10 +502,12 @@ impl Workspace {
     }
 
     /// Apply a status computed elsewhere (e.g. on a worker thread).
-    /// A repo whose folder is gone (a worktree removed) leaves the list.
+    /// A repo whose folder is gone (deleted outside argus) shows its error
+    /// once: it leaves the list when it was gone at the last refresh too.
     pub fn update_status(&mut self, path: &Path, r: Result<RepoStatus, String>) {
         let Some(i) = self.index_of(path) else { return };
-        if r.is_err() && path.symlink_metadata().is_err() {
+        let gone = r.is_err() && path.symlink_metadata().is_err();
+        if gone && self.entries[i].error().is_some() {
             self.entries.remove(i);
         } else {
             let ids = self.config.local_forges();
@@ -524,6 +526,14 @@ impl Workspace {
             self.entries.sort_by(|a, b| a.path.cmp(&b.path));
         }
         self.refresh(&path);
+    }
+
+    /// Drop a repo from the list (one removed, or gone and acknowledged);
+    /// a rescan finds it again if it's there.
+    pub fn forget(&mut self, path: &Path) {
+        if let Some(i) = self.index_of(path) {
+            self.entries.remove(i);
+        }
     }
 
     pub fn index_of(&self, path: &Path) -> Option<usize> {
@@ -570,12 +580,20 @@ impl Workspace {
         let mut extra: BTreeMap<PathBuf, Entry> = BTreeMap::new();
         for e in self.entries.iter().filter(|e| !e.nested) {
             let Some(s) = e.status() else { continue };
-            let kids = s.worktrees.iter().map(|p| (p, RepoKind::Worktree));
-            let kids = kids.chain(s.submodules.iter().map(|p| (p, RepoKind::Submodule)));
-            for (p, kind) in kids {
+            let kids = s.worktrees.iter().map(|p| (p, RepoKind::Worktree, false));
+            let kids = kids.chain(s.submodules.iter().map(|p| (p, RepoKind::Submodule, false)));
+            // a stale record's folder too: its row shows it's gone
+            let kids = kids.chain(
+                s.stale_worktrees
+                    .iter()
+                    .map(|p| (p, RepoKind::Worktree, true)),
+            );
+            for (p, kind, stale) in kids {
                 let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
-                // gone since the parent's status was read (a worktree removed)
-                if self.index_of(&p).is_none() && p.symlink_metadata().is_ok() {
+                // listed as there, gone since the parent's status was read
+                // (a worktree just removed): not brought back
+                let removed = !stale && p.symlink_metadata().is_err();
+                if self.index_of(&p).is_none() && !removed {
                     extra.entry(p.clone()).or_insert_with(|| {
                         let mut child = Entry::new(p, kind);
                         child.parent = Some(e.path.clone());

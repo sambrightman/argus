@@ -118,6 +118,9 @@ pub struct Changes {
     /// Submodules at another commit than recorded, by path.
     #[serde(skip)]
     pub(crate) moved: Vec<String>,
+    /// Submodules whose folder is gone, by path.
+    #[serde(skip)]
+    pub(crate) missing: Vec<String>,
     /// Up to [`MAX_FILES`] entries, sorted by path.
     pub files: Vec<FileChange>,
 }
@@ -223,9 +226,13 @@ pub struct RepoStatus {
     /// Linked worktrees (excluding the main one).
     pub worktrees: Vec<PathBuf>,
     /// Records of linked worktrees whose folder is gone (and that aren't
-    /// locked), by name: `git worktree prune` deletes them.
+    /// locked), by the folder's path: `git worktree prune` deletes them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub stale_worktrees: Vec<String>,
+    pub stale_worktrees: Vec<PathBuf>,
+    /// Submodules whose folder is gone (not merely not checked out, which
+    /// leaves it empty), by path: `git submodule update` puts them back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_submodules: Vec<String>,
     /// Checked-out submodule work trees.
     pub submodules: Vec<PathBuf>,
     pub last_fetch: Option<Timestamp>,
@@ -626,6 +633,7 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         )?
     };
     let moved_submodules = moved_submodules(repo, &changes.moved);
+    let missing_submodules = changes.missing.clone();
     let integration = integration(repo, &head, upstream.as_ref());
     let detached_orphans = match &head {
         Head::Detached(_) if repo.kind() != gix::repository::Kind::Submodule => {
@@ -670,6 +678,7 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         branches,
         worktrees: worktrees.0,
         stale_worktrees: worktrees.1,
+        missing_submodules,
         submodules: submodules(repo),
         moved_submodules,
         last_fetch: mtime(&repo.git_dir().join("FETCH_HEAD")).or_else(|| {
@@ -1056,6 +1065,7 @@ fn changes(
     let mut files: BTreeMap<String, (char, char)> = BTreeMap::new();
     let mut kinds: HashMap<String, PathKind> = HashMap::new();
     let mut moved = vec![];
+    let mut missing = vec![];
     for item in iter {
         let item = item.map_err(err)?;
         match item {
@@ -1103,7 +1113,16 @@ fn changes(
                             files.entry(path).or_insert((' ', ' ')).1 = code;
                             continue;
                         }
-                        EntryStatus::Change(Change::Removed) => 'D',
+                        EntryStatus::Change(Change::Removed) => {
+                            // a submodule's folder deleted: still a submodule
+                            if let IW::Modification { entry, .. } = &iw
+                                && entry.mode.is_submodule()
+                            {
+                                kinds.insert(path.clone(), PathKind::Submodule);
+                                missing.push(path.clone());
+                            }
+                            'D'
+                        }
                         EntryStatus::Change(Change::Type { .. }) => 'T',
                         EntryStatus::Change(_) => 'M',
                         EntryStatus::IntentToAdd => 'A',
@@ -1132,6 +1151,7 @@ fn changes(
     collapse_untracked(repo, &mut files, &mut kinds)?;
     let mut c = Changes {
         moved,
+        missing,
         ..Default::default()
     };
     for (path, (x, y)) in files {
@@ -1454,9 +1474,9 @@ pub(crate) fn map_state(s: gix::state::InProgress) -> InProgress {
     }
 }
 
-/// The linked worktrees, and the names of stale records (folder gone, not
+/// The linked worktrees, and the stale records' paths (folder gone, not
 /// locked).
-fn worktrees(repo: &gix::Repository) -> (Vec<PathBuf>, Vec<String>) {
+fn worktrees(repo: &gix::Repository) -> (Vec<PathBuf>, Vec<PathBuf>) {
     // A linked worktree sees all of its siblings (and itself); only the main
     // work tree reports them, so that each is listed exactly once.
     if repo.kind() == gix::repository::Kind::LinkedWorkTree {
@@ -1468,10 +1488,7 @@ fn worktrees(repo: &gix::Repository) -> (Vec<PathBuf>, Vec<String>) {
     let (stale, live): (Vec<_>, Vec<_>) = wts.iter().partition(|p| p.is_prunable());
     let mut v: Vec<PathBuf> = live.iter().filter_map(|p| p.base().ok()).collect();
     v.sort();
-    let mut gone: Vec<String> = stale
-        .iter()
-        .filter_map(|p| Some(p.id().ok()?.to_string()))
-        .collect();
+    let mut gone: Vec<PathBuf> = stale.iter().filter_map(|p| p.base().ok()).collect();
     gone.sort();
     (v, gone)
 }

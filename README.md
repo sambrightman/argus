@@ -179,7 +179,7 @@ again runs it.
 | `c` | **Commit** (prompts for the message): `c` what's staged (offered only when something is), `A` all changes, untracked files included, `a` amend the last commit with what's staged, starting from its summary line (unchanged keeps the message; the body is always kept; says so when the commit is on a remote, as pushing will then need force), `f` fixup: what's staged as a `fixup!` commit of one picked from HEAD's history (starting at HEAD, or the commit under the cursor), for `git rebase --autosquash`; `F` instant fixup: the same, folded in at once (a non-interactive autosquash rebase, uncommitted changes kept; refused for a commit already on a remote, as it rewrites history; a conflict leaves the rebase to finish or abort); `s` squash: a `squash!` commit, asking for the message to add, and `S` instant squash (the messages combined); all offered when something is staged |
 | `X` | **Reset** the current branch (one repo at a time): `s` soft (changes stay staged), `m` mixed (unstaged), `k` keep (drops the commits' changes, refusing if uncommitted ones are in the way), `h` hard (drops uncommitted changes too; asks first). Then pick the commit from HEAD's recent history, those on a remote marked; the cursor starts on the commit before HEAD, or, pressed on a commit in the details, on the one before it |
 | `b` | **Branch**: `b` checkout a branch: type to narrow the list fuzzily, as `/` does (local branches, then remote ones without a local copy, which creates a local branch tracking it), `C-n`/`C-p` to move, Enter to check it out, `-` checkout the previous branch, `s` spin off (as magit's: the commits the branch's upstream doesn't have go to a new branch, checked out, and the branch goes back to what it shares with its upstream; nothing unpushed, the new branch is made anyway), `S` spin out (the same, staying on the branch; if uncommitted changes would be lost, it spins off instead), `d` switch to default, `r` reattach detached HEAD, `c` create a branch at HEAD and check it out… (on a detached HEAD, that names its commits), `x` delete merged branches…, `f` fast-forward stale branches |
-| `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden, each saying what it would do (and left out when it would do nothing); then every fix that applies to the selection, with its reason (or how many repos it applies to): `s` stash, `c` commit…, `i` gitignore…, `b` branch…, `p` push, `u` publish, `R` add-remote…, `P` push-branches, `d` switch-default, `r` reattach, `F` pull, `f` fast-forward, `D` delete-branches…, `S` submodule-update, `w` prune-worktrees, `W` remove-worktree…, `z` stash-pop, `A` abort…. Those marked … ask first. Opened on a fix line in the details, it starts on that fix |
+| `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden, each saying what it would do (and left out when it would do nothing); then every fix that applies to the selection, with its reason (or how many repos it applies to): `s` stash, `c` commit…, `i` gitignore…, `b` branch…, `p` push, `u` publish, `R` add-remote…, `P` push-branches, `d` switch-default, `r` reattach, `F` pull, `f` fast-forward, `D` delete-branches…, `S` submodule-update, `w` prune-worktrees, `W` remove-worktree…, `z` stash-pop, `A` abort…; on a repo whose folder is gone, `g` drops it from the list and `G` rescans. Those marked … ask first. Opened on a fix line in the details, it starts on that fix |
 | `m` | **Mark**: `f` favourite, `p` pull, `i` ignore issues (a menu of the repo's issues and their state), `I` ignore or unignore the repo, `z` snooze (on an issue line in the details, just that issue), `u` unsnooze (on an issue line, just that issue; else the repo and its issues), `a` ack new, `c` clear |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page |
 | `v` | **View**: toggles, expand/collapse all, log |
@@ -305,11 +305,20 @@ Nothing is offered during a conflict.
   of its own in the way, else shown blocked with why. It also blocks
   `switch-default`. ` m` / ` ?` for changes inside one, which
   are its own to stash, commit or ignore on its own row, not the parent's.
-  No stash takes a submodule (git's doesn't).
+  ` D` when its folder was deleted, which `submodule-update` puts back
+  (nothing can be lost); an empty folder is a submodule not checked out,
+  which is normal. No stash takes a submodule (git's doesn't).
 * **A worktree folder deleted by hand** leaves git's record of it in the
   main repo, and its branch still counts as checked out there (`git
-  switch` refuses it): `prune-worktrees` deletes such records (`git
-  worktree prune`; locked worktrees are left alone).
+  switch` refuses it). Its row stays, as an error, and the main repo has
+  the issue: `x w` on the main repo prunes every such record (`git
+  worktree prune`; locked worktrees are left alone), on the worktree's row
+  just its own (`git worktree remove <path>`, run in the main repo). The
+  row goes once pruned.
+* **A repo deleted outside argus** shows as an error at the next refresh,
+  so you see it went; the refresh after that (or `x g`, or a rescan, `x
+  G` or `R`) drops it from the list. One removed from argus (`x W`)
+  simply goes.
 * **A finished worktree** (a linked one whose branch is merged into the
   default branch and whose upstream is gone, as after a pull request, with
   nothing uncommitted) is flagged instead of "not on default branch", and

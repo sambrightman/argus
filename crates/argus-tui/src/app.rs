@@ -167,6 +167,9 @@ pub enum Action {
     ToggleHidden,
     Refresh,
     Rescan,
+    /// Drop the selected repos whose folder is gone from the list (not a
+    /// stale worktree: pruning its record does that).
+    DropGone,
     /// Next built-in theme, for this session only.
     NextTheme,
     /// Next icon set, for this session only.
@@ -821,17 +824,20 @@ impl App {
             if self.expanded.contains(&e.path) {
                 // depth first: each line, its diff, then what it unfolds
                 // into; a nested repo's lines are its own, indented `pad`
-                let mut stack: Vec<(usize, usize, DetailLine)> = details(
+                let mut lines = details(
                     e,
                     &self.ws.config.fix.auto,
                     &self.ws.config.stash,
                     &icons,
                     &self.ws.state,
-                )
-                .into_iter()
-                .rev()
-                .map(|l| (i, 0, l))
-                .collect();
+                );
+                if self.stale_main(i).is_some() {
+                    lines.extend(crate::details::gone_lines(true));
+                } else if self.droppable(i) {
+                    lines.extend(crate::details::gone_lines(false));
+                }
+                let mut stack: Vec<(usize, usize, DetailLine)> =
+                    lines.into_iter().rev().map(|l| (i, 0, l)).collect();
                 while let Some((r, pad, line)) = stack.pop() {
                     let e = &self.ws.entries[r];
                     let expanded = line.file.as_ref().filter(|f| {
@@ -1524,6 +1530,29 @@ impl App {
             Refresh => {
                 let paths: Vec<PathBuf> = self.ws.entries.iter().map(|e| e.path.clone()).collect();
                 return vec![Effect::Refresh(paths)];
+            }
+            DropGone => {
+                let gone: Vec<PathBuf> = self
+                    .selected()
+                    .into_iter()
+                    .filter(|&i| self.droppable(i))
+                    .map(|i| self.ws.entries[i].path.clone())
+                    .collect();
+                if gone.is_empty() {
+                    return self.not_applicable("nothing selected is gone from disk");
+                }
+                for p in &gone {
+                    self.ws.forget(p);
+                    self.marked.remove(p);
+                }
+                self.rebuild();
+                let what = match gone.as_slice() {
+                    [one] => paths::contract_tilde(one),
+                    all => format!("{} repos", all.len()),
+                };
+                self.info(format!(
+                    "dropped {what} from the list (R finds it if it's back)"
+                ));
             }
             Rescan => {
                 self.scanning = true;
@@ -2494,12 +2523,7 @@ impl App {
         let selected = self.selected();
         let plans: Vec<Vec<fix::Fix>> = selected
             .iter()
-            .filter_map(|&i| {
-                Some(fix::plan(
-                    self.ws.entries[i].status()?,
-                    &self.ws.config.stash,
-                ))
-            })
+            .map(|&i| self.fixes_for(i).into_iter().map(|(_, f)| f).collect())
             .collect();
         for kind in FixKind::ALL {
             let of_kind: Vec<&fix::Fix> = plans
@@ -2521,6 +2545,79 @@ impl App {
                 Action::ApplyFix(kind),
             ));
         }
+        // gone with nothing to prune: acknowledged by dropping or rescanning
+        if selected.iter().any(|&i| self.droppable(i)) {
+            menu.items.push(menu::item(
+                'g',
+                "drop from the list (its folder is gone)",
+                Action::DropGone,
+            ));
+            menu.items
+                .push(menu::item('G', "rescan roots", Action::Rescan));
+        }
+    }
+
+    /// After `op` succeeded in the repo at `path`: drop the rows of the
+    /// worktrees it removed or pruned, which nothing need acknowledge.
+    /// Returns whether any went.
+    fn drop_removed(&mut self, path: &std::path::Path, op: &Op) -> bool {
+        let gone: Vec<PathBuf> = match op {
+            Op::RemoveWorktree => vec![path.to_path_buf()],
+            Op::PruneWorktree { path } => vec![path.clone()],
+            // its status from before still names them
+            Op::PruneWorktrees => self
+                .ws
+                .get(path)
+                .and_then(Entry::status)
+                .map(|s| s.stale_worktrees.clone())
+                .unwrap_or_default(),
+            _ => return false,
+        };
+        for p in &gone {
+            self.ws.forget(p);
+            self.marked.remove(p);
+        }
+        !gone.is_empty()
+    }
+
+    /// The fixes for the repo at `i`, with where each runs: its status's;
+    /// for a worktree whose folder is gone, pruning its record, in its
+    /// main repo.
+    fn fixes_for(&self, i: usize) -> Vec<(PathBuf, fix::Fix)> {
+        let e = &self.ws.entries[i];
+        if let Some(s) = e.status() {
+            return fix::plan(s, &self.ws.config.stash)
+                .into_iter()
+                .map(|f| (e.path.clone(), f))
+                .collect();
+        }
+        let Some(main) = self.stale_main(i) else {
+            return vec![];
+        };
+        let fix = fix::Fix {
+            kind: FixKind::PruneWorktrees,
+            op: Op::PruneWorktree {
+                path: e.path.clone(),
+            },
+            reason: "its folder is gone".into(),
+            blocked: None,
+        };
+        vec![(main, fix)]
+    }
+
+    /// The main repo whose stale record names the repo at `i`.
+    fn stale_main(&self, i: usize) -> Option<PathBuf> {
+        let e = &self.ws.entries[i];
+        let main = e.parent.as_ref()?;
+        let s = self.ws.get(main)?.status()?;
+        s.stale_worktrees.contains(&e.path).then(|| main.clone())
+    }
+
+    /// Gone (unreadable, its folder missing) with no record to prune: one
+    /// to drop from the list.
+    fn droppable(&self, i: usize) -> bool {
+        let e = &self.ws.entries[i];
+        e.error().is_some() && e.path.symlink_metadata().is_err() && self.stale_main(i).is_none()
     }
 
     /// Leave out items with nothing to act on: `c c` when nothing in the
@@ -2659,25 +2756,28 @@ impl App {
     /// Every fix of `kind` the selected repos have and can run, and what
     /// was left out.
     fn planned(&self, kind: FixKind) -> Planned {
-        let stash = self.ws.config.stash;
         let mut p = Planned::default();
         for i in self.selected() {
             let e = &self.ws.entries[i];
-            let Some(s) = e.status() else { continue };
-            let fixes: Vec<_> = fix::plan(s, &stash)
+            // unreadable: nothing to say, unless it's a stale worktree
+            if e.status().is_none() && self.stale_main(i).is_none() {
+                continue;
+            }
+            let fixes: Vec<_> = self
+                .fixes_for(i)
                 .into_iter()
-                .filter(|f| f.kind == kind)
+                .filter(|(_, f)| f.kind == kind)
                 .collect();
             if fixes.is_empty() {
                 p.none += 1;
             }
-            for f in fixes {
+            for (at, f) in fixes {
                 match f.blocked {
                     Some(why) => {
                         p.blocked += 1;
                         p.why.get_or_insert(format!("{}: {why}", e.display_name()));
                     }
-                    None => p.ops.push((e.path.clone(), f.op)),
+                    None => p.ops.push((at, f.op)),
                 }
             }
         }
@@ -3644,7 +3744,12 @@ impl App {
                 if self.running.is_empty() && self.message.as_ref().is_none_or(|m| !m.1) {
                     self.info("done");
                 }
-                return vec![Effect::Refresh(self.ws.with_parents(&path))];
+                // its main repo too, before a removed worktree's row goes
+                let refresh = self.ws.with_parents(&path);
+                if outcome.success && self.drop_removed(&path, &op) {
+                    self.rebuild();
+                }
+                return vec![Effect::Refresh(refresh)];
             }
             Msg::FixDone { path, applied } => {
                 self.running.remove(&path);

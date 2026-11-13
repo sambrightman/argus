@@ -5164,13 +5164,19 @@ fn removing_a_finished_worktree_asks_first() {
     assert!(app.on_key(key('n')).is_empty());
     assert!(wt.exists());
     app.act(Action::ApplyFix(FixKind::RemoveWorktree));
-    match app.on_key(key('y')).as_slice() {
-        [Effect::Jobs(j)] => {
-            assert_eq!(j[0].path, wt);
-            assert_eq!(j[0].op, Op::RemoveWorktree);
-        }
+    let (path, op) = match app.on_key(key('y')).as_slice() {
+        [Effect::Jobs(j)] => (j[0].path.clone(), j[0].op.clone()),
         other => panic!("{other:?}"),
-    }
+    };
+    assert_eq!((&path, &op), (&wt, &Op::RemoveWorktree));
+    // removed from argus: its row goes at once, nothing to acknowledge
+    assert!(finish(&mut app, path, op));
+    assert!(app.ws.index_of(&wt).is_none());
+    assert!(
+        !app.rows
+            .iter()
+            .any(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path == wt))
+    );
 }
 
 fn issue_row(app: &App, name: &str) -> usize {
@@ -5256,4 +5262,134 @@ fn a_snoozed_issue_still_unfolds() {
         unreachable!()
     };
     assert!(line.expand.is_some(), "{line:?}");
+}
+
+fn repo_row(app: &App, path: &std::path::Path) -> usize {
+    app.rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path == path))
+        .unwrap_or_else(|| panic!("{}", path.display()))
+}
+
+/// A refresh's answer for `path`, as the runtime sends it.
+fn refreshed(app: &mut App, path: &std::path::Path) {
+    let r = argus_core::status::status(path, Default::default()).map_err(|e| e.to_string());
+    app.on_msg(Msg::Status(path.to_path_buf(), Box::new(r)));
+}
+
+/// A repo deleted outside argus shows as an error at the next refresh,
+/// with fixes to drop it or rescan; the refresh after that drops it.
+#[test]
+fn a_repo_deleted_outside_argus_is_seen_then_dropped() {
+    let (sb, mut app) = setup("");
+    let clean = sb.path("dev/clean");
+    std::fs::remove_dir_all(&clean).unwrap();
+    refreshed(&mut app, &clean);
+    app.cursor = repo_row(&app, &clean);
+    assert!(app.current().unwrap().error().is_some());
+    app.on_key(code(KeyCode::Tab));
+    assert!(
+        trimmed(&app)
+            .iter()
+            .any(|l| l.contains("x g") && l.contains("x G")),
+        "{:?}",
+        trimmed(&app)
+    );
+    app.cursor = repo_row(&app, &clean);
+    app.on_key(key('x'));
+    let items = menu_items(&app);
+    assert!(items.iter().any(|i| i.starts_with("g drop")), "{items:?}");
+    assert!(items.iter().any(|i| i.starts_with("G rescan")), "{items:?}");
+    app.mode = Mode::Normal;
+    // drop: gone from the list
+    app.act(Action::DropGone);
+    assert!(app.ws.index_of(&clean).is_none());
+
+    // or the second refresh
+    let dirty = sb.path("dev/dirty");
+    std::fs::remove_dir_all(&dirty).unwrap();
+    refreshed(&mut app, &dirty);
+    assert!(app.ws.index_of(&dirty).is_some());
+    refreshed(&mut app, &dirty);
+    assert!(app.ws.index_of(&dirty).is_none());
+    // nothing gone selected: drop says so
+    app.cursor = 0;
+    assert!(app.act(Action::DropGone).is_empty());
+    assert!(app.message.clone().unwrap().0.contains("gone"));
+}
+
+/// A worktree folder deleted by hand: its row (an error) offers pruning
+/// its record, run in the main repo, which shows the issue too; pruned,
+/// the row goes. Dropping isn't offered: the record would bring it back.
+#[test]
+fn a_stale_worktree_row_prunes_its_record() {
+    use argus_core::fix::FixKind;
+    let (sb, mut app) = setup_with("", |sb| {
+        let r = sb.path("dev/clean");
+        let wt = sb.path("dev/clean-wt");
+        git(
+            &r,
+            &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()],
+        );
+        std::fs::remove_dir_all(&wt).unwrap();
+    });
+    let (main, wt) = (sb.path("dev/clean"), sb.path("dev/clean-wt"));
+    app.cursor = repo_row(&app, &wt);
+    assert!(app.current().unwrap().error().is_some());
+    app.on_key(key('x'));
+    let items = menu_items(&app);
+    assert!(
+        items.iter().any(|i| i.starts_with("w prune-worktrees")),
+        "{items:?}"
+    );
+    assert!(!items.iter().any(|i| i.starts_with("g drop")), "{items:?}");
+    app.mode = Mode::Normal;
+    app.on_key(code(KeyCode::Tab));
+    assert!(
+        trimmed(&app).iter().any(|l| l.contains("x w")),
+        "{:?}",
+        trimmed(&app)
+    );
+    app.cursor = repo_row(&app, &wt);
+    let (path, op) = apply_op(&app.act(Action::ApplyFix(FixKind::PruneWorktrees)));
+    assert_eq!(path, main, "run in the main repo");
+    assert_eq!(op, Op::PruneWorktree { path: wt.clone() });
+    assert!(finish(&mut app, path, op));
+    assert!(app.ws.index_of(&wt).is_none());
+    refreshed(&mut app, &main);
+    assert!(app.ws.index_of(&wt).is_none(), "not brought back");
+}
+
+/// `x w` on the main repo prunes every stale record, and their rows go.
+#[test]
+fn pruning_from_the_main_repo_drops_the_stale_rows() {
+    use argus_core::fix::FixKind;
+    let (sb, mut app) = setup_with("", |sb| {
+        let r = sb.path("dev/clean");
+        for n in ["a", "b"] {
+            let wt = sb.path(&format!("dev/clean-{n}"));
+            git(
+                &r,
+                &["worktree", "add", "-q", "-b", n, wt.to_str().unwrap()],
+            );
+            std::fs::remove_dir_all(&wt).unwrap();
+        }
+    });
+    let main = sb.path("dev/clean");
+    let rows = |app: &App| {
+        ["a", "b"]
+            .iter()
+            .filter(|n| {
+                app.ws
+                    .index_of(&sb.path(&format!("dev/clean-{n}")))
+                    .is_some()
+            })
+            .count()
+    };
+    assert_eq!(rows(&app), 2);
+    app.cursor = repo_row(&app, &main);
+    let (path, op) = apply_op(&app.act(Action::ApplyFix(FixKind::PruneWorktrees)));
+    assert_eq!((&path, &op), (&main, &Op::PruneWorktrees));
+    assert!(finish(&mut app, path, op));
+    assert_eq!(rows(&app), 0);
 }

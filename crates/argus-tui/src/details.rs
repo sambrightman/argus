@@ -147,6 +147,24 @@ fn ago_since(t: jiff::Timestamp, now: jiff::Timestamp) -> String {
     }
 }
 
+/// The fix lines of a repo whose folder is gone: pruning a stale
+/// worktree's record (`stale`), else dropping it or rescanning.
+pub fn gone_lines(stale: bool) -> Vec<DetailLine> {
+    let (op, keys) = if stale {
+        ("prune its record", "x w")
+    } else {
+        ("drop from the list, or rescan", "x g, x G")
+    };
+    vec![DetailLine {
+        fix: stale.then_some(FixKind::PruneWorktrees),
+        ..line(vec![
+            styled(Role::Dim, "fix       "),
+            styled(Role::Ahead, op),
+            styled(Role::Dim, format!("  its folder is gone  ({keys})")),
+        ])
+    }]
+}
+
 /// How long from `now` until `t`, in [`ago_since`]'s units, to the
 /// nearest (a snooze for 3d has `3d left`, not 2d and change).
 fn left_until(t: jiff::Timestamp, now: jiff::Timestamp) -> String {

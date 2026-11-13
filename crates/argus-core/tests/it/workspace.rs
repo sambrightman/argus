@@ -1632,10 +1632,39 @@ fn an_owner_can_be_marked_as_a_whole() {
     assert_eq!(w.owner_marked(at(&w, "local"), Mark::Favourite), None);
 }
 
-/// A repo whose folder is gone (a worktree removed) leaves the list when
-/// it's next refreshed.
+/// A repo whose folder is gone (deleted outside argus) shows its error
+/// at the next refresh, and leaves the list at the one after: seen once.
 #[test]
-fn a_repo_whose_folder_is_gone_leaves_the_list() {
+fn a_repo_whose_folder_is_gone_shows_once_then_leaves() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "app");
+    sb.remote("acme", "old");
+    let app = sb.clone_as_github("acme", "app", "dev/app");
+    let old = sb.clone_as_github("acme", "old", "dev/old");
+    let mut w = ws(&sb, "");
+    std::fs::remove_dir_all(&old).unwrap();
+    w.refresh(&old);
+    assert!(
+        w.get(&old).is_some_and(|e| e.error().is_some()),
+        "shown, as an error"
+    );
+    w.refresh(&old);
+    assert!(w.index_of(&old).is_none(), "gone at the second");
+    // an error with the folder still there stays listed
+    std::fs::remove_dir_all(app.join(".git")).unwrap();
+    w.refresh(&app);
+    w.refresh(&app);
+    assert!(w.get(&app).is_some_and(|e| e.error().is_some()));
+    // forgetting drops it whatever
+    w.forget(&app);
+    assert!(w.index_of(&app).is_none());
+}
+
+/// A worktree folder deleted by hand keeps its row, as an error, through
+/// refreshes and rescans (its main repo's record names it), as well as
+/// the issue on the main repo; until the record is pruned.
+#[test]
+fn a_stale_worktree_keeps_its_row_until_pruned() {
     let sb = Sandbox::new();
     sb.remote("acme", "app");
     let app = sb.clone_as_github("acme", "app", "dev/app");
@@ -1644,16 +1673,31 @@ fn a_repo_whose_folder_is_gone_leaves_the_list() {
         &app,
         &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()],
     );
+    std::fs::remove_dir_all(&wt).unwrap();
     let mut w = ws(&sb, "");
-    assert!(w.index_of(&wt).is_some());
-    git(&app, &["worktree", "remove", wt.to_str().unwrap()]);
-    w.refresh(&wt);
-    assert!(w.index_of(&wt).is_none());
-    assert!(w.index_of(&app).is_some());
-    // an error with the folder still there stays listed, with the error
-    std::fs::remove_dir_all(app.join(".git")).unwrap();
+    let row = |w: &Workspace| {
+        w.get(&wt)
+            .map(|e| (e.kind, e.error().is_some(), e.parent.clone()))
+    };
+    assert_eq!(row(&w), Some((RepoKind::Worktree, true, Some(app.clone()))));
+    assert!(
+        w.get(&app)
+            .unwrap()
+            .issues
+            .contains(&Issue::StaleWorktrees(1))
+    );
+    for _ in 0..2 {
+        w.refresh(&wt);
+        w.refresh(&app);
+    }
+    assert!(row(&w).is_some(), "refreshing doesn't drop it");
+    w.scan();
+    assert!(row(&w).is_some(), "nor rescanning");
+    git(&app, &["worktree", "prune"]);
     w.refresh(&app);
-    assert!(w.get(&app).is_some_and(|e| e.error().is_some()));
+    w.forget(&wt);
+    w.refresh(&app);
+    assert!(row(&w).is_none(), "pruned: not brought back");
 }
 
 /// One issue snoozed: it doesn't count (nor turn on its fixes) until the

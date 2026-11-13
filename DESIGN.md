@@ -324,7 +324,12 @@ Two findings:
     deleted by hand (gix's `is_prunable`: folder gone, not locked) →
     `git worktree prune`. Their branches count as checked out there until
     then (`git switch` refuses). Only the main checkout reports them, as it
-    lists the worktrees. Nothing on disk is lost; the branches stay.
+    lists the worktrees. Nothing on disk is lost; the branches stay. The
+    records' paths still give rows (errors: the folder is gone) through
+    refreshes and rescans, so the issue shows twice; on such a row the fix
+    is planned from the main repo's status and runs there, removing just
+    that record (`git worktree remove <path>` works on a missing folder).
+    The row goes once its record is pruned, from either place.
   * `remove-worktree`: a finished linked worktree (`is_finished_worktree`:
     nothing uncommitted, its branch merged into the default branch and its
     upstream gone) → `git worktree remove .`, run in it. Said instead of
@@ -333,9 +338,16 @@ Two findings:
     folder (git refuses untracked or changed ones itself). The branch
     stays, for `delete-branches`. Blocked when locked or with submodules
     (git refuses both). A branch never pushed doesn't count, as a new
-    worktree's branch is merged too. Once removed, the entry leaves the
-    list on refresh (a repo whose folder is gone), and the main repo's
-    stale status doesn't bring it back.
+    worktree's branch is merged too. Once removed, its row goes at once,
+    and the main repo's older status (listing it as there) doesn't bring
+    it back.
+  * **A repo whose folder is gone** otherwise (deleted outside argus)
+    shows gix's error at the next refresh, to be seen; a refresh that
+    finds it gone again drops it, as do `x g` (drop) and rescanning (`x
+    G`, `R`). Those two aren't fix kinds (no git operation, nothing for
+    `[fix] auto` or `argus fix -k`): TUI-only Fix-menu items. Not offered
+    on a stale worktree's row, which its record would bring back. The CLI
+    scans afresh each run, so a deleted clone isn't found at all.
   * `stash-pop`: stashes, no tracked changes → `git stash pop --index`,
     after `git merge-tree` of the stash into HEAD finds no conflicts
     (checked when it runs). Turned off for auto-fix while any stash is
@@ -465,7 +477,10 @@ rendering is snapshot-tested via `TestBackend`.
   status --short` does: `M` (at another commit than recorded: the parent
   commits it) or ` m` / ` ?` (changes inside: the submodule's own row fixes
   them). Fixes are planned from that, so the preview and the auto-fix agree;
-  git's stash takes neither.
+  git's stash takes neither. A submodule whose folder is gone shows as
+  ` D` and is still a submodule (the index entry's mode says so), listed
+  in `missing_submodules`: `submodule-update` puts it back, never blocked.
+  An empty folder is one not checked out, which isn't missing.
 * **Nested repos are entries only once unfolded.** A repo nested untracked
   in a work tree unfolds, under its line there, into its own details, whose
   actions run in it: it's a workspace entry marked `nested`, left out of
