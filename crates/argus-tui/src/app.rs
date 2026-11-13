@@ -81,6 +81,10 @@ pub enum Action {
     StageFiles,
     UnstageFiles,
     DiscardFiles,
+    /// In a diff, open the marked lines (else the hunk or line under the
+    /// cursor) as a patch in git's editor; what's saved is staged, or
+    /// unstaged on the staged side.
+    EditPatch,
     /// Ask for a message, then commit what's staged, or (`all`) every
     /// change, untracked files included.
     Commit {
@@ -621,6 +625,8 @@ pub enum Mode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Confirmed {
     ClearMarks(Vec<String>),
+    /// Open the edited patch that didn't apply again (no drops it).
+    EditAgain,
     /// Files to discard, by repo path.
     Discard(Vec<(PathBuf, Vec<String>)>),
     /// Operations to run, by repo path.
@@ -667,6 +673,8 @@ pub struct App {
     /// Where a region (`C-space`) starts: a diff row's repo, file, side,
     /// hunk and line. Its lines run to the cursor.
     pub region: Option<RegionStart>,
+    /// The patch being edited (`e`), until it's applied or dropped.
+    pub editing: Option<PatchEdit>,
     /// Files whose diff is shown, by repo path and file.
     pub expanded_files: BTreeSet<(PathBuf, String)>,
     /// Folded hunks: repo, file, side, hunk index.
@@ -727,6 +735,7 @@ impl App {
             marked_files: BTreeMap::new(),
             marked_lines: BTreeSet::new(),
             region: None,
+            editing: None,
             expanded_files: BTreeSet::new(),
             folded_hunks: BTreeSet::new(),
             diffs: HashMap::new(),
@@ -1082,6 +1091,11 @@ impl App {
                 if k.code == KeyCode::Char('y') && k.modifiers.is_empty() {
                     return self.confirmed(then);
                 }
+                if then == Confirmed::EditAgain {
+                    self.drop_edit();
+                    self.info("dropped the edited patch");
+                    return vec![];
+                }
                 self.info("cancelled");
                 vec![]
             }
@@ -1176,6 +1190,7 @@ impl App {
                 's' => StageFiles,
                 'u' => UnstageFiles,
                 'K' => DiscardFiles,
+                'e' => EditPatch,
                 'U' => UnmarkAll,
                 '/' => StartFilter,
                 '?' | 'h' => Help,
@@ -1408,6 +1423,7 @@ impl App {
                 }
                 return self.file_op(ops::unstage_ops, "unstage");
             }
+            EditPatch => return self.edit_patch(),
             DiscardFiles if let Some(fx) = self.hunk_op(HunkVerb::Discard) => return fx,
             DiscardFiles => {
                 let targets = self.file_targets();
@@ -2565,6 +2581,7 @@ impl App {
                 let jobs = self.file_jobs(targets, ops::discard_ops);
                 self.start_jobs(jobs)
             }
+            Confirmed::EditAgain => self.editing.iter().map(PatchEdit::open).collect(),
             Confirmed::Ops(ops) => {
                 let jobs = ops
                     .into_iter()
@@ -2875,6 +2892,168 @@ impl App {
             .filter(|&(_, _, take)| take)
             .map(|(h, a, _)| (repo.clone(), file.clone(), *side, h, a))
             .collect()
+    }
+
+    /// `e` in a diff: the marked lines (else the hunk or line under the
+    /// cursor) as a patch, with how to edit it, in git's editor.
+    fn edit_patch(&mut self) -> Vec<Effect> {
+        if self.editing.as_ref().is_some_and(|e| e.applying) {
+            self.info("the edited patch is still being applied");
+            return vec![];
+        }
+        if self.region.is_some() {
+            let lines = self.region_lines();
+            self.marked_lines.extend(lines);
+            self.region = None;
+        }
+        // by repo, file and side: hunk -> its chosen lines (all if None)
+        type Chosen = BTreeMap<(PathBuf, String, Side), BTreeMap<usize, Option<Vec<usize>>>>;
+        let mut chosen: Chosen = BTreeMap::new();
+        for (repo, file, side, h, at) in &self.marked_lines {
+            let lines = chosen
+                .entry((repo.clone(), file.clone(), *side))
+                .or_default()
+                .entry(*h)
+                .or_insert_with(|| Some(vec![]));
+            lines.get_or_insert_default().push(*at);
+        }
+        if chosen.is_empty()
+            && let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor)
+            && let (Some(d), Some(file)) = (line.diff.as_deref(), line.file.clone())
+            && let Some(h) = d.hunk
+        {
+            let changed = |i: &usize| {
+                d.line
+                    .as_ref()
+                    .is_some_and(|l| l.kind != LineKind::Context)
+                    .then_some(*i)
+            };
+            let path = self.ws.entries[*repo].path.clone();
+            chosen
+                .entry((path, file, d.side))
+                .or_default()
+                .insert(h, d.at.as_ref().and_then(changed).map(|i| vec![i]));
+        }
+        let Some((repo, _, side)) = chosen.keys().next().cloned() else {
+            self.info("e edits a hunk or lines of a file's diff (Tab on a file shows it)");
+            return vec![];
+        };
+        if chosen.keys().any(|k| k.2 != side) {
+            self.info("the marked lines are staged and unstaged: unmark one side's (space) first");
+            return vec![];
+        }
+        if chosen.keys().any(|k| k.0 != repo) {
+            self.info("the marked lines are in several repos: edit one repo's at a time");
+            return vec![];
+        }
+        let untracked = |file: &str| {
+            self.ws
+                .get(&repo)
+                .and_then(Entry::status)
+                .and_then(|s| s.changes.entry(file))
+                .is_some_and(|c| c.index == '?')
+        };
+        if let Some((_, file, _)) = chosen.keys().find(|k| untracked(&k.1)) {
+            self.info(format!(
+                "{file} is untracked: no patch to edit, s stages it whole"
+            ));
+            return vec![];
+        }
+        let reverse = side == Side::Staged;
+        let mut patch = String::new();
+        let mut files = vec![];
+        for ((_, file, _), hunks) in &chosen {
+            let key = (repo.clone(), file.clone(), side);
+            let Some(Ok(FileDiff::Text(all))) = self.diffs.get(&key) else {
+                continue;
+            };
+            let parts: Vec<(&diff::Hunk, Option<&[usize]>)> = hunks
+                .iter()
+                .filter_map(|(h, at)| Some((all.get(*h)?, at.as_deref())))
+                .collect();
+            patch.push_str(&diff::patch_hunks(file, &parts, reverse));
+            files.push(file.clone());
+        }
+        self.marked_lines.clear();
+        let file = std::env::temp_dir().join(format!(
+            "argus-{}-{}.diff",
+            std::process::id(),
+            EDITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        if let Err(e) = std::fs::write(&file, patch + edit_instructions(reverse)) {
+            self.error(format!("{}: {e}", file.display()));
+            return vec![];
+        }
+        let edit = PatchEdit {
+            repo,
+            file,
+            reverse,
+            files,
+            applying: false,
+        };
+        let open = edit.open();
+        self.editing = Some(edit);
+        vec![open]
+    }
+
+    /// Back from editing the patch: apply what was saved (its `#` lines
+    /// dropped), unless it's empty or touches more than the files' hunks.
+    fn edited(&mut self, r: Result<(), String>) -> Vec<Effect> {
+        let Some(edit) = self.editing.as_mut() else {
+            return vec![];
+        };
+        let text = r.and_then(|()| {
+            std::fs::read_to_string(&edit.file).map_err(|e| format!("{}: {e}", edit.file.display()))
+        });
+        let text = match text {
+            Ok(t) => t,
+            Err(e) => {
+                self.drop_edit();
+                self.error(format!("editing the patch: {e}"));
+                return vec![];
+            }
+        };
+        let mut patch: String = text
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .flat_map(|l| [l, "\n"])
+            .collect();
+        let verb = if edit.reverse { "unstage" } else { "stage" };
+        if patch.trim().is_empty() {
+            self.drop_edit();
+            self.info(format!("the patch is empty: nothing to {verb}"));
+            return vec![];
+        }
+        if let Err(why) = check_patch(&patch, &edit.files) {
+            self.mode = Mode::Confirm {
+                question: format!("The edited patch {why}: edit it again?"),
+                then: Confirmed::EditAgain,
+            };
+            return vec![];
+        }
+        if !patch.ends_with('\n') {
+            patch.push('\n');
+        }
+        edit.applying = true;
+        let what = match edit.files.as_slice() {
+            [one] => format!("{verb} an edited patch of {one}"),
+            all => format!("{verb} an edited patch of {} files", all.len()),
+        };
+        let op = Op::Apply {
+            patch,
+            index: true,
+            reverse: edit.reverse,
+            what,
+        };
+        let repo = edit.repo.clone();
+        let jobs = self.job(&repo, op).into_iter().collect();
+        self.start_jobs(jobs)
+    }
+
+    fn drop_edit(&mut self) {
+        if let Some(e) = self.editing.take() {
+            let _ = std::fs::remove_file(e.file);
+        }
     }
 
     /// `s`/`u`/`K` on the marked lines: one patch per file and side, its
@@ -3347,6 +3526,22 @@ impl App {
                 if !outcome.success {
                     self.error(format!("{label} failed ($ for log)"));
                 }
+                if let Op::Apply { .. } = op
+                    && let Some(e) = self.editing.as_mut()
+                    && e.applying
+                    && e.repo == path
+                {
+                    if outcome.success {
+                        self.drop_edit();
+                    } else {
+                        e.applying = false;
+                        self.mode = Mode::Confirm {
+                            question: "The edited patch doesn't apply ($ for why): edit it again?"
+                                .into(),
+                            then: Confirmed::EditAgain,
+                        };
+                    }
+                }
                 if let Op::Clone { .. } = op {
                     if outcome.success {
                         let jobs = [Job {
@@ -3433,6 +3628,9 @@ impl App {
                 self.rebuild();
                 return fx;
             }
+            Msg::Suspended(r) if self.editing.as_ref().is_some_and(|e| !e.applying) => {
+                return self.edited(r);
+            }
             Msg::Suspended(r) => {
                 if let Err(e) = r {
                     self.error(e);
@@ -3475,6 +3673,85 @@ struct CommitPick {
 /// An added or removed line marked in a diff: repo, file, side, hunk and
 /// the line's index in it.
 pub type MarkedLine = (PathBuf, String, argus_core::diff::Side, usize, usize);
+
+/// A patch being edited (`e`): in `file`, for the repo at `repo`, to stage
+/// (or, `reverse`, unstage) and naming only `files`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatchEdit {
+    pub repo: PathBuf,
+    pub file: PathBuf,
+    pub reverse: bool,
+    pub files: Vec<String>,
+    /// Saved, and being applied.
+    pub applying: bool,
+}
+
+impl PatchEdit {
+    /// git's editor (`GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`, as
+    /// that repo's git picks it) on the patch, run as git runs it.
+    fn open(&self) -> Effect {
+        Effect::Suspend {
+            program: "sh".into(),
+            args: vec![
+                "-c".into(),
+                r#"e=$(git var GIT_EDITOR) && eval "$e \"\$1\"""#.into(),
+                "argus".into(),
+                self.file.display().to_string(),
+            ],
+            cwd: self.repo.clone(),
+            login_shell: false,
+        }
+    }
+}
+
+/// Numbers the patch files of this process's edits.
+static EDITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How to edit, after the patch (as `git add -p`'s `e` says it).
+fn edit_instructions(reverse: bool) -> &'static str {
+    if reverse {
+        "# ---\n\
+         # Edit the patch, then save and quit: what's left is unstaged.\n\
+         # To keep a '+' line staged, make it a ' ' (context) line.\n\
+         # To keep a '-' line's removal staged, delete it.\n\
+         # Lines starting with # are dropped; delete everything to cancel.\n\
+         # If it doesn't apply, you're asked whether to edit it again.\n"
+    } else {
+        "# ---\n\
+         # Edit the patch, then save and quit: what's left is staged.\n\
+         # To leave a '-' line out, make it a ' ' (context) line.\n\
+         # To leave a '+' line out, delete it.\n\
+         # Lines starting with # are dropped; delete everything to cancel.\n\
+         # If it doesn't apply, you're asked whether to edit it again.\n"
+    }
+}
+
+/// Why an edited patch can't be applied as it is, if it can't: it may
+/// change only the hunks of `files`, each under its own header. (With
+/// `--recount`, git ends a hunk only at an `@@` or `diff` line, so a
+/// `---`/`+++` line inside one is a removed or added line.)
+fn check_patch(patch: &str, files: &[String]) -> Result<(), String> {
+    let mut lines = patch.lines();
+    let mut started = false;
+    while let Some(l) = lines.next() {
+        if let Some(rest) = l.strip_prefix("diff ") {
+            let Some(f) = files.iter().find(|f| rest == format!("--git a/{f} b/{f}")) else {
+                return Err(format!("names another file ({l})"));
+            };
+            if lines.next() != Some(&format!("--- a/{f}"))
+                || lines.next() != Some(&format!("+++ b/{f}"))
+            {
+                return Err(format!("has {f}'s header changed"));
+            }
+            started = true;
+        } else if !started {
+            return Err("lost its diff --git header".into());
+        } else if !(l.is_empty() || l.starts_with([' ', '+', '-', '\\']) || l.starts_with("@@ ")) {
+            return Err(format!("has a line that isn't a hunk's ({l})"));
+        }
+    }
+    Ok(())
+}
 
 /// Where a region starts: a diff row's repo, file, side, hunk and line
 /// (none on a side's heading or a hunk's header).

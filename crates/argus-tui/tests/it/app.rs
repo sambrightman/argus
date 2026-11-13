@@ -4793,3 +4793,326 @@ fn a_region_keeps_to_its_file_and_side() {
         assert_eq!(app.region_lines().len(), n, "to row {end}");
     }
 }
+
+/// `f`: 30 lines committed, then line 3 changed and a line added after 28
+/// (two hunks); `g`: one line changed.
+fn edit_fixture(sb: &Sandbox) {
+    let d = sb.path("dev/dirty");
+    let lines: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+    write(&d, "f", &lines);
+    write(&d, "g", "old\n");
+    commit(&d, "f");
+    let changed = lines
+        .replace("line 3\n", "line three\n")
+        .replace("line 28\n", "line 28\nadded\n");
+    write(&d, "f", &changed);
+    write(&d, "g", "new\n");
+}
+
+fn diff_row(app: &App, text: &str) -> usize {
+    app.rows
+        .iter()
+        .position(|r| {
+            matches!(r, Row::Detail { line, .. }
+            if line.diff.as_deref().and_then(|d| d.line.as_ref()).is_some_and(|l| l.text == text))
+        })
+        .unwrap_or_else(|| panic!("{text}"))
+}
+
+/// `e`'s editor runs through `sh` on the patch file, its last argument.
+fn editing_file(fx: &[Effect]) -> PathBuf {
+    match fx {
+        [Effect::Suspend { program, args, .. }] => {
+            assert_eq!(program, "sh");
+            assert!(args[1].contains("git var GIT_EDITOR"), "{args:?}");
+            PathBuf::from(args.last().unwrap())
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+fn apply_op(fx: &[Effect]) -> (PathBuf, Op) {
+    match fx {
+        [Effect::Jobs(j)] => (j[0].path.clone(), j[0].op.clone()),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Run the job for real and tell the app how it went.
+fn finish(app: &mut App, path: PathBuf, op: Op) -> bool {
+    let outcome = argus_core::ops::run(&path, &op);
+    let ok = outcome.success;
+    app.on_msg(Msg::JobFinished {
+        path,
+        label: "apply".into(),
+        op,
+        outcome,
+    });
+    ok
+}
+
+fn git_out(dir: &std::path::Path, args: &[&str]) -> String {
+    let o = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8(o.stdout).unwrap()
+}
+
+/// `e` in a diff opens the line (or hunk, or marked lines) as a patch in
+/// git's editor; what's saved is staged, the rest of the diff left alone.
+#[test]
+fn an_edited_line_is_staged_and_the_rest_kept() {
+    let (sb, mut app) = setup_with("", edit_fixture);
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    app.cursor = diff_row(&app, "added");
+    let file = editing_file(&app.on_key(key('e')));
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.starts_with("diff --git a/f b/f\n"), "{text}");
+    assert!(
+        text.contains("+added\n") && !text.contains("line three"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\n# ") && text.contains("staged"),
+        "instructions: {text}"
+    );
+    std::fs::write(&file, text.replace("+added\n", "+edited\n")).unwrap();
+    let (path, op) = apply_op(&app.on_msg(Msg::Suspended(Ok(()))));
+    match &op {
+        Op::Apply {
+            patch,
+            index,
+            reverse,
+            what,
+        } => {
+            assert!(*index && !*reverse);
+            assert_eq!(what, "stage an edited patch of f");
+            assert!(!patch.contains('#'), "instructions dropped: {patch}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(finish(&mut app, path, op));
+    let d = sb.path("dev/dirty");
+    let staged = git_out(&d, &["diff", "--cached"]);
+    assert!(
+        staged.contains("+edited") && !staged.contains("three"),
+        "{staged}"
+    );
+    let left = git_out(&d, &["diff"]);
+    assert!(
+        left.contains("-edited\n+added") && left.contains("+line three"),
+        "the rest of the diff kept: {left}"
+    );
+    assert!(app.editing.is_none() && !file.exists(), "done with");
+}
+
+/// Marked lines of several files make one patch.
+#[test]
+fn marked_lines_of_two_files_are_edited_as_one_patch() {
+    let (sb, mut app) = setup_with("", edit_fixture);
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    to_file(&mut app, "g");
+    app.act(Action::ToggleExpand);
+    for t in ["line three", "new"] {
+        app.cursor = diff_row(&app, t);
+        app.on_key(key(' '));
+    }
+    let file = editing_file(&app.on_key(key('e')));
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("diff --git a/f b/f") && text.contains("diff --git a/g b/g"));
+    let (path, op) = apply_op(&app.on_msg(Msg::Suspended(Ok(()))));
+    assert!(matches!(&op, Op::Apply { what, .. } if what == "stage an edited patch of 2 files"));
+    assert!(finish(&mut app, path, op));
+    let staged = git_out(&sb.path("dev/dirty"), &["diff", "--cached"]);
+    assert!(
+        staged.contains("+line three") && staged.contains("+new") && !staged.contains("added"),
+        "{staged}"
+    );
+}
+
+/// On the staged side, `e` unstages what's saved: a `+` line made context
+/// stays staged.
+#[test]
+fn an_edited_hunk_is_unstaged() {
+    let (sb, mut app) = setup_with("", |sb| {
+        edit_fixture(sb);
+        let d = sb.path("dev/dirty");
+        let f = std::fs::read_to_string(d.join("f")).unwrap();
+        write(&d, "f", &f.replace("added\n", "added\nalso\n"));
+        git(&d, &["add", "f"]);
+    });
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    // the second hunk's header
+    app.cursor = diff_row(&app, "added") - 4;
+    let file = editing_file(&app.on_key(key('e')));
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        text.contains("+added\n+also\n") && !text.contains("three"),
+        "{text}"
+    );
+    assert!(text.contains("unstaged"), "{text}");
+    std::fs::write(&file, text.replace("+added\n", " added\n")).unwrap();
+    let (path, op) = apply_op(&app.on_msg(Msg::Suspended(Ok(()))));
+    assert!(
+        matches!(&op, Op::Apply { index: true, reverse: true, what, .. }
+        if what == "unstage an edited patch of f")
+    );
+    assert!(finish(&mut app, path, op));
+    let d = sb.path("dev/dirty");
+    let staged = git_out(&d, &["diff", "--cached"]);
+    assert!(
+        staged.contains("+added") && staged.contains("+line three") && !staged.contains("also"),
+        "{staged}"
+    );
+    assert!(
+        git_out(&d, &["diff"]).contains("+also"),
+        "back in the work tree's diff"
+    );
+    assert!(app.editing.is_none() && !file.exists());
+}
+
+/// A patch that doesn't apply asks to edit it again, with the edit kept;
+/// no drops it, leaving everything as it was.
+#[test]
+fn an_edit_that_does_not_apply_can_be_edited_again_or_dropped() {
+    let (sb, mut app) = setup_with("", edit_fixture);
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    app.cursor = diff_row(&app, "added");
+    let file = editing_file(&app.on_key(key('e')));
+    let text = std::fs::read_to_string(&file).unwrap();
+    let broken = text.replace(" line 27\n", " line 27 changed\n");
+    std::fs::write(&file, &broken).unwrap();
+    let (path, op) = apply_op(&app.on_msg(Msg::Suspended(Ok(()))));
+    assert!(!finish(&mut app, path, op));
+    assert!(
+        matches!(&app.mode, Mode::Confirm { question, .. } if question.contains("doesn't apply"))
+    );
+    // y: the same file again, the edit in it
+    assert_eq!(editing_file(&app.on_key(key('y'))), file);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), broken);
+    // still broken: n drops it
+    let (path, op) = apply_op(&app.on_msg(Msg::Suspended(Ok(()))));
+    assert!(!finish(&mut app, path, op));
+    assert!(app.on_key(key('n')).is_empty());
+    assert!(app.editing.is_none() && !file.exists());
+    assert!(git_out(&sb.path("dev/dirty"), &["diff", "--cached"]).is_empty());
+}
+
+/// What `e` won't do: an emptied patch, one naming another file or
+/// changing anything but hunks, an editor that failed, an untracked file,
+/// lines of both sides, outside a diff.
+#[test]
+fn edits_that_are_refused() {
+    let (sb, mut app) = setup_with("", |sb| {
+        edit_fixture(sb);
+        write(&sb.path("dev/dirty"), "new", "a\n");
+    });
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    let start = |app: &mut App| {
+        app.cursor = diff_row(app, "added");
+        editing_file(&app.on_key(key('e')))
+    };
+    let msg = |app: &App| app.message.clone().unwrap().0;
+
+    // emptied, or only the instructions left: nothing happens
+    let file = start(&mut app);
+    let text = std::fs::read_to_string(&file).unwrap();
+    let instructions: String = text
+        .lines()
+        .filter(|l| l.starts_with('#'))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(&file, instructions).unwrap();
+    assert!(app.on_msg(Msg::Suspended(Ok(()))).is_empty());
+    assert!(msg(&app).contains("empty"), "{}", msg(&app));
+    assert!(app.editing.is_none() && !file.exists());
+
+    // another file, or a header line that isn't the file's: edit again?
+    for bad in [
+        text.replace("diff --git a/f b/f", "diff --git a/g b/g"),
+        text.replace("+++ b/f", "+++ b/g"),
+        text.replacen("@@", "new file mode 100755\n@@", 1),
+    ] {
+        let file = start(&mut app);
+        std::fs::write(&file, &bad).unwrap();
+        assert!(app.on_msg(Msg::Suspended(Ok(()))).is_empty(), "{bad}");
+        assert!(matches!(&app.mode, Mode::Confirm { .. }), "{bad}");
+        app.on_key(key('n'));
+        assert!(app.editing.is_none() && !file.exists());
+    }
+
+    // the editor failed
+    let file = start(&mut app);
+    assert!(
+        app.on_msg(Msg::Suspended(Err("vi exited with 1".into())))
+            .is_empty()
+    );
+    assert!(app.message.as_ref().unwrap().1, "an error");
+    assert!(app.editing.is_none() && !file.exists());
+
+    // untracked: no patch to edit
+    to_file(&mut app, "new");
+    app.act(Action::ToggleExpand);
+    app.cursor = diff_row(&app, "a");
+    assert!(app.on_key(key('e')).is_empty());
+    assert!(msg(&app).contains("untracked"), "{}", msg(&app));
+
+    // outside a diff
+    app.cursor = 0;
+    assert!(app.on_key(key('e')).is_empty());
+    assert!(msg(&app).contains("diff"), "{}", msg(&app));
+    assert!(git_out(&sb.path("dev/dirty"), &["diff", "--cached"]).is_empty());
+}
+
+/// Marked lines must all be on one side.
+#[test]
+fn editing_marked_lines_of_both_sides_is_refused() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "both");
+    app.act(Action::ToggleExpand);
+    for t in ["three", "two"] {
+        let i = app
+            .rows
+            .iter()
+            .rposition(|r| {
+                matches!(r, Row::Detail { line, .. }
+                if line.diff.as_deref().and_then(|d| d.line.as_ref())
+                    .is_some_and(|l| l.text == t && l.kind == argus_core::diff::LineKind::Add))
+            })
+            .unwrap();
+        app.cursor = i;
+        app.on_key(key(' '));
+    }
+    assert_eq!(app.marked_lines.len(), 2);
+    assert!(app.on_key(key('e')).is_empty());
+    assert!(
+        app.message
+            .clone()
+            .unwrap()
+            .0
+            .contains("staged and unstaged")
+    );
+    assert!(app.editing.is_none());
+}
+
+/// On an unchanged line (or the header), `e` takes the whole hunk.
+#[test]
+fn editing_on_an_unchanged_line_takes_the_hunk() {
+    let (_sb, mut app) = setup_with("", edit_fixture);
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    app.cursor = diff_row(&app, "line 2");
+    let file = editing_file(&app.on_key(key('e')));
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("-line 3\n+line three\n"), "{text}");
+    std::fs::write(&file, "").unwrap();
+    app.on_msg(Msg::Suspended(Ok(())));
+    assert!(app.editing.is_none() && !file.exists());
+}

@@ -660,6 +660,14 @@ pub fn help_lines() -> Vec<(String, String)> {
             "stage / unstage / discard files (marked, else current; discard asks)",
         ),
         (
+            "C-space",
+            "in a diff: a region of lines, for s u K e (again: keep as marks)",
+        ),
+        (
+            "e",
+            "in a diff: edit the hunk, line or marked lines, then stage (or unstage)",
+        ),
+        (
             "i",
             "add untracked files (marked, else current) to a .gitignore…",
         ),
