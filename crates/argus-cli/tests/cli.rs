@@ -39,7 +39,7 @@ fn status_text_and_json() {
         .stdout(predicate::str::contains("acme/dirty").and(predicate::str::contains("±1")))
         .stdout(predicate::str::contains("acme/clean").not())
         .stdout(predicate::str::contains(
-            "2 of 3 repos need attention; 1 clean not shown (--all)",
+            "2 of 3 repos need attention; 1 not shown need no attention (--all)",
         ))
         .stdout(predicate::str::contains("\x1b[").not());
     // inverse: --all / -a includes them
@@ -79,7 +79,7 @@ fn status_when_everything_is_clean() {
         .arg("status")
         .assert()
         .success()
-        .stdout("0 of 1 repos need attention; 1 clean not shown (--all)\n");
+        .stdout("0 of 1 repos need attention; 1 not shown need no attention (--all)\n");
 }
 
 /// argus with an isolated environment but no `--root`, run from `cwd`.

@@ -830,9 +830,11 @@ fn status_summary(ws: &Workspace, filter: ViewFilter) -> String {
         .filter(shown)
         .filter(|e| e.needs_attention())
         .count();
-    let clean = total - attention;
-    let mut s = if filter.attention_only && clean > 0 {
-        format!("{attention} of {total} repos need attention; {clean} clean not shown (--all)")
+    let fine = total - attention;
+    let mut s = if filter.attention_only && fine > 0 {
+        format!(
+            "{attention} of {total} repos need attention; {fine} not shown need no attention (--all)"
+        )
     } else {
         format!("{total} repos, {attention} need attention")
     };
