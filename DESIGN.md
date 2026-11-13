@@ -254,7 +254,8 @@ Two findings:
 * **Attention.** A repo needs attention if it has any of: conflicts or an
   in-progress operation, uncommitted changes, unpushed commits, a non-default
   branch, detached HEAD, stashes, a gone upstream, no upstream for the
-  current branch, or records of worktrees whose folder is gone. Sort order: needing attention before clean, then
+  current branch, records of worktrees whose folder is gone, or a
+  finished worktree. Sort order: needing attention before clean, then
   favourites, then severity, then amount of change, then name.
 * **Auto-fixes** (planned and shown first, then executed; never destructive:
   the destructive kinds, `abort` and `delete-branches`, are confirmed
@@ -316,6 +317,17 @@ Two findings:
     `git worktree prune`. Their branches count as checked out there until
     then (`git switch` refuses). Only the main checkout reports them, as it
     lists the worktrees. Nothing on disk is lost; the branches stay.
+  * `remove-worktree`: a finished linked worktree (`is_finished_worktree`:
+    nothing uncommitted, its branch merged into the default branch and its
+    upstream gone) → `git worktree remove .`, run in it. Said instead of
+    "not on default branch" (and no `switch-default`, whose branch the main
+    checkout usually has). Confirmed first: ignored files go with the
+    folder (git refuses untracked or changed ones itself). The branch
+    stays, for `delete-branches`. Blocked when locked or with submodules
+    (git refuses both). A branch never pushed doesn't count, as a new
+    worktree's branch is merged too. Once removed, the entry leaves the
+    list on refresh (a repo whose folder is gone), and the main repo's
+    stale status doesn't bring it back.
   * `stash-pop`: stashes, no tracked changes → `git stash pop --index`,
     after `git merge-tree` of the stash into HEAD finds no conflicts
     (checked when it runs). Turned off for auto-fix while any stash is

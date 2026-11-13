@@ -491,10 +491,15 @@ impl Workspace {
     }
 
     /// Apply a status computed elsewhere (e.g. on a worker thread).
+    /// A repo whose folder is gone (a worktree removed) leaves the list.
     pub fn update_status(&mut self, path: &Path, r: Result<RepoStatus, String>) {
         let Some(i) = self.index_of(path) else { return };
-        let ids = self.config.local_forges();
-        self.entries[i].set_status(r, &ids);
+        if r.is_err() && path.symlink_metadata().is_err() {
+            self.entries.remove(i);
+        } else {
+            let ids = self.config.local_forges();
+            self.entries[i].set_status(r, &ids);
+        }
         self.add_children();
         self.link_parents();
         self.resolve_flags();
@@ -558,7 +563,8 @@ impl Workspace {
             let kids = kids.chain(s.submodules.iter().map(|p| (p, RepoKind::Submodule)));
             for (p, kind) in kids {
                 let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
-                if self.index_of(&p).is_none() {
+                // gone since the parent's status was read (a worktree removed)
+                if self.index_of(&p).is_none() && p.symlink_metadata().is_ok() {
                     extra.entry(p.clone()).or_insert_with(|| {
                         let mut child = Entry::new(p, kind);
                         child.parent = Some(e.path.clone());

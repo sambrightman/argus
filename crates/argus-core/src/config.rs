@@ -331,7 +331,7 @@ impl FixConfig {
         }
         vec![format!(
             "[fix] auto lists {}, which need input or confirmation, so are never automatic: \
-             they're left out (choose them from the TUI's menus, or `argus fix -k` for abort and delete-branches)",
+             they're left out (choose them from the TUI's menus, or `argus fix -k` for abort, delete-branches and remove-worktree)",
             manual.join(", ")
         )]
     }

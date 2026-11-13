@@ -5116,3 +5116,59 @@ fn editing_on_an_unchanged_line_takes_the_hunk() {
     app.on_msg(Msg::Suspended(Ok(())));
     assert!(app.editing.is_none() && !file.exists());
 }
+
+/// `x W` on a finished worktree asks first; no leaves it, yes removes it.
+#[test]
+fn removing_a_finished_worktree_asks_first() {
+    use argus_core::fix::FixKind;
+    let (sb, mut app) = setup_with("", |sb| {
+        let r = sb.path("dev/clean");
+        let wt = sb.path("dev/clean-wt");
+        git(
+            &r,
+            &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()],
+        );
+        commit(&wt, "work");
+        git(&wt, &["push", "-q", "-u", "origin", "wt"]);
+        git(&r, &["merge", "-q", "--no-edit", "--no-ff", "wt"]);
+        git(&r, &["push", "-q"]);
+        git(&r, &["push", "-q", "origin", "--delete", "wt"]);
+        git(&r, &["fetch", "-q", "--prune"]);
+    });
+    let wt = sb.path("dev/clean-wt");
+    // not one: said, nothing asked
+    app.cursor = 0;
+    assert!(
+        app.act(Action::ApplyFix(FixKind::RemoveWorktree))
+            .is_empty()
+    );
+    assert!(!matches!(app.mode, Mode::Confirm { .. }));
+    assert!(
+        app.message
+            .clone()
+            .unwrap()
+            .0
+            .contains("no finished worktree")
+    );
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path == wt))
+        .unwrap();
+    assert!(
+        app.act(Action::ApplyFix(FixKind::RemoveWorktree))
+            .is_empty()
+    );
+    assert!(matches!(&app.mode, Mode::Confirm { question, .. }
+            if question.contains("clean-wt") && question.contains("ignored files")),);
+    assert!(app.on_key(key('n')).is_empty());
+    assert!(wt.exists());
+    app.act(Action::ApplyFix(FixKind::RemoveWorktree));
+    match app.on_key(key('y')).as_slice() {
+        [Effect::Jobs(j)] => {
+            assert_eq!(j[0].path, wt);
+            assert_eq!(j[0].op, Op::RemoveWorktree);
+        }
+        other => panic!("{other:?}"),
+    }
+}

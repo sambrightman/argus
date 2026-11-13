@@ -75,12 +75,16 @@ pub enum FixKind {
     /// Delete the records of linked worktrees whose folder is gone (not
     /// locked ones): nothing on disk is lost.
     PruneWorktrees,
+    /// Remove a finished linked worktree (`git worktree remove`): its
+    /// folder goes, ignored files in it too; the branch stays (never
+    /// automatic: confirmed first).
+    RemoveWorktree,
 }
 
 impl FixKind {
     /// Default priority: clean up uncommitted work, share commits, leave
     /// the branch, then catch up (on the branch you end up on).
-    pub const ALL: [FixKind; 17] = [
+    pub const ALL: [FixKind; 18] = [
         FixKind::Abort,
         FixKind::Stash,
         FixKind::Commit,
@@ -97,6 +101,7 @@ impl FixKind {
         FixKind::FastForward,
         FixKind::DeleteBranches,
         FixKind::PruneWorktrees,
+        FixKind::RemoveWorktree,
         FixKind::StashPop,
     ];
 
@@ -110,7 +115,10 @@ impl FixKind {
 
     /// Permanently destructive: asked about first, never automatic.
     pub fn needs_confirmation(self) -> bool {
-        matches!(self, FixKind::Abort | FixKind::DeleteBranches)
+        matches!(
+            self,
+            FixKind::Abort | FixKind::DeleteBranches | FixKind::RemoveWorktree
+        )
     }
 
     /// Something a fix of this kind can't do alone: never automatic.
@@ -138,6 +146,7 @@ impl FixKind {
             FixKind::Gitignore => "gitignore",
             FixKind::SubmoduleUpdate => "submodule-update",
             FixKind::PruneWorktrees => "prune-worktrees",
+            FixKind::RemoveWorktree => "remove-worktree",
         }
     }
 }
@@ -215,7 +224,20 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
         // the work is merged (if only locally, switching shows it) or exists
         // on a remote.
         let safe = head_info.is_some_and(|h| h.merged || !h.is_unpushed());
-        if b != default && !tracked_dirty && safe {
+        if s.is_finished_worktree() {
+            v.push(Fix {
+                blocked: if s.locked {
+                    Some("it's locked (git worktree lock)".into())
+                } else if !s.submodules.is_empty() {
+                    Some("it has submodules, which git worktree remove refuses".into())
+                } else {
+                    None
+                },
+                kind: FixKind::RemoveWorktree,
+                op: Op::RemoveWorktree,
+                reason: format!("{b} is merged into {default} and its upstream is gone"),
+            });
+        } else if b != default && !tracked_dirty && safe {
             v.push(Fix {
                 blocked: None,
                 kind: FixKind::SwitchDefault,
@@ -855,6 +877,7 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
         | Op::Restore { .. }
         | Op::Remove { .. }
         | Op::Clean { .. }
+        | Op::RemoveWorktree
         | Op::Ignore { .. } => {}
     }
     s

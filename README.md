@@ -179,7 +179,7 @@ again runs it.
 | `c` | **Commit** (prompts for the message): `c` what's staged (offered only when something is), `A` all changes, untracked files included, `a` amend the last commit with what's staged, starting from its summary line (unchanged keeps the message; the body is always kept; says so when the commit is on a remote, as pushing will then need force), `f` fixup: what's staged as a `fixup!` commit of one picked from HEAD's history (starting at HEAD, or the commit under the cursor), for `git rebase --autosquash`; `F` instant fixup: the same, folded in at once (a non-interactive autosquash rebase, uncommitted changes kept; refused for a commit already on a remote, as it rewrites history; a conflict leaves the rebase to finish or abort); `s` squash: a `squash!` commit, asking for the message to add, and `S` instant squash (the messages combined); all offered when something is staged |
 | `X` | **Reset** the current branch (one repo at a time): `s` soft (changes stay staged), `m` mixed (unstaged), `k` keep (drops the commits' changes, refusing if uncommitted ones are in the way), `h` hard (drops uncommitted changes too; asks first). Then pick the commit from HEAD's recent history, those on a remote marked; the cursor starts on the commit before HEAD, or, pressed on a commit in the details, on the one before it |
 | `b` | **Branch**: `b` checkout a branch: type to narrow the list fuzzily, as `/` does (local branches, then remote ones without a local copy, which creates a local branch tracking it), `C-n`/`C-p` to move, Enter to check it out, `-` checkout the previous branch, `s` spin off (as magit's: the commits the branch's upstream doesn't have go to a new branch, checked out, and the branch goes back to what it shares with its upstream; nothing unpushed, the new branch is made anyway), `S` spin out (the same, staying on the branch; if uncommitted changes would be lost, it spins off instead), `d` switch to default, `r` reattach detached HEAD, `c` create a branch at HEAD and check it out… (on a detached HEAD, that names its commits), `x` delete merged branches…, `f` fast-forward stale branches |
-| `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden, each saying what it would do (and left out when it would do nothing); then every fix that applies to the selection, with its reason (or how many repos it applies to): `s` stash, `c` commit…, `i` gitignore…, `b` branch…, `p` push, `u` publish, `R` add-remote…, `P` push-branches, `d` switch-default, `r` reattach, `F` pull, `f` fast-forward, `D` delete-branches…, `z` stash-pop, `A` abort…. Those marked … ask first. Opened on a fix line in the details, it starts on that fix |
+| `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden, each saying what it would do (and left out when it would do nothing); then every fix that applies to the selection, with its reason (or how many repos it applies to): `s` stash, `c` commit…, `i` gitignore…, `b` branch…, `p` push, `u` publish, `R` add-remote…, `P` push-branches, `d` switch-default, `r` reattach, `F` pull, `f` fast-forward, `D` delete-branches…, `S` submodule-update, `w` prune-worktrees, `W` remove-worktree…, `z` stash-pop, `A` abort…. Those marked … ask first. Opened on a fix line in the details, it starts on that fix |
 | `m` | **Mark**: `f` favourite, `p` pull, `i` ignore issues (a menu of the repo's issues and their state), `I` ignore or unignore the repo, `z` snooze, `u` unsnooze, `a` ack new, `c` clear |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page |
 | `v` | **View**: toggles, expand/collapse all, log |
@@ -265,7 +265,8 @@ ref › **unpushed** work (on *no* remote, so a fork branch pushed to `origin`
 while tracking `upstream/main` is fine, and work merged into a `main` that
 isn't on the remote isn't) › uncommitted changes › upstream
 deleted with unmerged work › unpublished branch › other local branches with
-unpushed work › detached HEAD › not on default branch › worktree records whose
+unpushed work › detached HEAD › not on default branch (or a finished
+worktree) › worktree records whose
 folder is gone › stashes › no remote ›
 behind upstream (on its own, not counted as needing attention: a pull fixes it).
 
@@ -301,6 +302,13 @@ Nothing is offered during a conflict.
   main repo, and its branch still counts as checked out there (`git
   switch` refuses it): `prune-worktrees` deletes such records (`git
   worktree prune`; locked worktrees are left alone).
+* **A finished worktree** (a linked one whose branch is merged into the
+  default branch and whose upstream is gone, as after a pull request, with
+  nothing uncommitted) is flagged instead of "not on default branch", and
+  `x W` removes it (`git worktree remove`), asked first: its folder goes,
+  ignored files in it too; the branch stays, for `b x`. A branch never
+  pushed isn't flagged: it can't be told from one not started yet. Blocked
+  when it's locked or has submodules.
 * **Repos nested in the work tree** (untracked, not submodules) get
   `gitignore` only: git's stash skips them, and `commit` leaves them out
   rather than add them as embedded repos.
@@ -319,8 +327,10 @@ Nothing is offered during a conflict.
 * **Asked first, never automatic:** `x A` aborts the merge, rebase,
   cherry-pick, revert or am in progress (or ends a bisect), losing what it
   did so far; `b x` deletes branches merged into the default branch whose
-  upstream is gone or that have none (`git branch -d`, so git double-checks).
-  In the CLI, `argus fix -k abort` or `-k delete-branches` lists every one
+  upstream is gone or that have none (`git branch -d`, so git double-checks);
+  `x W` removes a finished worktree (below).
+  In the CLI, `argus fix -k abort`, `-k delete-branches` or
+  `-k remove-worktree` lists every one
   it finds, then asks (`--yes` to skip asking; refused without a terminal).
 
 Pushes that would need force (the branch was rewritten after pushing) are
@@ -335,8 +345,9 @@ Each auto-fix action applies **one** fix: the first kind in `[fix] auto`
 branch is pushed by one `x x` (or `argus fix`) and switched back to the
 default branch by the next. Or snooze it in between (`m z`).
 Kinds you don't list rank after the ones you do, in the default order:
-abort, stash, commit, gitignore, branch, push, publish, add-remote, push-branches,
-switch-default, reattach, pull, fast-forward, delete-branches, stash-pop.
+abort, stash, commit, submodule-update, gitignore, branch, push, publish,
+add-remote, push-branches, switch-default, reattach, pull, fast-forward,
+delete-branches, prune-worktrees, remove-worktree, stash-pop.
 
 `argus fix -n` shows, per repo, the fix this run would apply, then the
 chain later runs would continue with, then other fixes available now

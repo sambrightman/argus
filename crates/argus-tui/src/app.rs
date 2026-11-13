@@ -1384,6 +1384,7 @@ impl App {
                     FixKind::Branch => self.act(CreateBranch),
                     FixKind::AddRemote => self.act(AddRemote),
                     FixKind::DeleteBranches => self.act(DeleteMergedBranches),
+                    FixKind::RemoveWorktree => self.remove_worktrees(),
                     k => self.fix_ops(k),
                 };
             }
@@ -2688,6 +2689,39 @@ impl App {
 
     /// Run every fix of a kind (one per branch, for kinds that have
     /// several) on the selected repos where it applies and isn't blocked.
+    /// `x W`: remove the finished worktrees selected, asked first.
+    fn remove_worktrees(&mut self) -> Vec<Effect> {
+        let p = self.planned(FixKind::RemoveWorktree);
+        let ops = p.ops.clone();
+        let question = match ops.as_slice() {
+            [] => {
+                return match p.why {
+                    Some(why) => {
+                        self.error(why);
+                        vec![]
+                    }
+                    None => self.not_applicable("no finished worktree to remove"),
+                };
+            }
+            [(path, _)] => format!(
+                "Remove the worktree {} ({})? Its folder is deleted, ignored files in it too; \
+                 the branch stays.",
+                self.name_of(path),
+                paths::contract_tilde(path)
+            ),
+            _ => format!(
+                "Remove {} finished worktrees? Their folders are deleted, ignored files in \
+                 them too; the branches stay.",
+                ops.len()
+            ),
+        } + &p.note();
+        self.mode = Mode::Confirm {
+            question,
+            then: Confirmed::Ops(ops),
+        };
+        vec![]
+    }
+
     fn fix_ops(&mut self, kind: FixKind) -> Vec<Effect> {
         let p = self.planned(kind);
         if p.ops.is_empty() {

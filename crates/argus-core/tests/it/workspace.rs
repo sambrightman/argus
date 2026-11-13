@@ -1631,3 +1631,27 @@ fn an_owner_can_be_marked_as_a_whole() {
     let w = ws(&sb, "");
     assert_eq!(w.owner_marked(at(&w, "local"), Mark::Favourite), None);
 }
+
+/// A repo whose folder is gone (a worktree removed) leaves the list when
+/// it's next refreshed.
+#[test]
+fn a_repo_whose_folder_is_gone_leaves_the_list() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "app");
+    let app = sb.clone_as_github("acme", "app", "dev/app");
+    let wt = sb.path("dev/app-wt");
+    git(
+        &app,
+        &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()],
+    );
+    let mut w = ws(&sb, "");
+    assert!(w.index_of(&wt).is_some());
+    git(&app, &["worktree", "remove", wt.to_str().unwrap()]);
+    w.refresh(&wt);
+    assert!(w.index_of(&wt).is_none());
+    assert!(w.index_of(&app).is_some());
+    // an error with the folder still there stays listed, with the error
+    std::fs::remove_dir_all(app.join(".git")).unwrap();
+    w.refresh(&app);
+    assert!(w.get(&app).is_some_and(|e| e.error().is_some()));
+}

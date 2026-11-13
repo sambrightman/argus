@@ -233,6 +233,10 @@ pub struct RepoStatus {
     pub bare: bool,
     /// A linked worktree: shares branches with its main checkout.
     pub linked_worktree: bool,
+    /// A linked worktree locked against pruning, moving and removal (`git
+    /// worktree lock`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
     /// A submodule: a detached HEAD at the parent's pinned commit is normal.
     pub submodule: bool,
     /// Whether `git pull` could integrate the upstream; only computed when
@@ -264,6 +268,23 @@ pub enum PullBy {
 }
 
 impl RepoStatus {
+    /// A linked worktree that's done with: nothing uncommitted, its branch
+    /// (not the default) merged into the default branch and its upstream
+    /// gone, as after a pull request. A branch never pushed isn't: it can't
+    /// be told from one not started yet.
+    pub fn is_finished_worktree(&self) -> bool {
+        let Head::Branch(b) = &self.head else {
+            return false;
+        };
+        self.linked_worktree
+            && self.in_progress.is_none()
+            && self.changes.uncommitted() == 0
+            && self.changes.conflicted == 0
+            && self.default_branch.as_ref().is_some_and(|d| d != b)
+            && self.upstream.as_ref().is_some_and(|t| t.gone)
+            && self.branches.iter().any(|i| &i.name == b && i.merged)
+    }
+
     pub fn on_default(&self) -> bool {
         match (&self.head, &self.default_branch) {
             (Head::Branch(b) | Head::Unborn(b), Some(d)) => b == d,
@@ -661,6 +682,8 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
             .and_then(|t| Timestamp::from_second(t.seconds).ok()),
         bare,
         linked_worktree: repo.kind() == gix::repository::Kind::LinkedWorkTree,
+        locked: repo.kind() == gix::repository::Kind::LinkedWorkTree
+            && repo.git_dir().join("locked").symlink_metadata().is_ok(),
         submodule: repo.kind() == gix::repository::Kind::Submodule,
         integration,
     })

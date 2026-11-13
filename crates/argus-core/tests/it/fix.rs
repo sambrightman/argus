@@ -1848,3 +1848,91 @@ fn locked_or_seen_from_a_worktree_is_not_stale() {
         "the main repo reports it"
     );
 }
+
+/// `wt`'s branch pushed, merged into main (pushed) and deleted on the
+/// remote: the usual end of a pull request.
+fn finished_worktree(sb: &Sandbox) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (r, wt) = with_worktree(sb);
+    commit(&wt, "work");
+    git(&wt, &["push", "-q", "-u", "origin", "wt"]);
+    git(&r, &["merge", "-q", "--no-edit", "--no-ff", "wt"]);
+    git(&r, &["push", "-q"]);
+    git(&r, &["push", "-q", "origin", "--delete", "wt"]);
+    git(&r, &["fetch", "-q", "--prune"]);
+    (r, wt)
+}
+
+fn finished_issue(p: &std::path::Path) -> bool {
+    attention::issues(&st(p)).contains(&Issue::FinishedWorktree)
+}
+
+/// A linked worktree whose branch is merged, upstream gone and nothing
+/// uncommitted is finished: removed (confirmed first), its branch kept.
+#[test]
+fn a_finished_worktree_is_offered_for_removal() {
+    let sb = Sandbox::new();
+    let (r, wt) = finished_worktree(&sb);
+    let issues = attention::issues(&st(&wt));
+    assert!(issues.contains(&Issue::FinishedWorktree), "{issues:?}");
+    assert!(!issues.contains(&Issue::NonDefaultBranch), "said instead");
+    assert_eq!(
+        of_kind(&wt, FixKind::RemoveWorktree),
+        [("remove this worktree".to_string(), None)]
+    );
+    assert!(FixKind::RemoveWorktree.needs_confirmation());
+    assert!(
+        of_kind(&wt, FixKind::SwitchDefault).is_empty(),
+        "removed instead"
+    );
+    let fix = plan(&st(&wt), &StashConfig::default())
+        .into_iter()
+        .find(|f| f.kind == FixKind::RemoveWorktree)
+        .unwrap();
+    assert!(argus_core::ops::run(&wt, &fix.op).success);
+    assert!(!wt.exists());
+    let s = st(&r);
+    assert!(s.worktrees.is_empty() && s.stale_worktrees.is_empty());
+    assert!(
+        s.branches.iter().any(|b| b.name == "wt"),
+        "the branch stays"
+    );
+}
+
+/// Not finished: anything uncommitted, work not merged, an upstream still
+/// there, no upstream (a new worktree looks merged too), or the main
+/// checkout. Locked: offered, blocked.
+#[test]
+fn unfinished_worktrees_are_left_alone() {
+    let sb = Sandbox::new();
+    let (r, wt) = finished_worktree(&sb);
+    write(&wt, "scratch", "x");
+    assert!(!finished_issue(&wt), "untracked file");
+    assert!(of_kind(&wt, FixKind::RemoveWorktree).is_empty());
+    std::fs::remove_file(wt.join("scratch")).unwrap();
+    assert!(finished_issue(&wt));
+
+    git(&wt, &["worktree", "lock", "."]);
+    assert_eq!(
+        of_kind(&wt, FixKind::RemoveWorktree),
+        [(
+            "remove this worktree".to_string(),
+            Some("it's locked (git worktree lock)".to_string())
+        )]
+    );
+    git(&wt, &["worktree", "unlock", "."]);
+
+    commit(&wt, "more");
+    assert!(!finished_issue(&wt), "unmerged work");
+
+    // the main checkout on such a branch: switch-default's
+    git(&wt, &["switch", "-q", "--detach"]);
+    git(&r, &["switch", "-q", "wt"]);
+    git(&r, &["reset", "-q", "--hard", "HEAD~1"]);
+    assert!(!finished_issue(&r), "not a linked worktree");
+
+    let sb = Sandbox::new();
+    let (_r, wt) = with_worktree(&sb);
+    assert!(!finished_issue(&wt), "new, no upstream");
+    git(&wt, &["push", "-q", "-u", "origin", "wt"]);
+    assert!(!finished_issue(&wt), "upstream still there");
+}

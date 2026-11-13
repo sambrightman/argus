@@ -267,6 +267,7 @@ enum FixArg {
     DeleteBranches,
     SubmoduleUpdate,
     PruneWorktrees,
+    RemoveWorktree,
 }
 
 impl From<FixArg> for FixKind {
@@ -283,6 +284,7 @@ impl From<FixArg> for FixKind {
             FixArg::StashPop => FixKind::StashPop,
             FixArg::SubmoduleUpdate => FixKind::SubmoduleUpdate,
             FixArg::PruneWorktrees => FixKind::PruneWorktrees,
+            FixArg::RemoveWorktree => FixKind::RemoveWorktree,
             FixArg::Abort => FixKind::Abort,
             FixArg::DeleteBranches => FixKind::DeleteBranches,
         }

@@ -454,6 +454,13 @@ pub fn describe(i: &Issue, default: Option<&str>) -> (Role, String) {
             format!("{n} commit(s) on detached HEAD in no branch: create one before switching"),
         ),
         Issue::NoRemote => (Role::Dim, "no remote".into()),
+        Issue::FinishedWorktree => (
+            Role::Branch,
+            format!(
+                "finished worktree: its branch is merged{} and its upstream gone",
+                default.map(|d| format!(" into {d}")).unwrap_or_default()
+            ),
+        ),
         Issue::StaleWorktrees(n) => (
             Role::Warning,
             format!(
@@ -472,6 +479,7 @@ fn manual_keys(kind: FixKind) -> &'static str {
         FixKind::Branch => "b c",
         FixKind::AddRemote => "P r",
         FixKind::DeleteBranches => "b x",
+        FixKind::RemoveWorktree => "x W",
         _ => "x x",
     }
 }

@@ -29,6 +29,9 @@ pub enum Issue {
     /// Records of linked worktrees whose folder was deleted: their
     /// branches still count as checked out there.
     StaleWorktrees(usize),
+    /// A linked worktree whose branch is merged, upstream gone, nothing
+    /// uncommitted: done with.
+    FinishedWorktree,
 }
 
 impl Issue {
@@ -43,7 +46,7 @@ impl Issue {
             Issue::NoUpstream => 35,
             Issue::UnpushedBranches(_) => 30,
             Issue::Detached => 25,
-            Issue::NonDefaultBranch => 20,
+            Issue::NonDefaultBranch | Issue::FinishedWorktree => 20,
             Issue::StaleWorktrees(_) => 15,
             Issue::Stashes(_) => 10,
             Issue::NoRemote => 8,
@@ -100,6 +103,8 @@ pub fn issues(s: &RepoStatus) -> Vec<Issue> {
                 v.push(Issue::DetachedCommits(s.detached_orphans));
             }
         }
+        // said instead of not being on the default branch
+        Head::Branch(_) if s.is_finished_worktree() => v.push(Issue::FinishedWorktree),
         Head::Branch(_) if s.default_branch.is_some() && !s.on_default() => {
             v.push(Issue::NonDefaultBranch)
         }

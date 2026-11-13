@@ -152,6 +152,25 @@ pub fn build() -> Demo {
                 ],
             );
             std::fs::remove_dir_all(&gone).unwrap();
+            // one whose branch was pushed, merged and deleted on the remote
+            let done = sb.path("repos/worktrees-done");
+            git(
+                &r,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    "wt-done",
+                    done.to_str().unwrap(),
+                ],
+            );
+            commit(&done, "done");
+            git(&done, &["push", "-q", "-u", "origin", "wt-done"]);
+            git(&r, &["merge", "-q", "--no-edit", "--no-ff", "wt-done"]);
+            git(&r, &["push", "-q"]);
+            git(&r, &["push", "-q", "origin", "--delete", "wt-done"]);
+            git(&r, &["fetch", "-q", "--prune"]);
         }),
         Box::new(|| {
             let r = clone("with-submodule");

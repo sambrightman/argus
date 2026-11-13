@@ -69,6 +69,10 @@ fn demo_covers_every_state() {
         ("no remote", issue(|i| matches!(i, Issue::NoRemote))),
         ("worktree", has(&|e| e.kind == RepoKind::Worktree)),
         (
+            "finished worktree",
+            issue(|i| matches!(i, Issue::FinishedWorktree)),
+        ),
+        (
             "stale worktree record",
             issue(|i| matches!(i, Issue::StaleWorktrees(_))),
         ),
