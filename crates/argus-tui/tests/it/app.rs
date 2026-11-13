@@ -4632,3 +4632,66 @@ fn hunks_and_lines_are_staged_unstaged_and_discarded() {
     );
     assert!(!matches!(app.mode, Mode::Confirm { .. }));
 }
+
+/// Space marks added or removed lines; `s`/`u`/`K` then act on just those,
+/// across hunks, in one patch per file.
+#[test]
+fn marked_lines_are_staged_together() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let d = sb.path("dev/dirty");
+        let lines: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+        write(&d, "f", &lines);
+        commit(&d, "f");
+        let changed = lines
+            .replace("line 3\n", "line three\n")
+            .replace("line 28\n", "line 28\nadded\n");
+        write(&d, "f", &changed);
+    });
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    let row_of = |app: &App, text: &str| {
+        app.rows
+            .iter()
+            .position(|r| matches!(r, Row::Detail { line, .. }
+                if line.diff.as_deref().and_then(|d| d.line.as_ref()).is_some_and(|l| l.text == text)
+                    && line.diff.as_deref().is_some_and(|d| d.side == argus_core::diff::Side::Unstaged)))
+            .unwrap_or_else(|| panic!("{text}"))
+    };
+    for text in ["line three", "added"] {
+        app.cursor = row_of(&app, text);
+        app.on_key(key(' '));
+    }
+    assert_eq!(app.marked_lines.len(), 2);
+    let screen = render(&mut app, 100, 60);
+    let marked = screen
+        .lines()
+        .filter(|l| l.contains(&*argus_core::icons::UNICODE.marked))
+        .count();
+    assert!(marked >= 2, "{screen}");
+    // u: they aren't staged
+    assert!(app.act(Action::UnstageFiles).is_empty());
+    assert!(app.message.as_ref().unwrap().0.contains("aren't staged"));
+    match app.act(Action::StageFiles).as_slice() {
+        [Effect::Jobs(j)] => match &j[0].op {
+            Op::Apply {
+                patch,
+                what,
+                index: true,
+                reverse: false,
+            } => {
+                assert_eq!(what, "stage 2 lines of f");
+                assert!(
+                    patch.contains("+line three") && patch.contains("+added"),
+                    "{patch}"
+                );
+                assert!(
+                    patch.contains(" line 3\n"),
+                    "line 3's removal left out: {patch}"
+                );
+            }
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+    assert!(app.marked_lines.is_empty(), "acted on, unmarked");
+}

@@ -236,12 +236,15 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
             Row::Detail { repo, line } => {
                 // two in from the name: past the marker, flags and a space
                 let indent = "  ".repeat(app.ws.depth(*repo)) + &" ".repeat(flags_w + 4);
-                let marked = line.diff.is_none()
-                    && line.file.as_ref().is_some_and(|f| {
-                        app.marked_files
-                            .get(&app.ws.entries[*repo].path)
-                            .is_some_and(|m| m.contains(f))
-                    });
+                let path = &app.ws.entries[*repo].path;
+                let marked = match (line.diff.as_deref(), &line.file) {
+                    (None, Some(f)) => app.marked_files.get(path).is_some_and(|m| m.contains(f)),
+                    (Some(d), Some(f)) => d.hunk.zip(d.at).is_some_and(|(h, at)| {
+                        app.marked_lines
+                            .contains(&(path.clone(), f.clone(), d.side, h, at))
+                    }),
+                    _ => false,
+                };
                 let mut spans = if marked {
                     vec![
                         Span::styled(v.icons.marked.to_string(), t.ui(Ui::Marked)),

@@ -562,3 +562,44 @@ fn a_hunk_at_the_end_without_a_newline_stages() {
     apply(&r, "f", Side::Unstaged, 0, None, true, false);
     assert_eq!(git(&r, &["show", ":f"]), "a\nc");
 }
+
+/// Several lines, from different hunks, in one patch.
+#[test]
+fn lines_from_several_hunks_stage_together() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "f", &lines(30));
+    commit(&r, "lines");
+    let changed = lines(30)
+        .replace("line 2\n", "line two\n")
+        .replace("line 3\n", "line three\n")
+        .replace("line 28\n", "line 28\nadded\n");
+    write(&r, "f", &changed);
+    let h = hunks(&r, "f", Side::Unstaged);
+    assert_eq!(h.len(), 2);
+    let pos = |h: &argus_core::diff::Hunk, text: &str| {
+        h.lines.iter().position(|l| l.text == text).unwrap()
+    };
+    // "line three" (keeping line 3's removal out) and "added"
+    let first = [pos(&h[0], "line three")];
+    let second = [pos(&h[1], "added")];
+    let op = ops::Op::Apply {
+        patch: argus_core::diff::patch_hunks(
+            "f",
+            &[(&h[0], Some(&first[..])), (&h[1], Some(&second[..]))],
+            false,
+        ),
+        index: true,
+        reverse: false,
+        what: "test".into(),
+    };
+    let o = ops::run(&r, &op);
+    assert!(o.success, "{}", o.output);
+    let index = git(&r, &["show", ":f"]);
+    assert!(
+        index.contains("line 2\nline 3\nline three\nline 4\n"),
+        "{index}"
+    );
+    assert!(index.contains("line 28\nadded\n"), "{index}");
+    assert!(!index.contains("line two"), "{index}");
+}

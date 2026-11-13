@@ -658,6 +658,9 @@ pub struct App {
     pub marked: BTreeSet<PathBuf>,
     /// Files marked in the details view, by repo path.
     pub marked_files: BTreeMap<PathBuf, BTreeSet<String>>,
+    /// Added or removed lines marked in diffs: repo, file, side, hunk and
+    /// line index. They go when the repo's status (so its diff) changes.
+    pub marked_lines: BTreeSet<(PathBuf, String, argus_core::diff::Side, usize, usize)>,
     /// Files whose diff is shown, by repo path and file.
     pub expanded_files: BTreeSet<(PathBuf, String)>,
     /// Folded hunks: repo, file, side, hunk index.
@@ -716,6 +719,7 @@ impl App {
             describing: BTreeSet::new(),
             marked: BTreeSet::new(),
             marked_files: BTreeMap::new(),
+            marked_lines: BTreeSet::new(),
             expanded_files: BTreeSet::new(),
             folded_hunks: BTreeSet::new(),
             diffs: HashMap::new(),
@@ -1252,7 +1256,26 @@ impl App {
                 self.rebuild();
             }
             ToggleMark => {
+                // an added or removed line in a diff: that line
                 if let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor)
+                    && let (Some(f), Some(d)) = (&line.file, line.diff.as_deref())
+                    && let (Some(h), Some(at)) = (d.hunk, d.at)
+                    && d.line
+                        .as_ref()
+                        .is_some_and(|l| l.kind != argus_core::diff::LineKind::Context)
+                {
+                    let key = (
+                        self.ws.entries[*repo].path.clone(),
+                        f.clone(),
+                        d.side,
+                        h,
+                        at,
+                    );
+                    if !self.marked_lines.remove(&key) {
+                        self.marked_lines.insert(key);
+                    }
+                    self.cursor = (self.cursor + 1).min(self.rows.len().saturating_sub(1));
+                } else if let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor)
                     && let Some(f) = &line.file
                 {
                     let repo = self.ws.entries[*repo].path.clone();
@@ -1274,6 +1297,7 @@ impl App {
             UnmarkAll => {
                 self.marked.clear();
                 self.marked_files.clear();
+                self.marked_lines.clear();
             }
             Toggle(Switch::Untracked) => self.stash.untracked = !self.stash.untracked,
             Toggle(Switch::KeepIndex) => self.stash.keep_index = !self.stash.keep_index,
@@ -2710,6 +2734,9 @@ impl App {
     /// file, which is staged or discarded whole).
     fn hunk_op(&mut self, verb: HunkVerb) -> Option<Vec<Effect>> {
         use argus_core::diff::{self, FileDiff, LineKind, Side};
+        if !self.marked_lines.is_empty() {
+            return Some(self.marked_lines_op(verb));
+        }
         if !self.marked_files.is_empty() {
             return None;
         }
@@ -2776,6 +2803,78 @@ impl App {
         }
         let jobs = self.job(&path, op).into_iter().collect();
         Some(self.start_jobs(jobs))
+    }
+
+    /// `s`/`u`/`K` on the marked lines: one patch per file and side, its
+    /// hunks with their marked lines. All must be on the side the verb
+    /// acts on; the marks go once acted on.
+    fn marked_lines_op(&mut self, verb: HunkVerb) -> Vec<Effect> {
+        use argus_core::diff::{self, FileDiff, Side};
+        let want = match verb {
+            HunkVerb::Stage | HunkVerb::Discard => Side::Unstaged,
+            HunkVerb::Unstage => Side::Staged,
+        };
+        if self.marked_lines.iter().any(|k| k.2 != want) {
+            self.info(match verb {
+                HunkVerb::Unstage => "some marked lines aren't staged: unmark them (space) first",
+                _ => "some marked lines are staged: unmark them (space) first",
+            });
+            return vec![];
+        }
+        // by repo and file: hunk -> its marked lines
+        let mut by: BTreeMap<(PathBuf, String), BTreeMap<usize, Vec<usize>>> = BTreeMap::new();
+        for (repo, file, _, h, at) in &self.marked_lines {
+            by.entry((repo.clone(), file.clone()))
+                .or_default()
+                .entry(*h)
+                .or_default()
+                .push(*at);
+        }
+        let (index, reverse, verb_word) = match verb {
+            HunkVerb::Stage => (true, false, "stage"),
+            HunkVerb::Unstage => (true, true, "unstage"),
+            HunkVerb::Discard => (false, true, "discard"),
+        };
+        let mut ops = vec![];
+        for ((repo, file), hunks) in by {
+            let key = (repo.clone(), file.clone(), want);
+            let Some(Ok(FileDiff::Text(all))) = self.diffs.get(&key) else {
+                continue;
+            };
+            let parts: Vec<(&diff::Hunk, Option<&[usize]>)> = hunks
+                .iter()
+                .filter_map(|(h, at)| Some((all.get(*h)?, Some(at.as_slice()))))
+                .collect();
+            let n: usize = hunks.values().map(Vec::len).sum();
+            let what = format!(
+                "{verb_word} {n} line{} of {file}",
+                if n == 1 { "" } else { "s" }
+            );
+            let op = Op::Apply {
+                patch: diff::patch_hunks(&file, &parts, reverse),
+                index,
+                reverse,
+                what,
+            };
+            ops.push((repo, op));
+        }
+        self.marked_lines.clear();
+        if verb == HunkVerb::Discard {
+            let n: usize = ops.len();
+            self.mode = Mode::Confirm {
+                question: format!(
+                    "Discard the marked lines ({n} file{})? They're lost.",
+                    if n == 1 { "" } else { "s" }
+                ),
+                then: Confirmed::Ops(ops),
+            };
+            return vec![];
+        }
+        let jobs = ops
+            .into_iter()
+            .filter_map(|(p, op)| self.job(&p, op))
+            .collect();
+        self.start_jobs(jobs)
     }
 
     fn file_op(&mut self, plan: fn(&RepoStatus, &[String]) -> Vec<Op>, verb: &str) -> Vec<Effect> {
@@ -3147,6 +3246,7 @@ impl App {
             Msg::Status(path, st) => {
                 self.ws.update_status(&path, *st);
                 self.diffs.retain(|k, _| k.0 != path);
+                self.marked_lines.retain(|k| k.0 != path);
                 self.unfold_cache.retain(|k, _| k.0 != path);
                 self.rebuild();
                 return self.describe_opened();

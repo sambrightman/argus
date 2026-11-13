@@ -79,32 +79,40 @@ pub enum FileDiff {
 }
 
 /// A patch of `path`'s `hunk` for `git apply --recount` (which counts the
-/// lines itself, so the hunk's header serves): all its changes,
-/// or with `only` just the lines at those indices, the others left as they
-/// are where the patch applies. `reverse` for one applied backwards (`-R`:
+/// lines itself, so the hunk's header serves): all its changes, or with
+/// `only` just the lines at those indices, the others left as they are
+/// where the patch applies. `reverse` for one applied backwards (`-R`:
 /// unstaging, discarding), where that's the hunk's new side.
 pub fn patch(path: &str, hunk: &Hunk, only: Option<&[usize]>, reverse: bool) -> String {
-    let mut body = String::new();
-    for (i, l) in hunk.lines.iter().enumerate() {
-        let chosen = only.is_none_or(|o| o.contains(&i));
-        let mark = match (l.kind, chosen, reverse) {
-            (LineKind::Context, ..) => ' ',
-            (LineKind::Add, true, _) => '+',
-            (LineKind::Remove, true, _) => '-',
-            // left alone: forwards, the old side lacks the addition and
-            // has the removed line; backwards, the new side the opposite
-            (LineKind::Add, false, false) | (LineKind::Remove, false, true) => continue,
-            (LineKind::Remove, false, false) | (LineKind::Add, false, true) => ' ',
-        };
-        body.push(mark);
-        body.push_str(&l.text);
-        body.push('\n');
-        if l.no_newline {
-            body.push_str("\\ No newline at end of file\n");
+    patch_hunks(path, &[(hunk, only)], reverse)
+}
+
+/// [`patch`] of several of `path`'s hunks at once, each with its lines.
+pub fn patch_hunks(path: &str, hunks: &[(&Hunk, Option<&[usize]>)], reverse: bool) -> String {
+    let mut out = format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n");
+    for (hunk, only) in hunks {
+        out.push_str(&hunk.header());
+        out.push('\n');
+        for (i, l) in hunk.lines.iter().enumerate() {
+            let chosen = only.is_none_or(|o| o.contains(&i));
+            let mark = match (l.kind, chosen, reverse) {
+                (LineKind::Context, ..) => ' ',
+                (LineKind::Add, true, _) => '+',
+                (LineKind::Remove, true, _) => '-',
+                // left alone: forwards, the old side lacks the addition and
+                // has the removed line; backwards, the new side the opposite
+                (LineKind::Add, false, false) | (LineKind::Remove, false, true) => continue,
+                (LineKind::Remove, false, false) | (LineKind::Add, false, true) => ' ',
+            };
+            out.push(mark);
+            out.push_str(&l.text);
+            out.push('\n');
+            if l.no_newline {
+                out.push_str("\\ No newline at end of file\n");
+            }
         }
     }
-    let header = hunk.header();
-    format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n{header}\n{body}")
+    out
 }
 
 #[derive(Debug, thiserror::Error)]
