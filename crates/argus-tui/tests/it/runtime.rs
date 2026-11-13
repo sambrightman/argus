@@ -91,17 +91,16 @@ fn path(app: &App, name: &str) -> PathBuf {
 fn marks_are_written_to_the_config_file() {
     let (sb, mut app, mut rt) = setup("");
     select(&mut app, "acme/clean");
-    let fx = app.act(Action::ToggleFavourite);
+    let fx = app.act(Action::ToggleLabel(0));
     run(&mut app, &mut rt, fx);
     let saved = Config::load(&sb.path("config.toml")).unwrap();
-    assert_eq!(saved.favourite, ["github.com/acme/clean"]);
+    assert_eq!(saved.marks["favourite"].repos, ["github.com/acme/clean"]);
     // inverse: toggling back removes it
-    let fx = app.act(Action::ToggleFavourite);
+    let fx = app.act(Action::ToggleLabel(0));
     run(&mut app, &mut rt, fx);
     assert!(
-        Config::load(&sb.path("config.toml"))
-            .unwrap()
-            .favourite
+        Config::load(&sb.path("config.toml")).unwrap().marks["favourite"]
+            .repos
             .is_empty()
     );
 }
@@ -113,7 +112,7 @@ fn a_failed_save_is_reported() {
     std::fs::create_dir_all(sb.path("blocked/config.toml")).unwrap();
     let mut rt = runtime(&sb, &sb.path("blocked/config.toml"), "true", &no_forge);
     select(&mut app, "acme/clean");
-    let fx = app.act(Action::ToggleFavourite);
+    let fx = app.act(Action::ToggleLabel(0));
     run(&mut app, &mut rt, fx);
     let (msg, is_error) = app.message.clone().unwrap();
     assert!(is_error && msg.contains("config.toml"), "{msg}");

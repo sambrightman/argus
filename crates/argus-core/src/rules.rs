@@ -17,7 +17,12 @@ use crate::status::{Head, RepoStatus};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Flags {
-    pub favourite: bool,
+    /// The `[marks]` the repo has, by name, in config order.
+    #[serde(default)]
+    pub marks: Vec<String>,
+    /// The sum of their sort points.
+    #[serde(default)]
+    pub sort: i32,
     pub pull: bool,
     pub ignored: bool,
     pub snoozed: bool,
@@ -32,32 +37,52 @@ impl Flags {
     pub fn hidden(&self) -> bool {
         self.ignored || self.snoozed
     }
+
+    /// Whether the repo has the mark named `name`.
+    pub fn has(&self, name: &str) -> bool {
+        self.marks.iter().any(|m| m == name)
+    }
 }
 
-/// The per-repo settings kept as lists in config: `favourite`, `pull`,
-/// `ignore.repos`.
+/// The per-repo settings kept as lists in config: each of `[marks]`, by its
+/// place there, then `pull` and `ignore.repos`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Mark {
-    Favourite,
+    Label(usize),
     Pull,
     Ignore,
 }
 
 impl Mark {
-    pub const ALL: [Mark; 3] = [Mark::Favourite, Mark::Pull, Mark::Ignore];
+    /// Every mark of `c`: its `[marks]` in order, then pull and ignore.
+    pub fn all(c: &Config) -> Vec<Mark> {
+        (0..c.marks.len())
+            .map(Mark::Label)
+            .chain([Mark::Pull, Mark::Ignore])
+            .collect()
+    }
+
+    /// The mark of `c`'s `[marks]` named `name`.
+    pub fn label(c: &Config, name: &str) -> Option<Mark> {
+        c.marks.get_index_of(name).map(Mark::Label)
+    }
+
+    fn def(c: &Config, i: usize) -> (&String, &crate::config::MarkDef) {
+        c.marks.get_index(i).expect("a mark of this config")
+    }
 
     /// The config key, dotted.
-    pub fn path(self) -> &'static str {
+    pub fn path(self, c: &Config) -> String {
         match self {
-            Mark::Favourite => "favourite",
-            Mark::Pull => "pull",
-            Mark::Ignore => "ignore.repos",
+            Mark::Label(i) => format!("marks.{}.repos", Self::def(c, i).0),
+            Mark::Pull => "pull".into(),
+            Mark::Ignore => "ignore.repos".into(),
         }
     }
 
     pub fn list(self, c: &Config) -> &Vec<String> {
         match self {
-            Mark::Favourite => &c.favourite,
+            Mark::Label(i) => &Self::def(c, i).1.repos,
             Mark::Pull => &c.pull,
             Mark::Ignore => &c.ignore.repos,
         }
@@ -65,27 +90,100 @@ impl Mark {
 
     pub fn list_mut(self, c: &mut Config) -> &mut Vec<String> {
         match self {
-            Mark::Favourite => &mut c.favourite,
+            Mark::Label(i) => {
+                &mut c
+                    .marks
+                    .get_index_mut(i)
+                    .expect("a mark of this config")
+                    .1
+                    .repos
+            }
             Mark::Pull => &mut c.pull,
             Mark::Ignore => &mut c.ignore.repos,
         }
     }
 
-    pub fn of(self, f: &Flags) -> bool {
+    pub fn of(self, f: &Flags, c: &Config) -> bool {
         match self {
-            Mark::Favourite => f.favourite,
+            Mark::Label(i) => f.has(Self::def(c, i).0),
             Mark::Pull => f.pull,
             Mark::Ignore => f.ignored,
         }
     }
 
-    /// How a repo with the mark is described: `favourite`, `pull`, `ignored`.
-    pub fn label(self) -> &'static str {
+    /// How a repo with the mark is described: its name, `pull`, `ignored`.
+    pub fn label_text(self, c: &Config) -> String {
         match self {
-            Mark::Favourite => "favourite",
-            Mark::Pull => "pull",
-            Mark::Ignore => "ignored",
+            Mark::Label(i) => Self::def(c, i).0.clone(),
+            Mark::Pull => "pull".into(),
+            Mark::Ignore => "ignored".into(),
         }
+    }
+
+    /// Its sort points: a mark with some gives way to ignoring.
+    pub fn points(self, c: &Config) -> i32 {
+        match self {
+            Mark::Label(i) => Self::def(c, i).1.sort,
+            _ => 0,
+        }
+    }
+}
+
+/// The mark terms of a filter (fzf's extended syntax, which `/` follows):
+/// `#work` has the mark, `!#work` hasn't; space is AND, `|` OR. Groups
+/// of mark terms joined by `|` each need one of theirs; every group must
+/// hold. (OR is between mark terms only: fuzzy matching has none.)
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MarkFilter {
+    /// Each group: (wanted, mark name) terms, one of which must hold.
+    groups: Vec<Vec<(bool, String)>>,
+}
+
+impl MarkFilter {
+    /// Split `query` into its mark terms and the rest, the text to match
+    /// fuzzily (a group mixing marks and text is text).
+    pub fn parse(query: &str) -> (Self, String) {
+        let mut groups: Vec<Vec<&str>> = vec![];
+        let mut join = false;
+        for tok in query.split_whitespace() {
+            if tok == "|" {
+                join = !groups.is_empty();
+                continue;
+            }
+            match groups.last_mut() {
+                Some(g) if join => g.push(tok),
+                _ => groups.push(vec![tok]),
+            }
+            join = false;
+        }
+        let term = |t: &str| -> Option<(bool, String)> {
+            let (wanted, name) = match t.strip_prefix('!') {
+                Some(n) => (false, n),
+                None => (true, t),
+            };
+            let name = name.strip_prefix('#').filter(|n| !n.is_empty())?;
+            Some((wanted, name.to_string()))
+        };
+        let mut f = Self::default();
+        let mut rest = vec![];
+        for g in groups {
+            match g.iter().map(|t| term(t)).collect::<Option<Vec<_>>>() {
+                Some(terms) => f.groups.push(terms),
+                None => rest.extend(g),
+            }
+        }
+        (f, rest.join(" "))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.groups.is_empty()
+    }
+
+    /// Whether a repo with these flags passes.
+    pub fn matches(&self, f: &Flags) -> bool {
+        self.groups
+            .iter()
+            .all(|g| g.iter().any(|(wanted, name)| f.has(name) == *wanted))
     }
 }
 
@@ -231,17 +329,18 @@ pub enum List {
 }
 
 impl List {
-    pub fn all() -> impl Iterator<Item = List> {
-        Mark::ALL
+    /// Every list of `c`.
+    pub fn all(c: &Config) -> impl Iterator<Item = List> {
+        Mark::all(c)
             .into_iter()
             .map(List::Mark)
             .chain(IssueList::ALL.into_iter().map(List::Issue))
     }
 
     /// The config key, dotted (`ignore.detached`).
-    pub fn path(self) -> String {
+    pub fn path(self, c: &Config) -> String {
         match self {
-            List::Mark(m) => m.path().to_string(),
+            List::Mark(m) => m.path(c),
             List::Issue(l) => format!("ignore.{}", l.name()),
         }
     }
@@ -346,10 +445,12 @@ impl IssueEntry {
     }
 }
 
-/// The `favourite`, `pull` and `ignore` lists, compiled.
+/// The `[marks]`, `pull` and `ignore` lists, compiled.
 #[derive(Clone)]
 pub struct RuleSet {
-    lists: [Vec<Entry>; 3],
+    labels: Vec<Vec<Entry>>,
+    pull: Vec<Entry>,
+    ignore: Vec<Entry>,
     issues: Vec<Vec<IssueEntry>>,
 }
 
@@ -368,17 +469,21 @@ impl RuleSet {
             })
             .collect::<Result<_, _>>()?;
         Ok(Self {
-            lists: [
-                compile(Mark::Favourite)?,
-                compile(Mark::Pull)?,
-                compile(Mark::Ignore)?,
-            ],
+            labels: (0..config.marks.len())
+                .map(|i| compile(Mark::Label(i)))
+                .collect::<Result<_, _>>()?,
+            pull: compile(Mark::Pull)?,
+            ignore: compile(Mark::Ignore)?,
             issues,
         })
     }
 
     fn entries(&self, m: Mark) -> &[Entry] {
-        &self.lists[m as usize]
+        match m {
+            Mark::Label(i) => self.labels.get(i).map_or(&[], Vec::as_slice),
+            Mark::Pull => &self.pull,
+            Mark::Ignore => &self.ignore,
+        }
     }
 
     /// What `m`'s list says about the repo: its last matching entry, if any.
@@ -736,20 +841,25 @@ pub fn resolve(
         f.pull = t.pull;
         f.tracked = Some(t.key());
     }
-    for m in Mark::ALL {
+    let mut labels = vec![];
+    for m in Mark::all(config) {
         if let Some(v) = rules.decide(m, id, path) {
             match m {
-                Mark::Favourite => f.favourite = v,
+                Mark::Label(_) if v => labels.push(m),
+                Mark::Label(_) => {}
                 Mark::Pull => f.pull = v,
                 Mark::Ignore => f.ignored = v,
             }
         }
     }
-    // an ignored repo is neither favourite nor pulled, whatever patterns say
+    // an ignored repo is neither pulled nor raised by marks with points,
+    // whatever patterns say; labels stay
     if f.ignored {
-        f.favourite = false;
         f.pull = false;
+        labels.retain(|m| m.points(config) == 0);
     }
+    f.sort = labels.iter().map(|m| m.points(config)).sum();
+    f.marks = labels.iter().map(|m| m.label_text(config)).collect();
     f.snoozed = state.is_snoozed(key, now);
     f.new = state.new.contains(key);
     f
@@ -776,7 +886,7 @@ mod tests {
     }
 
     fn fav(cfg: &str, url: &str, path: &str) -> bool {
-        flags(cfg, &State::default(), url, path).favourite
+        flags(cfg, &State::default(), url, path).has("favourite")
     }
 
     const URL: &str = "git@github.com:acme/widget.git";
@@ -791,14 +901,25 @@ mod tests {
 
     #[test]
     fn entries_match_identity_slug_and_path() {
-        assert!(fav("favourite = ['github.com/acme/*']", URL, "/x"));
-        assert!(fav("favourite = ['acme/widget']", URL, "/x"));
-        assert!(fav("favourite = ['/r/**']", URL, "/r/a/widget"));
-        assert!(fav("favourite = ['ACME/*']", URL, "/x"), "case-insensitive");
+        assert!(fav(
+            "marks.favourite.repos = ['github.com/acme/*']",
+            URL,
+            "/x"
+        ));
+        assert!(fav("marks.favourite.repos = ['acme/widget']", URL, "/x"));
+        assert!(fav("marks.favourite.repos = ['/r/**']", URL, "/r/a/widget"));
+        assert!(
+            fav("marks.favourite.repos = ['ACME/*']", URL, "/x"),
+            "case-insensitive"
+        );
         // inverse: other owners, and `*` must not cross `/`
-        assert!(!fav("favourite = ['github.com/other/*']", URL, "/x"));
-        assert!(!fav("favourite = ['github.com/*']", URL, "/x"));
-        assert!(!fav("favourite = ['/r/*']", URL, "/r/a/widget"));
+        assert!(!fav(
+            "marks.favourite.repos = ['github.com/other/*']",
+            URL,
+            "/x"
+        ));
+        assert!(!fav("marks.favourite.repos = ['github.com/*']", URL, "/x"));
+        assert!(!fav("marks.favourite.repos = ['/r/*']", URL, "/r/a/widget"));
     }
 
     /// Whether `[ignore] <list>` in `cfg` ignores the issue for the widget
@@ -1086,15 +1207,19 @@ mod tests {
             .pull
         );
         // order matters: a later pattern turns it back on
-        assert!(fav("favourite = ['!acme/widget', 'acme/*']", URL, "/x"));
+        assert!(fav(
+            "marks.favourite.repos = ['!acme/widget', 'acme/*']",
+            URL,
+            "/x"
+        ));
         // the lists are independent
         let f = flags(
-            "favourite = ['acme/*']\nignore.repos = ['!acme/*']",
+            "marks.favourite.repos = ['acme/*']\nignore.repos = ['!acme/*']",
             &State::default(),
             URL,
             "/x",
         );
-        assert!(f.favourite && !f.ignored && !f.pull);
+        assert!(f.has("favourite") && !f.ignored && !f.pull);
     }
 
     #[test]
@@ -1171,29 +1296,81 @@ mod tests {
         assert!(f.ignored);
     }
 
+    /// `#work` has it, `!#work` hasn't, space is AND, `|` OR between marks;
+    /// the rest is text.
+    #[test]
+    fn mark_filters_parse_and_match() {
+        let f = |marks: &[&str]| Flags {
+            marks: marks.iter().map(|s| s.to_string()).collect(),
+            ..Flags::default()
+        };
+        let (work, home, both, none) = (f(&["work"]), f(&["home"]), f(&["work", "home"]), f(&[]));
+        let pass = |q: &str, fl: &Flags| MarkFilter::parse(q).0.matches(fl);
+        assert!(pass("#work", &work) && !pass("#work", &home));
+        assert!(pass("!#work", &home) && !pass("!#work", &work));
+        assert!(
+            pass("#work #home", &both) && !pass("#work #home", &work),
+            "AND"
+        );
+        assert!(
+            pass("#work | #home", &work) && pass("#work | #home", &home),
+            "OR"
+        );
+        assert!(!pass("#work | #home", &none));
+        assert!(pass("#work | #home !#home", &work) && !pass("#work | #home !#home", &both));
+        // the rest is text; a group mixing both is text
+        let (m, rest) = MarkFilter::parse("api #work | #home acme");
+        assert_eq!(rest, "api acme");
+        assert!(m.matches(&work) && !m.matches(&none));
+        let (m, rest) = MarkFilter::parse("#work | api");
+        assert!(m.is_empty() && rest == "#work api", "{rest}");
+        let (m, rest) = MarkFilter::parse("  ");
+        assert!(m.is_empty() && rest.is_empty() && m.matches(&none));
+        // not marks: a bare `#`, a leading `|`, `!` alone
+        let (m, rest) = MarkFilter::parse("| # ! !x");
+        assert!(m.is_empty(), "{m:?}");
+        assert_eq!(rest, "# ! !x");
+    }
+
     #[test]
     fn each_mark_reads_its_own_flag() {
-        let f = |favourite, pull, ignored| Flags {
-            favourite,
+        let c = Config::parse("[marks.work]\n").unwrap();
+        let (fav, work) = (Mark::Label(0), Mark::Label(1));
+        let f = |marks: &[&str], pull, ignored| Flags {
+            marks: marks.iter().map(|s| s.to_string()).collect(),
             pull,
             ignored,
             ..Flags::default()
         };
-        assert!(Mark::Favourite.of(&f(true, false, false)));
-        assert!(Mark::Pull.of(&f(false, true, false)));
-        assert!(Mark::Ignore.of(&f(false, false, true)));
+        assert!(fav.of(&f(&["favourite"], false, false), &c));
+        assert!(work.of(&f(&["work"], false, false), &c));
+        assert!(Mark::Pull.of(&f(&[], true, false), &c));
+        assert!(Mark::Ignore.of(&f(&[], false, true), &c));
         // inverse: not the others'
-        for m in Mark::ALL {
-            assert!(!m.of(&f(false, false, false)), "{m:?}");
+        for m in Mark::all(&c) {
+            assert!(!m.of(&f(&[], false, false), &c), "{m:?}");
         }
-        assert!(!Mark::Favourite.of(&f(false, true, true)));
-        assert!(!Mark::Pull.of(&f(true, false, true)));
-        assert!(!Mark::Ignore.of(&f(true, true, false)));
+        assert!(!fav.of(&f(&["work"], true, true), &c));
+        assert!(!Mark::Pull.of(&f(&["favourite"], false, true), &c));
+        assert!(!Mark::Ignore.of(&f(&["favourite"], true, false), &c));
+        assert_eq!(Mark::all(&c), [fav, work, Mark::Pull, Mark::Ignore]);
+        assert_eq!(
+            (work.path(&c), Mark::Pull.path(&c), Mark::Ignore.path(&c)),
+            (
+                "marks.work.repos".into(),
+                "pull".into(),
+                "ignore.repos".into()
+            )
+        );
+        assert_eq!(
+            (fav.points(&c), work.points(&c), Mark::Pull.points(&c)),
+            (1, 0, 0)
+        );
     }
 
     #[test]
     fn bad_patterns_are_config_errors() {
-        let c = Config::parse("favourite = ['acme/[oops']").unwrap();
+        let c = Config::parse("marks.favourite.repos = ['acme/[oops']").unwrap();
         let Err(e) = RuleSet::new(&c) else {
             panic!("accepted")
         };
@@ -1202,14 +1379,12 @@ mod tests {
 
     /// `set_mark` on the widget, returning the favourite list after.
     fn set(list: &[&str], on: bool) -> Vec<String> {
-        let mut c = Config {
-            favourite: list.iter().map(|s| s.to_string()).collect(),
-            ..Config::default()
-        };
+        let mut c = Config::default();
+        c.marks["favourite"].repos = list.iter().map(|s| s.to_string()).collect();
         let id = RepoId::from_url(URL).unwrap();
         set_mark(
             &mut c,
-            Mark::Favourite,
+            Mark::Label(0),
             Some(&id),
             Path::new("/r/widget"),
             "github.com/acme/widget",
@@ -1217,7 +1392,7 @@ mod tests {
             on,
         )
         .unwrap();
-        c.favourite
+        c.marks["favourite"].repos.clone()
     }
 
     #[test]

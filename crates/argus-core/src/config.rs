@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::fix::FixKind;
@@ -63,15 +64,13 @@ pub struct Config {
     /// Protocol for new clones; unset asks the forge (`gh config get git_protocol`).
     #[schemars(example = crate::forge::Protocol::Ssh)]
     pub clone_protocol: Option<crate::forge::Protocol>,
-    /// Repos sorted above others in their group. Each entry is a repo or a
-    /// pattern, matched against its identity (`github.com/acme/app`),
-    /// `owner/name` or path (`~/dev/x`); `*` stays within one level, `**`
-    /// crosses them. Later entries win, and `!` turns it off again:
-    /// `["acme/*", "!acme/legacy"]`. Marking from the TUI or `argus mark`
-    /// edits these lists.
-    #[schemars(example = vec!["acme/app", "~/dev/mine/*"])]
-    pub favourite: Vec<String>,
-    /// Repos pulled by `argus pull`; entries as for `favourite`. Tracked
+    /// Marks, each a table: `favourite` (sort points 1, `f` in the Mark
+    /// menu) and any of your own, `[marks.<name>]`, a word of letters,
+    /// digits, `-` and `_`. They show in the flag column and filter (`/`
+    /// with `#name`, `argus status --mark name`).
+    #[schemars(example = example_marks())]
+    pub marks: IndexMap<String, MarkDef>,
+    /// Repos pulled by `argus pull`; entries as for a mark's `repos`. Tracked
     /// owners' repos are pulled unless an entry here turns them off (`!`).
     #[schemars(example = vec!["acme/*", "!acme/huge-monorepo"])]
     pub pull: Vec<String>,
@@ -123,7 +122,7 @@ impl Default for Config {
             concurrency: Concurrency::default(),
             describe_limit: DESCRIBE_LIMIT,
             clone_protocol: None,
-            favourite: vec![],
+            marks: IndexMap::from([("favourite".to_string(), MarkDef::favourite())]),
             pull: vec![],
             ignore: Ignore::default(),
             tracks: vec![],
@@ -203,11 +202,90 @@ fn yes() -> bool {
     true
 }
 fn example_icon_overrides() -> BTreeMap<&'static str, &'static str> {
-    BTreeMap::from([("favourite", "★")])
+    BTreeMap::from([("pull", "⇣")])
 }
 
 fn example_colors() -> BTreeMap<&'static str, &'static str> {
-    BTreeMap::from([("favourite", "yellow"), ("branch", "bold magenta")])
+    BTreeMap::from([("mark.favourite", "yellow"), ("branch", "bold magenta")])
+}
+
+fn example_marks() -> IndexMap<String, MarkDef> {
+    IndexMap::from([(
+        "work".to_string(),
+        MarkDef {
+            key: Some('w'),
+            icon: Some(MarkIcon::One("W".into())),
+            color: Some("cyan".into()),
+            sort: 0,
+            repos: vec!["acme/*".into(), "!acme/legacy".into()],
+        },
+    )])
+}
+
+/// A mark (`[marks.<name>]`): which repos have it, and how it looks and
+/// sorts.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(
+    default,
+    deny_unknown_fields,
+    expecting = "a table: [marks.<name>] with its options"
+)]
+pub struct MarkDef {
+    /// Its key in the TUI's Mark menu (`m`), one character.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<char>,
+    /// Its icon in the flag column: one for every icon set, or by set
+    /// (`{ unicode = "◆", nerd = "…", ascii = "*" }`; unicode stands in
+    /// for one left out). None: the name's first letter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<MarkIcon>,
+    /// Its colour, as in `[ui] colors`. Coming first: `[ui] colors`
+    /// naming it (`"mark.<name>"`), then the theme's own for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Sort points: repos sort by the sum of their marks' (after needing
+    /// attention, before severity). A mark with points gives way to
+    /// ignoring a repo, and stops it being ignored; one without (a label)
+    /// doesn't.
+    pub sort: i32,
+    /// Repos with the mark. Each entry is a repo or a pattern, matched
+    /// against its identity (`github.com/acme/app`), `owner/name` or path
+    /// (`~/dev/x`); `*` stays within one level, `**` crosses them. Later
+    /// entries win, and `!` turns it off again: `["acme/*",
+    /// "!acme/legacy"]`. Marking from the TUI or `argus mark` edits it.
+    pub repos: Vec<String>,
+}
+
+impl MarkDef {
+    /// The built-in `favourite`: sorted above others in their group.
+    pub fn favourite() -> Self {
+        Self {
+            key: Some('f'),
+            icon: Some(MarkIcon::BySet {
+                unicode: Some("◆".into()),
+                nerd: Some("\u{eb59} ".into()), // cod-star_full
+                ascii: Some("*".into()),
+            }),
+            color: None,
+            sort: 1,
+            repos: vec![],
+        }
+    }
+}
+
+/// A mark's icon: one for every icon set, or by set.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum MarkIcon {
+    One(String),
+    BySet {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unicode: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nerd: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ascii: Option<String>,
+    },
 }
 
 /// `[ignore]`: entries as for `favourite` (a repo or a pattern, matched
@@ -484,6 +562,7 @@ impl Layers {
                 source,
             })?;
         let bases = take_extend(&mut layer, path)?;
+        moved_keys(&layer, Some(path))?;
         chain.push(real);
         let dir = path.parent().unwrap_or(Path::new("."));
         for inc in &bases {
@@ -639,6 +718,29 @@ pub enum ConfigError {
     },
     #[error("{path}: extend {what}")]
     ExtendFile { path: PathBuf, what: String },
+    #[error("[marks.{0}]: a mark's name is letters, digits, - and _")]
+    MarkName(String),
+    #[error("[marks.{0}]: {0} isn't a mark of its own: it's the `{0}` setting")]
+    MarkReserved(String),
+    #[error("{key} is now `[marks.favourite] repos`: move its entries there")]
+    Moved { key: String },
+}
+
+/// Settings that moved, said plainly instead of "unknown field"; `file`
+/// names where, if it's a file.
+fn moved_keys(layer: &toml::Table, file: Option<&Path>) -> Result<(), ConfigError> {
+    match ["favourite", "extend_favourite"]
+        .into_iter()
+        .find(|k| layer.contains_key(*k))
+    {
+        Some(k) => Err(ConfigError::Moved {
+            key: match file {
+                Some(f) => format!("{}: `{k}`", f.display()),
+                None => format!("`{k}`"),
+            },
+        }),
+        None => Ok(()),
+    }
 }
 
 /// A TOML or type error in plain words: Rust's type names (`usize`,
@@ -673,7 +775,7 @@ impl Config {
                 source,
             })?;
         c.extend = main_extends;
-        c.normalize();
+        c.normalize()?;
         Ok(c)
     }
 
@@ -682,15 +784,31 @@ impl Config {
     pub fn parse(s: &str) -> Result<Self, ConfigError> {
         let mut layer: toml::Table = toml::from_str(s)?;
         let extend = take_extend(&mut layer, Path::new("config"))?;
+        moved_keys(&layer, None)?;
         let mut layers = Layers::defaults();
         layers.merge(layer)?;
         let mut c: Config = toml::Value::Table(layers.table).try_into()?;
         c.extend = extend;
-        c.normalize();
+        c.normalize()?;
         Ok(c)
     }
 
-    fn normalize(&mut self) {
+    fn normalize(&mut self) -> Result<(), ConfigError> {
+        if let Some(bad) = self.marks.keys().find(|n| {
+            n.is_empty()
+                || !n
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        }) {
+            return Err(ConfigError::MarkName(bad.clone()));
+        }
+        // `argus mark pull …` and `… ignore …` name those
+        if let Some(taken) = ["pull", "ignore"]
+            .into_iter()
+            .find(|n| self.marks.contains_key(*n))
+        {
+            return Err(ConfigError::MarkReserved(taken.into()));
+        }
         for r in &mut self.roots {
             *r = expand_tilde(r);
         }
@@ -699,6 +817,38 @@ impl Config {
                 *p = expand_tilde(p);
             }
         }
+        Ok(())
+    }
+
+    /// Mark `name`'s icon in the icon set `set` (`unicode`, `nerd`,
+    /// `ascii`): its own for the set, else for unicode, else its name's
+    /// first letter.
+    pub fn mark_icon(&self, name: &str, set: &str) -> String {
+        let first = || name.chars().next().map(String::from).unwrap_or_default();
+        match self.marks.get(name).and_then(|m| m.icon.as_ref()) {
+            Some(MarkIcon::One(s)) => s.clone(),
+            Some(MarkIcon::BySet {
+                unicode,
+                nerd,
+                ascii,
+            }) => match set {
+                "nerd" => nerd.as_ref(),
+                "ascii" => ascii.as_ref(),
+                _ => None,
+            }
+            .or(unicode.as_ref())
+            .cloned()
+            .unwrap_or_else(first),
+            None => first(),
+        }
+    }
+
+    /// Each mark's name and icon in the configured icon set, in order.
+    pub fn mark_icons(&self) -> Vec<(String, String)> {
+        self.marks
+            .keys()
+            .map(|n| (n.clone(), self.mark_icon(n, &self.ui.icons)))
+            .collect()
     }
 
     /// How many network operations to run at once: see `concurrency.network`.

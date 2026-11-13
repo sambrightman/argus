@@ -65,7 +65,8 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
     // refreshes reuse repos rather than reopening them each time
     ws.keep_repos_open();
     check_terminal()?;
-    let (mut theme, warnings) = theme::Theme::build(&ws.config.ui.theme, &ws.config.ui.colors);
+    let (mut theme, mut warnings) = theme::Theme::for_config(&ws.config);
+    warnings.extend(menu::mark_key_clashes(&ws.config));
     let mut theme_name = ws.config.ui.theme.clone();
     let (mut icons, icon_warnings) = ws.config.ui.icons();
     let mut icons_name = ws.config.ui.icons.clone();
@@ -89,7 +90,7 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
             // The View menu can switch theme and icons for the session.
             if app.ws.config.ui.theme != theme_name {
                 theme_name = app.ws.config.ui.theme.clone();
-                theme = theme::Theme::build(&theme_name, &app.ws.config.ui.colors).0;
+                theme = theme::Theme::for_config(&app.ws.config).0;
             }
             if app.ws.config.ui.icons != icons_name {
                 icons_name = app.ws.config.ui.icons.clone();

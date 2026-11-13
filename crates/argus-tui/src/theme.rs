@@ -29,10 +29,11 @@ pub enum Ui {
 pub struct Theme {
     pub name: String,
     roles: BTreeMap<String, Style>,
+    /// Each mark's, in config order (see [`Theme::with_marks`]).
+    marks: Vec<Style>,
 }
 
 const ROLE_NAMES: &[(Role, &str)] = &[
-    (Role::Favourite, "favourite"),
     (Role::New, "new"),
     (Role::Hidden, "hidden"),
     (Role::Pull, "pull"),
@@ -78,6 +79,13 @@ fn fg(c: Color) -> Style {
 
 impl Theme {
     pub fn role(&self, r: Role) -> Style {
+        if let Role::Mark(i) = r {
+            return self
+                .marks
+                .get(i)
+                .copied()
+                .unwrap_or_else(|| self.roles.get("mark").copied().unwrap_or_default());
+        }
         let name = ROLE_NAMES
             .iter()
             .find(|(x, _)| *x == r)
@@ -95,12 +103,57 @@ impl Theme {
         self.roles.get(name).copied().unwrap_or_default()
     }
 
-    /// Known style keys, for documentation and validation.
+    /// Known style keys, for documentation and validation (and
+    /// `mark.<name>` for each mark).
     pub fn keys() -> impl Iterator<Item = &'static str> {
         ROLE_NAMES
             .iter()
             .map(|(_, n)| *n)
+            .chain(["mark"])
             .chain(UI_NAMES.iter().map(|(_, n)| *n))
+    }
+
+    /// The theme `c` names, with its colour overrides and its marks', and
+    /// the warnings of both.
+    pub fn for_config(c: &argus_core::Config) -> (Self, Vec<String>) {
+        let (t, mut w) = Self::build(&c.ui.theme, &c.ui.colors);
+        let (t, more) = t.with_marks(c);
+        w.extend(more);
+        (t, w)
+    }
+
+    /// Each mark's style, in config order: `[ui] colors` naming it
+    /// (`mark.<name>`, applied by [`Theme::build`]), else this theme's own for it, else
+    /// its `color`, else the theme's `mark`. Returns warnings: a `mark.`
+    /// colour for no mark, a bad colour.
+    pub fn with_marks(mut self, config: &argus_core::Config) -> (Self, Vec<String>) {
+        let marks = &config.marks;
+        let mut warnings: Vec<String> = config
+            .ui
+            .colors
+            .keys()
+            .filter_map(|k| k.strip_prefix("mark."))
+            .filter(|n| !marks.contains_key(*n))
+            .map(|n| format!("colour for mark.{n}, which isn't a mark"))
+            .collect();
+        let fallback = self.roles.get("mark").copied().unwrap_or_default();
+        self.marks = marks
+            .iter()
+            .map(|(name, def)| {
+                if let Some(s) = self.roles.get(&format!("mark.{name}")) {
+                    return *s;
+                }
+                match def.color.as_deref().map(|c| (c, parse_style(c))) {
+                    Some((_, Some(s))) => s,
+                    Some((c, None)) => {
+                        warnings.push(format!("bad colour {c:?} for mark {name}"));
+                        fallback
+                    }
+                    None => fallback,
+                }
+            })
+            .collect();
+        (self, warnings)
     }
 
     /// Build a theme by name with overrides. Unknown names fall back to
@@ -112,7 +165,8 @@ impl Theme {
         let mut warnings = vec![];
         let base: Vec<(&str, Style)> = match name {
             "dark" => vec![
-                ("favourite", fg(Rgb(0xe0, 0xaf, 0x68))),
+                ("mark", fg(Rgb(0xe0, 0xaf, 0x68))),
+                ("mark.favourite", fg(Rgb(0xe0, 0xaf, 0x68))),
                 ("new", fg(Rgb(0x7d, 0xcf, 0xff)).add_modifier(b)),
                 ("hidden", fg(Rgb(0x56, 0x5f, 0x89))),
                 ("pull", fg(Rgb(0x73, 0x7a, 0xa2))),
@@ -152,7 +206,8 @@ impl Theme {
                 ("failed", fg(Rgb(0xf7, 0x76, 0x8e)).add_modifier(b)),
             ],
             "light" => vec![
-                ("favourite", fg(Rgb(0x8f, 0x5e, 0x15))),
+                ("mark", fg(Rgb(0x8f, 0x5e, 0x15))),
+                ("mark.favourite", fg(Rgb(0x8f, 0x5e, 0x15))),
                 ("new", fg(Rgb(0x00, 0x6f, 0x9f)).add_modifier(b)),
                 ("hidden", fg(Rgb(0x9a, 0x9a, 0x9a))),
                 ("pull", fg(Rgb(0x80, 0x80, 0x90))),
@@ -192,7 +247,8 @@ impl Theme {
                 ("failed", fg(Rgb(0xc0, 0x1c, 0x28)).add_modifier(b)),
             ],
             "mono" => vec![
-                ("favourite", Style::new().add_modifier(b)),
+                ("mark", Style::new().add_modifier(b)),
+                ("mark.favourite", Style::new().add_modifier(b)),
                 ("new", Style::new().add_modifier(b | Modifier::UNDERLINED)),
                 ("hidden", Style::new().add_modifier(d)),
                 ("pull", Style::new().add_modifier(d)),
@@ -224,7 +280,8 @@ impl Theme {
                     warnings.push(format!("unknown theme {other:?}, using \"terminal\""));
                 }
                 vec![
-                    ("favourite", fg(Yellow)),
+                    ("mark", fg(Yellow)),
+                    ("mark.favourite", fg(Yellow)),
                     ("new", fg(Cyan).add_modifier(b)),
                     ("hidden", fg(DarkGray)),
                     ("pull", fg(Blue)),
@@ -264,7 +321,8 @@ impl Theme {
             base.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
         let known: Vec<&str> = Self::keys().collect();
         for (k, v) in overrides {
-            if !known.contains(&k.as_str()) {
+            // a mark's: checked against the marks by with_marks
+            if !known.contains(&k.as_str()) && !k.starts_with("mark.") {
                 warnings.push(format!("unknown colour key {k:?}"));
                 continue;
             }
@@ -279,6 +337,7 @@ impl Theme {
             Self {
                 name: name.to_string(),
                 roles,
+                marks: vec![],
             },
             warnings,
         )
@@ -320,6 +379,29 @@ mod tests {
         }
     }
 
+    /// A mark's colour: `[ui] colors` naming it, else the theme's own,
+    /// else its `color`, else the theme's for marks.
+    #[test]
+    fn marks_take_colours_from_config_then_theme_then_their_own() {
+        let c = argus_core::Config::parse(
+            "[marks.work]\ncolor = 'cyan'\n[marks.plain]\n[marks.bad]\ncolor = 'nocolour'\n\
+             [marks.mine]\ncolor = 'cyan'\n\
+             [ui.colors]\n'mark.mine' = 'magenta'\n'mark.ghost' = 'red'\n",
+        )
+        .unwrap();
+        let (t, w) = Theme::build("terminal", &c.ui.colors);
+        assert!(w.is_empty(), "{w:?}");
+        let (t, w) = t.with_marks(&c);
+        let fg = |i| t.role(Role::Mark(i)).fg;
+        assert_eq!(fg(0), Some(Color::Yellow), "favourite: the theme's own");
+        assert_eq!(fg(1), Some(Color::Cyan), "work: its own");
+        assert_eq!(fg(2), t.roles["mark"].fg, "plain: the theme's for marks");
+        assert_eq!(fg(3), t.roles["mark"].fg, "bad: the same, warned");
+        assert_eq!(fg(4), Some(Color::Magenta), "mine: config first");
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(w.iter().any(|w| w.contains("ghost")) && w.iter().any(|w| w.contains("nocolour")));
+    }
+
     #[test]
     fn each_ui_element_gets_its_own_style() {
         let (t, _) = Theme::build("mono", &BTreeMap::new());
@@ -333,13 +415,13 @@ mod tests {
     #[test]
     fn overrides_apply_and_bad_ones_warn() {
         let o = BTreeMap::from([
-            ("favourite".to_string(), "#ff0000".to_string()),
+            ("mark".to_string(), "#ff0000".to_string()),
             ("branch".to_string(), "bold 208 on black".to_string()),
             ("nope".to_string(), "red".to_string()),
             ("ahead".to_string(), "notacolour".to_string()),
         ]);
         let (t, w) = Theme::build("terminal", &o);
-        assert_eq!(t.role(Role::Favourite).fg, Some(Color::Rgb(255, 0, 0)));
+        assert_eq!(t.role(Role::Mark(0)).fg, Some(Color::Rgb(255, 0, 0)));
         let br = t.role(Role::Branch);
         assert_eq!(
             (br.fg, br.bg),

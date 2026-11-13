@@ -149,7 +149,7 @@ fn config(c: &mut Criterion) {
     let d = t.path();
     std::fs::write(
         d.join("base.toml"),
-        "max_depth = 3\nfavourite = ['base/*']\n[[track]]\nowner = 'a'\n",
+        "max_depth = 3\nmarks.favourite.repos = ['base/*']\n[[track]]\nowner = 'a'\n",
     )
     .unwrap();
     std::fs::create_dir_all(d.join("conf.d")).unwrap();
@@ -163,7 +163,7 @@ fn config(c: &mut Criterion) {
     let main = d.join("config.toml");
     std::fs::write(
         &main,
-        "extend = ['base.toml', 'conf.d/*.toml']\nextend_favourite = ['x/y']\n",
+        "extend = ['base.toml', 'conf.d/*.toml']\nmarks.favourite.extend_repos = ['x/y']\n",
     )
     .unwrap();
     let mut g = c.benchmark_group("config");
@@ -177,11 +177,11 @@ fn config(c: &mut Criterion) {
 }
 
 fn rules(c: &mut Criterion) {
-    let config = Config {
-        favourite: (0..20).map(|i| format!("org{i}/*")).collect(),
+    let mut config = Config {
         pull: (0..20).map(|i| format!("!org{i}/legacy-*")).collect(),
         ..Config::default()
     };
+    config.marks["favourite"].repos = (0..20).map(|i| format!("org{i}/*")).collect();
     let rs = RuleSet::new(&config).unwrap();
     let ids: Vec<RepoId> = (0..1000)
         .filter_map(|i| RepoId::from_url(&format!("git@github.com:org{}/repo{i}.git", i % 40)))
@@ -189,7 +189,7 @@ fn rules(c: &mut Criterion) {
     c.bench_function("decide 3 marks for 1000 repos, 40 patterns", |b| {
         b.iter(|| {
             for id in &ids {
-                for m in Mark::ALL {
+                for m in Mark::all(&config) {
                     black_box(rs.decide(m, Some(id), Path::new("/x")));
                 }
             }

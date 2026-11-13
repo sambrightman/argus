@@ -298,10 +298,10 @@ impl Workspace {
 
     /// Mark (or unmark) the repos at `indices` in `config` (see
     /// [`rules::set_mark`]); flags follow. Saving config is the caller's.
-    /// Ignore excludes the others: ignoring turns favourite and pull off,
-    /// and turning either on stops ignoring.
+    /// Ignore excludes pull and marks with sort points: ignoring turns them
+    /// off, and turning one on stops ignoring (labels don't).
     pub fn set_mark(&mut self, indices: &[usize], m: Mark, on: bool) -> Result<(), ConfigError> {
-        let marks = exclusive(m, on);
+        let marks = exclusive(&self.config, m, on);
         for &i in indices {
             let e = &self.entries[i];
             let tracked_pull =
@@ -390,7 +390,7 @@ impl Workspace {
     pub fn clear_marks(&mut self, indices: &[usize]) -> Result<(), ConfigError> {
         for &i in indices {
             let (id, path) = (self.entries[i].id.clone(), self.entries[i].path.clone());
-            for m in Mark::ALL {
+            for m in Mark::all(&self.config) {
                 rules::clear_mark(&mut self.config, m, id.as_ref(), &path)?;
             }
         }
@@ -412,7 +412,7 @@ impl Workspace {
             .filter_map(|&i| self.entries[i].id.clone())
             .collect();
         for id in &owners {
-            for (m, on) in exclusive(m, on) {
+            for (m, on) in exclusive(&self.config, m, on) {
                 let base = m == Mark::Pull && self.tracked_pull(id);
                 rules::set_owner_mark(&mut self.config, m, id, base, on)?;
             }
@@ -433,9 +433,10 @@ impl Workspace {
             )
         };
         let ignored = decided(Mark::Ignore)?;
-        // ignore wins, as for a repo
+        // ignore wins, as for a repo, except over a label
         Some(match m {
             Mark::Ignore => ignored,
+            Mark::Label(_) if m.points(&self.config) == 0 => decided(m)?,
             _ => decided(m)? && !ignored,
         })
     }
@@ -451,15 +452,15 @@ impl Workspace {
     /// github.com/acme)`.
     pub fn remaining_marks(&self, i: usize) -> Vec<String> {
         let e = &self.entries[i];
-        Mark::ALL
+        Mark::all(&self.config)
             .into_iter()
-            .filter(|&m| m.of(&e.flags))
+            .filter(|&m| m.of(&e.flags, &self.config))
             .filter_map(|m| {
                 let why = match self.rules.marking(m, e.id.as_ref(), &e.path) {
                     Some(entry) => entry.to_string(),
                     None => format!("tracking {}", e.flags.tracked.as_ref()?),
                 };
-                Some(format!("{} ({why})", m.label()))
+                Some(format!("{} ({why})", m.label_text(&self.config)))
             })
             .collect()
     }
@@ -471,9 +472,9 @@ impl Workspace {
             .iter()
             .filter(|&&i| {
                 let e = &self.entries[i];
-                Mark::ALL
-                    .iter()
-                    .any(|&m| !self.rules.own_entries(m, e.id.as_ref(), &e.path).is_empty())
+                Mark::all(&self.config)
+                    .into_iter()
+                    .any(|m| !self.rules.own_entries(m, e.id.as_ref(), &e.path).is_empty())
             })
             .count()
     }
@@ -690,7 +691,7 @@ impl Workspace {
     }
 
     /// Indices into `entries` in display order: top-level repos sorted by
-    /// favourite, severity, amount of change and name; each followed by its
+    /// marks' sort points, severity, amount of change and name; each followed by its
     /// children (worktrees, submodules).
     pub fn ordered(&self, filter: ViewFilter) -> Vec<usize> {
         let visible = |e: &Entry| {
@@ -706,7 +707,7 @@ impl Workspace {
             let (a, b) = (&self.entries[a], &self.entries[b]);
             b.needs_attention()
                 .cmp(&a.needs_attention())
-                .then(b.flags.favourite.cmp(&a.flags.favourite))
+                .then(b.flags.sort.cmp(&a.flags.sort))
                 .then(b.score().cmp(&a.score()))
                 .then(b.change_count().cmp(&a.change_count()))
                 .then_with(|| {
@@ -817,10 +818,19 @@ impl Workspace {
     }
 }
 
-/// The marks to set for `m` `on`: ignore excludes favourite and pull.
-fn exclusive(m: Mark, on: bool) -> Vec<(Mark, bool)> {
+/// The marks to set for `m` `on`: ignore excludes pull and the marks with
+/// sort points (which would raise a repo you hid); pure labels go with it.
+fn exclusive(c: &Config, m: Mark, on: bool) -> Vec<(Mark, bool)> {
     match (m, on) {
-        (Mark::Ignore, true) => vec![(m, on), (Mark::Favourite, false), (Mark::Pull, false)],
+        (Mark::Ignore, true) => std::iter::once((m, on))
+            .chain(
+                Mark::all(c)
+                    .into_iter()
+                    .filter(|&o| o == Mark::Pull || o.points(c) != 0)
+                    .map(|o| (o, false)),
+            )
+            .collect(),
+        (Mark::Label(_), true) if m.points(c) == 0 => vec![(m, on)],
         (_, true) => vec![(m, on), (Mark::Ignore, false)],
         _ => vec![(m, on)],
     }

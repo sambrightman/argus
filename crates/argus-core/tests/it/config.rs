@@ -70,7 +70,7 @@ fn extended_files_are_read_first_and_overridden_by_the_extending_file() {
     write(
         d,
         "base.toml",
-        "max_depth = 3\nconcurrency.disk = 1\nconcurrency.network = 2\nexclude_paths = ['from-base']\nfavourite = ['base/*']\n[[track]]\nowner = 'base-org'\n",
+        "max_depth = 3\nconcurrency.disk = 1\nconcurrency.network = 2\nexclude_paths = ['from-base']\nmarks.favourite.repos = ['base/*']\n[[track]]\nowner = 'base-org'\n",
     );
     write(
         d,
@@ -80,7 +80,7 @@ fn extended_files_are_read_first_and_overridden_by_the_extending_file() {
     write(
         d,
         "conf.d/a.toml",
-        "concurrency.network = 4\nextend_favourite = ['a/*']\n[ui]\ntheme = 'dark'\n",
+        "concurrency.network = 4\nmarks.favourite.extend_repos = ['a/*']\n[ui]\ntheme = 'dark'\n",
     );
     write(d, "conf.d/notes.txt", "not toml");
     let main = write(
@@ -98,7 +98,7 @@ fn extended_files_are_read_first_and_overridden_by_the_extending_file() {
     );
     assert_eq!(c.ui.theme, "dark");
     assert_eq!(c.exclude_paths, ["from-base", "from-main"]);
-    assert_eq!(c.favourite, ["base/*", "a/*"]);
+    assert_eq!(c.marks["favourite"].repos, ["base/*", "a/*"]);
     // lists of tables add up
     let owners: Vec<&str> = c.tracks.iter().map(|t| t.owner.as_str()).collect();
     assert_eq!(owners, ["base-org", "b-org", "main-org"]);
@@ -154,13 +154,13 @@ fn marks_are_saved_to_the_file_holding_them() {
     let inc = write(
         d,
         "marks.toml",
-        "# shared\nfavourite = ['acme/a', 'acme/b']\n",
+        "# shared\nmarks.favourite.repos = ['acme/a', 'acme/b']\n",
     );
     let main = write(d, "config.toml", "extend = ['marks.toml']\n# mine\n");
     let before = Config::load(&main).unwrap();
     let mut after = before.clone();
     // drop an entry that lives in the extended file, add a new one
-    after.favourite = vec!["acme/b".into(), "acme/c".into()];
+    after.marks["favourite"].repos = vec!["acme/b".into(), "acme/c".into()];
     update_mark_lists(&main, &before, &after).unwrap();
     let inc_text = std::fs::read_to_string(&inc).unwrap();
     let main_text = std::fs::read_to_string(&main).unwrap();
@@ -173,29 +173,35 @@ fn marks_are_saved_to_the_file_holding_them() {
     // the list lives: the highest file with it
     assert!(inc_text.contains("acme/c"), "{inc_text}");
     assert_eq!(main_text, "extend = ['marks.toml']\n# mine\n");
-    assert_eq!(Config::load(&main).unwrap().favourite, ["acme/b", "acme/c"]);
+    assert_eq!(
+        Config::load(&main).unwrap().marks["favourite"].repos,
+        ["acme/b", "acme/c"]
+    );
 }
 
 #[test]
 fn an_empty_extend_list_in_the_main_file_keeps_additions_there() {
     let t = tempfile::tempdir().unwrap();
     let d = t.path();
-    let shared = write(d, "team.toml", "favourite = ['acme/a']\n");
+    let shared = write(d, "team.toml", "marks.favourite.repos = ['acme/a']\n");
     let main = write(
         d,
         "config.toml",
-        "extend = ['team.toml']\nextend_favourite = []\n",
+        "extend = ['team.toml']\nmarks.favourite.extend_repos = []\n",
     );
     let before = Config::load(&main).unwrap();
     let mut after = before.clone();
-    after.favourite.push("acme/c".into());
+    after.marks["favourite"].repos.push("acme/c".into());
     update_mark_lists(&main, &before, &after).unwrap();
     assert_eq!(
         std::fs::read_to_string(&shared).unwrap(),
-        "favourite = ['acme/a']\n",
+        "marks.favourite.repos = ['acme/a']\n",
         "shared file untouched"
     );
-    assert_eq!(Config::load(&main).unwrap().favourite, ["acme/a", "acme/c"]);
+    assert_eq!(
+        Config::load(&main).unwrap().marks["favourite"].repos,
+        ["acme/a", "acme/c"]
+    );
 }
 
 #[test]
@@ -238,15 +244,19 @@ fn marks_are_added_to_the_main_files_own_list_when_it_has_one() {
 fn an_unmark_alone_is_saved_in_the_file_holding_the_entry() {
     let t = tempfile::tempdir().unwrap();
     let d = t.path();
-    let shared = write(d, "team.toml", "favourite = ['acme/a', 'acme/b']\n");
+    let shared = write(
+        d,
+        "team.toml",
+        "marks.favourite.repos = ['acme/a', 'acme/b']\n",
+    );
     let main = write(d, "config.toml", "extend = ['team.toml']\n");
     let before = Config::load(&main).unwrap();
     let mut after = before.clone();
-    after.favourite.retain(|e| e != "acme/a");
+    after.marks["favourite"].repos.retain(|e| e != "acme/a");
     update_mark_lists(&main, &before, &after).unwrap();
     assert_eq!(
         std::fs::read_to_string(&shared).unwrap(),
-        "favourite = ['acme/b']\n"
+        "marks.favourite.repos = ['acme/b']\n"
     );
     assert_eq!(
         std::fs::read_to_string(&main).unwrap(),
@@ -354,5 +364,107 @@ fn auto_fix_kinds_that_are_never_automatic_are_warned_about() {
     assert!(
         w[0].contains("commit, abort") && w[0].contains("never automatic"),
         "{w:?}"
+    );
+}
+
+/// Marks are tables: favourite's defaults are in code (key, icon, sort),
+/// any field can be set; yours follow it, in the order written.
+#[test]
+fn marks_are_tables_with_defaults_for_favourite() {
+    let c = Config::default();
+    let names: Vec<&String> = c.marks.keys().collect();
+    assert_eq!(names, ["favourite"]);
+    let fav = &c.marks["favourite"];
+    assert_eq!((fav.key, fav.sort), (Some('f'), 1));
+    assert!(fav.repos.is_empty());
+    let c = Config::parse(
+        "[marks.work]\nkey = 'w'\nicon = 'W'\ncolor = 'cyan'\nrepos = ['acme/*', '!acme/old']\n\
+         [marks.home]\nicon = { unicode = '⌂', ascii = 'h' }\nsort = 2\n\
+         [marks.favourite]\nrepos = ['acme/app']\n",
+    )
+    .unwrap();
+    let names: Vec<&String> = c.marks.keys().collect();
+    assert_eq!(
+        names,
+        ["favourite", "work", "home"],
+        "defaults first, then as written"
+    );
+    assert_eq!(c.marks["favourite"].repos, ["acme/app"]);
+    assert_eq!(
+        c.marks["favourite"].sort, 1,
+        "the rest of its defaults kept"
+    );
+    let work = &c.marks["work"];
+    assert_eq!(
+        (work.key, work.sort, work.color.as_deref()),
+        (Some('w'), 0, Some("cyan"))
+    );
+    assert_eq!(work.repos, ["acme/*", "!acme/old"]);
+    // icons by set: one for all, or per set (unicode standing in for a missing one)
+    assert_eq!(c.mark_icon("work", "nerd"), "W");
+    assert_eq!(c.mark_icon("home", "ascii"), "h");
+    assert_eq!(c.mark_icon("home", "nerd"), "⌂");
+    assert_eq!(c.mark_icon("favourite", "unicode"), "◆");
+    assert_eq!(c.mark_icon("favourite", "ascii"), "*");
+    assert_eq!(
+        c.mark_icon("favourite", "nerd"),
+        "\u{eb59} ",
+        "its own for nerd"
+    );
+    // none: its name's first letter
+    let c = Config::parse("[marks.later]\n").unwrap();
+    assert_eq!(c.mark_icon("later", "unicode"), "l");
+}
+
+/// Mark names are words (they're keys and `#name` filters); keys one
+/// character; a top-level `favourite` list says where it went.
+#[test]
+fn bad_marks_are_explained() {
+    // words: letters, digits, - and _
+    assert!(Config::parse("[marks.my-work_2]\n").is_ok());
+    assert!(err(Config::parse("[marks.\"a b\"]\n")).contains("letters, digits"));
+    assert!(
+        err(Config::parse("[marks.\"\"]\n")).contains("letters, digits"),
+        "empty"
+    );
+    assert!(err(Config::parse("[marks.w]\nkey = 'ww'\n")).contains("key"));
+    for taken in ["pull", "ignore"] {
+        let e = err(Config::parse(&format!("[marks.{taken}]\n")));
+        assert!(
+            e.contains(taken) && e.contains("isn't a mark of its own"),
+            "{e}"
+        );
+    }
+    assert!(err(Config::parse("favourite = ['acme/app']\n")).contains("[marks.favourite] repos"));
+    assert!(err(Config::parse("[marks.w]\nrepo = []\n")).contains("repo"));
+}
+
+/// Adding to a mark of your own writes its table.
+#[test]
+fn a_new_marks_entries_are_saved_in_its_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = write(dir.path(), "config.toml", "[marks.work]\nkey = 'w'\n");
+    let before = Config::load(&main).unwrap();
+    let mut after = before.clone();
+    after
+        .marks
+        .get_mut("work")
+        .unwrap()
+        .repos
+        .push("acme/app".into());
+    after
+        .marks
+        .get_mut("favourite")
+        .unwrap()
+        .repos
+        .push("acme/fav".into());
+    update_mark_lists(&main, &before, &after).unwrap();
+    let c = Config::load(&main).unwrap();
+    assert_eq!(c.marks["work"].repos, ["acme/app"]);
+    assert_eq!(c.marks["favourite"].repos, ["acme/fav"]);
+    assert_eq!(
+        c.marks["work"].key,
+        Some('w'),
+        "the table's other keys kept"
     );
 }

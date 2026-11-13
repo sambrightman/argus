@@ -68,7 +68,7 @@ fn flag_badges_show_favourite_new_ignored_or_snoozed_and_pull() {
     let texts = |extra: &str| {
         let mut ws = Workspace::new(Config::parse(&cfg(extra)).unwrap(), State::default()).unwrap();
         ws.scan();
-        badges::flags(&ws.entries[0], &UNICODE)
+        badges::flags(&ws.entries[0], &UNICODE, &ws.config.mark_icons())
             .into_iter()
             .map(|b| b.text)
             .collect::<Vec<_>>()
@@ -76,8 +76,8 @@ fn flag_badges_show_favourite_new_ignored_or_snoozed_and_pull() {
     assert!(texts("").is_empty());
     let path = r.display().to_string();
     assert_eq!(
-        texts(&format!("favourite = ['{path}']")),
-        [UNICODE.favourite.to_string()]
+        texts(&format!("marks.favourite.repos = ['{path}']")),
+        ["◆".to_string()]
     );
     assert_eq!(
         texts(&format!("ignore.repos = ['{path}']")),
@@ -89,8 +89,10 @@ fn flag_badges_show_favourite_new_ignored_or_snoozed_and_pull() {
         [UNICODE.pull.to_string()]
     );
     assert_eq!(
-        texts(&format!("pull = ['{path}']\nfavourite = ['{path}']")),
-        [UNICODE.favourite.to_string(), UNICODE.pull.to_string()]
+        texts(&format!(
+            "pull = ['{path}']\nmarks.favourite.repos = ['{path}']"
+        )),
+        ["◆".to_string(), UNICODE.pull.to_string()]
     );
     // an ignored repo isn't pulled, so it shows no pull mark
     assert_eq!(

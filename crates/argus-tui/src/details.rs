@@ -244,17 +244,13 @@ pub fn details(
         ]));
     }
     let flags = [
-        (e.flags.favourite, "favourite"),
         (e.flags.pull, "pulled"),
         (e.flags.ignored, "ignored"),
         (e.flags.snoozed, "snoozed"),
         (e.flags.new, "new"),
     ];
-    let mut fl: Vec<String> = flags
-        .iter()
-        .filter(|f| f.0)
-        .map(|f| f.1.to_string())
-        .collect();
+    let mut fl: Vec<String> = e.flags.marks.clone();
+    fl.extend(flags.iter().filter(|f| f.0).map(|f| f.1.to_string()));
     if let Some(t) = &e.flags.tracked {
         fl.push(format!("tracked by {t}"));
     }

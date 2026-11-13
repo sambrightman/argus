@@ -119,7 +119,8 @@ pub enum Action {
     FastForward,
     AutoFix(Scope),
     PullAndClone,
-    ToggleFavourite,
+    /// Toggle the mark at this place in `[marks]` (its key in the Mark menu).
+    ToggleLabel(usize),
     TogglePull,
     ToggleIgnore,
     /// A mark for the selected repo's owner as a whole.
@@ -809,11 +810,16 @@ impl App {
                 self.ws.nested(&p, &rel);
             }
         }
-        let mut fuzzy = (!self.filter.is_empty()).then(|| crate::fuzzy::Fuzzy::new(&self.filter));
+        // `#work` / `!#work` terms by marks, the rest fuzzily
+        let (marks, text) = argus_core::rules::MarkFilter::parse(&self.filter);
+        let mut fuzzy = (!text.is_empty()).then(|| crate::fuzzy::Fuzzy::new(&text));
         let (icons, _) = self.ws.config.ui.icons();
         let mut rows = vec![];
         for i in self.ws.ordered(self.view) {
             let e = &self.ws.entries[i];
+            if !marks.matches(&e.flags) {
+                continue;
+            }
             if let Some(f) = &mut fuzzy
                 && f.score(&e.display_name()).is_none()
                 && f.score(&e.key).is_none()
@@ -1462,6 +1468,7 @@ impl App {
             }
             OpenMenu(m) => {
                 let mut menu = m.menu();
+                self.add_marks(&mut menu);
                 self.state_labels(&mut menu);
                 self.drop_inapplicable(&mut menu);
                 let mut cursor = 0;
@@ -1771,7 +1778,7 @@ impl App {
                 self.info("listing forges…");
                 return vec![Effect::PlanPullAndClone];
             }
-            ToggleFavourite => return self.toggle_mark(Mark::Favourite),
+            ToggleLabel(i) => return self.toggle_mark(Mark::Label(i)),
             TogglePull => return self.toggle_mark(Mark::Pull),
             ToggleIgnore => return self.toggle_mark(Mark::Ignore),
             ToggleOwnerMark(m) => return self.toggle_owner_mark(m),
@@ -1917,7 +1924,7 @@ impl App {
         let Some(&first) = sel.first() else {
             return vec![];
         };
-        let on = !m.of(&self.ws.entries[first].flags);
+        let on = !m.of(&self.ws.entries[first].flags, &self.ws.config);
         let before = self.ws.config.clone();
         if let Err(e) = self.ws.set_mark(&sel, m, on) {
             self.error(e.to_string());
@@ -2641,14 +2648,39 @@ impl App {
         }
     }
 
+    /// The Mark and Owner menus' items for each mark with a key, first, in
+    /// config order: "mark work" or "unmark work" by the first selected
+    /// repo (the Owner menu's are labelled by [`Self::state_labels`]). A
+    /// key the menu has already is left to it (warned about at startup).
+    fn add_marks(&self, menu: &mut Menu) {
+        if !matches!(menu.id, MenuId::Mark | MenuId::Owner) {
+            return;
+        }
+        let first = self.selected().first().map(|&i| &self.ws.entries[i].flags);
+        let mut items = vec![];
+        for (i, (name, def)) in self.ws.config.marks.iter().enumerate() {
+            let Some(key) = def.key else { continue };
+            if menu.items.iter().any(|it| it.key == key) {
+                continue;
+            }
+            let (label, action) = match menu.id {
+                MenuId::Owner => (String::new(), Action::ToggleOwnerMark(Mark::Label(i))),
+                _ if first.is_some_and(|f| f.has(name)) => {
+                    (format!("unmark {name}"), Action::ToggleLabel(i))
+                }
+                _ => (format!("mark {name}"), Action::ToggleLabel(i)),
+            };
+            items.push(menu::item(key, label, action));
+        }
+        menu.items.splice(0..0, items);
+    }
+
     /// Labels for toggles saying what choosing them does now: mark or
     /// unmark (by the first selected repo, as toggling goes), show or hide.
     fn state_labels(&self, menu: &mut Menu) {
         let first = self.selected().first().map(|&i| &self.ws.entries[i].flags);
         let label = |key: char| -> Option<&'static str> {
             Some(match (menu.id, key) {
-                (MenuId::Mark, 'f') if first?.favourite => "unfavourite",
-                (MenuId::Mark, 'f') => "favourite",
                 (MenuId::Mark, 'p') if first?.pull => "stop pulling",
                 (MenuId::Mark, 'p') => "pull (with F a and argus pull)",
                 (MenuId::Mark, 'I') if first?.ignored => "unignore repo",
@@ -2678,14 +2710,13 @@ impl App {
                 };
                 let on = self.ws.owner_marked(i, m) == Some(true);
                 it.label = match (m, on) {
-                    (Mark::Favourite, true) => "unfavourite",
-                    (Mark::Favourite, false) => "favourite",
-                    (Mark::Pull, true) => "stop pulling",
-                    (Mark::Pull, false) => "pull",
-                    (Mark::Ignore, true) => "unignore",
-                    (Mark::Ignore, false) => "ignore",
-                }
-                .to_string();
+                    (Mark::Label(_), true) => format!("unmark {}", m.label_text(&self.ws.config)),
+                    (Mark::Label(_), false) => format!("mark {}", m.label_text(&self.ws.config)),
+                    (Mark::Pull, true) => "stop pulling".into(),
+                    (Mark::Pull, false) => "pull".into(),
+                    (Mark::Ignore, true) => "unignore".into(),
+                    (Mark::Ignore, false) => "ignore".into(),
+                };
             }
         }
     }

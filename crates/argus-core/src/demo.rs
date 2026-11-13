@@ -216,8 +216,8 @@ fn conflicting_branch(r: &std::path::Path) {
 
 impl Demo {
     /// Set the marks the sample repos are named after: favourite and
-    /// ignored in `ws.config`, new and snoozed in `ws.state`. Call after a
-    /// scan, so repo keys are known.
+    /// ignored in `ws.config`, new and snoozed in `ws.state`; and a label of
+    /// its own, `work`. Call after a scan, so repo keys are known.
     pub fn apply_marks(&self, ws: &mut Workspace) {
         let index = |ws: &Workspace, name: &str| {
             ws.entries
@@ -229,7 +229,23 @@ impl Demo {
             .iter()
             .filter_map(|n| index(ws, n))
             .collect();
-        ws.set_mark(&favourites, Mark::Favourite, true).unwrap();
+        let fav = Mark::label(&ws.config, "favourite").expect("built in");
+        ws.set_mark(&favourites, fav, true).unwrap();
+        ws.config
+            .marks
+            .entry("work".into())
+            .or_insert(crate::config::MarkDef {
+                key: Some('w'),
+                icon: Some(crate::config::MarkIcon::One("W".into())),
+                color: Some("cyan".into()),
+                ..Default::default()
+            });
+        let work: Vec<usize> = ["clean", "worktrees"]
+            .iter()
+            .filter_map(|n| index(ws, n))
+            .collect();
+        let label = Mark::label(&ws.config, "work").expect("just added");
+        ws.set_mark(&work, label, true).unwrap();
         if let Some(i) = index(ws, "ignored") {
             ws.set_mark(&[i], Mark::Ignore, true).unwrap();
         }

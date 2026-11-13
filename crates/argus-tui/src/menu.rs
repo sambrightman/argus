@@ -269,7 +269,6 @@ impl MenuId {
             MenuId::Mark => (
                 "Mark",
                 vec![
-                    item('f', "toggle favourite", Action::ToggleFavourite),
                     item('p', "toggle pull", Action::TogglePull),
                     item('i', "ignore issues…", Action::IgnoreIssues),
                     item('I', "toggle ignoring the repo", Action::ToggleIgnore),
@@ -329,15 +328,11 @@ impl MenuId {
                 ],
             ),
             MenuId::PickCommit => ("Commits", vec![]),
-            // titled with the owner and labelled as toggled when opened
+            // titled with the owner and labelled as toggled when opened; its
+            // marks added then, as the Mark menu's
             MenuId::Owner => (
                 "Owner",
                 vec![
-                    item(
-                        'f',
-                        "toggle favourite",
-                        Action::ToggleOwnerMark(argus_core::rules::Mark::Favourite),
-                    ),
                     item(
                         'p',
                         "toggle pull",
@@ -378,6 +373,39 @@ impl MenuId {
 /// closes menus. A list has at most this many items.
 pub const LIST_KEYS: &str = "1234567890abcdefghilmorstuvwxyz";
 
+/// Marks whose key the Mark menu (or the Owner menu) has already: they're
+/// left out of it, so say so.
+pub fn mark_key_clashes(c: &argus_core::Config) -> Vec<String> {
+    let taken = |id: MenuId| {
+        id.menu()
+            .items
+            .into_iter()
+            .map(|i| i.key)
+            .collect::<Vec<_>>()
+    };
+    let (mark, owner) = (taken(MenuId::Mark), taken(MenuId::Owner));
+    let mut seen = vec![];
+    c.marks
+        .iter()
+        .filter_map(|(name, d)| Some((name, d.key?)))
+        .filter_map(|(name, k)| {
+            let clash = if mark.contains(&k) || owner.contains(&k) {
+                Some(format!(
+                    "[marks.{name}] key {k:?} is the Mark menu's own: choose another"
+                ))
+            } else if seen.contains(&k) {
+                Some(format!(
+                    "[marks.{name}] key {k:?} is another mark's: choose another"
+                ))
+            } else {
+                None
+            };
+            seen.push(k);
+            clash
+        })
+        .collect()
+}
+
 /// The Fix menu's key for a fix of `kind`.
 pub fn fix_key(kind: argus_core::fix::FixKind) -> char {
     use argus_core::fix::FixKind::*;
@@ -406,6 +434,25 @@ pub fn fix_key(kind: argus_core::fix::FixKind) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_marks_key_the_menu_has_is_warned_about() {
+        let c = argus_core::Config::parse(
+            "[marks.work]\nkey = 'w'\n[marks.pulled]\nkey = 'z'\n[marks.other]\nkey = 'w'\n[marks.nokey]\n",
+        )
+        .unwrap();
+        let w = mark_key_clashes(&c);
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(
+            w[0].contains("pulled") && w[0].contains("Mark menu"),
+            "{w:?}"
+        );
+        assert!(
+            w[1].contains("other") && w[1].contains("another mark"),
+            "{w:?}"
+        );
+        assert!(mark_key_clashes(&argus_core::Config::default()).is_empty());
+    }
 
     #[test]
     fn list_keys_leave_out_moving_and_closing() {

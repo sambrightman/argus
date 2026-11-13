@@ -80,6 +80,37 @@ pub fn example() -> String {
             g.key(&mut out, &k, &kp, false);
         }
     }
+    // a table per entry: the defaults, then an example of your own
+    for (name, p) in props.iter().filter(|(_, p)| g.kind(p) == Kind::MapOfTables) {
+        out.push('\n');
+        g.doc(&mut out, p);
+        let item = g.resolve(&g.resolve(p)["additionalProperties"]);
+        g.doc(&mut out, item);
+        let entries = |v: &Json| v.as_object().cloned().unwrap_or_default();
+        for (entry, value) in entries(&p["default"]) {
+            out.push_str(&format!("# [{name}.{entry}]\n"));
+            for (k, mut kp) in properties(item) {
+                if let Some(v) = value.get(&k) {
+                    kp["default"] = v.clone();
+                }
+                g.key(&mut out, &k, &kp, false);
+            }
+        }
+        for (entry, value) in p["examples"]
+            .as_array()
+            .and_then(|e| e.first())
+            .map(entries)
+            .unwrap_or_default()
+        {
+            out.push_str("##\n## One of your own, for example:\n");
+            out.push_str(&format!("# [{name}.{entry}]\n"));
+            for (k, v) in entries(&value) {
+                for line in render(&k, &v).lines() {
+                    out.push_str(&format!("# {line}\n"));
+                }
+            }
+        }
+    }
     for (name, p) in props
         .iter()
         .filter(|(_, p)| g.kind(p) == Kind::ArrayOfTables)
@@ -104,6 +135,8 @@ pub fn example() -> String {
 enum Kind {
     Value,
     Table,
+    /// Tables by name (`[marks.<name>]`).
+    MapOfTables,
     ArrayOfTables,
 }
 
@@ -137,6 +170,13 @@ impl Gen<'_> {
         let r = self.resolve(p);
         if r["type"] == "object" && r.get("properties").is_some() {
             Kind::Table
+        } else if r["type"] == "object"
+            && self
+                .resolve(&r["additionalProperties"])
+                .get("properties")
+                .is_some()
+        {
+            Kind::MapOfTables
         } else if r["type"] == "array" && self.resolve(&r["items"]).get("properties").is_some() {
             Kind::ArrayOfTables
         } else {
@@ -476,8 +516,8 @@ fn split_path(path: &str) -> (Vec<&str>, &str) {
 /// Whether the mark or issue list at dotted `key` is empty by default.
 fn default_is_empty(key: &str) -> bool {
     let defaults = Config::default();
-    List::all()
-        .find(|l| l.path() == key)
+    List::all(&defaults)
+        .find(|l| l.path(&defaults) == key)
         .is_none_or(|l| l.get(&defaults).is_empty())
 }
 
@@ -727,12 +767,13 @@ pub fn remove_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsRemoved, EditE
 /// `add_target`), else a new list in the main file, as for roots. No
 /// changes, no write.
 pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result<(), EditError> {
-    let changes: Vec<(String, Vec<&String>, Vec<&String>)> = List::all()
+    // (marks are defined in config, the same before and after)
+    let changes: Vec<(String, Vec<&String>, Vec<&String>)> = List::all(after)
         .map(|l| {
             let (old, new) = (l.get(before), l.get(after));
             let removed: Vec<&String> = old.iter().filter(|e| !new.contains(e)).collect();
             let added: Vec<&String> = new.iter().filter(|e| !old.contains(e)).collect();
-            (l.path(), removed, added)
+            (l.path(after), removed, added)
         })
         .filter(|(_, removed, added)| !removed.is_empty() || !added.is_empty())
         .collect();
@@ -819,7 +860,9 @@ mod tests {
         assert_eq!(c.fix, d.fix);
         assert_eq!(c.ui.theme, d.ui.theme);
         assert!(c.roots.is_empty(), "roots are never guessed");
-        assert!(c.favourite.is_empty() && c.pull.is_empty() && c.ignore.repos.is_empty());
+        assert!(
+            c.marks["favourite"].repos.is_empty() && c.pull.is_empty() && c.ignore.repos.is_empty()
+        );
         assert_eq!(c.tracks.len(), 1);
         assert_eq!(
             c.tracks[0].host, "github.com",
@@ -849,7 +892,7 @@ mod tests {
                 "fix",
                 "tools",
                 "ui",
-                "favourite",
+                "marks",
                 "pull",
                 "ignore",
                 "track",
@@ -868,14 +911,18 @@ mod tests {
             assert!(
                 ex.contains(&format!("# {k} = "))
                     || ex.contains(&format!("# [{k}]"))
+                    || ex.contains(&format!("# [{k}."))
                     || ex.contains(&format!("# [[{k}]]")),
                 "{k} missing from example:\n{ex}"
             );
         }
         // every setting line is preceded by documentation
+        // (but an example table's, documented by the table above it)
         let lines: Vec<&str> = ex.lines().collect();
+        let mut example = false;
         for (i, l) in lines.iter().enumerate() {
-            if l.starts_with("# ") && l.contains(" = ") && !l.starts_with("#   ") {
+            example = (example || l.starts_with("## One of your own")) && !l.is_empty();
+            if l.starts_with("# ") && l.contains(" = ") && !l.starts_with("#   ") && !example {
                 assert!(i > 0 && lines[i - 1].starts_with("##"), "undocumented: {l}");
             }
         }
@@ -899,14 +946,19 @@ mod tests {
             ("roots", r#"["~/dev"]"#),
             (
                 "colors",
-                r#"{ branch = "bold magenta", favourite = "yellow" }"#,
+                r#"{ branch = "bold magenta", "mark.favourite" = "yellow" }"#,
             ),
-            ("icon_overrides", r#"{ favourite = "★" }"#),
+            ("icon_overrides", r#"{ pull = "⇣" }"#),
         ] {
             let want = format!("##   e.g. {example}\n# {key} = ");
             assert!(ex.contains(&want), "{want}\n{ex}");
         }
         assert!(ex.contains("\n# forge = \"github\"\n"), "{ex}");
+        // a mark of your own, after the built-in ones
+        assert!(
+            ex.contains("## One of your own, for example:\n# [marks.work]\n# key = \"w\"\n"),
+            "{ex}"
+        );
     }
 
     #[test]
@@ -1099,19 +1151,19 @@ mod tests {
     fn mark_lists_are_edited_in_place() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("config.toml");
-        let text = "# my config\nroots = [\"~/dev\"]\nfavourite = [\"a/x\", \"b/*\"] # keep\n\n[ui]\ntheme = \"dark\"\n";
+        let text = "# my config\nroots = [\"~/dev\"]\nmarks.favourite.repos = [\"a/x\", \"b/*\"] # keep\n\n[ui]\ntheme = \"dark\"\n";
         std::fs::write(&p, text).unwrap();
         let before = Config::parse(text).unwrap();
         // nothing changed: the file isn't touched
         update_mark_lists(&p, &before, &before).unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), text);
         let mut after = before.clone();
-        after.favourite = vec!["b/*".into(), "c/y".into()];
+        after.marks["favourite"].repos = vec!["b/*".into(), "c/y".into()];
         after.ignore.repos = vec!["!d/z".into()];
         update_mark_lists(&p, &before, &after).unwrap();
         let out = std::fs::read_to_string(&p).unwrap();
         let c = Config::parse(&out).unwrap();
-        assert_eq!(c.favourite, ["b/*", "c/y"]);
+        assert_eq!(c.marks["favourite"].repos, ["b/*", "c/y"]);
         assert_eq!(c.ignore.repos, ["!d/z"], "created when missing");
         assert!(c.pull.is_empty());
         // the rest of the file is as written

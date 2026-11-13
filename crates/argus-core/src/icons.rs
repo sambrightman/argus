@@ -11,7 +11,6 @@ use std::collections::BTreeMap;
 /// (`[ui.icon_overrides]`). `argus demo --glyphs` shows them all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Icons {
-    pub favourite: Cow<'static, str>,
     pub new: Cow<'static, str>,
     pub ignored: Cow<'static, str>,
     pub snoozed: Cow<'static, str>,
@@ -80,7 +79,6 @@ macro_rules! icon_names {
 }
 
 icon_names!(
-    favourite,
     new,
     ignored,
     snoozed,
@@ -147,7 +145,6 @@ const fn s(glyph: &'static str) -> Cow<'static, str> {
 /// Sans Mono, Fira Code, Hack, Source Code Pro) all have, so none is drawn
 /// from a fallback font that can overlap the next character.
 pub const UNICODE: Icons = Icons {
-    favourite: s("◆"),
     new: s("+"),
     ignored: s("×"),
     snoozed: s("z"),
@@ -183,7 +180,6 @@ pub const UNICODE: Icons = Icons {
 /// Nerd Font glyphs (codicons, Powerline). Each is followed by a space:
 /// non-Mono Nerd Fonts draw them up to two cells wide.
 pub const NERD: Icons = Icons {
-    favourite: s("\u{eb59} "),        // cod-star_full
     new: s("\u{ec21} "),              // cod-sparkle_filled
     ignored: s("\u{eae7} "),          // cod-eye_closed
     snoozed: s("\u{ec08} "),          // cod-bell_slash
@@ -228,7 +224,6 @@ pub fn by_name(name: &str) -> Icons {
 }
 
 pub const ASCII: Icons = Icons {
-    favourite: s("*"),
     new: s("+"),
     ignored: s("x"),
     snoozed: s("z"),
@@ -278,7 +273,6 @@ mod tests {
         // every icon in both sets is non-empty except the optional branch glyph
         for set in [UNICODE, ASCII] {
             for s in [
-                &set.favourite,
                 &set.new,
                 &set.ahead,
                 &set.behind,
@@ -290,10 +284,6 @@ mod tests {
                 assert!(!s.is_empty());
             }
         }
-        assert!(
-            ASCII.favourite.is_ascii()
-                && ASCII.untracked.is_ascii()
-                && ASCII.in_progress.is_ascii()
-        );
+        assert!(ASCII.untracked.is_ascii() && ASCII.in_progress.is_ascii());
     }
 }

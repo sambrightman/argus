@@ -64,6 +64,14 @@ enum Cmd {
     Status {
         #[command(flatten)]
         view: View,
+        /// Only repos matching this, as `/` does in the TUI: `#work` has
+        /// the mark, `!#work` hasn't, space is AND, `|` is OR between
+        /// marks; other words match the name fuzzily.
+        #[arg(long, value_name = "QUERY")]
+        filter: Option<String>,
+        /// Only repos with this mark; repeatable (all of them).
+        #[arg(long, value_name = "MARK", add = mark_completer())]
+        mark: Vec<String>,
     },
     /// Pull the repos marked for pull; list tracked owners and clone their
     /// new repos.
@@ -97,9 +105,23 @@ enum Cmd {
         #[arg(add = repo_completer())]
         patterns: Vec<String>,
     },
-    /// Set favourite / pull / ignore (edits those lists in config), or
-    /// snooze repos.
+    /// Mark repos with MARK, whatever patterns in config say: one of
+    /// `[marks]` (favourite, or one of your own), `pull` (pulled by `argus
+    /// pull`) or `ignore` (hidden, left out of pulls and bulk actions).
+    /// Edits that list in config.
     Mark(MarkArgs),
+    /// Unmark repos, whatever patterns in config say; `--all`: drop the
+    /// repos' own entries from every mark and end their snoozes.
+    Unmark(UnmarkArgs),
+    /// Hide repos for a while, or with `--issue` just that issue of them.
+    Snooze(SnoozeArgs),
+    /// End snoozes early: the repos' and all their issues', or with
+    /// `--issue` just that one.
+    Unsnooze(UnsnoozeArgs),
+    /// Ignore one issue for some repos (`[ignore] <issue>`).
+    IgnoreIssue(IgnoreIssueArgs),
+    /// Stop ignoring an issue for some repos.
+    UnignoreIssue(UnignoreIssueArgs),
     /// Acknowledge "new" repos (all, or matching patterns).
     Ack {
         /// Repos (glob on name/key/path).
@@ -161,66 +183,88 @@ impl From<View> for ViewFilter {
 
 #[derive(Args)]
 struct MarkArgs {
+    /// One of `[marks]` (favourite, or one of your own), `pull` or
+    /// `ignore`.
+    #[arg(add = mark_completer())]
+    mark: String,
     /// Repos (glob on name/key/path).
     #[arg(required = true, add = repo_completer())]
     patterns: Vec<String>,
-    /// Sort above other repos in the same group.
-    #[arg(long, overrides_with = "no_favourite")]
-    favourite: bool,
-    /// Not a favourite, whatever patterns in config say.
+    /// The repos' owners as a whole instead (their `github.com/acme/*`
+    /// pattern).
     #[arg(long)]
-    no_favourite: bool,
-    /// Pull with `argus pull`.
-    #[arg(long, overrides_with = "no_pull")]
-    pull: bool,
-    /// Don't pull with `argus pull`, whatever patterns in config say.
+    owner: bool,
+}
+
+#[derive(Args)]
+struct UnmarkArgs {
+    /// Every mark (the repos' own entries; what patterns give stays, and
+    /// is noted), and their snoozes. Then there's no MARK.
     #[arg(long)]
-    no_pull: bool,
-    /// Hide, and leave out of pulls, clones and bulk operations.
-    #[arg(long, overrides_with = "unignore")]
-    ignore: bool,
-    /// Not ignored, whatever patterns in config say.
-    #[arg(long)]
-    unignore: bool,
-    /// Ignore one issue for these repos (`[ignore] <issue>`):
+    all: bool,
+    /// The repos' owners as a whole instead (their `github.com/acme/*`
+    /// pattern).
+    #[arg(long, conflicts_with = "all")]
+    owner: bool,
+    /// MARK (as for `mark`), unless `--all`; then the repos (glob on
+    /// name/key/path).
+    #[arg(value_name = "[MARK] PATTERNS", required = true, add = mark_or_repo_completer())]
+    args: Vec<String>,
+}
+
+#[derive(Args)]
+struct SnoozeArgs {
+    /// Repos (glob on name/key/path).
+    #[arg(required = true, add = repo_completer())]
+    patterns: Vec<String>,
+    /// How long: `90m`, `12h`, `3d`, `2w`.
+    #[arg(long = "for", value_name = "DURATION", required = true)]
+    duration: String,
+    /// Just this issue of them (`dirty`, `unpushed`, `behind`, `stashes`…),
+    /// which doesn't count until the snooze ends; repeatable.
+    #[arg(long, value_name = "ISSUE", value_parser = issue_name)]
+    issue: Vec<Issue>,
+}
+
+#[derive(Args)]
+struct UnsnoozeArgs {
+    /// Repos (glob on name/key/path).
+    #[arg(required = true, add = repo_completer())]
+    patterns: Vec<String>,
+    /// Just this issue's snooze; repeatable.
+    #[arg(long, value_name = "ISSUE", value_parser = issue_name)]
+    issue: Vec<Issue>,
+}
+
+#[derive(Args)]
+struct IgnoreIssueArgs {
     /// non-default-branch, detached, no-remote, no-upstream, stashes,
     /// unpushed-branches, behind. Pinned to the current branch, tag or
     /// commit where the list pins those; stashes aren't pinned unless
     /// `--pin` says so.
-    #[arg(long, value_name = "ISSUE", value_parser = issue_list)]
-    ignore_issue: Vec<IssueList>,
-    /// With `--ignore-issue`: pin to the current value(s), e.g. each
-    /// stash's message, so a new one is flagged again.
+    #[arg(value_parser = issue_list, add = issue_list_completer())]
+    issue: IssueList,
+    /// Repos (glob on name/key/path).
+    #[arg(required = true, add = repo_completer())]
+    patterns: Vec<String>,
+    /// Pin to the current value(s), e.g. each stash's message, so a new
+    /// one is flagged again.
     #[arg(long, overrides_with = "no_pin")]
     pin: bool,
-    /// With `--ignore-issue`: don't pin, so the issue stays ignored
-    /// whatever the branch, HEAD or stashes become.
+    /// Don't pin, so the issue stays ignored whatever the branch, HEAD or
+    /// stashes become.
     #[arg(long)]
     no_pin: bool,
-    /// Stop ignoring an issue for these repos.
-    #[arg(long, value_name = "ISSUE", value_parser = issue_list)]
-    unignore_issue: Vec<IssueList>,
-    /// Hide temporarily, e.g. `3d`, `12h`, `2w`.
-    #[arg(long, value_name = "DURATION")]
-    snooze: Option<String>,
-    /// End a snooze early: the repo's, and its issues'.
-    #[arg(long)]
-    unsnooze: bool,
-    /// With `--snooze` or `--unsnooze`: that issue of the repos instead,
-    /// which doesn't count until the snooze ends (`dirty`, `unpushed`,
-    /// `behind`, `stashes`…).
-    #[arg(long, value_name = "ISSUE", value_parser = issue_name)]
-    issue: Vec<Issue>,
-    /// Mark the repos' owners as a whole (their `github.com/acme/*`
-    /// pattern) instead: with --favourite, --pull, --ignore and their
-    /// opposites only.
-    #[arg(long)]
-    owner: bool,
-    /// Remove the repos' own entries from the favourite, pull and ignore
-    /// lists and end any snooze. Marks that patterns (or a tracked owner)
-    /// still give are noted.
-    #[arg(long)]
-    clear: bool,
+}
+
+#[derive(Args)]
+struct UnignoreIssueArgs {
+    /// As for `ignore-issue`.
+    #[arg(value_parser = issue_list, add = issue_list_completer())]
+    issue: IssueList,
+    /// Repos (glob on name/key/path).
+    #[arg(required = true, add = repo_completer())]
+    patterns: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -412,9 +456,18 @@ fn run() -> Result<()> {
             };
             argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))?;
         }
-        Cmd::Status { view } => {
+        Cmd::Status { view, filter, mark } => {
             scan(&mut ws);
-            status(&ws, view.into(), json)?;
+            for m in &mark {
+                mark_named(&ws, m)?;
+            }
+            let query = mark
+                .iter()
+                .map(|m| format!("#{m}"))
+                .chain(filter)
+                .collect::<Vec<_>>()
+                .join(" ");
+            status(&ws, view.into(), &query, json)?;
         }
         Cmd::Pull {
             dry_run,
@@ -443,8 +496,39 @@ fn run() -> Result<()> {
         }
         Cmd::Mark(m) => {
             scan(&mut ws);
-            mark(&mut ws, &ctx, &m, json, cli.yes)?;
+            set_mark(&mut ws, &ctx, &m.mark, &m.patterns, m.owner, true, json)?;
+        }
+        Cmd::Unmark(m) if m.all => {
+            scan(&mut ws);
+            unmark_all(&mut ws, &ctx, &m.args, json, cli.yes)?;
             save_state(&ws, &ctx)?;
+        }
+        Cmd::Unmark(m) => {
+            scan(&mut ws);
+            let (mark, patterns) = m.args.split_first().expect("required");
+            if patterns.is_empty() {
+                bail!("which repos? `argus unmark {mark} PATTERNS…`");
+            }
+            set_mark(&mut ws, &ctx, mark, patterns, m.owner, false, json)?;
+        }
+        Cmd::Snooze(a) => {
+            scan(&mut ws);
+            snooze(&mut ws, &a.patterns, Some(&a.duration), &a.issue, json)?;
+            save_state(&ws, &ctx)?;
+        }
+        Cmd::Unsnooze(a) => {
+            scan(&mut ws);
+            snooze(&mut ws, &a.patterns, None, &a.issue, json)?;
+            save_state(&ws, &ctx)?;
+        }
+        Cmd::IgnoreIssue(a) => {
+            scan(&mut ws);
+            let pin = (a.pin || a.no_pin).then_some(a.pin);
+            ignore_issue(&mut ws, &ctx, a.issue, &a.patterns, true, pin, json)?;
+        }
+        Cmd::UnignoreIssue(a) => {
+            scan(&mut ws);
+            ignore_issue(&mut ws, &ctx, a.issue, &a.patterns, false, None, json)?;
         }
         Cmd::Ack { patterns } => {
             scan(&mut ws);
@@ -566,28 +650,80 @@ fn confirm_with(
 /// Completes repo patterns with the names of the repos argus finds, using
 /// the config named by `ARGUS_CONFIG` or the default one (options like
 /// `--root` aren't seen while completing).
+/// The config completion sees: `$ARGUS_CONFIG`'s, else the default file's.
+fn completion_config() -> Config {
+    let path = std::env::var_os("ARGUS_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(paths::config_file);
+    Config::load(&path).unwrap_or_default()
+}
+
+/// Completes `names` that start with what's typed.
+fn starting(
+    names: Vec<String>,
+    current: &std::ffi::OsStr,
+) -> Vec<clap_complete::CompletionCandidate> {
+    let Some(current) = current.to_str() else {
+        return vec![];
+    };
+    names
+        .into_iter()
+        .filter(|n| n.starts_with(current))
+        .map(clap_complete::CompletionCandidate::new)
+        .collect()
+}
+
+/// Mark names: `[marks]`, then pull and ignore.
+fn mark_names() -> Vec<String> {
+    let c = completion_config();
+    c.marks
+        .keys()
+        .cloned()
+        .chain(["pull".into(), "ignore".into()])
+        .collect()
+}
+
+fn mark_completer() -> clap_complete::ArgValueCompleter {
+    clap_complete::ArgValueCompleter::new(|current: &std::ffi::OsStr| {
+        starting(mark_names(), current)
+    })
+}
+
+/// `unmark`'s arguments: a mark, then repos (or repos alone, with --all).
+fn mark_or_repo_completer() -> clap_complete::ArgValueCompleter {
+    clap_complete::ArgValueCompleter::new(|current: &std::ffi::OsStr| {
+        let mut names = mark_names();
+        names.extend(repo_names());
+        starting(names, current)
+    })
+}
+
+fn issue_list_completer() -> clap_complete::ArgValueCompleter {
+    clap_complete::ArgValueCompleter::new(|current: &std::ffi::OsStr| {
+        let names = IssueList::ALL
+            .iter()
+            .map(|l| l.name().replace('_', "-"))
+            .collect();
+        starting(names, current)
+    })
+}
+
+/// Every repo's name, as completion offers them.
+fn repo_names() -> Vec<String> {
+    let mut config = completion_config();
+    if config.roots.is_empty()
+        && let Ok(cwd) = std::env::current_dir()
+    {
+        config.roots = vec![cwd];
+    }
+    Workspace::new(config, State::default())
+        .map(|ws| ws.repo_names())
+        .unwrap_or_default()
+}
+
 fn repo_completer() -> clap_complete::ArgValueCompleter {
     clap_complete::ArgValueCompleter::new(|current: &std::ffi::OsStr| {
-        let Some(current) = current.to_str() else {
-            return vec![];
-        };
-        let path = std::env::var_os("ARGUS_CONFIG")
-            .map(PathBuf::from)
-            .unwrap_or_else(paths::config_file);
-        let mut config = Config::load(&path).unwrap_or_default();
-        if config.roots.is_empty()
-            && let Ok(cwd) = std::env::current_dir()
-        {
-            config.roots = vec![cwd];
-        }
-        let Ok(ws) = Workspace::new(config, State::default()) else {
-            return vec![];
-        };
-        ws.repo_names()
-            .into_iter()
-            .filter(|n| n.starts_with(current))
-            .map(clap_complete::CompletionCandidate::new)
-            .collect()
+        starting(repo_names(), current)
     })
 }
 
@@ -704,13 +840,34 @@ fn forge_factory() -> pull::ForgeFactory<'static> {
 
 struct Paint {
     color: bool,
+    /// Each mark's colour code, in config order (see [`Paint::marks`]).
+    marks: Vec<String>,
 }
 
 impl Paint {
     fn detect() -> Self {
         Self {
             color: std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none(),
+            marks: vec![],
         }
+    }
+
+    /// With `c`'s marks' colours: each one's `[ui] colors` `mark.<name>`,
+    /// else its `color`, as far as the terminal's 16 colours and bold or
+    /// dim go; else yellow.
+    fn marks(mut self, c: &argus_core::Config) -> Self {
+        self.marks = c
+            .marks
+            .iter()
+            .map(|(name, def)| {
+                let spec =
+                    c.ui.colors
+                        .get(&format!("mark.{name}"))
+                        .or(def.color.as_ref());
+                spec.and_then(|s| ansi(s)).unwrap_or_else(|| "33".into())
+            })
+            .collect();
+        self
     }
 
     fn role(&self, role: Role, s: &str) -> String {
@@ -718,7 +875,7 @@ impl Paint {
             return s.to_string();
         }
         let code = match role {
-            Role::Favourite => "33",
+            Role::Mark(i) => self.marks.get(i).map_or("33", String::as_str),
             Role::New => "1;36",
             Role::Hidden | Role::Dim => "2",
             Role::Pull => "34",
@@ -753,6 +910,26 @@ fn pad(s: &str, width: usize) -> String {
     format!("{s}{}", " ".repeat(width.saturating_sub(w)))
 }
 
+/// An ANSI code for a colour as `[ui] colors` writes it, if it uses only
+/// the 16 colours' names and bold or dim (`"bold cyan"`); else `None`.
+fn ansi(spec: &str) -> Option<String> {
+    const NAMES: [&str; 8] = [
+        "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+    ];
+    let codes: Option<Vec<String>> = spec
+        .split_whitespace()
+        .map(|w| match w {
+            "bold" => Some("1".into()),
+            "dim" => Some("2".into()),
+            c => NAMES
+                .iter()
+                .position(|n| *n == c)
+                .map(|n| (30 + n).to_string()),
+        })
+        .collect();
+    codes.filter(|c| !c.is_empty()).map(|c| c.join(";"))
+}
+
 fn icons(ws: &Workspace) -> Icons {
     let (icons, warnings) = ws.config.ui.icons();
     for w in warnings {
@@ -761,19 +938,31 @@ fn icons(ws: &Workspace) -> Icons {
     icons
 }
 
-fn status(ws: &Workspace, filter: ViewFilter, json: bool) -> Result<()> {
-    let order = ws.ordered(filter);
+/// The repos to list, in order, less those `query` (as `/` takes it)
+/// leaves out.
+fn status(ws: &Workspace, filter: ViewFilter, query: &str, json: bool) -> Result<()> {
+    let (marks, text) = argus_core::rules::MarkFilter::parse(query);
+    let mut fuzzy = (!text.is_empty()).then(|| argus_tui::fuzzy::Fuzzy::new(&text));
+    let mut order = ws.ordered(filter);
+    order.retain(|&i| {
+        let e = &ws.entries[i];
+        marks.matches(&e.flags)
+            && fuzzy
+                .as_mut()
+                .is_none_or(|f| f.score(&e.display_name()).is_some() || f.score(&e.key).is_some())
+    });
     if json {
         let v: Vec<_> = order.iter().map(|&i| &ws.entries[i]).collect();
         return print_json(&v);
     }
-    let p = Paint::detect();
+    let p = Paint::detect().marks(&ws.config);
     let ic = icons(ws);
+    let marks = ws.config.mark_icons();
     let rows: Vec<(String, String, String, String)> = order
         .iter()
         .map(|&i| {
             let e = &ws.entries[i];
-            let flags = badges::flags(e, &ic);
+            let flags = badges::flags(e, &ic, &marks);
             let flag_w: usize = flags
                 .iter()
                 .map(|b| UnicodeWidthStr::width(b.text.as_str()))
@@ -816,7 +1005,15 @@ fn status(ws: &Workspace, filter: ViewFilter, json: bool) -> Result<()> {
             pad(&name, name_w)
         )?;
     }
-    writeln!(out, "{}", p.role(Role::Dim, &status_summary(ws, filter)))?;
+    let mut summary = status_summary(ws, filter);
+    if !query.trim().is_empty() {
+        summary += &format!(
+            "; {} {} the filter",
+            order.len(),
+            plural(order.len(), "matches", "match")
+        );
+    }
+    writeln!(out, "{}", p.role(Role::Dim, &summary))?;
     Ok(())
 }
 
@@ -1080,25 +1277,36 @@ fn glyph_cell(g: &str) -> String {
 }
 
 fn demo_glyphs(ctx: &Ctx, json: bool) -> Result<()> {
-    let ui = Config::load(&ctx.config_path)
-        .map(|c| c.ui)
-        .unwrap_or_default();
-    let (yours, warnings) = ui.icons();
+    let c = Config::load(&ctx.config_path).unwrap_or_default();
+    let (yours, warnings) = c.ui.icons();
     for w in warnings {
         eprintln!("argus: config: {w}");
     }
+    // the icons, then each mark's (`mark.<name>`)
+    let names: Vec<String> = icons::ICON_NAMES
+        .iter()
+        .map(|n| n.to_string())
+        .chain(c.marks.keys().map(|n| format!("mark.{n}")))
+        .collect();
+    // a glyph by name in a set (by its name: `yours` is the configured one)
+    let glyph = |set: &str, i: &Icons, name: &str| -> String {
+        match name.strip_prefix("mark.") {
+            Some(m) => c.mark_icon(m, if set == "yours" { &c.ui.icons } else { set }),
+            None => i.get(name).unwrap_or_default().to_string(),
+        }
+    };
     if json {
-        let set = |i: &Icons| -> serde_json::Map<String, serde_json::Value> {
-            icons::ICON_NAMES
+        let set = |name: &str, i: &Icons| -> serde_json::Map<String, serde_json::Value> {
+            names
                 .iter()
-                .map(|n| (n.to_string(), i.get(n).unwrap().into()))
+                .map(|n| (n.clone(), glyph(name, i, n).into()))
                 .collect()
         };
         let mut sets: serde_json::Map<String, serde_json::Value> = icons::SETS
             .iter()
-            .map(|n| (n.to_string(), set(&icons::by_name(n)).into()))
+            .map(|n| (n.to_string(), set(n, &icons::by_name(n)).into()))
             .collect();
-        sets.insert("yours".into(), set(&yours).into());
+        sets.insert("yours".into(), set("yours", &yours).into());
         return print_json(&serde_json::json!({
             "sets": sets,
             "punctuation": icons::PUNCTUATION,
@@ -1113,11 +1321,11 @@ fn demo_glyphs(ctx: &Ctx, json: bool) -> Result<()> {
         .map(|&n| (n, icons::by_name(n)))
         .chain([("yours", yours)])
         .collect();
-    let cells: Vec<Vec<String>> = icons::ICON_NAMES
+    let cells: Vec<Vec<String>> = names
         .iter()
         .map(|n| {
             sets.iter()
-                .map(|(_, i)| glyph_cell(i.get(n).unwrap()))
+                .map(|(set, i)| glyph_cell(&glyph(set, i, n)))
                 .collect()
         })
         .collect();
@@ -1136,9 +1344,9 @@ fn demo_glyphs(ctx: &Ctx, json: bool) -> Result<()> {
         .zip(&widths)
         .map(|((n, _), &w)| pad(n, w))
         .collect();
-    let name_w = icons::ICON_NAMES.iter().map(|n| n.len()).max().unwrap_or(0) + 2;
+    let name_w = names.iter().map(|n| n.len()).max().unwrap_or(0) + 2;
     println!("{}{}", pad("icon", name_w), header.trim_end());
-    for (name, row) in icons::ICON_NAMES.iter().zip(&cells) {
+    for (name, row) in names.iter().zip(&cells) {
         let line: String = row.iter().zip(&widths).map(|(c, &w)| pad(c, w)).collect();
         println!("{}{}", pad(name, name_w), line.trim_end());
     }
@@ -1414,122 +1622,167 @@ fn issue_name(s: &str) -> std::result::Result<Issue, String> {
     })
 }
 
-fn mark(ws: &mut Workspace, ctx: &Ctx, m: &MarkArgs, json: bool, yes: bool) -> Result<()> {
-    if !m.issue.is_empty() && m.snooze.is_none() && !m.unsnooze {
-        bail!("--issue goes with --snooze or --unsnooze");
-    }
-    if m.owner
-        && (m.clear
-            || m.snooze.is_some()
-            || m.unsnooze
-            || !m.ignore_issue.is_empty()
-            || !m.unignore_issue.is_empty())
-    {
-        bail!("--owner marks owners with --favourite, --pull, --ignore and their opposites only");
-    }
-    // patterns are required, and they reach hidden repos whatever the filter
-    let sel = ws.select(&m.patterns, ViewFilter::default());
+/// The repos `patterns` match, hidden ones included; an error if none.
+fn matching(ws: &Workspace, patterns: &[String]) -> Result<Vec<usize>> {
+    let sel = ws.select(patterns, ViewFilter::default());
     if sel.is_empty() {
-        bail!("no repos match {:?}", m.patterns);
+        bail!("no repos match {patterns:?}");
     }
-    let snooze_until = match &m.snooze {
+    Ok(sel)
+}
+
+/// A mark by name: one of `[marks]`, `pull` or `ignore`.
+fn mark_named(ws: &Workspace, name: &str) -> Result<Mark> {
+    match name {
+        "pull" => Ok(Mark::Pull),
+        "ignore" => Ok(Mark::Ignore),
+        n => Mark::label(&ws.config, n).with_context(|| {
+            let names: Vec<&str> = ws.config.marks.keys().map(String::as_str).collect();
+            format!(
+                "{n:?} isn't a mark; these are: {}, pull, ignore (yours go in [marks.<name>])",
+                names.join(", ")
+            )
+        }),
+    }
+}
+
+/// What `mark`, `unmark`, `snooze` and the issue commands print for the
+/// repos at `sel`: names, or with `--json` each one's marks and snoozes.
+fn print_marks(ws: &Workspace, sel: &[usize], json: bool) -> Result<()> {
+    if !json {
+        for &i in sel {
+            println!("{}", ws.entries[i].display_name());
+        }
+        return Ok(());
+    }
+    let records: Vec<serde_json::Value> = sel
+        .iter()
+        .map(|&i| {
+            let e = &ws.entries[i];
+            serde_json::json!({
+                "repo": e.display_name(),
+                "key": e.key,
+                "marks": e.flags.marks,
+                "pull": e.flags.pull,
+                "ignore": e.flags.ignored,
+                "ignored_issues": e.ignored_issues.iter()
+                    .filter_map(|i| IssueList::of(*i).map(|l| l.name()))
+                    .collect::<Vec<_>>(),
+                "snoozed_until": ws.state.snoozed.get(&e.key),
+                "snoozed_issues": ws.state.snoozed_issues.get(&e.key).cloned().unwrap_or_default(),
+            })
+        })
+        .collect();
+    print_json(&records)
+}
+
+/// `mark` (`on`) and `unmark`: the repos, or with `owner` their owners.
+fn set_mark(
+    ws: &mut Workspace,
+    ctx: &Ctx,
+    name: &str,
+    patterns: &[String],
+    owner: bool,
+    on: bool,
+    json: bool,
+) -> Result<()> {
+    let m = mark_named(ws, name)?;
+    let sel = matching(ws, patterns)?;
+    let before = ws.config.clone();
+    if owner {
+        ws.set_owner_mark(&sel, m, on)?;
+    } else {
+        ws.set_mark(&sel, m, on)?;
+    }
+    configfile::update_mark_lists(&ctx.config_path, &before, &ws.config)?;
+    print_marks(ws, &sel, json)
+}
+
+/// `unmark --all`: the repos' own entries go from every mark, and their
+/// snoozes; what patterns (or a tracked owner) still give is noted.
+fn unmark_all(
+    ws: &mut Workspace,
+    ctx: &Ctx,
+    patterns: &[String],
+    json: bool,
+    yes: bool,
+) -> Result<()> {
+    let sel = matching(ws, patterns)?;
+    let n = ws.marked_count(&sel);
+    if n > 1 {
+        confirm(&format!("clear marks of {n} repos"), yes)?;
+    }
+    let before = ws.config.clone();
+    ws.clear_marks(&sel)?;
+    for &i in &sel {
+        let marks = ws.remaining_marks(i);
+        if !marks.is_empty() {
+            eprintln!(
+                "{}: still {}",
+                ws.entries[i].display_name(),
+                marks.join(", ")
+            );
+        }
+        let key = ws.entries[i].key.clone();
+        ws.state.unsnooze_all(&key);
+    }
+    configfile::update_mark_lists(&ctx.config_path, &before, &ws.config)?;
+    ws.resolve_flags();
+    print_marks(ws, &sel, json)
+}
+
+/// `snooze` (`duration`) and `unsnooze` (`None`): the repos, or just
+/// `issues` of them.
+fn snooze(
+    ws: &mut Workspace,
+    patterns: &[String],
+    duration: Option<&str>,
+    issues: &[Issue],
+    json: bool,
+) -> Result<()> {
+    let until = match duration {
         Some(d) => {
             let secs = argus_core::state::parse_duration(d)
-                .with_context(|| format!("bad duration {d:?}"))?;
+                .with_context(|| format!("bad duration {d:?} (try 90m, 12h, 3d, 2w)"))?;
             Some(jiff::Timestamp::now() + jiff::SignedDuration::from_secs(secs))
         }
         None => None,
     };
-    if m.clear {
-        let n = ws.marked_count(&sel);
-        if n > 1 {
-            confirm(&format!("clear marks of {n} repos"), yes)?;
-        }
-    }
-    let before = ws.config.clone();
-    // what patterns (or tracking) still mark once the repos' own entries go
-    let mut left = vec![];
-    if m.clear {
-        ws.clear_marks(&sel)?;
-        for &i in &sel {
-            let marks = ws.remaining_marks(i);
-            if !marks.is_empty() {
-                left.push(format!(
-                    "{}: still {}",
-                    ws.entries[i].display_name(),
-                    marks.join(", ")
-                ));
-            }
-        }
-    }
-    for (mark, on, off) in [
-        (Mark::Favourite, m.favourite, m.no_favourite),
-        (Mark::Pull, m.pull, m.no_pull),
-        (Mark::Ignore, m.ignore, m.unignore),
-    ] {
-        if on || off {
-            if m.owner {
-                ws.set_owner_mark(&sel, mark, on)?;
-            } else {
-                ws.set_mark(&sel, mark, on)?;
-            }
-        }
-    }
-    for (lists, on) in [(&m.ignore_issue, true), (&m.unignore_issue, false)] {
-        for &l in lists {
-            let pin = (m.pin || m.no_pin).then_some(m.pin);
-            ws.set_issue_ignored(&sel, l, on, pin)?;
-        }
-    }
-    configfile::update_mark_lists(&ctx.config_path, &before, &ws.config)?;
-    for l in &left {
-        eprintln!("{l}");
-    }
-    let mut records = vec![];
-    for i in sel {
+    let sel = matching(ws, patterns)?;
+    for &i in &sel {
         let key = ws.entries[i].key.clone();
-        match (snooze_until, m.issue.as_slice()) {
+        match (until, issues) {
             (Some(t), []) => {
-                ws.state.snoozed.insert(key.clone(), t);
+                ws.state.snoozed.insert(key, t);
             }
-            (Some(t), issues) => {
-                for &i in issues {
-                    ws.state.snooze_issue(&key, i, t);
-                }
-            }
-            (None, _) => {}
-        }
-        if m.unsnooze && !m.issue.is_empty() {
-            for &i in &m.issue {
-                ws.state.unsnooze_issue(&key, i);
-            }
-        } else if m.unsnooze || m.clear {
-            ws.state.unsnooze_all(&key);
-        }
-        if json {
-            let f = &ws.entries[i].flags;
-            records.push(serde_json::json!({
-                "repo": ws.entries[i].display_name(),
-                "key": key,
-                "marks": {
-                    "favourite": f.favourite,
-                    "pull": f.pull,
-                    "ignore": f.ignored,
-                },
-                "ignored_issues": ws.entries[i].ignored_issues.iter()
-                    .filter_map(|i| IssueList::of(*i).map(|l| l.name()))
-                    .collect::<Vec<_>>(),
-                "snoozed_until": ws.state.snoozed.get(&key),
-                "snoozed_issues": ws.state.snoozed_issues.get(&key).cloned().unwrap_or_default(),
-            }));
-        } else {
-            println!("{}", ws.entries[i].display_name());
+            (Some(t), issues) => issues
+                .iter()
+                .for_each(|&is| ws.state.snooze_issue(&key, is, t)),
+            (None, []) => ws.state.unsnooze_all(&key),
+            (None, issues) => issues
+                .iter()
+                .for_each(|&is| ws.state.unsnooze_issue(&key, is)),
         }
     }
-    if json {
-        print_json(&records)?;
-    }
-    Ok(())
+    ws.resolve_flags();
+    print_marks(ws, &sel, json)
+}
+
+/// `ignore-issue` (`on`) and `unignore-issue`.
+fn ignore_issue(
+    ws: &mut Workspace,
+    ctx: &Ctx,
+    list: IssueList,
+    patterns: &[String],
+    on: bool,
+    pin: Option<bool>,
+    json: bool,
+) -> Result<()> {
+    let sel = matching(ws, patterns)?;
+    let before = ws.config.clone();
+    ws.set_issue_ignored(&sel, list, on, pin)?;
+    configfile::update_mark_lists(&ctx.config_path, &before, &ws.config)?;
+    print_marks(ws, &sel, json)
 }
 
 // ---------- forge ----------
@@ -1564,6 +1817,36 @@ fn forge_cmd(cmd: ForgeCmd, json: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The 16 colours' names and bold or dim map to ANSI; anything else
+    /// (hex, 256 colours) doesn't.
+    #[test]
+    fn mark_colours_map_to_ansi_where_they_can() {
+        assert_eq!(ansi("cyan").as_deref(), Some("36"));
+        assert_eq!(ansi("bold red").as_deref(), Some("1;31"));
+        assert_eq!(ansi("dim black").as_deref(), Some("2;30"));
+        assert_eq!(ansi("white").as_deref(), Some("37"));
+        assert_eq!(ansi("#ff0000"), None);
+        assert_eq!(ansi("bold 208"), None);
+        assert_eq!(ansi(""), None);
+        let c = Config::parse(
+            "[marks.work]\ncolor = 'cyan'\n[marks.odd]\ncolor = '#123456'\n\
+             [ui.colors]\n'mark.favourite' = 'bold blue'\n",
+        )
+        .unwrap();
+        let p = Paint {
+            color: true,
+            marks: vec![],
+        }
+        .marks(&c);
+        assert_eq!(p.marks, ["1;34", "36", "33"]);
+        assert_eq!(p.role(Role::Mark(1), "W"), "\x1b[36mW\x1b[0m");
+        assert_eq!(
+            p.role(Role::Mark(9), "?"),
+            "\x1b[33m?\x1b[0m",
+            "unknown: yellow"
+        );
+    }
 
     #[test]
     fn the_demo_shows_its_own_repos_in_the_users_look() {

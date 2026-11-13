@@ -5,7 +5,6 @@ use argus_core::icons::{self, ASCII, Icons, NERD, UNICODE};
 
 fn icons(set: &Icons) -> Vec<(&'static str, &str)> {
     vec![
-        ("favourite", &*set.favourite),
         ("new", &*set.new),
         ("ignored", &*set.ignored),
         ("snoozed", &*set.snoozed),
@@ -59,7 +58,17 @@ fn falls_back_cleanly(c: char) -> bool {
 
 #[test]
 fn unicode_icons_are_in_common_fonts_or_known_gaps() {
-    for (name, icon) in icons(&UNICODE) {
+    // the built-in marks' icons too
+    let marks = Config::default();
+    let marks: Vec<(&str, String)> = marks
+        .marks
+        .keys()
+        .map(|n| (n.as_str(), marks.mark_icon(n, "unicode")))
+        .collect();
+    let set = UNICODE;
+    let mut all_icons: Vec<(&str, &str)> = icons(&set);
+    all_icons.extend(marks.iter().map(|(n, i)| (*n, i.as_str())));
+    for &(name, icon) in &all_icons {
         for c in icon.chars() {
             assert!(
                 c.is_ascii()
@@ -74,7 +83,7 @@ fn unicode_icons_are_in_common_fonts_or_known_gaps() {
     // inverse: the policy rejects a glyph most fonts lack
     assert!(!IN_ALL_FONTS.contains('★') && !falls_back_cleanly('★'));
     // and every listed gap is still in use
-    let all: String = icons(&UNICODE).iter().map(|(_, i)| *i).collect();
+    let all: String = all_icons.iter().map(|(_, i)| *i).collect();
     for (c, why) in GAPS {
         assert!(all.contains(*c), "{c} ({why}) is no longer used");
     }
@@ -140,16 +149,16 @@ fn ascii_icons_are_ascii() {
 #[test]
 fn icon_overrides_replace_single_icons_on_any_set() {
     let c = Config::parse(
-        "[ui]\nicons = 'nerd'\n[ui.icon_overrides]\nfavourite = '★'\nuntracked = '…'\nbogus = 'x'",
+        "[ui]\nicons = 'nerd'\n[ui.icon_overrides]\npull = '★'\nuntracked = '…'\nbogus = 'x'",
     )
     .unwrap();
     let (i, warnings) = c.ui.icons();
-    assert_eq!(i.favourite, "★");
+    assert_eq!(i.pull, "★");
     assert_eq!(i.untracked, "…");
     assert_eq!(i.ahead, NERD.ahead, "the rest come from the chosen set");
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(
-        warnings[0].contains("bogus") && warnings[0].contains("favourite"),
+        warnings[0].contains("bogus") && warnings[0].contains("pull"),
         "{warnings:?}"
     );
     // inverse: no overrides, the set as is

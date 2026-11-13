@@ -44,7 +44,8 @@ deferred.
 
 ## Next steps
 
-- **Custom marks:** agreed, not built: the plan is in DESIGN.md §9.
+- **Marks next:** pull and ignore as marks with behaviour fields (they
+  keep their own rules for now; see DESIGN.md §9, custom marks).
 - **Pull requests:** fetched with the remote, shown per branch; a merged PR
   makes a branch safe to delete, squash-merged ones included.
 - **Orphans** (local clones the forge no longer lists): reported only, no

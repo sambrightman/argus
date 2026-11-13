@@ -13,7 +13,8 @@ use crate::workspace::Entry;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Role {
-    Favourite,
+    /// The mark at this place in `[marks]`.
+    Mark(usize),
     New,
     Hidden,
     Pull,
@@ -41,16 +42,19 @@ pub struct Badge {
     pub text: String,
 }
 
-/// Flag badges (favourite, new, hidden, pull), shown before the name, in
-/// that order: the commonest, pull, last.
-pub fn flags(e: &Entry, i: &Icons) -> Vec<Badge> {
+/// Flag badges, shown before the name: the repo's marks (`marks`: each
+/// mark's name and icon, in config order, as [`crate::Config::mark_icons`]
+/// gives them), then new, hidden and pull.
+pub fn flags(e: &Entry, i: &Icons, marks: &[(String, String)]) -> Vec<Badge> {
     let mut v = vec![];
     let b = |role, text: &str| Badge {
         role,
         text: text.to_string(),
     };
-    if e.flags.favourite {
-        v.push(b(Role::Favourite, &i.favourite));
+    for (n, (name, icon)) in marks.iter().enumerate() {
+        if e.flags.has(name) {
+            v.push(b(Role::Mark(n), icon));
+        }
     }
     if e.flags.new {
         v.push(b(Role::New, &i.new));

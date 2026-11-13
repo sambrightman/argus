@@ -222,6 +222,29 @@ fn the_filter_matches_fuzzily() {
     assert!(names(&app).is_empty(), "{:?}", names(&app));
 }
 
+/// `#mark` in `/` filters by marks, `!#mark` by not having one, `|`
+/// either; with text, both must match.
+#[test]
+fn the_filter_takes_marks() {
+    let (_sb, mut app) = setup(
+        "[marks.work]\nrepos = ['acme/clean', 'acme/dirty']\n[marks.home]\nrepos = ['acme/feature']\n",
+    );
+    let filter = |app: &mut App, q: &str| {
+        app.on_key(key('/'));
+        for c in q.chars() {
+            app.on_key(key(c));
+        }
+        let n = names(app);
+        app.on_key(ctrl('g'));
+        n
+    };
+    assert_eq!(filter(&mut app, "#work"), ["acme/dirty", "acme/clean"]);
+    assert_eq!(filter(&mut app, "!#work"), ["acme/feature"]);
+    assert_eq!(filter(&mut app, "#work | #home").len(), 3);
+    assert_eq!(filter(&mut app, "#work cln"), ["acme/clean"]);
+    assert!(filter(&mut app, "#nope").is_empty());
+}
+
 #[test]
 fn transient_menu_by_key_and_by_arrows() {
     let (_sb, mut app) = setup("");
@@ -302,7 +325,10 @@ fn toggle_favourite_edits_the_config_list_and_resorts() {
     let fx = app.on_key(key('f'));
     // saved as a change from the config before
     assert_eq!(fx, vec![Effect::SaveMarks(Box::new(before))]);
-    assert_eq!(app.ws.config.favourite, ["github.com/acme/feature"]);
+    assert_eq!(
+        app.ws.config.marks["favourite"].repos,
+        ["github.com/acme/feature"]
+    );
     assert_eq!(names(&app), ["acme/feature", "acme/dirty", "acme/clean"]);
     assert_eq!(current(&app), "acme/feature", "cursor follows the repo");
     // inverse: a clean favourite stays below unclean repos
@@ -313,7 +339,7 @@ fn toggle_favourite_edits_the_config_list_and_resorts() {
     app.on_key(key('m'));
     app.on_key(key('f'));
     assert_eq!(
-        app.ws.config.favourite,
+        app.ws.config.marks["favourite"].repos,
         ["github.com/acme/feature"],
         "off again: removed"
     );
@@ -603,7 +629,7 @@ fn render_menu_and_help_and_narrow_terminal() {
     app.on_key(key('m'));
     let out = render(&mut app, 80, 16);
     assert!(
-        out.contains("Mark · 1 repo") && out.contains("f  favourite"),
+        out.contains("Mark · 1 repo") && out.contains("f  mark favourite"),
         "{out}"
     );
     app.on_key(code(KeyCode::Esc));
@@ -633,7 +659,7 @@ fn render_empty_states() {
         Action::ToggleMark,
         Action::Shell,
         Action::Push,
-        Action::ToggleFavourite,
+        Action::ToggleLabel(0),
     ] {
         app.act(a);
     }
@@ -1087,8 +1113,8 @@ fn clearing_marks_of_several_repos_asks_first() {
     use argus_core::rules::Mark;
     let (_sb, mut app) = setup("");
     let all: Vec<usize> = (0..app.ws.entries.len()).collect();
-    app.ws.set_mark(&all, Mark::Favourite, true).unwrap();
-    let favourites = |app: &App| app.ws.config.favourite.len();
+    app.ws.set_mark(&all, Mark::Label(0), true).unwrap();
+    let favourites = |app: &App| app.ws.config.marks["favourite"].repos.len();
     for e in &app.ws.entries {
         app.marked.insert(e.path.clone());
     }
@@ -2287,11 +2313,11 @@ fn toggles_say_what_they_will_do() {
         app.on_key(ctrl('g'));
         l
     };
-    assert_eq!(label(&mut app, 'm', 'f'), "f favourite");
+    assert_eq!(label(&mut app, 'm', 'f'), "f mark favourite");
     assert_eq!(label(&mut app, 'm', 'I'), "I ignore repo");
     assert_eq!(label(&mut app, 'm', 'i'), "i ignore issues…");
-    app.act(Action::ToggleFavourite);
-    assert_eq!(label(&mut app, 'm', 'f'), "f unfavourite");
+    app.act(Action::ToggleLabel(0));
+    assert_eq!(label(&mut app, 'm', 'f'), "f unmark favourite");
     assert_eq!(
         label(&mut app, 'v', 'a'),
         "a show only repos needing attention"
@@ -3409,7 +3435,7 @@ fn detail_lines_carry_their_issue_fix_and_unfolding() {
         !detail_texts(&app).iter().any(|t| t.starts_with("flags")),
         "no flags, no line"
     );
-    app.act(Action::ToggleFavourite);
+    app.act(Action::ToggleLabel(0));
     cursor_on_detail(&mut app, "clean", "flags");
     assert_eq!(
         detail_texts(&app)
@@ -3541,7 +3567,7 @@ fn repo_columns_line_up_and_nested_names_are_indented_with_their_icon() {
         git(&d, &["commit", "-q", "-m", "a"]);
     });
     app.act(Action::Bottom);
-    app.act(Action::ToggleFavourite);
+    app.act(Action::ToggleLabel(0));
     app.act(Action::Top);
     let screen = render(&mut app, 100, 24);
     let row = |name: &str| {
@@ -4108,7 +4134,7 @@ fn a_nested_repo_unfolds_into_its_own_details_and_acts_there() {
 #[test]
 fn clearing_marks_says_what_patterns_still_give() {
     use argus_core::rules::Mark;
-    let (_sb, mut app) = setup("favourite = ['acme/c*']");
+    let (_sb, mut app) = setup("marks.favourite.repos = ['acme/c*']");
     let msg = |app: &App| app.message.as_ref().unwrap().0.clone();
     let at = |app: &App, n: &str| {
         app.ws
@@ -4137,7 +4163,7 @@ fn clearing_marks_says_what_patterns_still_give() {
         .iter()
         .position(|r| matches!(r, Row::Repo(i) if *i == dirty))
         .unwrap();
-    app.ws.set_mark(&[dirty], Mark::Favourite, true).unwrap();
+    app.ws.set_mark(&[dirty], Mark::Label(0), true).unwrap();
     app.act(Action::ClearMarks);
     assert_eq!(msg(&app), "marks cleared");
     // the menu item
@@ -4154,13 +4180,17 @@ fn clearing_marks_says_what_patterns_still_give() {
 /// aligned however many flags a row has, in every icon set.
 #[test]
 fn rows_show_the_pull_mark_and_names_stay_aligned() {
-    let (_sb, mut app) = setup("favourite = ['acme/clean']\npull = ['acme/clean', 'acme/dirty']");
-    for icons in [
-        argus_core::icons::UNICODE,
-        argus_core::icons::NERD,
-        argus_core::icons::ASCII,
+    let (_sb, mut app) =
+        setup("marks.favourite.repos = ['acme/clean']\npull = ['acme/clean', 'acme/dirty']");
+    for (icons, set) in [
+        (argus_core::icons::UNICODE, "unicode"),
+        (argus_core::icons::NERD, "nerd"),
+        (argus_core::icons::ASCII, "ascii"),
     ] {
-        let (fav, pull) = (icons.favourite.to_string(), icons.pull.to_string());
+        // marks' icons follow the configured set
+        app.ws.config.ui.icons = set.into();
+        let fav = app.ws.config.mark_icon("favourite", set);
+        let pull = icons.pull.to_string();
         let screen = render_with(&mut app, 100, 8, icons);
         let row = |name: &str| {
             screen
@@ -4193,11 +4223,12 @@ fn rows_show_the_pull_mark_and_names_stay_aligned() {
         jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
     );
     app.ws.resolve_flags();
+    app.ws.config.ui.icons = "unicode".into();
     app.view.show_hidden = true;
     app.rebuild();
     let i = argus_core::icons::UNICODE;
     let screen = render_with(&mut app, 100, 12, i.clone());
-    let all = format!("{}{}{}{}", i.favourite, i.new, i.snoozed, i.pull);
+    let all = format!("{}{}{}{}", "◆", i.new, i.snoozed, i.pull);
     assert!(screen.contains(&all), "{screen}");
     let start = |l: &str, s: &str| unicode_width::UnicodeWidthStr::width(&l[..l.find(s).unwrap()]);
     let names: Vec<usize> = screen
@@ -4261,19 +4292,22 @@ fn an_owner_is_marked_from_the_mark_menu() {
         _ => panic!("no menu"),
     }
     assert!(
-        menu_items(&app).iter().any(|l| l == "f favourite"),
+        menu_items(&app).iter().any(|l| l == "f mark favourite"),
         "{:?}",
         menu_items(&app)
     );
     let before = app.ws.config.clone();
     let fx = app.on_key(key('f'));
     assert!(fx.contains(&Effect::SaveMarks(Box::new(before))), "{fx:?}");
-    assert_eq!(app.ws.config.favourite, ["github.com/acme/*"]);
-    assert!(app.ws.entries.iter().all(|e| e.flags.favourite));
+    assert_eq!(
+        app.ws.config.marks["favourite"].repos,
+        ["github.com/acme/*"]
+    );
+    assert!(app.ws.entries.iter().all(|e| e.flags.has("favourite")));
     app.on_key(key('m'));
     app.on_key(key('o'));
     assert!(
-        menu_items(&app).iter().any(|l| l == "f unfavourite"),
+        menu_items(&app).iter().any(|l| l == "f unmark favourite"),
         "{:?}",
         menu_items(&app)
     );
@@ -5554,5 +5588,57 @@ fn picking_past_the_branch_list_does_nothing() {
         app.act(Action::PickBranch(n - 1))
             .iter()
             .any(|e| matches!(e, Effect::Jobs(_)))
+    );
+}
+
+/// A mark of your own: in the Mark menu by its key, toggled there; its
+/// icon in the flag column, its name in the details, its line in the
+/// legend. One without a key isn't in the menu.
+#[test]
+fn a_mark_of_your_own_is_set_from_the_mark_menu_and_shown() {
+    let (_sb, mut app) = setup(
+        "[marks.work]\nkey = 'w'\nicon = 'W'\n[marks.later]\nicon = 'L'\nrepos = ['acme/dirty']\n",
+    );
+    app.cursor = app
+        .rows
+        .iter()
+        .position(
+            |r| matches!(r, Row::Repo(i) if app.ws.entries[*i].display_name() == "acme/clean"),
+        )
+        .unwrap();
+    app.on_key(key('m'));
+    let items = menu_items(&app);
+    assert_eq!(items[..2], ["f mark favourite", "w mark work"], "{items:?}");
+    assert!(
+        !items.iter().any(|i| i.contains("later")),
+        "no key: {items:?}"
+    );
+    app.on_key(key('w'));
+    assert!(app.current().unwrap().flags.has("work"));
+    assert_eq!(app.ws.config.marks["work"].repos, ["github.com/acme/clean"]);
+    app.on_key(key('m'));
+    assert!(menu_items(&app).contains(&"w unmark work".to_string()));
+    app.on_key(ctrl('g'));
+    let out = render(&mut app, 80, 10);
+    let row = out.lines().find(|l| l.contains("acme/clean")).unwrap();
+    assert!(
+        row.contains("W acme/clean") || row.contains("W  acme/clean"),
+        "{row}"
+    );
+    let row = out.lines().find(|l| l.contains("acme/dirty")).unwrap();
+    assert!(row.contains('L'), "{row}");
+    app.on_key(code(KeyCode::Tab));
+    assert!(
+        trimmed(&app)
+            .iter()
+            .any(|l| l.starts_with("flags") && l.contains("work")),
+        "{:?}",
+        trimmed(&app)
+    );
+    app.on_key(key('?'));
+    let help = render(&mut app, 100, 200);
+    assert!(
+        help.contains("W  mark: work") && help.contains("L  mark: later"),
+        "{help}"
     );
 }

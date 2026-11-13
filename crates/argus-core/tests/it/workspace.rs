@@ -101,7 +101,7 @@ fn ordering_attention_then_favourites_then_severity_then_changes_then_name() {
     commit(&c, "m");
     assert!(!argus_core::testkit::git_may_fail(&c, &["merge", "o"]));
 
-    let w = ws(&sb, "favourite = ['acme/fav*']");
+    let w = ws(&sb, "marks.favourite.repos = ['acme/fav*']");
     assert_eq!(
         names(&w, DEFAULT),
         vec![
@@ -621,12 +621,12 @@ fn marking_edits_the_config_lists() {
     };
     let (app, lib, big, local) = (at(&w, "app"), at(&w, "lib"), at(&w, "big"), at(&w, "local"));
     // on: the repo's identity is added, and flags follow
-    w.set_mark(&[app, lib], Mark::Favourite, true).unwrap();
+    w.set_mark(&[app, lib], Mark::Label(0), true).unwrap();
     assert_eq!(
-        w.config.favourite,
+        w.config.marks["favourite"].repos,
         ["github.com/acme/app", "github.com/acme/lib"]
     );
-    assert!(w.entries[app].flags.favourite && !w.entries[big].flags.favourite);
+    assert!(w.entries[app].flags.has("favourite") && !w.entries[big].flags.has("favourite"));
     // a repo without an identity is named by its path
     w.set_mark(&[local], Mark::Ignore, true).unwrap();
     assert_eq!(
@@ -643,9 +643,9 @@ fn marking_edits_the_config_lists() {
     assert_eq!(w.marked_count(&[app]), 1);
     // clearing: own entries go, patterns decide again
     w.clear_marks(&[app, big]).unwrap();
-    assert_eq!(w.config.favourite, ["github.com/acme/lib"]);
+    assert_eq!(w.config.marks["favourite"].repos, ["github.com/acme/lib"]);
     assert_eq!(w.config.pull, ["acme/*"]);
-    assert!(w.entries[big].flags.pull && !w.entries[app].flags.favourite);
+    assert!(w.entries[big].flags.pull && !w.entries[app].flags.has("favourite"));
     assert_eq!(w.marked_count(&[app, big]), 0);
 }
 
@@ -658,8 +658,8 @@ fn unmarking_a_tracked_repo_for_pull_writes_a_bang() {
     let mut w = ws(&sb, "[[track]]\nowner='acme'");
     assert!(w.entries[0].flags.pull, "tracked: pulled by default");
     // tracking's default is pull's only: favourite gets an entry as usual
-    w.set_mark(&[0], Mark::Favourite, true).unwrap();
-    assert_eq!(w.config.favourite, ["github.com/acme/app"]);
+    w.set_mark(&[0], Mark::Label(0), true).unwrap();
+    assert_eq!(w.config.marks["favourite"].repos, ["github.com/acme/app"]);
     w.set_mark(&[0], Mark::Pull, false).unwrap();
     assert_eq!(w.config.pull, ["!github.com/acme/app"]);
     assert!(!w.entries[0].flags.pull);
@@ -671,12 +671,15 @@ fn unmarking_a_tracked_repo_for_pull_writes_a_bang() {
 fn marks_of_missing_repos_stay_in_config() {
     let sb = Sandbox::new();
     sb.init("dev/app");
-    let mut w = ws(&sb, "favourite = ['/elsewhere/gone', 'acme/*']");
+    let mut w = ws(&sb, "marks.favourite.repos = ['/elsewhere/gone', 'acme/*']");
     w.scan();
     std::fs::remove_dir_all(sb.path("dev/app")).unwrap();
     w.scan();
     assert!(w.entries.is_empty());
-    assert_eq!(w.config.favourite, ["/elsewhere/gone", "acme/*"]);
+    assert_eq!(
+        w.config.marks["favourite"].repos,
+        ["/elsewhere/gone", "acme/*"]
+    );
 }
 
 #[test]
@@ -1413,7 +1416,7 @@ fn marks_left_after_clearing_say_what_gives_them() {
     }
     let mut w = ws(
         &sb,
-        "favourite = ['acme/*', '!acme/l*']\n[[track]]\nowner='acme'\npull=true",
+        "marks.favourite.repos = ['acme/*', '!acme/l*']\n[[track]]\nowner='acme'\npull=true",
     );
     let at = |w: &Workspace, n: &str| w.entries.iter().position(|e| e.path.ends_with(n)).unwrap();
     let (app, lib) = (at(&w, "app"), at(&w, "lib"));
@@ -1428,7 +1431,7 @@ fn marks_left_after_clearing_say_what_gives_them() {
     // inverse: no patterns, no tracking, nothing left
     let mut w = ws(&sb, "");
     let app = at(&w, "app");
-    w.set_mark(&[app], Mark::Favourite, true).unwrap();
+    w.set_mark(&[app], Mark::Label(0), true).unwrap();
     w.clear_marks(&[app]).unwrap();
     assert_eq!(w.remaining_marks(app), Vec::<String>::new());
 }
@@ -1537,13 +1540,13 @@ fn ignore_excludes_favourite_and_pull() {
         .iter()
         .position(|e| e.path.ends_with("app"))
         .unwrap();
-    w.set_mark(&[app], Mark::Favourite, true).unwrap();
-    assert!(w.entries[app].flags.favourite && w.entries[app].flags.pull);
+    w.set_mark(&[app], Mark::Label(0), true).unwrap();
+    assert!(w.entries[app].flags.has("favourite") && w.entries[app].flags.pull);
     // ignoring: favourite's entry goes, pull gets a `!` against the pattern
     w.set_mark(&[app], Mark::Ignore, true).unwrap();
     let f = &w.entries[app].flags;
-    assert!(f.ignored && !f.favourite && !f.pull, "{f:?}");
-    assert!(w.config.favourite.is_empty());
+    assert!(f.ignored && !f.has("favourite") && !f.pull, "{f:?}");
+    assert!(w.config.marks["favourite"].repos.is_empty());
     assert_eq!(w.config.pull, ["acme/*", "!github.com/acme/app"]);
     // marking for pull stops ignoring it
     w.set_mark(&[app], Mark::Pull, true).unwrap();
@@ -1552,16 +1555,16 @@ fn ignore_excludes_favourite_and_pull() {
     assert!(w.config.ignore.repos.is_empty());
     // and so does marking favourite
     w.set_mark(&[app], Mark::Ignore, true).unwrap();
-    w.set_mark(&[app], Mark::Favourite, true).unwrap();
+    w.set_mark(&[app], Mark::Label(0), true).unwrap();
     let f = &w.entries[app].flags;
-    assert!(f.favourite && !f.ignored, "{f:?}");
+    assert!(f.has("favourite") && !f.ignored, "{f:?}");
     // inverse: unmarking favourite or pull doesn't touch ignore
-    w.set_mark(&[app], Mark::Favourite, false).unwrap();
+    w.set_mark(&[app], Mark::Label(0), false).unwrap();
     assert!(!w.entries[app].flags.ignored);
     // patterns saying both: ignore wins
     let w = ws(
         &sb,
-        "favourite = ['acme/*']\npull = ['acme/*']\nignore.repos = ['acme/old']",
+        "marks.favourite.repos = ['acme/*']\npull = ['acme/*']\nignore.repos = ['acme/old']",
     );
     let old = w
         .entries
@@ -1569,7 +1572,7 @@ fn ignore_excludes_favourite_and_pull() {
         .position(|e| e.path.ends_with("old"))
         .unwrap();
     let f = &w.entries[old].flags;
-    assert!(f.ignored && !f.favourite && !f.pull, "{f:?}");
+    assert!(f.ignored && !f.has("favourite") && !f.pull, "{f:?}");
 }
 
 /// Marking a repo's owner writes the owner's pattern, so every repo of its
@@ -1585,15 +1588,15 @@ fn an_owner_can_be_marked_as_a_whole() {
     let mut w = ws(&sb, "");
     let at = |w: &Workspace, n: &str| w.entries.iter().position(|e| e.path.ends_with(n)).unwrap();
     let (app, lib, x) = (at(&w, "app"), at(&w, "lib"), at(&w, "x"));
-    assert_eq!(w.owner_marked(app, Mark::Favourite), Some(false));
-    w.set_owner_mark(&[app], Mark::Favourite, true).unwrap();
-    assert_eq!(w.config.favourite, ["github.com/acme/*"]);
-    assert!(w.entries[app].flags.favourite && w.entries[lib].flags.favourite);
-    assert!(!w.entries[x].flags.favourite, "another owner");
-    assert_eq!(w.owner_marked(lib, Mark::Favourite), Some(true));
+    assert_eq!(w.owner_marked(app, Mark::Label(0)), Some(false));
+    w.set_owner_mark(&[app], Mark::Label(0), true).unwrap();
+    assert_eq!(w.config.marks["favourite"].repos, ["github.com/acme/*"]);
+    assert!(w.entries[app].flags.has("favourite") && w.entries[lib].flags.has("favourite"));
+    assert!(!w.entries[x].flags.has("favourite"), "another owner");
+    assert_eq!(w.owner_marked(lib, Mark::Label(0)), Some(true));
     // off again: the pattern goes
-    w.set_owner_mark(&[lib], Mark::Favourite, false).unwrap();
-    assert!(w.config.favourite.is_empty());
+    w.set_owner_mark(&[lib], Mark::Label(0), false).unwrap();
+    assert!(w.config.marks["favourite"].repos.is_empty());
     // against a wider pattern: a `!` for the owner
     let mut w = ws(&sb, "pull = ['**']");
     w.set_owner_mark(&[app], Mark::Pull, false).unwrap();
@@ -1606,30 +1609,30 @@ fn an_owner_can_be_marked_as_a_whole() {
     assert_eq!(w.config.pull, ["!github.com/acme/*"]);
     // ignoring the owner turns its favourite and pull off
     let mut w = ws(&sb, "");
-    w.set_owner_mark(&[app], Mark::Favourite, true).unwrap();
+    w.set_owner_mark(&[app], Mark::Label(0), true).unwrap();
     w.set_owner_mark(&[app], Mark::Pull, true).unwrap();
     w.set_owner_mark(&[app], Mark::Ignore, true).unwrap();
-    assert!(w.config.favourite.is_empty() && w.config.pull.is_empty());
+    assert!(w.config.marks["favourite"].repos.is_empty() && w.config.pull.is_empty());
     assert_eq!(w.config.ignore.repos, ["github.com/acme/*"]);
     // and favouriting it stops ignoring it
-    w.set_owner_mark(&[app], Mark::Favourite, true).unwrap();
+    w.set_owner_mark(&[app], Mark::Label(0), true).unwrap();
     assert!(w.config.ignore.repos.is_empty());
     // patterns saying both for the owner: ignore wins
     let w = ws(
         &sb,
-        "favourite = ['github.com/acme/*']\nignore.repos = ['github.com/acme/*']",
+        "marks.favourite.repos = ['github.com/acme/*']\nignore.repos = ['github.com/acme/*']",
     );
     assert_eq!(w.owner_marked(app, Mark::Ignore), Some(true));
-    assert_eq!(w.owner_marked(app, Mark::Favourite), Some(false));
+    assert_eq!(w.owner_marked(app, Mark::Label(0)), Some(false));
     assert_eq!(
-        w.owner_marked(x, Mark::Favourite),
+        w.owner_marked(x, Mark::Label(0)),
         Some(false),
         "another owner"
     );
     // a repo without an identity has no owner
     sb.init("dev/local");
     let w = ws(&sb, "");
-    assert_eq!(w.owner_marked(at(&w, "local"), Mark::Favourite), None);
+    assert_eq!(w.owner_marked(at(&w, "local"), Mark::Label(0)), None);
 }
 
 /// A repo whose folder is gone (deleted outside argus) shows its error
@@ -1783,4 +1786,79 @@ fn a_snoozed_issue_does_not_count_until_it_ends() {
     );
     w.state.unsnooze_all(&key);
     assert!(w.state.snoozed_issues.is_empty());
+}
+
+/// Marks of your own: flags list them in config order; repos sort by the
+/// sum of their marks' points; ignoring turns off those with points (and
+/// pull), not pure labels; marking one with points stops ignoring.
+#[test]
+fn custom_marks_label_sort_and_give_way_to_ignore() {
+    use argus_core::rules::Mark;
+    let sb = Sandbox::new();
+    for n in ["a", "b", "c"] {
+        sb.remote("acme", n);
+        sb.clone_as_github("acme", n, &format!("dev/{n}"));
+    }
+    let mut w = ws(
+        &sb,
+        "[marks.work]\nrepos = ['acme/*']\n[marks.top]\nsort = 5\nrepos = ['acme/c']\n\
+         [marks.favourite]\nrepos = ['acme/b', 'acme/c']\n",
+    );
+    let at = |w: &Workspace, n: &str| w.index_of(&sb.path(&format!("dev/{n}"))).unwrap();
+    let c = &w.entries[at(&w, "c")].flags;
+    assert_eq!(c.marks, ["favourite", "work", "top"], "in config order");
+    assert_eq!(c.sort, 6);
+    assert_eq!(w.entries[at(&w, "b")].flags.sort, 1);
+    assert_eq!(w.entries[at(&w, "a")].flags.sort, 0);
+    assert_eq!(names(&w, ALL), ["acme/c", "acme/b", "acme/a"], "by points");
+
+    let work = Mark::label(&w.config, "work").unwrap();
+    let fav = Mark::label(&w.config, "favourite").unwrap();
+    assert_eq!(Mark::label(&w.config, "nope"), None);
+    let b = at(&w, "b");
+    w.set_mark(&[b], Mark::Ignore, true).unwrap();
+    let f = &w.entries[at(&w, "b")].flags;
+    assert!(f.ignored && f.marks == ["work"] && f.sort == 0, "{f:?}");
+    assert_eq!(
+        w.config.marks["favourite"].repos,
+        ["acme/c"],
+        "its own entry went"
+    );
+    // a pure label doesn't stop ignoring; one with points does
+    let b = at(&w, "b");
+    w.set_mark(&[b], work, false).unwrap();
+    w.set_mark(&[b], work, true).unwrap();
+    assert!(w.entries[at(&w, "b")].flags.ignored);
+    let b = at(&w, "b");
+    w.set_mark(&[b], fav, true).unwrap();
+    let f = &w.entries[at(&w, "b")].flags;
+    assert!(!f.ignored && f.marks.contains(&"favourite".to_string()));
+    assert_eq!(
+        w.config.marks["work"].repos,
+        ["acme/*"],
+        "work's own entries went back to none"
+    );
+
+    // an owner as a whole
+    let a = at(&w, "a");
+    w.set_owner_mark(&[a], work, false).unwrap();
+    assert_eq!(
+        w.config.marks["work"].repos,
+        ["acme/*", "!github.com/acme/*"]
+    );
+    assert_eq!(w.owner_marked(at(&w, "a"), work), Some(false));
+    // ignoring the owner leaves a label, not a mark with points
+    let a = at(&w, "a");
+    w.set_owner_mark(&[a], work, true).unwrap();
+    w.set_owner_mark(&[a], Mark::Ignore, true).unwrap();
+    assert_eq!(
+        w.owner_marked(at(&w, "a"), work),
+        Some(true),
+        "a label stays"
+    );
+    assert_eq!(
+        w.owner_marked(at(&w, "a"), fav),
+        Some(false),
+        "points give way"
+    );
 }

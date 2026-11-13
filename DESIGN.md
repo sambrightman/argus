@@ -19,7 +19,7 @@ attention, fix them, and keep everything (including whole forge orgs) up to date
 | lazygit / gitui / magit | Go/Rust/elisp | single repo | — | — | ✔ | ✔ | Excellent *per repo*; argus should hand off to them |
 
 None combines: forge-aware org/team membership (auto-detect new repos), sync
-flags, favourites/exclusions/snoozes, attention-sorted status, safe auto-fixes,
+flags, marks/exclusions/snoozes, attention-sorted status, safe auto-fixes,
 and a TUI with both arrow-key and transient-style menus. So we build, and
 **delegate to existing tools** where they already excel (git for network
 mutations and user config, `gh` for auth, lazygit/magit/`$SHELL` for deep work).
@@ -138,8 +138,9 @@ Two findings:
   `node_modules`, `target`, `.git` internals and configurable globs.
 * **Identity.** `host/owner/name` parsed from the `origin` remote URL (or the
   first remote).
-* **Marks: `favourite`, `pull`, `ignore.repos`** are lists in config, one per
-  kind. An entry is a repo or a glob, matched against identity, `owner/name`
+* **Marks: `[marks.<name>] repos` (favourite and yours), `pull`,
+  `ignore.repos`** are lists in config, one per kind (see §9, custom
+  marks). An entry is a repo or a glob, matched against identity, `owner/name`
   or path; the last matching entry wins and `!` turns the mark off, as in
   gitignore. Names: `ignore.repos` hides a repo and leaves it out of
   pulls, clones and bulk actions; *hidden* is the wider set, ignored or
@@ -158,7 +159,7 @@ Two findings:
   moves from `issues` to `snoozed_issues`: no attention, shown dimmed with
   the time left, and its fix turned off as an ignored one's. An ignored
   issue stays ignored. A repo's snooze hides the repo; an issue's doesn't.
-  Unsnoozing a repo (`m u` on it, `--unsnooze`, `--clear`) ends its issue
+  Unsnoozing a repo (`m u` on it, `argus unsnooze`, `argus unmark --all`) ends its issue
   snoozes too; on an issue line, or with `--issue`, just that one.
 * **Stashes are ignored one by one, and argus's own aren't by default.**
   A detached HEAD's tags, describe and commit are names for one thing, so
@@ -212,7 +213,7 @@ Two findings:
   neither anywhere, start the list in the main file (`roots` at the
   top). Nothing above that file sets the list, so the addition counts;
   and when a shared base sets a list that the main file extends,
-  additions stay in the main file (an empty `extend_favourite = []`
+  additions stay in the main file (an empty `extend_pull = []`
   there steers them). Precedence: the main file, then a later extended
   file before an earlier one, a file before the files it extends
   (`Layers.files` reversed). Removal takes an entry out of every file
@@ -264,7 +265,7 @@ Two findings:
   branch, detached HEAD, stashes, a gone upstream, no upstream for the
   current branch, records of worktrees whose folder is gone, or a
   finished worktree. Sort order: needing attention before clean, then
-  favourites, then severity, then amount of change, then name.
+  marks' sort points (favourites first), then severity, then amount of change, then name.
 * **Auto-fixes** (planned and shown first, then executed; never destructive:
   the destructive kinds, `abort` and `delete-branches`, are confirmed
   first in the TUI and never chosen automatically):
@@ -451,7 +452,7 @@ rendering is snapshot-tested via `TestBackend`.
   such operation is tested declined, refused and confirmed. Recoverable
   operations (stash, commit, switch, fast-forward, pull, push) don't ask.
   Clearing marks asks when more than one repo has entries of its own in
-  the favourite/pull/ignore.repos lists; snoozes and "new" flags don't count. `root remove` doesn't ask.
+  the marks', pull and ignore.repos lists; snoozes and "new" flags don't count. `root remove` doesn't ask.
 
 * **"Unpushed" means "on no remote-tracking ref"**, not "ahead of upstream".
   On real data, a fork branch that tracked `upstream/master` but was pushed
@@ -712,7 +713,7 @@ packed debug info kept aside are unmeasured (TODO.md).
 
 In [TODO.md](TODO.md). Planned in detail:
 
-### Custom marks (agreed, not built)
+### Custom marks (built)
 
 The aim: built-in marks aren't special. All of a mark's style and
 behaviour could come from config, though the defaults stay in code like
@@ -747,15 +748,26 @@ ignore later.
   `#work` has the mark, `!#work` hasn't, space is AND (`#work api`: marked
   work and fuzzily "api"), `|` is OR (`#work | #home`). The CLI takes the
   same: `argus status --filter '#work !#old'`, and `--mark work`
-  (repeatable, AND) as shorthand.
+  (repeatable, AND) as shorthand. `MarkFilter::parse` (core) splits a
+  query: groups joined by `|` made only of mark terms filter by marks;
+  everything else goes to nucleo as text, which has no OR, so `|` works
+  between marks only. An unknown name in `/` matches nothing; in
+  `--mark`, it's an error naming the marks there are.
 * **Setting them:** the Mark menu has an item per mark by its `key` (a
   clash with the menu's own keys warns at load); `m o`, the owner's menu,
-  lists them too. CLI: `argus mark` and `argus unmark`, with `--owner` for
-  the owner's pattern; written back into `[marks.X] repos` in place, as
-  `configfile` edits the lists today.
-* **Open:** the CLI's shape. `argus mark <mark> PATTERNS…` / `argus
-  unmark <mark> PATTERNS…` for marks; then today's other `argus mark`
-  flags need homes: pull and ignore could be names in the same commands
-  (`argus mark pull …`, `argus unmark ignore …`); snoozes and ignored
-  issues aren't marks, so `argus snooze PATTERNS --for 3d [--issue
-  dirty]`, `argus unsnooze`, and `argus ignore-issue` / `unignore-issue`.
+  lists them too. CLI: `argus mark <mark> PATTERNS…` / `argus unmark
+  <mark> PATTERNS…`, `<mark>` being one of `[marks]` or pull or ignore
+  (so no mark may be named either), `--owner` for the owner's pattern;
+  `argus unmark --all` clears every mark of the repos and their snoozes.
+  Written back into `[marks.X] repos` in place, as `configfile` edits the
+  lists. Snoozes and ignored issues aren't marks: `argus snooze PATTERNS
+  --for 3d [--issue …]`, `argus unsnooze`, `argus ignore-issue` /
+  `unignore-issue`.
+* **Done this way:** `Mark` is `Label(index) | Pull | Ignore`, the index
+  into `[marks]` (config doesn't change during a session), so it stays
+  `Copy` for menu actions. Badges carry `Role::Mark(index)`; the theme
+  resolves each mark's style once (`Theme::with_marks`). The CLI maps a
+  mark's colour to ANSI where it's one of the 16 names with bold or dim,
+  else yellow. A mark without `key` isn't in the Mark menu (the CLI still
+  sets it); one whose key the menu has warns at startup. `argus demo
+  --glyphs` lists each mark's icon by set.

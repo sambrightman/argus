@@ -90,7 +90,7 @@ fn demo_covers_every_state() {
         ),
         ("bare", has(&|e| e.kind == RepoKind::Bare)),
         ("error", has(&|e| e.error().is_some())),
-        ("favourite", has(&|e| e.flags.favourite)),
+        ("favourite", has(&|e| e.flags.has("favourite"))),
         ("new", has(&|e| e.flags.new)),
         ("ignored", has(&|e| e.flags.ignored)),
         ("snoozed", has(&|e| e.flags.snoozed)),
