@@ -647,13 +647,10 @@ fn confirm_with(
     }
 }
 
-/// Completes repo patterns with the names of the repos argus finds, using
-/// the config named by `ARGUS_CONFIG` or the default one (options like
-/// `--root` aren't seen while completing).
 /// The values of option `name` on the command line being completed (the
 /// shell runs `argus -- argus <words…>`), as `--name v` or `--name=v`.
 fn line_values(name: &str) -> Vec<String> {
-    let words: Vec<String> = std::env::args().skip_while(|a| a != "--").skip(2).collect();
+    let words: Vec<String> = std::env::args().skip(3).collect();
     let prefix = format!("{name}=");
     let mut values = vec![];
     let mut it = words.iter();

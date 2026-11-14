@@ -175,10 +175,6 @@ impl MarkFilter {
         (f, rest.join(" "))
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.groups.is_empty()
-    }
-
     /// Whether a repo with these flags passes.
     pub fn matches(&self, f: &Flags) -> bool {
         self.groups
@@ -1323,12 +1319,12 @@ mod tests {
         assert_eq!(rest, "api acme");
         assert!(m.matches(&work) && !m.matches(&none));
         let (m, rest) = MarkFilter::parse("#work | api");
-        assert!(m.is_empty() && rest == "#work api", "{rest}");
+        assert!(m.groups.is_empty() && rest == "#work api", "{rest}");
         let (m, rest) = MarkFilter::parse("  ");
-        assert!(m.is_empty() && rest.is_empty() && m.matches(&none));
+        assert!(m.groups.is_empty() && rest.is_empty() && m.matches(&none));
         // not marks: a bare `#`, a leading `|`, `!` alone
         let (m, rest) = MarkFilter::parse("| # ! !x");
-        assert!(m.is_empty(), "{m:?}");
+        assert!(m.groups.is_empty(), "{m:?}");
         assert_eq!(rest, "# ! !x");
     }
 
