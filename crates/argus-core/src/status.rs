@@ -44,10 +44,20 @@ pub struct BranchInfo {
     pub name: String,
     pub upstream: Option<Tracking>,
     pub is_head: bool,
+    /// The commit it's at.
+    #[serde(default)]
+    pub tip: String,
     /// Tip is reachable from the default branch (safe to leave/delete).
     pub merged: bool,
+    /// Not merged, but merging it into the default branch would change
+    /// nothing: its changes are there already, squash-merged or rebased
+    /// (its commits aren't). Not when the default branch has since changed
+    /// the same lines, or reverted them: then it can't be told, or isn't so.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub absorbed: bool,
     /// Commits not reachable from any remote-tracking ref; `None` when the
-    /// repo has no remote-tracking refs at all.
+    /// repo has no remote-tracking refs at all. 0 too for a branch
+    /// absorbed into a remote's default branch: its changes are there.
     pub unpushed: Option<usize>,
     /// When `git push` would push to a branch other than the upstream, and
     /// that's the same-named branch (say `feat` pulls from `origin/main`,
@@ -64,6 +74,11 @@ impl BranchInfo {
     /// the default branch doesn't count: that may be only the local one.)
     pub fn is_unpushed(&self) -> bool {
         self.unpushed.is_none_or(|n| n > 0)
+    }
+
+    /// Its changes are in the default branch: merged, or absorbed.
+    pub fn landed(&self) -> bool {
+        self.merged || self.absorbed
     }
 
     /// The upstream is the same-named branch on some remote, so a plain
@@ -289,7 +304,7 @@ impl RepoStatus {
             && self.changes.conflicted == 0
             && self.default_branch.as_ref().is_some_and(|d| d != b)
             && self.upstream.as_ref().is_some_and(|t| t.gone)
-            && self.branches.iter().any(|i| &i.name == b && i.merged)
+            && self.branches.iter().any(|i| &i.name == b && i.landed())
     }
 
     pub fn on_default(&self) -> bool {
@@ -809,15 +824,51 @@ fn default_branch(repo: &gix::Repository, refs: &Refs, remote: Option<&str>) -> 
         .map(|s| s.to_str_lossy().into_owned())
 }
 
-/// Commit the default branch points to: remote-tracking ref preferred, as it
-/// is what "pushed/merged" means; local branch as a fallback.
-fn default_tip(refs: &Refs, remote: Option<&str>, default: &str) -> Option<gix::ObjectId> {
-    let mut names = vec![];
-    if let Some(r) = remote {
-        names.push(format!("refs/remotes/{r}/{default}"));
+/// Commit the default branch points to, and whether that's a remote's:
+/// remote-tracking ref preferred, as it is what "pushed/merged" means;
+/// local branch as a fallback.
+fn default_tip(refs: &Refs, remote: Option<&str>, default: &str) -> Option<(gix::ObjectId, bool)> {
+    let on_remote = remote.and_then(|r| refs.peel(&format!("refs/remotes/{r}/{default}")));
+    match on_remote {
+        Some(id) => Some((id, true)),
+        None => Some((refs.peel(&format!("refs/heads/{default}"))?, false)),
     }
-    names.push(format!("refs/heads/{default}"));
-    names.iter().find_map(|n| refs.peel(n))
+}
+
+/// Whether merging `tip` into `default` would change nothing (see
+/// [`BranchInfo::absorbed`]): a trial merge in memory, nothing written to
+/// the repo. A conflict, or any failure, is a no; so is a branch with no
+/// net change since it split off (empty commits, a change and its
+/// revert), which nothing absorbed.
+fn absorbed(repo: &gix::Repository, tip: gix::ObjectId, default: gix::ObjectId) -> bool {
+    use gix::merge::tree::TreatAsUnresolved;
+    let repo = repo.clone().with_object_memory();
+    let merged = (|| {
+        let options = repo
+            .tree_merge_options()
+            .ok()?
+            .with_fail_on_conflict(Some(TreatAsUnresolved::git()));
+        let mut out = repo
+            .merge_commits(default, tip, Default::default(), options.into())
+            .ok()?;
+        if out
+            .tree_merge
+            .has_unresolved_conflicts(TreatAsUnresolved::git())
+        {
+            return None;
+        }
+        let theirs = repo.find_commit(tip).ok()?.tree_id().ok()?.detach();
+        if theirs == out.merge_base_tree_id {
+            return None;
+        }
+        Some(out.tree_merge.tree.write().ok()?.detach())
+    })();
+    let ours = repo
+        .find_commit(default)
+        .ok()
+        .and_then(|c| c.tree_id().ok())
+        .map(|t| t.detach());
+    merged.is_some() && merged == ours
 }
 
 /// Number of commits reachable from `a` but not from `b`.
@@ -858,7 +909,7 @@ fn branches(
     repo: &gix::Repository,
     refs: &Refs,
     head_branch: Option<&str>,
-    default_tip: Option<gix::ObjectId>,
+    default_tip: Option<(gix::ObjectId, bool)>,
 ) -> Result<Vec<BranchInfo>, StatusError> {
     let mut remote_tips: Vec<gix::ObjectId> = vec![];
     for i in refs.prefixed("refs/remotes/") {
@@ -917,9 +968,10 @@ fn branches(
             _ => None,
         };
         let merged = match default_tip {
-            Some(d) => count_exclusive(repo, tip, d)? == 0,
+            Some((d, _)) => count_exclusive(repo, tip, d)? == 0,
             None => false,
         };
+        let absorbed = !merged && default_tip.is_some_and(|(d, _)| absorbed(repo, tip, d));
         let unpushed = if remote_tips.is_empty() {
             None
         } else if remote_tips.binary_search(&tip).is_ok() {
@@ -937,11 +989,18 @@ fn branches(
             }
             Some(n)
         };
+        // absorbed into a remote's default branch: nothing of it is unpushed
+        let unpushed = match default_tip {
+            Some((_, true)) if absorbed => Some(0),
+            _ => unpushed,
+        };
         out.push(BranchInfo {
             is_head: head_branch == Some(name.as_str()),
             name,
+            tip: tip.to_string(),
             upstream,
             merged,
+            absorbed,
             unpushed,
             own,
         });

@@ -320,7 +320,9 @@ Two findings:
     the one-per-run auto-fixes, the CLI applies every one listed.
   * `delete-branches`: other branches merged into the default branch,
     upstream gone or none → `git branch -d`, which refuses what it doesn't
-    see as merged. Confirmed first.
+    see as merged. Confirmed first. An absorbed branch (below) needs
+    `-D`, as git can't see it's merged; the op carries the commit status
+    saw (`absorbed_at`) and refuses if the branch has moved.
   * `prune-worktrees`: records of linked worktrees whose folder was
     deleted by hand (gix's `is_prunable`: folder gone, not locked) →
     `git worktree prune`. Their branches count as checked out there until
@@ -454,6 +456,26 @@ rendering is snapshot-tested via `TestBackend`.
   Clearing marks asks when more than one repo has entries of its own in
   the marks', pull and ignore.repos lists; snoozes and "new" flags don't count. `root remove` doesn't ask.
 
+* **Absorbed: merged by content.** A forge's squash- or rebase-merge
+  leaves the branch's commits out of the default branch's history, so
+  ancestry (`merged`) says no. `absorbed` asks instead whether merging the
+  branch into the default branch's tip would change nothing: gix's
+  `merge_commits` on a clone of the repo handle with object memory, so
+  status writes nothing; the result tree must equal the default tip's.
+  Unlike comparing patches (`git cherry`, or the squash-commit trick), it
+  holds when the default branch changed nearby lines before the squash.
+  It says no on a conflict (the default branch changed the same lines
+  again: can't tell), when the change was reverted (merging would bring it
+  back), and for a branch with no net change since its merge base (empty
+  commits, a change and its revert: nothing absorbed those commits).
+  `landed()` is merged or absorbed, used where merged was: switch-default,
+  delete-branches, finished worktrees. When the default tip is a remote's,
+  an absorbed branch's `unpushed` is 0, so it raises no unpushed, gone-
+  upstream or no-upstream issue and no publish fix. Only unmerged
+  branches get the trial merge (in process, no git spawned); it isn't
+  cached. Pull requests weren't needed for this: a PR's head rarely
+  equals a local tip once the branch was updated on the forge, which is
+  the same case a content check handles.
 * **"Unpushed" means "on no remote-tracking ref"**, not "ahead of upstream".
   On real data, a fork branch that tracked `upstream/master` but was pushed
   to `origin/<branch>` was flagged as unpushed. Worse, a `push` fix was

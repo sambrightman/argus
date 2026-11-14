@@ -1657,13 +1657,31 @@ impl App {
                 let names: Vec<String> = ops
                     .iter()
                     .filter_map(|(_, op)| match op {
-                        Op::DeleteBranch { branch } => Some(branch.clone()),
+                        Op::DeleteBranch { branch, .. } => Some(branch.clone()),
                         _ => None,
                     })
                     .collect();
+                // by content only: git's own check can't see those
+                let forced = ops
+                    .iter()
+                    .filter(|(_, op)| {
+                        matches!(
+                            op,
+                            Op::DeleteBranch {
+                                absorbed_at: Some(_),
+                                ..
+                            }
+                        )
+                    })
+                    .count();
+                let how = match forced {
+                    0 => String::new(),
+                    n if n == names.len() => " (squashed or rebased: their commits go)".into(),
+                    n => format!(" ({n} squashed or rebased: their commits go)"),
+                };
                 self.mode = Mode::Confirm {
                     question: format!(
-                        "Delete {} merged branch(es): {}?{}",
+                        "Delete {} merged branch(es){how}: {}?{}",
                         names.len(),
                         fix::list(&names, 3),
                         p.note()

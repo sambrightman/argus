@@ -233,7 +233,7 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
         // Switching never loses commits, but it hides them; only do it when
         // the work is merged (if only locally, switching shows it) or exists
         // on a remote.
-        let safe = head_info.is_some_and(|h| h.merged || !h.is_unpushed());
+        let safe = head_info.is_some_and(|h| h.landed() || !h.is_unpushed());
         if s.is_finished_worktree() {
             v.push(Fix {
                 blocked: if s.locked {
@@ -458,7 +458,7 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
         for b in s
             .branches
             .iter()
-            .filter(|b| !b.is_head && b.merged && b.name != *default)
+            .filter(|b| !b.is_head && b.landed() && b.name != *default)
         {
             let gone = match &b.upstream {
                 None => false,
@@ -470,14 +470,20 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
                 kind: FixKind::DeleteBranches,
                 op: Op::DeleteBranch {
                     branch: b.name.clone(),
+                    absorbed_at: (!b.merged).then(|| b.tip.clone()),
                 },
                 reason: format!(
-                    "{} is merged into {default}{}",
-                    b.name,
-                    if gone {
-                        " and its upstream is gone"
+                    "{}{default}{}",
+                    if b.merged {
+                        format!("{} is merged into ", b.name)
                     } else {
-                        ""
+                        format!("{}'s changes are in ", b.name)
+                    },
+                    match (gone, b.merged) {
+                        (true, true) => " and its upstream is gone",
+                        (true, false) => " (squashed or rebased) and its upstream is gone",
+                        (false, true) => "",
+                        (false, false) => " (squashed or rebased)",
                     }
                 ),
             });
@@ -794,7 +800,9 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
                     name: name.clone(),
                     upstream: None,
                     is_head: true,
+                    tip: s.head_commit.clone().unwrap_or_default(),
                     merged: false,
+                    absorbed: false,
                     unpushed: s.remote.as_ref().map(|_| s.detached_orphans),
                     own: None,
                 },
@@ -810,7 +818,7 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
         Op::Abort { .. } => {
             s.in_progress = None;
         }
-        Op::DeleteBranch { branch } => s.branches.retain(|b| &b.name != branch),
+        Op::DeleteBranch { branch, .. } => s.branches.retain(|b| &b.name != branch),
         Op::PruneWorktrees => s.stale_worktrees.clear(),
         Op::PruneWorktree { path } => s.stale_worktrees.retain(|p| p != path),
         Op::StashPop => {
@@ -842,7 +850,9 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
                         gone: false,
                     }),
                     is_head: false,
+                    tip: String::new(), // the remote branch's, not read here
                     merged: true,
+                    absorbed: false,
                     unpushed: Some(0),
                     own: None,
                 });

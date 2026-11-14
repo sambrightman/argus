@@ -340,6 +340,15 @@ Nothing is offered during a conflict.
   so you see it went; the refresh after that (or `x g`, or a rescan, `x
   G` or `R`) drops it from the list. One removed from argus (`x W`)
   simply goes.
+* **Squash- and rebase-merged branches count as merged.** A branch whose
+  commits aren't in the default branch's history is still merged if
+  merging it would change nothing: its changes are already there. argus
+  tries that merge in memory (nothing is written to the repo). Such a
+  branch isn't "unpushed work" or "upstream gone with unmerged commits",
+  can be left with `switch-default`, shows as `merged (squashed or
+  rebased)`, and is offered to `b x`. Not when the default branch has
+  since changed the same lines again or reverted them, nor for a branch
+  with no net change of its own: those stay as they were.
 * **A finished worktree** (a linked one whose branch is merged into the
   default branch and whose upstream is gone, as after a pull request, with
   nothing uncommitted) is flagged instead of "not on default branch", and
@@ -365,7 +374,9 @@ Nothing is offered during a conflict.
 * **Asked first, never automatic:** `x A` aborts the merge, rebase,
   cherry-pick, revert or am in progress (or ends a bisect), losing what it
   did so far; `b x` deletes branches merged into the default branch whose
-  upstream is gone or that have none (`git branch -d`, so git double-checks);
+  upstream is gone or that have none (`git branch -d`, so git double-checks;
+  for one merged by squashing or rebasing, which git can't see, `-D`, only
+  while it's still at the commit argus checked);
   `x W` removes a finished worktree (below).
   In the CLI, `argus fix -k abort`, `-k delete-branches` or
   `-k remove-worktree` lists every one

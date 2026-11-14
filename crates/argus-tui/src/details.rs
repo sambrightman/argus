@@ -330,7 +330,7 @@ pub fn details(
         let branches: Vec<String> = of_kind
             .iter()
             .filter_map(|f| match &f.op {
-                Op::DeleteBranch { branch } => Some(branch.clone()),
+                Op::DeleteBranch { branch, .. } => Some(branch.clone()),
                 _ => None,
             })
             .collect();
@@ -386,6 +386,8 @@ pub fn details(
             }
             if b.merged && s.default_branch.as_deref() != Some(&b.name) {
                 parts.push(styled(Role::Dim, "  merged"));
+            } else if b.absorbed {
+                parts.push(styled(Role::Dim, "  merged (squashed or rebased)"));
             }
             let unpushed = b.unpushed.filter(|&n| n > 0);
             // unless ↑ already says it

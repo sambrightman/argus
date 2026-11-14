@@ -41,8 +41,11 @@ deferred.
 
 - **Marks next:** pull and ignore as marks with behaviour fields (they
   keep their own rules for now; see DESIGN.md §9, custom marks).
-- **Pull requests:** fetched with the remote, shown per branch; a merged PR
-  makes a branch safe to delete, squash-merged ones included.
+- **Pull request and issue details:** looked up in the background (never
+  holding up the screen; one search for all repos) and shown in a repo's
+  details: number, title, review and CI state. For display, not safety:
+  merged-by-squash is detected locally. In the CLI only behind a flag
+  that fetches them then, never from a stale cache.
 - **Orphans** (local clones the forge no longer lists): reported only, no
   archive/move action.
 - **GitLab/Gitea forges** (implement `argus_core::forge::Forge`); a **jj

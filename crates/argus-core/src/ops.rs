@@ -56,8 +56,14 @@ pub enum Op {
         what: InProgress,
     },
     /// `git branch -d`: delete a branch git agrees is merged.
+    /// `git branch -d`, which refuses a branch git doesn't see as merged.
+    /// With `absorbed_at`, for a branch whose changes are in the default
+    /// branch by content (squashed or rebased), which git can't see: `-D`,
+    /// only while the branch is still at that commit.
     DeleteBranch {
         branch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        absorbed_at: Option<String>,
     },
     /// `git worktree prune`: delete the records of linked worktrees whose
     /// folder is gone (not locked ones).
@@ -249,7 +255,13 @@ impl Op {
                 InProgress::Bisect => v(&["bisect", "reset"]),
                 w => v(&[w.label(), "--abort"]),
             },
-            Op::DeleteBranch { branch } => v(&["branch", "-d", "--", branch]),
+            Op::DeleteBranch {
+                branch,
+                absorbed_at,
+            } => {
+                let how = if absorbed_at.is_some() { "-D" } else { "-d" };
+                v(&["branch", how, "--", branch])
+            }
             Op::PruneWorktrees => v(&["worktree", "prune"]),
             Op::RemoveWorktree => v(&["worktree", "remove", "."]),
             Op::PruneWorktree { path } => {
@@ -401,7 +413,7 @@ impl Op {
                 what: InProgress::Bisect,
             } => "end bisect".into(),
             Op::Abort { what } => format!("abort {}", what.label()),
-            Op::DeleteBranch { branch } => format!("delete branch {branch}"),
+            Op::DeleteBranch { branch, .. } => format!("delete branch {branch}"),
             Op::PruneWorktrees => "prune stale worktree records".into(),
             Op::RemoveWorktree => "remove this worktree".into(),
             Op::PruneWorktree { path } => format!(
@@ -791,6 +803,29 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
         Op::StashPop => {
             if let Some(why) = pop_problem(&cwd) {
                 return refused(format!("not popping: {why}"), started);
+            }
+        }
+        Op::DeleteBranch {
+            branch,
+            absorbed_at: Some(seen),
+        } => {
+            let at = git(
+                &cwd,
+                &[
+                    "rev-parse".into(),
+                    "-q".into(),
+                    "--verify".into(),
+                    format!("refs/heads/{branch}"),
+                ],
+                started,
+            );
+            if !at.success || at.output != *seen {
+                return refused(
+                    format!(
+                        "not deleting: {branch} has moved since it was checked (refresh and try again)"
+                    ),
+                    started,
+                );
             }
         }
         Op::StashDrop { index, id } => {

@@ -1889,7 +1889,8 @@ fn destructive_fixes_ask_first_and_do_nothing_unless_told_yes() {
     assert_eq!(
         confirm(&mut app, Action::DeleteMergedBranches, 'y'),
         Some(vec![Op::DeleteBranch {
-            branch: "done".into()
+            branch: "done".into(),
+            absorbed_at: None,
         }])
     );
     app.running.clear();
@@ -5641,4 +5642,70 @@ fn a_mark_of_your_own_is_set_from_the_mark_menu_and_shown() {
         help.contains("W  mark: work") && help.contains("L  mark: later"),
         "{help}"
     );
+}
+
+/// A squash-merged branch shows as merged that way, and deleting it says
+/// its commits go (it's forced).
+#[test]
+fn a_squash_merged_branch_is_shown_and_its_deletion_says_so() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let r = sb.path("dev/clean");
+        git(&r, &["switch", "-q", "-c", "sq"]);
+        write(&r, "f", "feature\n");
+        commit(&r, "work");
+        git(&r, &["push", "-q", "-u", "origin", "sq"]);
+        git(&r, &["switch", "-q", "main"]);
+        git(&r, &["merge", "-q", "--squash", "sq"]);
+        git(&r, &["commit", "-q", "-m", "sq (#1)"]);
+        git(&r, &["push", "-q"]);
+        git(&r, &["push", "-q", "origin", "--delete", "sq"]);
+        git(&r, &["fetch", "-q", "--prune"]);
+        git(&r, &["branch", "done"]);
+    });
+    app.cursor = app
+        .rows
+        .iter()
+        .position(
+            |r| matches!(r, Row::Repo(i) if app.ws.entries[*i].display_name() == "acme/clean"),
+        )
+        .unwrap();
+    app.on_key(code(KeyCode::Tab));
+    let t = trimmed(&app);
+    assert!(
+        t.iter()
+            .any(|l| l.contains("sq") && l.ends_with("merged (squashed or rebased)")),
+        "{t:?}"
+    );
+    assert!(
+        t.iter()
+            .any(|l| l.contains("done") && l.ends_with("  merged")),
+        "{t:?}"
+    );
+    app.cursor = 0;
+    app.cursor = app
+        .rows
+        .iter()
+        .position(
+            |r| matches!(r, Row::Repo(i) if app.ws.entries[*i].display_name() == "acme/clean"),
+        )
+        .unwrap();
+    app.act(Action::DeleteMergedBranches);
+    match &app.mode {
+        Mode::Confirm { question, .. } => assert!(
+            question.starts_with(
+                "Delete 2 merged branch(es) (1 squashed or rebased: their commits go): "
+            ),
+            "{question}"
+        ),
+        _ => panic!("no question"),
+    }
+    // all of them that way: no count
+    app.on_key(key('n'));
+    let clean = app.current().unwrap().path.clone();
+    git(&clean, &["branch", "-q", "-d", "done"]);
+    refreshed(&mut app, &clean);
+    app.cursor = repo_row(&app, &clean);
+    app.act(Action::DeleteMergedBranches);
+    assert!(matches!(&app.mode, Mode::Confirm { question, .. }
+        if question.starts_with("Delete 1 merged branch(es) (squashed or rebased: their commits go): sq?")));
 }

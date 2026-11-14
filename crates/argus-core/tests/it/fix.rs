@@ -2046,3 +2046,113 @@ fn an_uninitialised_submodule_is_not_missing() {
     );
     assert!(of_kind(&app, FixKind::SubmoduleUpdate).is_empty());
 }
+
+/// `feat` pushed, squash-merged into main on the remote and its remote
+/// branch deleted; the clone on `on`.
+fn squash_merged(sb: &Sandbox, on: &str) -> std::path::PathBuf {
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    git(&r, &["switch", "-q", "-c", "feat"]);
+    write(&r, "f", "feature\n");
+    commit(&r, "one");
+    write(&r, "g", "more\n");
+    commit(&r, "two");
+    git(&r, &["push", "-q", "-u", "origin", "feat"]);
+    git(&r, &["switch", "-q", "main"]);
+    git(&r, &["merge", "-q", "--squash", "feat"]);
+    git(&r, &["commit", "-q", "-m", "feat (#1)"]);
+    git(&r, &["push", "-q"]);
+    git(&r, &["push", "-q", "origin", "--delete", "feat"]);
+    git(&r, &["fetch", "-q", "--prune"]);
+    git(&r, &["switch", "-q", on]);
+    r
+}
+
+/// On a squash-merged branch: not "upstream gone with unmerged work" and
+/// no publishing it again; it's a branch to leave, safely.
+#[test]
+fn a_squash_merged_branch_is_left_not_republished() {
+    let sb = Sandbox::new();
+    let r = squash_merged(&sb, "feat");
+    let issues = attention::issues(&st(&r));
+    assert_eq!(issues, [Issue::NonDefaultBranch], "{issues:?}");
+    assert!(of_kind(&r, FixKind::Publish).is_empty());
+    assert_eq!(
+        of_kind(&r, FixKind::SwitchDefault),
+        [("switch main".to_string(), None)]
+    );
+}
+
+/// From main: the squash-merged branch isn't unpushed work, and it's
+/// offered for deletion, forced (git's own check can't see the squash),
+/// only while it's still at the commit status saw.
+#[test]
+fn a_squash_merged_branch_is_deleted_by_force_at_the_commit_seen() {
+    let sb = Sandbox::new();
+    let r = squash_merged(&sb, "main");
+    let s = st(&r);
+    assert!(
+        attention::issues(&s).is_empty(),
+        "{:?}",
+        attention::issues(&s)
+    );
+    let fix = plan(&s, &StashConfig::default())
+        .into_iter()
+        .find(|f| f.kind == FixKind::DeleteBranches)
+        .expect("offered");
+    let tip = git(&r, &["rev-parse", "feat"]).trim().to_string();
+    assert_eq!(
+        fix.op,
+        Op::DeleteBranch {
+            branch: "feat".into(),
+            absorbed_at: Some(tip)
+        }
+    );
+    assert!(fix.reason.contains("squashed or rebased"), "{}", fix.reason);
+    assert!(simulate(&s, &fix).branches.iter().all(|b| b.name != "feat"));
+    // moved since: refused, the branch kept
+    git(&r, &["switch", "-q", "feat"]);
+    commit(&r, "more work");
+    git(&r, &["switch", "-q", "main"]);
+    let out = argus_core::ops::run(&r, &fix.op);
+    assert!(
+        !out.success && out.output.contains("moved"),
+        "{}",
+        out.output
+    );
+    assert!(st(&r).branches.iter().any(|b| b.name == "feat"));
+    // as seen: deleted
+    git(&r, &["branch", "-f", "feat", "feat~1"]);
+    let out = argus_core::ops::run(&r, &fix.op);
+    assert!(out.success, "{}", out.output);
+    assert!(st(&r).branches.iter().all(|b| b.name != "feat"));
+    // inverse: a branch in main's history keeps git's own check (-d)
+    git(&r, &["branch", "done"]);
+    let fix = plan(&st(&r), &StashConfig::default())
+        .into_iter()
+        .find(|f| f.kind == FixKind::DeleteBranches)
+        .unwrap();
+    assert_eq!(
+        fix.op,
+        Op::DeleteBranch {
+            branch: "done".into(),
+            absorbed_at: None
+        }
+    );
+}
+
+/// A worktree on a squash-merged branch is finished.
+#[test]
+fn a_worktree_on_a_squash_merged_branch_is_finished() {
+    let sb = Sandbox::new();
+    let (r, wt) = with_worktree(&sb);
+    write(&wt, "f", "feature\n");
+    commit(&wt, "work");
+    git(&wt, &["push", "-q", "-u", "origin", "wt"]);
+    git(&r, &["merge", "-q", "--squash", "wt"]);
+    git(&r, &["commit", "-q", "-m", "wt (#2)"]);
+    git(&r, &["push", "-q"]);
+    git(&r, &["push", "-q", "origin", "--delete", "wt"]);
+    git(&r, &["fetch", "-q", "--prune"]);
+    assert!(finished_issue(&wt));
+}

@@ -1003,3 +1003,160 @@ fn files_are_listed_up_to_the_cap_and_all_counted() {
     let c = st(&r).changes;
     assert_eq!((c.files.len(), c.untracked), (MAX_FILES, MAX_FILES + 1));
 }
+
+/// A clone with `f` (20 lines) on main, and a pushed branch `feat` that
+/// changes line 10.
+fn feature_changing_line_10(sb: &Sandbox) -> std::path::PathBuf {
+    sb.remote("acme", "sq");
+    let r = sb.clone_as_github("acme", "sq", "dev/sq");
+    let lines: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+    write(&r, "f", &lines);
+    commit(&r, "f");
+    git(&r, &["push", "-q"]);
+    git(&r, &["switch", "-q", "-c", "feat"]);
+    write(&r, "f", &lines.replace("line 10\n", "line ten\n"));
+    commit(&r, "ten");
+    write(&r, "g", "new file\n");
+    commit(&r, "g");
+    git(&r, &["push", "-q", "-u", "origin", "feat"]);
+    git(&r, &["switch", "-q", "main"]);
+    r
+}
+
+/// As a forge does it: main gets the branch's whole change as one new
+/// commit, and the remote branch is deleted.
+fn squash_merge(r: &std::path::Path) {
+    git(r, &["merge", "-q", "--squash", "feat"]);
+    git(r, &["commit", "-q", "-m", "feat (#1)"]);
+    git(r, &["push", "-q"]);
+    git(r, &["push", "-q", "origin", "--delete", "feat"]);
+    git(r, &["fetch", "-q", "--prune"]);
+}
+
+fn replace_in(r: &std::path::Path, file: &str, from: &str, to: &str) {
+    let text = std::fs::read_to_string(r.join(file)).unwrap();
+    assert!(text.contains(from));
+    write(r, file, &text.replace(from, to));
+}
+
+fn feat(r: &std::path::Path) -> argus_core::status::BranchInfo {
+    st(r)
+        .branches
+        .into_iter()
+        .find(|b| b.name == "feat")
+        .unwrap()
+}
+
+/// A branch is absorbed when merging it into the default branch would
+/// change nothing: squash-merged (even with main changing nearby lines
+/// first, which makes the patches differ) or rebase-merged. Its commits
+/// are on no remote, but nothing of it is unpushed.
+#[test]
+fn a_squash_or_rebase_merged_branch_is_absorbed() {
+    let sb = Sandbox::new();
+    let r = feature_changing_line_10(&sb);
+    let b = feat(&r);
+    assert!(!b.merged && !b.absorbed && !b.landed(), "not yet: {b:?}");
+    // main changes a line near the branch's, then squash-merges it
+    replace_in(&r, "f", "line 12\n", "line twelve\n");
+    commit(&r, "twelve");
+    squash_merge(&r);
+    let b = feat(&r);
+    assert!(!b.merged, "its commits aren't in main's history");
+    assert!(b.absorbed && b.landed(), "{b:?}");
+    assert!(b.upstream.as_ref().unwrap().gone);
+    assert_eq!(b.unpushed, Some(0), "its changes are on the remote's main");
+    assert!(!b.is_unpushed());
+
+    // rebase-merged: the same changes as new commits
+    let sb = Sandbox::new();
+    let r = feature_changing_line_10(&sb);
+    replace_in(&r, "f", "line 2\n", "line two\n");
+    commit(&r, "two");
+    git(&r, &["cherry-pick", "main..feat"]);
+    git(&r, &["push", "-q"]);
+    let b = feat(&r);
+    assert!(!b.merged && b.absorbed, "{b:?}");
+}
+
+/// Not absorbed: main reverted the change (merging would bring it back),
+/// or changed the same lines again (can't tell: left alone), or never had
+/// it. A branch in main's history is merged, which isn't checked again.
+#[test]
+fn a_branch_main_does_not_hold_is_not_absorbed() {
+    // reverted on main
+    let sb = Sandbox::new();
+    let r = feature_changing_line_10(&sb);
+    squash_merge(&r);
+    assert!(feat(&r).absorbed);
+    git(&r, &["revert", "--no-edit", "HEAD"]);
+    git(&r, &["push", "-q"]);
+    let b = feat(&r);
+    assert!(!b.absorbed && !b.landed(), "{b:?}");
+    assert!(b.is_unpushed(), "its work is on no remote");
+
+    // the same line changed again on main
+    let sb = Sandbox::new();
+    let r = feature_changing_line_10(&sb);
+    squash_merge(&r);
+    replace_in(&r, "f", "line ten\n", "line X\n");
+    commit(&r, "again");
+    git(&r, &["push", "-q"]);
+    assert!(!feat(&r).absorbed);
+
+    // part of it only: one of its two commits
+    let sb = Sandbox::new();
+    let r = feature_changing_line_10(&sb);
+    git(&r, &["cherry-pick", "feat~1"]);
+    git(&r, &["push", "-q"]);
+    assert!(!feat(&r).absorbed, "g isn't in main");
+
+    // no net change of its own (empty commits, or a change and its
+    // revert): nothing was merged anywhere; its commits are still unpushed
+    let sb = Sandbox::new();
+    sb.remote("acme", "e");
+    let r = sb.clone_as_github("acme", "e", "dev/e");
+    git(&r, &["switch", "-q", "-c", "feat"]);
+    git(&r, &["commit", "-q", "--allow-empty", "-m", "note"]);
+    write(&r, "f", "x\n");
+    commit(&r, "x");
+    git(&r, &["revert", "--no-edit", "HEAD"]);
+    let b = feat(&r);
+    assert!(!b.absorbed && b.is_unpushed(), "{b:?}");
+
+    // in main's history: merged, nothing more to ask
+    let sb = Sandbox::new();
+    let r = feature_changing_line_10(&sb);
+    git(&r, &["merge", "-q", "--no-edit", "--no-ff", "feat"]);
+    git(&r, &["push", "-q"]);
+    let b = feat(&r);
+    assert!(b.merged && !b.absorbed && b.landed(), "{b:?}");
+}
+
+/// Absorbed into a main that's only local: nothing of it is on a remote,
+/// so it's still unpushed. And status writes nothing to the repo.
+#[test]
+fn absorbed_into_a_local_main_is_still_unpushed_and_nothing_is_written() {
+    let sb = Sandbox::new();
+    let r = feature_changing_line_10(&sb);
+    // feat's own remote branch gone before the local squash
+    git(&r, &["push", "-q", "origin", "--delete", "feat"]);
+    git(&r, &["fetch", "-q", "--prune"]);
+    replace_in(&r, "f", "line 12\n", "line twelve\n");
+    commit(&r, "twelve");
+    git(&r, &["merge", "-q", "--squash", "feat"]);
+    git(&r, &["commit", "-q", "-m", "squashed, not pushed"]);
+    let objects = || git(&r, &["count-objects", "-v"]);
+    let before = objects();
+    let b = feat(&r);
+    assert!(
+        !b.absorbed,
+        "origin/main, what merged means, doesn't have it: {b:?}"
+    );
+    assert!(b.is_unpushed());
+    assert_eq!(objects(), before, "the trial merge stayed in memory");
+    git(&r, &["push", "-q"]);
+    let b = feat(&r);
+    assert!(b.absorbed && !b.is_unpushed(), "{b:?}");
+    assert_eq!(objects(), before);
+}
