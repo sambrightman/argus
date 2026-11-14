@@ -322,7 +322,7 @@ Two findings:
     upstream gone or none → `git branch -d`, which refuses what it doesn't
     see as merged. Confirmed first. An absorbed branch (below) needs
     `-D`, as git can't see it's merged; the op carries the commit status
-    saw (`absorbed_at`) and refuses if the branch has moved.
+    saw (`force_at`) and refuses if the branch has moved.
   * `prune-worktrees`: records of linked worktrees whose folder was
     deleted by hand (gix's `is_prunable`: folder gone, not locked) →
     `git worktree prune`. Their branches count as checked out there until
@@ -476,6 +476,27 @@ rendering is snapshot-tested via `TestBackend`.
   cached. Pull requests weren't needed for this: a PR's head rarely
   equals a local tip once the branch was updated on the forge, which is
   the same case a content check handles.
+* **Absorbed stops at the check against the tip, by decision.** It
+  misses a merged branch once the default branch changes the same (or
+  touching) lines again, so a branch can come back as unmerged. Measured
+  on a synthetic repo (20,000 commits, 100 stale squash-merged branches,
+  densely overlapping): status 0.26 s before the check, 0.47 s with it
+  (1.8 ms a branch, every run), 67 of 100 recognised. A search through
+  history (the trial merge at each commit that changed the branch's
+  files, from where it split off) recognised 99, for 0.75 s more; a walk
+  comparing file ids only, 73. But the search has to be remembered to be
+  affordable (a cache keyed by commit ids), reruns whenever a long-lived
+  branch moves, needs the branches to search named for a dev/main setup
+  (every remote branch is too many where they aren't deleted), and still
+  misses a branch that isn't what was merged. Too much machinery for a
+  tidying hint: instead `b x` offers only what's certain, and `b k`
+  deletes any branch by hand, saying what's known and what isn't.
+* **`b k` deletes the branch under the cursor** (details lines carry
+  their branch): `DeleteBranch` with `force_at`, as for an absorbed
+  branch, whatever its state, since it was chosen by name. The question
+  is built from status alone: merged, absorbed, `unpushed == 0` (naming
+  the upstream when that's what holds the commits), a count on no
+  remote, or no remote at all. Never the branch that's checked out.
 * **"Unpushed" means "on no remote-tracking ref"**, not "ahead of upstream".
   On real data, a fork branch that tracked `upstream/master` but was pushed
   to `origin/<branch>` was flagged as unpushed. Worse, a `push` fix was

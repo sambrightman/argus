@@ -2105,7 +2105,7 @@ fn a_squash_merged_branch_is_deleted_by_force_at_the_commit_seen() {
         fix.op,
         Op::DeleteBranch {
             branch: "feat".into(),
-            absorbed_at: Some(tip)
+            force_at: Some(tip)
         }
     );
     assert!(fix.reason.contains("squashed or rebased"), "{}", fix.reason);
@@ -2136,7 +2136,7 @@ fn a_squash_merged_branch_is_deleted_by_force_at_the_commit_seen() {
         fix.op,
         Op::DeleteBranch {
             branch: "done".into(),
-            absorbed_at: None
+            force_at: None
         }
     );
 }

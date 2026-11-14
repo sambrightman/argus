@@ -258,6 +258,11 @@ impl MenuId {
                         Action::DeleteMergedBranches,
                     ),
                     item(
+                        'k',
+                        "delete the branch under the cursor in the details…",
+                        Action::DeleteBranch,
+                    ),
+                    item(
                         'f',
                         "fast-forward stale local branches",
                         Action::FastForward,

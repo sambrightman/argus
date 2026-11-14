@@ -57,13 +57,14 @@ pub enum Op {
     },
     /// `git branch -d`: delete a branch git agrees is merged.
     /// `git branch -d`, which refuses a branch git doesn't see as merged.
-    /// With `absorbed_at`, for a branch whose changes are in the default
-    /// branch by content (squashed or rebased), which git can't see: `-D`,
-    /// only while the branch is still at that commit.
+    /// With `force_at`, `-D`, only while the branch is still at that
+    /// commit: for a branch whose changes are in the default branch by
+    /// content (squashed or rebased), which git can't see, or one chosen
+    /// by name (`b k`).
     DeleteBranch {
         branch: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        absorbed_at: Option<String>,
+        force_at: Option<String>,
     },
     /// `git worktree prune`: delete the records of linked worktrees whose
     /// folder is gone (not locked ones).
@@ -255,11 +256,8 @@ impl Op {
                 InProgress::Bisect => v(&["bisect", "reset"]),
                 w => v(&[w.label(), "--abort"]),
             },
-            Op::DeleteBranch {
-                branch,
-                absorbed_at,
-            } => {
-                let how = if absorbed_at.is_some() { "-D" } else { "-d" };
+            Op::DeleteBranch { branch, force_at } => {
+                let how = if force_at.is_some() { "-D" } else { "-d" };
                 v(&["branch", how, "--", branch])
             }
             Op::PruneWorktrees => v(&["worktree", "prune"]),
@@ -807,7 +805,7 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
         }
         Op::DeleteBranch {
             branch,
-            absorbed_at: Some(seen),
+            force_at: Some(seen),
         } => {
             let at = git(
                 &cwd,

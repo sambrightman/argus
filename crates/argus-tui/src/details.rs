@@ -27,6 +27,8 @@ pub struct DetailLine {
     pub ignored: bool,
     /// The stash this line shows (`stash@{n}`), for dropping it.
     pub stash: Option<usize>,
+    /// The local branch this line shows, for deleting it.
+    pub branch: Option<String>,
     /// What Tab unfolds it into, read when unfolded.
     pub expand: Option<Expand>,
     /// The fix this line offers, for the Fix menu to start on.
@@ -118,6 +120,7 @@ fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
         issue: None,
         ignored: false,
         stash: None,
+        branch: None,
         expand: None,
         fix: None,
         body: false,
@@ -396,6 +399,7 @@ pub fn details(
                 parts.push(styled(Role::Dim, format!("  {n} on no remote")));
             }
             v.push(DetailLine {
+                branch: Some(b.name.clone()),
                 expand: unpushed.map(|_| {
                     Expand::Commits(Range::NotOnRemote {
                         tip: format!("refs/heads/{}", b.name),

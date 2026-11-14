@@ -113,6 +113,8 @@ pub enum Action {
     AbortOperation,
     /// Delete the selected repos' merged branches, once confirmed.
     DeleteMergedBranches,
+    /// Delete the branch under the cursor in the details, once confirmed.
+    DeleteBranch,
     PopStash,
     /// Drop the stash under the cursor in the details, once confirmed.
     DropStash,
@@ -232,6 +234,7 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
             issue: None,
             ignored: false,
             stash: None,
+            branch: None,
             expand: None,
             fix: None,
             body: false,
@@ -424,6 +427,7 @@ fn diff_rows(
         issue: None,
         ignored: false,
         stash: None,
+        branch: None,
         expand: None,
         fix: None,
         body: false,
@@ -1668,7 +1672,7 @@ impl App {
                         matches!(
                             op,
                             Op::DeleteBranch {
-                                absorbed_at: Some(_),
+                                force_at: Some(_),
                                 ..
                             }
                         )
@@ -1689,6 +1693,7 @@ impl App {
                     then: Confirmed::Ops(ops),
                 };
             }
+            DeleteBranch => return self.delete_branch(),
             PopStash => return self.fix_ops(FixKind::StashPop),
             DropStash => {
                 let Some(Row::Detail {
@@ -2873,6 +2878,64 @@ impl App {
 
     /// Run every fix of a kind (one per branch, for kinds that have
     /// several) on the selected repos where it applies and isn't blocked.
+    /// `b k`: delete the branch under the cursor in the details, asked
+    /// first, saying what's known of its commits: merged, on a remote, or
+    /// on none and not found merged (which they may still be). Forced
+    /// (`-D`: you chose it), while it's at the commit seen.
+    fn delete_branch(&mut self) -> Vec<Effect> {
+        let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor) else {
+            return self.not_applicable("put the cursor on a branch in the details (Tab)");
+        };
+        let (Some(name), e) = (line.branch.clone(), &self.ws.entries[*repo]) else {
+            return self.not_applicable("put the cursor on a branch in the details (Tab)");
+        };
+        let Some((s, b)) = e
+            .status()
+            .and_then(|s| Some((s, s.branches.iter().find(|b| b.name == name)?)))
+        else {
+            return vec![];
+        };
+        if b.is_head {
+            return self.not_applicable("that's the branch you're on: switch to another first");
+        }
+        let default = s.default_branch.as_deref().unwrap_or("the default branch");
+        let known = match (b.merged, b.absorbed, b.unpushed) {
+            (true, ..) => format!("It's merged into {default}."),
+            (_, true, _) => {
+                format!("Its changes are in {default} (squashed or rebased); its commits go.")
+            }
+            (_, _, Some(0)) => {
+                // its upstream, when that's what holds them
+                let on = b
+                    .upstream
+                    .as_ref()
+                    .filter(|t| !t.gone && t.ahead == 0)
+                    .map(|t| format!(" ({})", t.name))
+                    .unwrap_or_default();
+                format!("Its commits are on a remote{on}: nothing is lost.")
+            }
+            (_, _, Some(n)) => format!(
+                "{n} {} on no remote, and argus couldn't find them merged into {default} \
+                 (they may be, in a way it can't see). They'd be lost.",
+                plural(n, "commit is", "commits are")
+            ),
+            (_, _, None) => format!(
+                "{} has no remote: its commits that aren't in {default} are only here. \
+                 They'd be lost.",
+                e.display_name()
+            ),
+        };
+        let op = Op::DeleteBranch {
+            branch: name.clone(),
+            force_at: Some(b.tip.clone()),
+        };
+        self.mode = Mode::Confirm {
+            question: format!("Delete branch {name}? {known}"),
+            then: Confirmed::Ops(vec![(e.path.clone(), op)]),
+        };
+        vec![]
+    }
+
     /// `x W`: remove the finished worktrees selected, asked first.
     fn remove_worktrees(&mut self) -> Vec<Effect> {
         let p = self.planned(FixKind::RemoveWorktree);

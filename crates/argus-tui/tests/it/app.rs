@@ -1890,7 +1890,7 @@ fn destructive_fixes_ask_first_and_do_nothing_unless_told_yes() {
         confirm(&mut app, Action::DeleteMergedBranches, 'y'),
         Some(vec![Op::DeleteBranch {
             branch: "done".into(),
-            absorbed_at: None,
+            force_at: None,
         }])
     );
     app.running.clear();
@@ -5708,4 +5708,136 @@ fn a_squash_merged_branch_is_shown_and_its_deletion_says_so() {
     app.act(Action::DeleteMergedBranches);
     assert!(matches!(&app.mode, Mode::Confirm { question, .. }
         if question.starts_with("Delete 1 merged branch(es) (squashed or rebased: their commits go): sq?")));
+}
+
+/// The cursor on the details line of branch `name` of the current repo.
+fn to_branch(app: &mut App, name: &str) {
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Detail { line, .. } if line.branch.as_deref() == Some(name)))
+        .unwrap_or_else(|| panic!("{name}: {:?}", trimmed(app)))
+}
+
+/// `b k` deletes the branch under the cursor, asked first, saying what
+/// argus knows of its commits: merged, on a remote, or on none and not
+/// found merged (which it may still be). Forced, at the commit seen.
+#[test]
+fn the_branch_under_the_cursor_is_deleted_saying_what_is_known() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let r = sb.path("dev/clean");
+        // pushed, not merged
+        git(&r, &["switch", "-q", "-c", "pushed"]);
+        write(&r, "p", "p\n");
+        commit(&r, "p");
+        git(&r, &["push", "-q", "-u", "origin", "pushed"]);
+        // local only: two commits on no remote
+        git(&r, &["switch", "-q", "-c", "local", "main"]);
+        write(&r, "l", "l\n");
+        commit(&r, "l1");
+        commit(&r, "l2");
+        // squash-merged, its remote branch gone
+        git(&r, &["switch", "-q", "-c", "sq", "main"]);
+        write(&r, "s", "s\n");
+        commit(&r, "s");
+        git(&r, &["switch", "-q", "main"]);
+        git(&r, &["merge", "-q", "--squash", "sq"]);
+        git(&r, &["commit", "-q", "-m", "sq (#1)"]);
+        git(&r, &["push", "-q"]);
+        git(&r, &["branch", "done"]);
+        // its own upstream gone, its commits on another remote branch
+        git(&r, &["branch", "copy", "pushed"]);
+        git(&r, &["config", "branch.copy.remote", "origin"]);
+        git(&r, &["config", "branch.copy.merge", "refs/heads/copy"]);
+    });
+    let clean = sb.path("dev/clean");
+    app.cursor = repo_row(&app, &clean);
+    // not on a branch line: said, nothing asked
+    assert!(app.act(Action::DeleteBranch).is_empty());
+    assert!(
+        app.message
+            .clone()
+            .unwrap()
+            .0
+            .contains("branch in the details")
+    );
+    app.on_key(code(KeyCode::Tab));
+    let ask = |app: &mut App, name: &str| -> String {
+        to_branch(app, name);
+        assert!(app.act(Action::DeleteBranch).is_empty());
+        match std::mem::replace(&mut app.mode, Mode::Normal) {
+            Mode::Confirm { question, .. } => question,
+            _ => panic!("{name}: no question: {:?}", app.message),
+        }
+    };
+    assert_eq!(
+        ask(&mut app, "done"),
+        "Delete branch done? It's merged into main."
+    );
+    assert_eq!(
+        ask(&mut app, "sq"),
+        "Delete branch sq? Its changes are in main (squashed or rebased); its commits go."
+    );
+    assert_eq!(
+        ask(&mut app, "pushed"),
+        "Delete branch pushed? Its commits are on a remote (origin/pushed): nothing is lost."
+    );
+    assert_eq!(
+        ask(&mut app, "local"),
+        "Delete branch local? 2 commits are on no remote, and argus couldn't find them merged \
+         into main (they may be, in a way it can't see). They'd be lost."
+    );
+    assert_eq!(
+        ask(&mut app, "copy"),
+        "Delete branch copy? Its commits are on a remote: nothing is lost.",
+        "not naming its gone upstream"
+    );
+    // the branch you're on: refused
+    to_branch(&mut app, "main");
+    assert!(app.act(Action::DeleteBranch).is_empty());
+    assert!(!matches!(app.mode, Mode::Confirm { .. }));
+    assert!(app.message.clone().unwrap().0.contains("you're on"));
+    // n: kept; y: forced, at the commit seen
+    to_branch(&mut app, "local");
+    app.on_key(key('b'));
+    assert!(
+        menu_items(&app)
+            .iter()
+            .any(|i| i.starts_with("k delete the branch under the cursor"))
+    );
+    app.on_key(key('k'));
+    assert!(app.on_key(key('n')).is_empty());
+    app.act(Action::DeleteBranch);
+    let (path, op) = apply_op(&app.on_key(key('y')));
+    let tip = git(&clean, &["rev-parse", "local"]).trim().to_string();
+    assert_eq!(
+        op,
+        Op::DeleteBranch {
+            branch: "local".into(),
+            force_at: Some(tip)
+        }
+    );
+    assert!(finish(&mut app, path, op));
+    assert!(git_out(&clean, &["branch", "--list", "local"]).is_empty());
+}
+
+/// Without any remote, nothing is on one: `b k` says the commits are only
+/// here.
+#[test]
+fn deleting_a_branch_of_a_repo_without_a_remote_says_its_commits_are_only_here() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let r = sb.init("dev/alone");
+        commit(&r, "one");
+        git(&r, &["switch", "-q", "-c", "side"]);
+        write(&r, "f", "x\n");
+        commit(&r, "two");
+        git(&r, &["switch", "-q", "-"]);
+    });
+    let alone = sb.path("dev/alone");
+    app.cursor = repo_row(&app, &alone);
+    app.on_key(code(KeyCode::Tab));
+    to_branch(&mut app, "side");
+    app.act(Action::DeleteBranch);
+    assert!(matches!(&app.mode, Mode::Confirm { question, .. }
+        if question.contains("has no remote") && question.ends_with("They'd be lost.")));
 }

@@ -470,7 +470,7 @@ pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
                 kind: FixKind::DeleteBranches,
                 op: Op::DeleteBranch {
                     branch: b.name.clone(),
-                    absorbed_at: (!b.merged).then(|| b.tip.clone()),
+                    force_at: (!b.merged).then(|| b.tip.clone()),
                 },
                 reason: format!(
                     "{}{default}{}",
