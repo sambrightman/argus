@@ -867,9 +867,13 @@ faster binary. Symbols are kept (only debug info is stripped, as in any
 release build), so a panic's backtrace names functions; stripping them
 too saved 2.2 MB of 12.5 MB, not worth unreadable bug reports. argus is
 mostly bound by file-system calls and git processes, so the profile
-matters more for size than speed. Split, packed debug info kept aside (to turn a crash report's addresses
-into lines) is still to try (TODO.md); fat LTO and `panic = "abort"`
-were considered and left.
+matters more for size than speed. Split debug info kept aside (to turn a crash report's addresses into
+lines) was measured and left: with line tables the binary grows 1.1 MB
+and the build 12 s, for a 70 MB bundle per release, and it can't be made
+afterwards, as a build with debug info lays its code out differently
+from one without. A panic already says its file and line, and a
+backtrace names every function. Fat LTO and `panic = "abort"` were
+considered and left too.
 
 ## 9. Not done yet / next steps
 
