@@ -381,6 +381,17 @@ Two findings:
   space, since non-Mono Nerd Fonts draw them up to two cells wide.
   `[ui.icon_overrides]` replaces single icons on top of either set, for
   fonts with better glyphs (e.g. ★); unknown names warn.
+* **Changes are listed by section, as magit has them:** `untracked`,
+  `unstaged`, `staged`, in that order, each headed by its own line at the
+  label column after a blank one, its files below with that side's one
+  letter (an untracked file is just its path). A file with changes on both
+  sides is under both, and Tab on either line shows that side's diff only.
+  The section says which side a key means: `s` under untracked or
+  unstaged, `u` under staged, `K` under untracked or unstaged; elsewhere
+  the status line says what to press instead. On a section's own line the
+  keys take every file in it, and Tab folds it to that line
+  (`App::folded_sections`). Titles stay short and lowercase, like the
+  other labels. `argus status --details` prints the same.
 * **Every issue has an icon in the row.** A repo is never listed as
   needing attention without its row saying why. `badges::issue_icon`
   names the icon of each kind of issue with no wildcard, so adding an

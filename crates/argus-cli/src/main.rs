@@ -1093,7 +1093,9 @@ fn status(
                                     None => text,
                                 }
                             });
-                            format!("{indent}    {}", parts.collect::<String>())
+                            // (a blank line stays blank)
+                            let text = format!("{indent}    {}", parts.collect::<String>());
+                            text.trim_end().to_string()
                         })
                         .collect()
                 } else {

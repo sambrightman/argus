@@ -17,7 +17,7 @@ use argus_core::status::RepoStatus;
 use argus_core::{Entry, ViewFilter, Workspace, paths, plural};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::details::{DetailLine, DiffRef, Expand, ago, describe, details};
+use crate::details::{DetailLine, DiffRef, Expand, Section, ago, describe, details};
 use crate::input::{Edit, LineEditor};
 use crate::menu::{self, Item, Menu, MenuId};
 
@@ -245,6 +245,7 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
             fix: None,
             body: false,
             links: vec![],
+            section: None,
         }
     };
     let body = |parts| DetailLine {
@@ -374,10 +375,8 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
                     .map(|(f, kind)| DetailLine {
                         file: Some(f.clone()),
                         expand: crate::details::untracked_expand(&f, kind),
-                        ..line(vec![
-                            (Some(Role::Untracked), "??".into()),
-                            (None, format!(" {f}")),
-                        ])
+                        section: Some(Section::Untracked),
+                        ..line(vec![(Some(Role::Untracked), f.clone())])
                     })
                     .collect();
                 if more {
@@ -398,32 +397,18 @@ type RowKey = (
     Option<String>,
     Option<(Side, Option<usize>, bool)>,
     Option<Expand>,
+    Option<Section>,
 );
 
-/// The diff rows under an expanded file's line: each side with changes (unstaged first), its hunks
-/// (unless folded) and their lines.
+/// The diff rows under an expanded file's line: that side's hunks (unless
+/// folded) and their lines.
 fn diff_rows(
     cache: &mut HashMap<(PathBuf, String, Side), Result<FileDiff, String>>,
     folded: &BTreeSet<(PathBuf, String, Side, usize)>,
     repo: &std::path::Path,
-    s: &RepoStatus,
     file: &str,
+    side: Side,
 ) -> Vec<DetailLine> {
-    let Some(c) = s.changes.entry(file) else {
-        return vec![];
-    };
-    let sides = [
-        (
-            Side::Unstaged,
-            c.worktree != ' ' || c.index == '?',
-            "unstaged changes",
-        ),
-        (
-            Side::Staged,
-            c.index != ' ' && c.index != '?',
-            "staged changes",
-        ),
-    ];
     let indent = || (None, "      ".to_string());
     let row = |parts: Vec<(Option<Role>, String)>,
                side,
@@ -445,15 +430,10 @@ fn diff_rows(
         fix: None,
         body: false,
         links: vec![],
+        section: None,
     };
     let mut v = vec![];
-    for (side, _, title) in sides.into_iter().filter(|s| s.1) {
-        v.push(row(
-            vec![indent(), (Some(Role::Dim), title.into())],
-            side,
-            None,
-            None,
-        ));
+    {
         let d = cache
             .entry((repo.to_path_buf(), file.to_string(), side))
             .or_insert_with(|| diff::file_diff(repo, file, side).map_err(|e| e.to_string()));
@@ -762,7 +742,9 @@ pub struct App {
     /// The patch being edited (`e`), until it's applied or dropped.
     pub editing: Option<PatchEdit>,
     /// Files whose diff is shown, by repo path and file.
-    pub expanded_files: BTreeSet<(PathBuf, String)>,
+    pub expanded_files: BTreeSet<(PathBuf, String, Side)>,
+    /// Sections of changes folded to their own line (Tab on it), by repo.
+    pub folded_sections: BTreeSet<(PathBuf, Section)>,
     /// Folded hunks: repo, file, side, hunk index.
     pub folded_hunks: BTreeSet<(PathBuf, String, Side, usize)>,
     /// Diffs read so far; a repo's go when its status changes.
@@ -829,6 +811,7 @@ impl App {
             region: None,
             editing: None,
             expanded_files: BTreeSet::new(),
+            folded_sections: BTreeSet::new(),
             folded_hunks: BTreeSet::new(),
             diffs: HashMap::new(),
             unfolded: BTreeSet::new(),
@@ -867,7 +850,7 @@ impl App {
     /// rows its file and diff position.
     fn row_key(&self, n: usize) -> Option<RowKey> {
         match self.rows.get(n)? {
-            Row::Repo(i) => Some((self.ws.entries[*i].path.clone(), None, None, None)),
+            Row::Repo(i) => Some((self.ws.entries[*i].path.clone(), None, None, None, None)),
             Row::Detail { repo, line } => Some((
                 self.ws.entries[*repo].path.clone(),
                 line.file.clone(),
@@ -875,6 +858,7 @@ impl App {
                     .as_ref()
                     .map(|d| (d.side, d.hunk, d.line.is_some())),
                 line.expand.clone(),
+                line.section,
             )),
         }
     }
@@ -936,16 +920,27 @@ impl App {
                     lines.into_iter().rev().map(|l| (i, 0, l)).collect();
                 while let Some((r, pad, line)) = stack.pop() {
                     let e = &self.ws.entries[r];
-                    let expanded = line.file.as_ref().filter(|f| {
+                    // a folded section shows only its own line
+                    if line.section.is_some_and(|s| {
+                        Section::heads(&line).is_none()
+                            && self.folded_sections.contains(&(e.path.clone(), s))
+                    }) {
+                        continue;
+                    }
+                    let expanded = line.file.as_ref().zip(line.section).filter(|(f, s)| {
                         self.expanded_files
-                            .contains(&(e.path.clone(), f.to_string()))
+                            .contains(&(e.path.clone(), f.to_string(), s.side()))
                     });
                     let (diff, below) = match e.status() {
                         Some(s) => (
                             match expanded {
-                                Some(f) => {
-                                    diff_rows(&mut self.diffs, &self.folded_hunks, &e.path, s, f)
-                                }
+                                Some((f, section)) => diff_rows(
+                                    &mut self.diffs,
+                                    &self.folded_hunks,
+                                    &e.path,
+                                    f,
+                                    section.side(),
+                                ),
                                 None => vec![],
                             },
                             unfolded_rows(
@@ -1006,12 +1001,28 @@ impl App {
             !files.is_empty()
         });
         let exact = target.as_ref().and_then(|t| {
-            let file_line = (t.0.clone(), t.1.clone(), None, None);
+            // its file's line in that section (a diff row's: by its side),
+            // else wherever the file now is
+            let wanted = t.4.or(t.2.map(|d| match d.0 {
+                Side::Staged => Section::Staged,
+                Side::Unstaged => Section::Unstaged,
+            }));
+            let file_line = |n: usize, any: bool| match self.rows.get(n) {
+                Some(Row::Detail { repo, line }) => {
+                    t.1.is_some()
+                        && self.ws.entries[*repo].path == t.0
+                        && line.file == t.1
+                        && line.diff.is_none()
+                        && (any
+                            || wanted
+                                .is_none_or(|w| line.section.is_some_and(|s| s.side() == w.side())))
+                }
+                _ => false,
+            };
             (0..self.rows.len())
                 .find(|&n| self.row_key(n).as_ref() == Some(t))
-                .or_else(|| {
-                    (0..self.rows.len()).find(|&n| self.row_key(n) == Some(file_line.clone()))
-                })
+                .or_else(|| (0..self.rows.len()).find(|&n| file_line(n, false)))
+                .or_else(|| (0..self.rows.len()).find(|&n| file_line(n, true)))
         });
         self.cursor = exact
             .or_else(|| {
@@ -1360,6 +1371,17 @@ impl App {
                     self.cursor = i;
                 }
             }
+            ToggleExpand if self.on_section().is_some() => {
+                // its own line folds a section of changes, and unfolds it
+                if let Some(key) = self.on_section() {
+                    if !self.folded_sections.remove(&key) {
+                        self.folded_sections.insert(key);
+                    }
+                    let at = self.cursor;
+                    self.rebuild();
+                    self.cursor = at.min(self.rows.len().saturating_sub(1));
+                }
+            }
             ToggleExpand if self.on_unfoldable() => return self.toggle_unfold(),
             ToggleExpand if self.on_file_or_diff() => return self.toggle_file_or_hunk(),
             ToggleExpand => {
@@ -1528,17 +1550,29 @@ impl App {
                 if let Some(fx) = self.hunk_op(HunkVerb::Stage) {
                     return fx;
                 }
+                if let Some(why) = self.wrong_section(HunkVerb::Stage) {
+                    self.info(why);
+                    return vec![];
+                }
                 return self.file_op(ops::stage_ops, "stage");
             }
             UnstageFiles => {
                 if let Some(fx) = self.hunk_op(HunkVerb::Unstage) {
                     return fx;
                 }
+                if let Some(why) = self.wrong_section(HunkVerb::Unstage) {
+                    self.info(why);
+                    return vec![];
+                }
                 return self.file_op(ops::unstage_ops, "unstage");
             }
             EditPatch => return self.edit_patch(),
             DiscardFiles if let Some(fx) = self.hunk_op(HunkVerb::Discard) => return fx,
             DiscardFiles => {
+                if let Some(why) = self.wrong_section(HunkVerb::Discard) {
+                    self.info(why);
+                    return vec![];
+                }
                 let targets = self.file_targets();
                 if targets.is_empty() {
                     self.info(FILE_HINT);
@@ -3260,10 +3294,40 @@ impl App {
                 .collect();
         }
         match self.rows.get(self.cursor) {
+            // a section's own line: every file in it
+            Some(Row::Detail { repo, line }) if Section::heads(line).is_some() => {
+                let files = Section::heads(line)
+                    .zip(self.ws.entries[*repo].status())
+                    .map(|(section, s)| section.files(s))
+                    .unwrap_or_default();
+                vec![(*repo, files)]
+            }
             Some(Row::Detail { repo, line }) => {
                 line.file.iter().map(|f| (*repo, vec![f.clone()])).collect()
             }
             _ => vec![],
+        }
+    }
+
+    /// Why `verb` isn't for the file or section under the cursor, if it
+    /// isn't: staging what's staged, unstaging or discarding the wrong
+    /// side. Marked files are taken as they are.
+    fn wrong_section(&self, verb: HunkVerb) -> Option<&'static str> {
+        if !self.marked_files.is_empty() {
+            return None;
+        }
+        let Some(Row::Detail { line, .. }) = self.rows.get(self.cursor) else {
+            return None;
+        };
+        match (verb, line.section?) {
+            (HunkVerb::Stage, Section::Staged) => Some("that's staged already: u unstages it"),
+            (HunkVerb::Unstage, Section::Untracked | Section::Unstaged) => {
+                Some("that's not staged: s stages it")
+            }
+            (HunkVerb::Discard, Section::Staged) => {
+                Some("that's staged: u unstages it, then K discards it")
+            }
+            _ => None,
         }
     }
 
@@ -3688,6 +3752,16 @@ impl App {
         vec![]
     }
 
+    /// The section of changes whose own line the cursor is on, by repo.
+    fn on_section(&self) -> Option<(PathBuf, Section)> {
+        match self.rows.get(self.cursor)? {
+            Row::Detail { repo, line } => {
+                Some((self.ws.entries[*repo].path.clone(), Section::heads(line)?))
+            }
+            Row::Repo(_) => None,
+        }
+    }
+
     fn on_file_or_diff(&self) -> bool {
         matches!(self.rows.get(self.cursor), Some(Row::Detail { line, .. }) if line.file.is_some())
     }
@@ -3709,15 +3783,31 @@ impl App {
                 if !self.folded_hunks.remove(&key) {
                     self.folded_hunks.insert(key);
                 }
-                self.rebuild_at(Some((path, Some(file), Some((side, Some(h), false)), None)));
+                self.rebuild_at(Some((
+                    path,
+                    Some(file),
+                    Some((side, Some(h), false)),
+                    None,
+                    None,
+                )));
             }
             None => {
-                let key = (path, file);
+                // (a note under a file's line, "binary file", has its side)
+                let side = match (line.section, line.diff.as_ref()) {
+                    (Some(s), _) => s.side(),
+                    (None, Some(d)) => d.side,
+                    (None, None) => Side::Unstaged,
+                };
+                let key = (path.clone(), file.clone(), side);
                 if !self.expanded_files.remove(&key) {
                     self.expanded_files.insert(key);
                 }
-                // the cursor stays on the file's line (from a heading too)
-                self.rebuild();
+                // the cursor stays on the file's line
+                let section = match side {
+                    Side::Staged => Section::Staged,
+                    Side::Unstaged => Section::Unstaged,
+                };
+                self.rebuild_at(Some((path, Some(file), None, None, Some(section))));
             }
         }
         vec![]

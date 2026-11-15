@@ -2146,8 +2146,8 @@ fn status_details_prints_what_the_tui_details_show() {
         "    issue     1 uncommitted path(s)",
         "    branches",
         "      * feat  origin/feat",
-        "    changes (1)",
-        "         M README",
+        // changes by section, after a blank line that stays blank
+        "\n\n    unstaged (1)\n        M README\n",
         // a fix the CLI can't run says where it can be
         "commit…  1 uncommitted path(s)  (in the TUI: c A)",
         // one it can names the command
@@ -2163,7 +2163,7 @@ fn status_details_prints_what_the_tui_details_show() {
     );
     // each repo's details follow its own row
     let row = |name: &str| out.find(name).unwrap();
-    let readme = out.find(" M README").unwrap();
+    let readme = out.find("    M README").unwrap();
     assert!(
         row("acme/dirty") < readme && readme < row("acme/feature"),
         "{out}"

@@ -38,6 +38,64 @@ pub struct DetailLine {
     pub body: bool,
     /// Parts that are links (by their place in `parts`), and where to.
     pub links: Vec<(usize, String)>,
+    /// The section of changes this line heads (no `file`) or is in.
+    pub section: Option<Section>,
+}
+
+/// The sections of a repo's changes, in the order shown (magit's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Section {
+    Untracked,
+    Unstaged,
+    Staged,
+}
+
+impl Section {
+    pub const ALL: [Section; 3] = [Section::Untracked, Section::Unstaged, Section::Staged];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Section::Untracked => "untracked",
+            Section::Unstaged => "unstaged",
+            Section::Staged => "staged",
+        }
+    }
+
+    /// The side its files' diffs are of (an untracked file's is all
+    /// added, against nothing).
+    pub fn side(self) -> Side {
+        match self {
+            Section::Staged => Side::Staged,
+            _ => Side::Unstaged,
+        }
+    }
+
+    /// The file's letter in this section and its colour, if it's in it:
+    /// the work tree's change under unstaged, the index's under staged; a
+    /// conflicted file is unstaged.
+    pub fn code(self, f: &argus_core::status::FileChange) -> Option<(Role, char)> {
+        match (self, f.index, f.worktree) {
+            (Section::Untracked, '?', _) => Some((Role::Untracked, '?')),
+            (_, '?', _) => None,
+            (Section::Unstaged, 'U', _) => Some((Role::Conflict, 'U')),
+            (_, 'U', _) => None,
+            (Section::Unstaged, _, w) if w != ' ' => Some((Role::Unstaged, w)),
+            (Section::Staged, i, _) if i != ' ' => Some((Role::Staged, i)),
+            _ => None,
+        }
+    }
+
+    /// The paths of `s` in this section, in order.
+    pub fn files(self, s: &argus_core::status::RepoStatus) -> Vec<String> {
+        let in_it = |f: &&argus_core::status::FileChange| self.code(f).is_some();
+        let files = s.changes.files.iter().filter(in_it);
+        files.map(|f| f.path.clone()).collect()
+    }
+
+    /// Whether this is the section's own line, which folds it.
+    pub fn heads(line: &DetailLine) -> Option<Section> {
+        line.section.filter(|_| line.file.is_none() && !line.body)
+    }
 }
 
 impl DetailLine {
@@ -127,6 +185,7 @@ fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
         fix: None,
         body: false,
         links: vec![],
+        section: None,
     }
 }
 
@@ -530,37 +589,66 @@ pub fn details(
             });
         }
     }
-    if !s.changes.files.is_empty() {
-        v.push(line(vec![styled(
-            Role::Dim,
-            format!("changes ({})", s.changes.total()),
-        )]));
-        for f in s.changes.files.iter().take(MAX_FILES) {
-            // each letter by its side, as `git status --short` has them
-            let (index, worktree) = match f.index {
-                'U' => (Role::Conflict, Role::Conflict),
-                '?' => (Role::Untracked, Role::Untracked),
-                _ => (Role::Staged, Role::Unstaged),
-            };
+    // changes by section, as magit has them: each headed by its own line
+    // (which folds it) after a blank one, its files below, a file in every
+    // section it has changes in
+    for section in Section::ALL {
+        let files: Vec<_> = s
+            .changes
+            .files
+            .iter()
+            .filter_map(|f| Some((f, section.code(f)?)))
+            .collect();
+        if files.is_empty() {
+            continue;
+        }
+        v.push(DetailLine {
+            body: true,
+            ..line(vec![])
+        });
+        v.push(DetailLine {
+            section: Some(section),
+            ..line(vec![styled(
+                Role::Dim,
+                format!("{} ({})", section.title(), files.len()),
+            )])
+        });
+        for (f, (role, code)) in files.iter().take(MAX_FILES) {
+            // (an untracked file's place says what it is)
+            let mut parts = vec![plain("    ")];
+            match section {
+                Section::Untracked => parts.push(styled(*role, f.path.clone())),
+                _ => {
+                    parts.push(styled(*role, code.to_string()));
+                    parts.push(plain(format!(" {}", f.path)));
+                }
+            }
             v.push(DetailLine {
                 file: Some(f.path.clone()),
-                expand: (f.index == '?')
+                section: Some(section),
+                expand: (section == Section::Untracked)
                     .then(|| untracked_expand(&f.path, f.kind))
                     .flatten(),
-                ..line(vec![
-                    plain("    "),
-                    styled(index, f.index.to_string()),
-                    styled(worktree, f.worktree.to_string()),
-                    plain(format!(" {}", f.path)),
-                ])
+                ..line(parts)
             });
         }
-        let more = s.changes.total().saturating_sub(MAX_FILES);
+        let more = files.len().saturating_sub(MAX_FILES);
         if more > 0 {
-            v.push(line(vec![styled(Role::Dim, format!("    … {more} more"))]));
+            v.push(DetailLine {
+                section: Some(section),
+                body: true,
+                ..line(vec![styled(Role::Dim, format!("    … {more} more"))])
+            });
         }
     }
     if !s.stashes.is_empty() {
+        // (set off from the sections of changes, as they are from above)
+        if !s.changes.files.is_empty() {
+            v.push(DetailLine {
+                body: true,
+                ..line(vec![])
+            });
+        }
         let ignored = e.stash_ignored.iter().filter(|&&i| i).count();
         let mut parts = vec![
             styled(Role::Dim, "stashes   "),

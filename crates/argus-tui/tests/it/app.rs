@@ -1370,6 +1370,21 @@ fn to_file(app: &mut App, file: &str) {
         .unwrap_or_else(|| panic!("{file} listed: {:?}", trimmed(app)));
 }
 
+/// Expand the current repo and put the cursor on `file`'s line under
+/// staged.
+fn to_staged(app: &mut App, file: &str) {
+    to_file(app, file);
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| {
+            matches!(r, Row::Detail { line, .. } if line.file.as_deref() == Some(file)
+            && line.diff.is_none()
+            && line.section == Some(argus_tui::details::Section::Staged))
+        })
+        .unwrap_or_else(|| panic!("{file} staged: {:?}", trimmed(app)));
+}
+
 /// In `dirty`: README "hello world" committed, then "hello there"; `both`
 /// staged then changed again; `bin` binary and untracked; `new` untracked.
 fn diff_fixture(sb: &Sandbox) {
@@ -1391,31 +1406,29 @@ fn files_unfold_to_their_diff() {
     to_file(&mut app, "README");
     app.on_key(code(KeyCode::Tab));
     let t = trimmed(&app);
-    let at = t
-        .iter()
-        .position(|l| l == "unstaged changes")
-        .expect("section");
+    let at = t.iter().position(|l| l == "M README").expect("its line");
     assert_eq!(
         t[at + 1..at + 4],
         ["@@ -1 +1 @@", "-hello world", "+hello there"]
     );
-    // a file with both sides shows both, unstaged first
+    // a file with both sides: each under its section, each side's diff
+    // under its own line, opened one at a time
     to_file(&mut app, "both");
     app.on_key(code(KeyCode::Tab));
     let t = trimmed(&app);
-    let both = t.iter().position(|l| l.ends_with("both")).unwrap();
+    let both = t.iter().position(|l| l == "M both").unwrap();
     assert_eq!(
-        t[both + 1..both + 9],
-        [
-            "unstaged changes",
-            "@@ -1 +1 @@",
-            "-two",
-            "+three",
-            "staged changes",
-            "@@ -1 +1 @@",
-            "-one",
-            "+two"
-        ]
+        t[both + 1..both + 7],
+        ["@@ -1 +1 @@", "-two", "+three", "", "staged (1)", "M both"]
+    );
+    assert_eq!(t.len(), both + 7, "the staged side still folded: {t:?}");
+    to_staged(&mut app, "both");
+    app.on_key(code(KeyCode::Tab));
+    let t = trimmed(&app);
+    assert_eq!(
+        t[both + 6..],
+        ["M both", "@@ -1 +1 @@", "-one", "+two"],
+        "{t:?}"
     );
     // untracked: everything added; binary: said so
     to_file(&mut app, "new");
@@ -1423,18 +1436,10 @@ fn files_unfold_to_their_diff() {
     to_file(&mut app, "bin");
     app.on_key(code(KeyCode::Tab));
     let t = trimmed(&app);
-    let new = t.iter().position(|l| l.ends_with("new")).unwrap();
-    assert_eq!(
-        t[new + 1..new + 5],
-        ["unstaged changes", "@@ -0,0 +1,2 @@", "+a", "+b"]
-    );
-    // nothing is staged for an untracked file (it's the last one listed)
-    assert!(
-        !t[new + 1..].contains(&"staged changes".to_string()),
-        "{t:?}"
-    );
-    let bin = t.iter().position(|l| l.ends_with("bin")).unwrap();
-    assert_eq!(t[bin + 1..bin + 3], ["unstaged changes", "binary file"]);
+    let new = t.iter().position(|l| l == "new").unwrap();
+    assert_eq!(t[new + 1..new + 4], ["@@ -0,0 +1,2 @@", "+a", "+b"]);
+    let bin = t.iter().position(|l| l == "bin").unwrap();
+    assert_eq!(t[bin + 1], "binary file");
     // Tab on the file again folds it
     to_file(&mut app, "README");
     app.on_key(code(KeyCode::Tab));
@@ -1583,16 +1588,8 @@ fn stage_and_unstage_the_file_under_the_cursor() {
         }]
     );
     app.running.clear();
-    // on a side's heading in a file's diff: that file (a hunk or line is
-    // just that: see hunks_and_lines_are_staged_unstaged_and_discarded)
-    to_file(&mut app, "both");
-    app.on_key(code(KeyCode::Tab));
-    app.cursor = app
-        .rows
-        .iter()
-        .position(|r| matches!(r, Row::Detail { line, .. } if line.file.as_deref() == Some("both")
-            && line.diff.as_ref().is_some_and(|d| d.hunk.is_none() && d.side == argus_core::diff::Side::Staged)))
-        .unwrap();
+    // a file is unstaged from its line under staged
+    to_staged(&mut app, "both");
     let fx = app.on_key(key('u'));
     assert_eq!(
         job_ops(&fx),
@@ -1615,14 +1612,111 @@ fn stage_and_unstage_the_file_under_the_cursor() {
         }]
     );
     app.running.clear();
-    // nothing staged: nothing to unstage, said so
+    // the wrong side says what to do instead, and runs nothing
+    let said = |app: &mut App, k: char| {
+        assert!(app.on_key(key(k)).is_empty());
+        assert!(matches!(app.mode, Mode::Normal), "nothing asked");
+        app.message.as_ref().unwrap().0.clone()
+    };
     to_file(&mut app, "new");
+    assert_eq!(said(&mut app, 'u'), "that's not staged: s stages it");
+    to_file(&mut app, "README");
+    assert_eq!(said(&mut app, 'u'), "that's not staged: s stages it");
+    to_staged(&mut app, "both");
+    assert_eq!(said(&mut app, 's'), "that's staged already: u unstages it");
+    assert_eq!(
+        said(&mut app, 'K'),
+        "that's staged: u unstages it, then K discards it"
+    );
+}
+
+/// The cursor on the own line of `section` in the current repo's details.
+fn to_section(app: &mut App, section: argus_tui::details::Section) {
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| {
+            matches!(r, Row::Detail { line, .. }
+            if argus_tui::details::Section::heads(line) == Some(section))
+        })
+        .unwrap_or_else(|| panic!("{section:?}: {:?}", trimmed(app)));
+}
+
+#[test]
+fn a_sections_own_line_acts_on_all_its_files_and_folds_it() {
+    use argus_tui::details::Section;
+    let (_sb, mut app) = setup_with("", |sb| {
+        diff_fixture(sb);
+        let d = sb.path("dev/dirty");
+        write(&d, "added", "x\n");
+        git(&d, &["add", "added"]);
+    });
+    to_file(&mut app, "README");
+    // s on unstaged: every file with unstaged changes
+    to_section(&mut app, Section::Unstaged);
+    let fx = app.on_key(key('s'));
+    assert_eq!(
+        job_ops(&fx),
+        [Op::AddTracked {
+            paths: paths(&["README", "both"])
+        }]
+    );
+    app.running.clear();
+    // on untracked: all of those
+    to_section(&mut app, Section::Untracked);
+    let fx = app.on_key(key('s'));
+    assert_eq!(
+        job_ops(&fx),
+        [Op::Add {
+            paths: paths(&["bin", "new"])
+        }]
+    );
+    app.running.clear();
+    // u on staged: everything staged, each as it's unstaged
+    to_section(&mut app, Section::Staged);
     let fx = app.on_key(key('u'));
-    assert!(fx.is_empty());
+    let ops = job_ops(&fx);
+    assert!(ops.contains(&Op::Remove {
+        cached: true,
+        paths: paths(&["added"])
+    }));
     assert!(
-        app.message.as_ref().unwrap().0.contains("nothing"),
-        "{:?}",
-        app.message
+        ops.iter().any(
+            |o| matches!(o, Op::Restore { staged: true, paths: p, .. } if p == &paths(&["both"]))
+        ),
+        "{ops:?}"
+    );
+    app.running.clear();
+    // the wrong way round is said, as for a file
+    assert!(app.on_key(key('s')).is_empty());
+    assert!(app.message.as_ref().unwrap().0.contains("staged already"));
+    // K on unstaged asks about all of them
+    to_section(&mut app, Section::Unstaged);
+    assert!(app.on_key(key('K')).is_empty());
+    assert!(
+        matches!(&app.mode, Mode::Confirm { question, .. } if question == "Discard changes to 2 files?")
+    );
+    app.on_key(key('n'));
+    // Tab folds the section to its own line, and back; the others stay
+    let lines = |app: &App| trimmed(app);
+    let before = lines(&app);
+    app.on_key(code(KeyCode::Tab));
+    let folded = lines(&app);
+    assert!(folded.contains(&"unstaged (2)".to_string()));
+    assert!(!folded.contains(&"M README".to_string()), "{folded:?}");
+    assert!(folded.contains(&"new".to_string()) && folded.contains(&"A added".to_string()));
+    assert!(matches!(&app.rows[app.cursor], Row::Detail { line, .. }
+        if Section::heads(line) == Some(Section::Unstaged)));
+    app.on_key(code(KeyCode::Tab));
+    assert_eq!(lines(&app), before);
+    // a folded section's files are still what s on it stages
+    app.on_key(code(KeyCode::Tab));
+    let fx = app.on_key(key('s'));
+    assert_eq!(
+        job_ops(&fx),
+        [Op::AddTracked {
+            paths: paths(&["README", "both"])
+        }]
     );
 }
 
@@ -2504,7 +2598,7 @@ fn untracked_files_go_into_the_gitignore_chosen() {
         write(&c, "notes.txt", "x\n");
     });
     // a tracked file: nothing to ignore
-    cursor_on_detail(&mut app, "dirty", "     M README");
+    cursor_on_detail(&mut app, "dirty", "    M README");
     assert!(app.act(Action::GitignoreMenu).is_empty());
     assert!(matches!(app.mode, Mode::Normal));
     assert!(
@@ -2515,7 +2609,7 @@ fn untracked_files_go_into_the_gitignore_chosen() {
             .starts_with("no untracked file selected")
     );
     // an untracked directory under the cursor
-    cursor_on_detail(&mut app, "clean", "    ?? build/");
+    cursor_on_detail(&mut app, "clean", "    build/");
     app.on_key(key('i'));
     match &app.mode {
         Mode::Menu { menu, .. } => assert_eq!(menu.title, "Gitignore · 1 untracked file(s)"),
@@ -2674,14 +2768,11 @@ fn an_untracked_directory_unfolds_into_files_that_can_be_acted_on() {
         write(&c, "build/a.o", "a\n");
         write(&c, "build/sub/b.o", "b\n");
     });
-    cursor_on_detail(&mut app, "clean", "    ?? build/");
+    cursor_on_detail(&mut app, "clean", "    build/");
     app.act(Action::ToggleExpand);
-    assert_eq!(
-        below(&app, "    ?? build/", 4),
-        ["?? build/a.o", "?? build/sub/b.o"]
-    );
+    assert_eq!(below(&app, "    build/", 4), ["build/a.o", "build/sub/b.o"]);
     // a file in it: staged, gitignored, diffed like any untracked file
-    cursor_on_detail(&mut app, "clean", "      ?? build/a.o");
+    cursor_on_detail(&mut app, "clean", "      build/a.o");
     match app.act(Action::StageFiles).as_slice() {
         [Effect::Jobs(j)] => assert_eq!(
             j[0].op,
@@ -2695,7 +2786,7 @@ fn an_untracked_directory_unfolds_into_files_that_can_be_acted_on() {
     app.act(Action::GitignoreMenu);
     assert_eq!(menu_items(&app)[0], "t add /build/a.o to .gitignore");
     app.on_key(ctrl('g'));
-    cursor_on_detail(&mut app, "clean", "      ?? build/a.o");
+    cursor_on_detail(&mut app, "clean", "      build/a.o");
     app.act(Action::ToggleExpand);
     assert!(
         detail_texts(&app).iter().any(|t| t.trim() == "+a"),
@@ -2771,11 +2862,13 @@ fn n_and_p_step_through_sections_skipping_diff_and_message_lines() {
     assert_eq!(
         steps,
         [
-            "unstaged changes",
+            // its hunk, the next file, then over the blank line to the
+            // next section's own line
             "@@ -1 +1 @@",
-            "?? bin",
-            "@@ -1 +1 @@",
-            "unstaged changes"
+            "M both",
+            "staged (1)",
+            "M both",
+            "@@ -1 +1 @@"
         ]
     );
     // a commit: its message is skipped, its file's hunk isn't
@@ -3508,58 +3601,49 @@ fn change_lines_are_coloured_by_state_and_the_rest_counted() {
         write(&c, "u.txt", "u\n");
     });
     use argus_core::badges::Role::*;
-    cursor_on_detail(&mut app, "clean", "changes");
-    // each letter by its side: the index's, then the work tree's
-    let role = |code: &str, path: &str| {
-        let parts = app
-            .rows
+    cursor_on_detail(&mut app, "clean", "untracked");
+    // each file under its section, its letter (an untracked one, its
+    // path) in that section's colour
+    let role = |path: &str| {
+        app.rows
             .iter()
             .find_map(|r| match r {
                 Row::Detail { line, .. } if line.file.as_deref() == Some(path) => {
-                    Some(line.parts[1..3].to_vec())
+                    Some((line.section.unwrap(), line.parts[1].clone()))
                 }
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("no {path}"));
-        let (index, worktree) = code_roles(code);
-        parts
-            == [
-                (Some(index), code[..1].to_string()),
-                (Some(worktree), code[1..].to_string()),
-            ]
+            .unwrap_or_else(|| panic!("no {path}"))
     };
-    fn code_roles(code: &str) -> (argus_core::badges::Role, argus_core::badges::Role) {
-        match code {
-            "UU" => (Conflict, Conflict),
-            "??" => (Untracked, Untracked),
-            _ => (Staged, Unstaged),
-        }
-    }
-    for (code, path) in [
-        ("UU", "README"),
-        ("A ", "s.txt"),
-        (" M", "t.txt"),
-        ("??", "u.txt"),
-    ] {
-        assert!(role(code, path), "{code} {path}: {:?}", detail_texts(&app));
-    }
+    use argus_tui::details::Section;
+    let part = |role, text: &str| (Some(role), text.to_string());
+    assert_eq!(role("README"), (Section::Unstaged, part(Conflict, "U")));
+    assert_eq!(role("s.txt"), (Section::Staged, part(Staged, "A")));
+    assert_eq!(role("t.txt"), (Section::Unstaged, part(Unstaged, "M")));
+    assert_eq!(
+        role("u.txt"),
+        (Section::Untracked, part(Untracked, "u.txt"))
+    );
 
-    // the dirty repo: 25 changed paths fit, a 26th is counted
+    // the dirty repo: 25 paths of a section fit, a 26th is counted
     let d = sb.path("dev/dirty");
-    for n in 1..25 {
+    for n in 1..=25 {
         write(&d, &format!("new{n:02}.txt"), "x\n");
     }
     let more = |app: &mut App| {
         app.ws.refresh(&d);
         app.rebuild();
-        cursor_on_detail(app, "dirty", "changes");
+        cursor_on_detail(app, "dirty", "untracked");
         detail_texts(app)
             .into_iter()
             .find(|t| t.trim_start().starts_with('…'))
     };
     assert_eq!(more(&mut app), None, "25 shown");
-    write(&d, "new25.txt", "x\n");
+    write(&d, "new26.txt", "x\n");
     assert_eq!(more(&mut app).as_deref(), Some("    … 1 more"));
+    // (its own count: the modified README is in another section)
+    assert!(detail_texts(&app).contains(&"untracked (26)".to_string()));
+    assert!(detail_texts(&app).contains(&"unstaged (1)".to_string()));
 }
 
 /// The terminal after drawing `app` (mono theme, Unicode icons), for
@@ -3880,19 +3964,13 @@ fn unfolding_commit_files_mode_changes_staged_files_and_emptied_ranges() {
     app.act(Action::ToggleExpand);
     let t = trimmed(&app);
     let at = t.iter().position(|l| l.ends_with("w.sh")).unwrap();
-    assert_eq!(
-        t[at + 1..at + 3],
-        ["unstaged changes", "no change in content"]
-    );
+    assert_eq!(t[at + 1], "no change in content");
     to_file(&mut app, "s.txt");
     app.act(Action::ToggleExpand);
     let t = trimmed(&app);
     let at = t.iter().position(|l| l.ends_with("s.txt")).unwrap();
-    assert_eq!(
-        t[at + 1..at + 5],
-        ["staged changes", "@@ -0,0 +1 @@", "+s", "M w.sh"],
-        "staged only: no unstaged side"
-    );
+    assert_eq!(t[at - 1], "staged (1)", "staged only: under staged");
+    assert_eq!(t[at + 1..at + 3], ["@@ -0,0 +1 @@", "+s"]);
 
     // pushed since the status was read: its range is empty when unfolded
     git(&c, &["push", "-q", "origin", "pushed"]);
@@ -4103,9 +4181,9 @@ fn a_nested_repo_unfolds_into_its_own_details_and_acts_there() {
         commit(&other, "o");
     });
     let listed = names(&app);
-    cursor_on_detail(&mut app, "clean", "    ?? nested");
+    cursor_on_detail(&mut app, "clean", "    nested");
     app.act(Action::ToggleExpand);
-    let under = below(&app, "    ?? nested", 4);
+    let under = below(&app, "    nested", 4);
     assert!(under.iter().any(|l| l == "M a"), "{under:?}");
     let path_of = |under: &[String]| under.iter().find(|l| l.starts_with("path")).cloned();
     assert!(
@@ -4155,11 +4233,11 @@ fn a_nested_repo_unfolds_into_its_own_details_and_acts_there() {
     assert!(matches!(app.rows[app.cursor], Row::Repo(_)));
     assert!(!app.expanded.contains(&nested));
     // one inside an untracked directory unfolds from there
-    cursor_on_detail(&mut app, "clean", "    ?? tools/");
+    cursor_on_detail(&mut app, "clean", "    tools/");
     app.act(Action::ToggleExpand);
-    cursor_on_detail(&mut app, "clean", "      ?? tools/deep");
+    cursor_on_detail(&mut app, "clean", "      tools/deep");
     app.act(Action::ToggleExpand);
-    let under = below(&app, "      ?? tools/deep", 6);
+    let under = below(&app, "      tools/deep", 6);
     assert!(under.iter().any(|l| l == "M a"), "{under:?}");
     // its own, with the other still unfolded
     assert!(
@@ -4167,9 +4245,9 @@ fn a_nested_repo_unfolds_into_its_own_details_and_acts_there() {
         "{under:?}"
     );
     // folded again, its lines go (the entry stays, unlisted)
-    cursor_on_detail(&mut app, "clean", "    ?? nested");
+    cursor_on_detail(&mut app, "clean", "    nested");
     app.act(Action::ToggleExpand);
-    assert_eq!(below(&app, "    ?? nested", 4), Vec::<String>::new());
+    assert_eq!(below(&app, "    nested", 4), Vec::<String>::new());
 }
 
 /// Clearing says what's left: marks that patterns (or tracking) still give.
@@ -4313,13 +4391,16 @@ fn staging_a_nested_repo_explains_itself() {
     let (_sb, mut app) = setup_with("", |sb| {
         sb.init("dev/clean/nested");
     });
-    cursor_on_detail(&mut app, "clean", "    ?? nested");
+    cursor_on_detail(&mut app, "clean", "    nested");
     assert!(app.act(Action::StageFiles).is_empty());
     let msg = app.message.as_ref().unwrap().0.clone();
     assert!(msg.contains("nested") && msg.contains("embedded"), "{msg}");
-    // inverse: unstaging it is just nothing to do
+    // inverse: unstaging it: it isn't staged
     assert!(app.act(Action::UnstageFiles).is_empty());
-    assert_eq!(app.message.as_ref().unwrap().0, "nothing to unstage");
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "that's not staged: s stages it"
+    );
 }
 
 /// `m o` marks the selected repo's owner as a whole, with the same keys.
@@ -4725,7 +4806,7 @@ fn hunks_and_lines_are_staged_unstaged_and_discarded() {
     assert!(app.act(Action::UnstageFiles).is_empty());
     assert!(app.message.as_ref().unwrap().0.contains("not staged"));
     // and staging or discarding a staged one
-    to_file(&mut app, "both");
+    to_staged(&mut app, "both");
     app.act(Action::ToggleExpand);
     app.cursor = app
         .rows
@@ -4885,6 +4966,8 @@ fn a_region_keeps_to_its_file_and_side() {
         to_file(&mut app, f);
         app.act(Action::ToggleExpand);
     }
+    to_staged(&mut app, "both");
+    app.act(Action::ToggleExpand);
     let changed = |app: &App, file: &str, side| -> Vec<usize> {
         (0..app.rows.len())
             .filter(|&i| {
@@ -5189,6 +5272,8 @@ fn edits_that_are_refused() {
 fn editing_marked_lines_of_both_sides_is_refused() {
     let (_sb, mut app) = setup_with("", diff_fixture);
     to_file(&mut app, "both");
+    app.act(Action::ToggleExpand);
+    to_staged(&mut app, "both");
     app.act(Action::ToggleExpand);
     for t in ["three", "two"] {
         let i = app
@@ -5912,9 +5997,8 @@ fn a_textconv_diff_is_shown_converted_and_acts_as_its_file() {
     let t = trimmed(&app);
     let at = t.iter().position(|l| l.ends_with("f.dat")).unwrap();
     assert_eq!(
-        t[at + 1..at + 7],
+        t[at + 1..at + 6],
         [
-            "unstaged changes",
             "converted to text (textconv): staged or discarded as a whole file",
             "@@ -1,2 +1,2 @@",
             "ONE",
@@ -6616,47 +6700,66 @@ fn a_pull_says_what_became_of_orphans_and_asks_before_following_a_rename() {
 }
 
 #[test]
-fn a_files_two_status_letters_are_coloured_each_by_its_side() {
+fn changes_are_listed_by_section_each_file_with_that_sides_letter() {
     use argus_core::badges::Role;
+    use argus_tui::details::Section;
     let (_sb, mut app) = setup_with("", diff_fixture);
     to_file(&mut app, "both");
-    let codes = |app: &App, file: &str| -> Vec<(Option<Role>, String)> {
-        app.rows
-            .iter()
-            .find_map(|r| match r {
-                Row::Detail { line, .. }
-                    if line.file.as_deref() == Some(file) && line.diff.is_none() =>
-                {
-                    Some(line.parts[1..line.parts.len() - 1].to_vec())
-                }
-                _ => None,
-            })
-            .unwrap()
+    // from the first section's line down: text, section, whether it heads one
+    let from = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Detail { line, .. } if Section::heads(line).is_some()))
+        .unwrap();
+    let listed: Vec<(String, Option<Section>, bool)> = app.rows[from - 1..]
+        .iter()
+        .map_while(|r| match r {
+            Row::Detail { line, .. } => Some((
+                line.parts.iter().map(|p| p.1.as_str()).collect::<String>(),
+                line.section,
+                Section::heads(line).is_some(),
+            )),
+            Row::Repo(_) => None,
+        })
+        .collect();
+    let want = [
+        ("", None, false),
+        ("untracked (2)", Some(Section::Untracked), true),
+        ("    bin", Some(Section::Untracked), false),
+        ("    new", Some(Section::Untracked), false),
+        ("", None, false),
+        ("unstaged (2)", Some(Section::Unstaged), true),
+        ("    M README", Some(Section::Unstaged), false),
+        ("    M both", Some(Section::Unstaged), false),
+        ("", None, false),
+        ("staged (1)", Some(Section::Staged), true),
+        ("    M both", Some(Section::Staged), false),
+    ];
+    let want: Vec<_> = want
+        .iter()
+        .map(|(t, s, h)| (t.to_string(), *s, *h))
+        .collect();
+    assert_eq!(listed, want);
+    // each letter in its side's colour; an untracked path in its own
+    let role = |text: &str, section: Section| {
+        app.rows.iter().find_map(|r| match r {
+            Row::Detail { line, .. }
+                if line.section == Some(section)
+                    && line.parts.iter().map(|p| p.1.as_str()).collect::<String>() == text =>
+            {
+                line.parts[1].0
+            }
+            _ => None,
+        })
     };
-    // staged and changed again: the index's letter as staged, the work
-    // tree's as unstaged, as `git status --short` colours them
-    assert_eq!(
-        codes(&app, "both"),
-        [
-            (Some(Role::Staged), "M".to_string()),
-            (Some(Role::Unstaged), "M".to_string())
-        ]
-    );
-    assert_eq!(
-        codes(&app, "README"),
-        [
-            (Some(Role::Staged), " ".to_string()),
-            (Some(Role::Unstaged), "M".to_string())
-        ]
-    );
-    // untracked: both marks as untracked
-    assert_eq!(
-        codes(&app, "new"),
-        [
-            (Some(Role::Untracked), "?".to_string()),
-            (Some(Role::Untracked), "?".to_string())
-        ]
-    );
+    assert_eq!(role("    M both", Section::Unstaged), Some(Role::Unstaged));
+    assert_eq!(role("    M both", Section::Staged), Some(Role::Staged));
+    assert_eq!(role("    new", Section::Untracked), Some(Role::Untracked));
+    // a blank line is nothing to stop at: `n` goes from heading to file
+    assert!(app.rows.iter().all(|r| match r {
+        Row::Detail { line, .. } => !line.parts.is_empty() || line.is_body(),
+        Row::Repo(_) => true,
+    }));
 }
 
 #[test]
