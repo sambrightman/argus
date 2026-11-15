@@ -2591,10 +2591,31 @@ impl App {
             mode,
             commit: c.id.clone(),
         };
-        if mode == ResetMode::Hard {
+        // what can't be had back: the work tree's changes (hard), or what's
+        // staged of a file changed again since (mixed: the index goes)
+        let restaged: Vec<String> = match self.ws.get(&path).and_then(|e| e.status()) {
+            Some(s) if mode == ResetMode::Mixed => {
+                let both = |f: &&argus_core::status::FileChange| {
+                    !matches!(f.index, ' ' | '?') && f.worktree != ' '
+                };
+                let files = s.changes.files.iter().filter(both);
+                files.map(|f| f.path.clone()).collect()
+            }
+            _ => vec![],
+        };
+        let lost = match mode {
+            ResetMode::Hard => Some("Uncommitted changes are lost.".to_string()),
+            _ if !restaged.is_empty() => Some(format!(
+                "What's staged of {} differs from the work tree and is lost.",
+                fix::list(&restaged, 3)
+            )),
+            _ => None,
+        };
+        if let Some(lost) = lost {
             self.mode = Mode::Confirm {
                 question: format!(
-                    "Reset {name} --hard to {} ({})? Uncommitted changes are lost.",
+                    "Reset {name} {} to {} ({})? {lost}",
+                    mode.flag(),
                     &c.id[..7],
                     c.summary
                 ),

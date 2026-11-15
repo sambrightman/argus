@@ -3133,6 +3133,60 @@ fn a_hard_reset_asks_first() {
     }
 }
 
+/// A mixed reset keeps the work tree but not the index: what's staged of
+/// a file changed again since is nowhere else, so it's asked about.
+#[test]
+fn a_mixed_reset_asks_only_when_something_staged_would_be_lost() {
+    let (sb, mut app) = setup_with("", two_local_commits);
+    let c = sb.path("dev/clean");
+    let reset = |app: &mut App| {
+        while current(app) != "acme/clean" {
+            app.act(Action::Down);
+        }
+        app.on_key(key('X'));
+        app.on_key(key('m'));
+        app.on_key(key('2'))
+    };
+    // staged, then changed again: asked
+    write(&c, "README", "staged\n");
+    git(&c, &["add", "README"]);
+    write(&c, "README", "and changed again\n");
+    app.ws.refresh(&c);
+    app.rebuild();
+    assert!(reset(&mut app).is_empty());
+    match &app.mode {
+        Mode::Confirm { question, .. } => assert_eq!(
+            question,
+            &format!(
+                "Reset acme/clean --mixed to {} (local one)? What's staged of README \
+                 differs from the work tree and is lost.",
+                &rev(&sb, "dev/clean", "HEAD~1")[..7]
+            )
+        ),
+        _ => panic!("not asked"),
+    }
+    assert!(app.on_key(key('n')).is_empty(), "no: nothing done");
+    reset(&mut app);
+    match app.on_key(key('y')).as_slice() {
+        [Effect::Jobs(j)] => assert!(matches!(
+            j[0].op,
+            Op::Reset {
+                mode: ResetMode::Mixed,
+                ..
+            }
+        )),
+        other => panic!("{other:?}"),
+    }
+    // inverse: staged, and the same in the work tree: nothing to lose
+    let (sb, mut app) = setup_with("", two_local_commits);
+    let c = sb.path("dev/clean");
+    write(&c, "README", "staged\n");
+    git(&c, &["add", "README"]);
+    app.ws.refresh(&c);
+    app.rebuild();
+    assert!(matches!(reset(&mut app).as_slice(), [Effect::Jobs(_)]));
+}
+
 #[test]
 fn reset_is_one_repo_at_a_time() {
     let (_sb, mut app) = setup("");
