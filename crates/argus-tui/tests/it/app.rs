@@ -1253,7 +1253,7 @@ fn stash_staged_only_and_refusals() {
     // staged only
     app.act(Action::Top);
     app.on_key(key('z'));
-    let fx = app.on_key(key('i'));
+    let fx = app.on_key(key('g'));
     let jobs = stash_jobs(&app, &fx);
     assert!(
         jobs.len() == 1 && stash_op(true, false, true, &[])(&jobs[0].1),
@@ -1266,7 +1266,7 @@ fn stash_staged_only_and_refusals() {
     app.ws.refresh(&d);
     app.rebuild();
     app.on_key(key('z'));
-    let fx = app.on_key(key('i'));
+    let fx = app.on_key(key('g'));
     assert!(fx.is_empty(), "{fx:?}");
     let (msg, is_error) = app.message.clone().unwrap();
     assert!(
@@ -1279,8 +1279,14 @@ fn stash_staged_only_and_refusals() {
 #[test]
 fn stash_with_a_message() {
     let (_sb, mut app) = setup("");
+    // the message switch: whichever stash is chosen asks for one first
     app.on_key(key('z'));
-    app.on_key(key('m'));
+    app.on_key(key('M'));
+    assert!(
+        matches!(app.mode, Mode::Menu { .. }),
+        "a switch: still open"
+    );
+    app.on_key(key('z'));
     assert!(matches!(app.mode, Mode::Input { .. }));
     for c in "wip".chars() {
         app.on_key(key(c));
@@ -1288,8 +1294,116 @@ fn stash_with_a_message() {
     let fx = app.on_key(code(KeyCode::Enter));
     let jobs = stash_jobs(&app, &fx);
     assert!(
-        matches!(&jobs[..], [(n, Op::Stash { message, .. })] if n == "acme/dirty" && message == "wip"),
+        matches!(&jobs[..], [(n, Op::Stash { message, staged: false, .. })] if n == "acme/dirty" && message == "wip"),
         "{jobs:?}"
+    );
+    // a staged stash too; no message given, the usual one
+    app.running.clear();
+    assert!(app.act(Action::Stash(StashKind::Staged)).is_empty());
+    assert!(matches!(app.mode, Mode::Input { .. }));
+    let fx = app.on_key(code(KeyCode::Enter));
+    // (nothing staged in dirty: said, not stashed)
+    assert!(fx.is_empty() && !matches!(app.mode, Mode::Input { .. }));
+    // inverse: switched off again, stashed at once
+    app.on_key(key('z'));
+    app.on_key(key('M'));
+    let fx = app.on_key(key('z'));
+    let jobs = stash_jobs(&app, &fx);
+    assert!(
+        matches!(&jobs[..], [(_, Op::Stash { message, .. })] if message.starts_with("argus ")),
+        "{jobs:?}"
+    );
+}
+
+/// From config: `[stash] message = true` starts with the switch on.
+#[test]
+fn the_message_switch_starts_as_config_says() {
+    let (_sb, mut app) = setup("[stash]\nmessage = true\n");
+    app.on_key(key('z'));
+    app.on_key(key('z'));
+    assert!(matches!(app.mode, Mode::Input { .. }));
+}
+
+/// Pop and drop take the stash under the cursor, else ask which (the
+/// newest first); drop asks before dropping either way.
+#[test]
+fn pop_and_drop_take_the_cursors_stash_or_ask_which() {
+    let (sb, mut app) = setup("");
+    let d = sb.path("dev/dirty");
+    git(&d, &["stash", "push", "-q", "-m", "older"]);
+    write(&d, "README", "again\n");
+    git(&d, &["stash", "push", "-q", "-m", "newer"]);
+    status_arrives(&mut app, &d);
+    let ids = app.ws.get(&d).unwrap().status().unwrap().stash_ids.clone();
+    let op = |fx: &[Effect]| match fx {
+        [Effect::Jobs(j)] => j[0].op.clone(),
+        other => panic!("{other:?}"),
+    };
+    let at = |index: usize| (index, ids[index].clone());
+    // on the repo's own line: asked which, the newest first
+    cursor_on_detail(&mut app, "dirty", "path");
+    app.on_key(key('z'));
+    app.on_key(key('p'));
+    match &app.mode {
+        Mode::Pick { title, labels, .. } => {
+            assert_eq!(title, "Pop · acme/dirty");
+            assert_eq!(labels[..], ["stash@{0} newer", "stash@{1} older"]);
+        }
+        _ => panic!("no list"),
+    }
+    let (index, id) = at(0);
+    assert_eq!(
+        op(&app.on_key(code(KeyCode::Enter))),
+        Op::StashPopAt { index, id }
+    );
+    app.running.clear();
+    // the second of them
+    app.on_key(key('z'));
+    app.on_key(key('p'));
+    app.on_key(code(KeyCode::Down));
+    let (index, id) = at(1);
+    assert_eq!(
+        op(&app.on_key(code(KeyCode::Enter))),
+        Op::StashPopAt { index, id }
+    );
+    app.running.clear();
+    // drop: picked, then asked about
+    app.on_key(key('z'));
+    app.on_key(key('d'));
+    assert!(app.on_key(code(KeyCode::Enter)).is_empty());
+    match &app.mode {
+        Mode::Confirm { question, .. } => assert_eq!(
+            question,
+            "Drop stash@{0} (newer) of acme/dirty? It can't be recovered."
+        ),
+        _ => panic!("not asked"),
+    }
+    let (index, id) = at(0);
+    assert_eq!(op(&app.on_key(key('y'))), Op::StashDrop { index, id });
+    app.running.clear();
+    // on a stash's line: that one, pop without asking anything
+    cursor_on_detail(&mut app, "dirty", "          stash@{1}");
+    app.on_key(key('z'));
+    let (index, id) = at(1);
+    assert_eq!(op(&app.on_key(key('p'))), Op::StashPopAt { index, id });
+    app.running.clear();
+    app.on_key(key('z'));
+    assert!(app.on_key(key('d')).is_empty());
+    assert!(
+        matches!(&app.mode, Mode::Confirm { question, .. } if question.starts_with("Drop stash@{1} "))
+    );
+    app.on_key(key('n'));
+    // several repos selected, none under the cursor: one at a time
+    cursor_on_detail(&mut app, "dirty", "path");
+    app.marked = app.ws.entries.iter().map(|e| e.path.clone()).collect();
+    assert!(app.act(Action::PopStash).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
+    assert!(
+        app.message
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("one repo at a time")
     );
 }
 
@@ -1299,7 +1413,7 @@ fn files_marked_in_details_can_be_stashed() {
     // nothing marked yet: not offered, and said if asked for anyway
     app.on_key(key('z'));
     assert!(
-        matches!(&app.mode, Mode::Menu { menu, .. } if menu.items.iter().all(|i| i.key != 'f'))
+        matches!(&app.mode, Mode::Menu { menu, .. } if menu.items.iter().all(|i| i.key != 'm'))
     );
     app.on_key(code(KeyCode::Esc));
     assert!(app.act(Action::Stash(StashKind::MarkedFiles)).is_empty());
@@ -1334,7 +1448,7 @@ fn files_marked_in_details_can_be_stashed() {
     app.cursor = at;
     app.on_key(code(KeyCode::Tab));
     app.on_key(key('z'));
-    let fx = app.on_key(key('f'));
+    let fx = app.on_key(key('m'));
     let jobs = stash_jobs(&app, &fx);
     assert!(
         jobs.len() == 1 && stash_op(true, false, false, &["README"])(&jobs[0].1),
@@ -2284,7 +2398,10 @@ fn the_footer_names_n_p_j_k_in_lists_only() {
     }
     app.on_key(key('X'));
     let screen = render(&mut app, 100, 20);
-    assert!(screen.contains("q/Esc/C-g cancel · ↑↓ Enter"), "{screen}");
+    assert!(
+        screen.contains("q/Esc/C-g cancel · ↑↓ C-n C-p Enter"),
+        "{screen}"
+    );
     app.on_key(key('s'));
     let screen = render(&mut app, 100, 20);
     assert!(
@@ -3978,7 +4095,8 @@ fn the_log_takes_a_third_and_shows_short_or_failed_output() {
 fn the_prompt_puts_the_cursor_after_the_text() {
     let (_sb, mut app) = setup("");
     app.on_key(key('z'));
-    app.on_key(key('m'));
+    app.on_key(key('M'));
+    app.on_key(key('z'));
     for c in "ab".chars() {
         app.on_key(key(c));
     }
@@ -7717,33 +7835,31 @@ fn the_stash_menu_offers_only_what_applies() {
     let keys = |app: &mut App| -> String { offered(app).iter().map(|i| i.0).collect() };
     // unstaged changes only: no staged, marked, pop or drop
     cursor_on_detail(&mut app, "dirty", "path");
-    assert_eq!(keys(&mut app), "ukzm");
+    assert_eq!(keys(&mut app), "ukMz");
     // something staged
     git(&d, &["add", "README"]);
     status_arrives(&mut app, &d);
-    assert_eq!(keys(&mut app), "ukzim");
+    assert_eq!(keys(&mut app), "ukMzg");
     // a file marked
     git(&d, &["reset", "-q"]);
     status_arrives(&mut app, &d);
     to_file(&mut app, "README");
     app.act(Action::ToggleMark);
     let items = offered(&mut app);
-    assert!(
-        items.contains(&('f', "stash marked files".into())),
-        "{items:?}"
-    );
+    assert!(items.contains(&('m', "stash marked".into())), "{items:?}");
     app.marked_files.clear();
-    // a stash: pop; drop only with the cursor on it
+    // a stash: pop and drop, asking which unless the cursor is on one
     git(&d, &["stash", "push", "-q", "-m", "mine"]);
     write(&d, "README", "more\n");
     status_arrives(&mut app, &d);
     cursor_on_detail(&mut app, "dirty", "path");
     let items = offered(&mut app);
-    assert_eq!(keys(&mut app), "ukzmp", "{:?}", trimmed(&app));
-    assert!(items.contains(&('p', "pop".into())), "{items:?}");
+    assert_eq!(keys(&mut app), "ukMzpd", "{:?}", trimmed(&app));
+    assert!(items.contains(&('p', "pop…".into())), "{items:?}");
     cursor_on_detail(&mut app, "dirty", "          stash@{0}");
     let items = offered(&mut app);
-    assert_eq!(keys(&mut app), "ukzmpd");
+    assert_eq!(keys(&mut app), "ukMzpd");
+    assert!(items.contains(&('p', "pop".into())), "{items:?}");
     assert!(items.contains(&('d', "drop…".into())), "{items:?}");
 }
 

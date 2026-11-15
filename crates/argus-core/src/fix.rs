@@ -854,6 +854,11 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
             // its changes, whatever they are
             s.changes.unstaged = s.changes.unstaged.max(1);
         }
+        Op::StashPopAt { index, .. } => {
+            s.stashes.remove(*index);
+            s.stash_ids.remove(*index);
+            s.changes.unstaged = s.changes.unstaged.max(1);
+        }
         Op::StashDrop { index, .. } => {
             s.stashes.remove(*index);
             s.stash_ids.remove(*index);

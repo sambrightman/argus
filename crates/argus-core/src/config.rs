@@ -399,13 +399,16 @@ pub struct Concurrency {
 #[serde(
     default,
     deny_unknown_fields,
-    expecting = "a table: [stash] with untracked and keep_index"
+    expecting = "a table: [stash] with untracked, keep_index and message"
 )]
 pub struct StashConfig {
     /// Include untracked files.
     pub untracked: bool,
     /// Leave staged changes in the index after stashing them (`--keep-index`).
     pub keep_index: bool,
+    /// In the TUI's stash menu: ask for a message before stashing (else
+    /// `argus <date> <time>`).
+    pub message: bool,
 }
 
 impl Default for StashConfig {
@@ -413,6 +416,7 @@ impl Default for StashConfig {
         Self {
             untracked: true,
             keep_index: false,
+            message: false,
         }
     }
 }

@@ -542,7 +542,7 @@ fn draw_status(f: &mut Frame, app: &App, v: &View, area: Rect) {
                     if *all { "all" } else { "staged" },
                     p.len()
                 ),
-                Prompt::StashMessage(p) => format!("stash message ({} repo(s)): ", p.len()),
+                Prompt::StashMessage(_) => "stash message (empty for the usual): ".to_string(),
                 Prompt::BranchName(p) => format!("new branch at HEAD ({} repo(s)): ", p.len()),
                 Prompt::SquashMessage(_, c, instant) => format!(
                     "{}squash into {} (message to add; empty for none): ",
@@ -683,7 +683,7 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) -> Option<std::ops:
     let moves = if menu.id.is_list() {
         "↑↓ n p j k"
     } else {
-        "↑↓"
+        "↑↓ C-n C-p"
     };
     lines.push(Line::from(Span::styled(
         format!(" q/Esc/C-g cancel · {moves} Enter"),

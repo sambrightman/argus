@@ -162,23 +162,11 @@ impl MenuId {
                 vec![
                     switch('u', "include untracked", Switch::Untracked),
                     switch('k', "keep index", Switch::KeepIndex),
-                    item('z', "stash all changes", Action::Stash(StashKind::All)),
-                    item(
-                        'i',
-                        "stash staged changes only",
-                        Action::Stash(StashKind::Staged),
-                    ),
-                    item(
-                        'm',
-                        "stash with a message…",
-                        Action::Stash(StashKind::WithMessage),
-                    ),
-                    item(
-                        'f',
-                        "stash marked files",
-                        Action::Stash(StashKind::MarkedFiles),
-                    ),
-                    item('p', "pop", Action::PopStash),
+                    switch('M', "message", Switch::Message),
+                    item('z', "stash all", Action::Stash(StashKind::All)),
+                    item('m', "stash marked", Action::Stash(StashKind::MarkedFiles)),
+                    item('g', "stash staged", Action::Stash(StashKind::Staged)),
+                    item('p', "pop…", Action::PopStash),
                     item('d', "drop…", Action::DropStash),
                 ],
             ),

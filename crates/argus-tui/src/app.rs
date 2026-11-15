@@ -471,10 +471,9 @@ const FILE_HINT: &str = "move to a file in the details (Tab), or mark files with
 pub enum StashKind {
     /// Everything (untracked files as the switch says).
     All,
-    /// Only staged changes.
+    /// Only staged changes (untracked files and the index, never: the
+    /// first two switches don't apply).
     Staged,
-    /// Everything, after asking for a message.
-    WithMessage,
     /// The files marked in the details view.
     MarkedFiles,
 }
@@ -486,6 +485,8 @@ pub enum Switch {
     Untracked,
     /// Leave staged changes in the index after stashing.
     KeepIndex,
+    /// Ask for the stash's message first.
+    Message,
     /// In the gitignore menu: rules match only their path (`/build/`), not
     /// the name anywhere (`build/`).
     Anchored,
@@ -600,7 +601,8 @@ pub enum Prompt {
     /// For amending the repo's last commit: its message, and whether
     /// it's on a remote.
     AmendMessage(PathBuf, String, bool),
-    StashMessage(Vec<PathBuf>),
+    /// For a stash of that kind.
+    StashMessage(StashKind),
     BranchName(Vec<PathBuf>),
     /// The message a squash commit of the commit adds (`true`: instant).
     SquashMessage(PathBuf, String, bool),
@@ -737,8 +739,9 @@ pub struct App {
     gitignore: Option<GitignoreTargets>,
     /// The repo, mode and commits the open reset menu offers.
     pick: Option<CommitPick>,
-    /// What each line of an open branch list checks out, and where.
-    branches: Option<(PathBuf, Vec<Op>)>,
+    /// What each line of an open pick list (branches to check out,
+    /// stashes to pop or drop) does, and where.
+    picks: Option<(PathBuf, Vec<Op>)>,
     pub log: Vec<LogEntry>,
     pub show_log: bool,
     pub message: Option<(String, bool)>,
@@ -788,7 +791,7 @@ impl App {
             ignore_menu: None,
             gitignore: None,
             pick: None,
-            branches: None,
+            picks: None,
             log: vec![],
             show_log: false,
             message: None,
@@ -1218,7 +1221,7 @@ impl App {
                     KeyCode::Char('p') if ctrl => *cursor = cursor.saturating_sub(1),
                     _ => match editor.handle(k) {
                         Edit::Cancel => {
-                            self.branches = None;
+                            self.picks = None;
                             self.mode = Mode::Normal;
                         }
                         Edit::Submit => {
@@ -1227,7 +1230,7 @@ impl App {
                             if let Some(i) = picked {
                                 return self.act(Action::PickBranch(i));
                             }
-                            self.branches = None;
+                            self.picks = None;
                         }
                         Edit::Changed => {
                             let mut f = crate::fuzzy::Fuzzy::new(&editor.text());
@@ -1560,6 +1563,7 @@ impl App {
             }
             Toggle(Switch::Untracked) => self.stash.untracked = !self.stash.untracked,
             Toggle(Switch::KeepIndex) => self.stash.keep_index = !self.stash.keep_index,
+            Toggle(Switch::Message) => self.stash.message = !self.stash.message,
             IgnoreStep(which) => return self.ignore_step(which),
             GitignoreMenu => return self.open_gitignore_menu(),
             Toggle(Switch::Anchored) => {
@@ -1612,11 +1616,10 @@ impl App {
             }
             Checkout => return self.open_branch_pick(),
             PickBranch(n) => {
-                if let Some((path, mut ops)) = self.branches.take()
+                if let Some((path, mut ops)) = self.picks.take()
                     && n < ops.len()
                 {
-                    let jobs = self.job(&path, ops.swap_remove(n)).into_iter().collect();
-                    return self.start_jobs(jobs);
+                    return self.run_or_ask(path, ops.swap_remove(n));
                 }
             }
             CheckoutPrevious => {
@@ -1934,35 +1937,11 @@ impl App {
                 };
             }
             DeleteBranch => return self.delete_branch(),
-            PopStash => return self.fix_ops(FixKind::StashPop),
+            PopStash => {
+                return self.stash_pick("Pop", |index, id| Op::StashPopAt { index, id });
+            }
             DropStash => {
-                let Some(Row::Detail {
-                    repo,
-                    line: DetailLine { stash: Some(n), .. },
-                }) = self.rows.get(self.cursor)
-                else {
-                    self.info("put the cursor on a stash in the details (Tab)");
-                    return vec![];
-                };
-                let (i, n) = (*repo, *n);
-                let e = &self.ws.entries[i];
-                let Some(s) = e.status() else { return vec![] };
-                let (Some(message), Some(id)) = (s.stashes.get(n), s.stash_ids.get(n)) else {
-                    return vec![];
-                };
-                self.mode = Mode::Confirm {
-                    question: format!(
-                        "Drop stash@{{{n}}} ({message}) of {}? It can't be recovered.",
-                        e.display_name()
-                    ),
-                    then: Confirmed::Ops(vec![(
-                        e.path.clone(),
-                        Op::StashDrop {
-                            index: n,
-                            id: id.clone(),
-                        },
-                    )]),
-                };
+                return self.stash_pick("Drop", |index, id| Op::StashDrop { index, id });
             }
             AddRemote => match self.applicable(FixKind::AddRemote).as_slice() {
                 [] => self.info("the selection has remotes"),
@@ -2401,7 +2380,7 @@ impl App {
             labels.push(l);
             ops.push(op);
         }
-        self.branches = Some((path, ops));
+        self.picks = Some((path, ops));
         self.mode = Mode::Pick {
             title,
             editor: LineEditor::new(""),
@@ -3084,10 +3063,19 @@ impl App {
         menu.items.retain(|it| match it.action {
             Action::Stash(StashKind::Staged) => staged,
             Action::Stash(StashKind::MarkedFiles) => !self.marked_files.is_empty(),
-            Action::PopStash => stashes,
-            Action::DropStash => on_stash,
+            Action::PopStash | Action::DropStash => stashes,
             _ => true,
         });
+        // with the cursor on a stash there's nothing more to ask before
+        // popping it (dropping always asks)
+        if let Some(pop) = menu
+            .items
+            .iter_mut()
+            .find(|it| it.action == Action::PopStash)
+            && on_stash
+        {
+            pop.label = "pop".into();
+        }
         // a repo without a forge identity has no owner to mark
         if self.owner().is_none() {
             menu.items
@@ -3981,47 +3969,106 @@ impl App {
         match s {
             Switch::Untracked => self.stash.untracked,
             Switch::KeepIndex => self.stash.keep_index,
+            Switch::Message => self.stash.message,
             Switch::Anchored => self.gitignore.as_ref().is_some_and(|g| g.anchored),
         }
     }
 
+    /// A stash of `kind`, now or (the message switch on) once its message
+    /// has been asked for.
     fn stash_action(&mut self, kind: StashKind) -> Vec<Effect> {
-        match kind {
-            StashKind::All => {
-                let targets = self.selected().into_iter().map(|i| (i, vec![])).collect();
-                self.stash_jobs(targets, false, None)
-            }
-            StashKind::Staged => {
-                let targets = self.selected().into_iter().map(|i| (i, vec![])).collect();
-                self.stash_jobs(targets, true, None)
-            }
-            StashKind::WithMessage => {
-                let paths = self
-                    .selected()
-                    .into_iter()
-                    .map(|i| self.ws.entries[i].path.clone())
-                    .collect();
-                self.mode = Mode::Input {
-                    prompt: Prompt::StashMessage(paths),
-                    editor: LineEditor::new(""),
-                };
-                vec![]
-            }
-            StashKind::MarkedFiles => {
-                let targets: Vec<(usize, Vec<String>)> = self
-                    .marked_files
-                    .iter()
-                    .filter_map(|(repo, files)| {
-                        Some((self.ws.index_of(repo)?, files.iter().cloned().collect()))
-                    })
-                    .collect();
-                if targets.is_empty() {
-                    self.info("mark files in the details view first (Tab, then space on a file)");
-                    return vec![];
-                }
-                self.stash_jobs(targets, false, None)
-            }
+        if kind == StashKind::MarkedFiles && self.marked_files.is_empty() {
+            self.info("mark files in the details view first (Tab, then space on a file)");
+            return vec![];
         }
+        if !self.stash.message {
+            return self.stash_now(kind, None);
+        }
+        self.mode = Mode::Input {
+            prompt: Prompt::StashMessage(kind),
+            editor: LineEditor::new(""),
+        };
+        vec![]
+    }
+
+    fn stash_now(&mut self, kind: StashKind, message: Option<String>) -> Vec<Effect> {
+        let targets: Vec<(usize, Vec<String>)> = match kind {
+            StashKind::All | StashKind::Staged => {
+                self.selected().into_iter().map(|i| (i, vec![])).collect()
+            }
+            StashKind::MarkedFiles => self
+                .marked_files
+                .iter()
+                .filter_map(|(repo, files)| {
+                    Some((self.ws.index_of(repo)?, files.iter().cloned().collect()))
+                })
+                .collect(),
+        };
+        self.stash_jobs(targets, kind == StashKind::Staged, message)
+    }
+
+    /// Pop or drop a stash: the one under the cursor, else one picked
+    /// from the repo's (the newest first, so Enter takes it).
+    fn stash_pick(&mut self, title: &str, op: fn(usize, String) -> Op) -> Vec<Effect> {
+        if let Some(Row::Detail {
+            repo,
+            line: DetailLine { stash: Some(n), .. },
+        }) = self.rows.get(self.cursor)
+        {
+            let (e, n) = (&self.ws.entries[*repo], *n);
+            let id = e.status().and_then(|s| s.stash_ids.get(n)).cloned();
+            let path = e.path.clone();
+            return match id {
+                Some(id) => self.run_or_ask(path, op(n, id)),
+                None => vec![],
+            };
+        }
+        let [i] = self.selected()[..] else {
+            self.error("pick a stash of one repo at a time");
+            return vec![];
+        };
+        let e = &self.ws.entries[i];
+        let stashes = e.status().map(|s| s.stashes.iter().zip(&s.stash_ids));
+        let (mut names, mut ops) = (vec![], vec![]);
+        for (n, (message, id)) in stashes.into_iter().flatten().enumerate() {
+            names.push(format!("stash@{{{n}}} {message}"));
+            ops.push(op(n, id.clone()));
+        }
+        if names.is_empty() {
+            return self.not_applicable("no stash");
+        }
+        self.picks = Some((e.path.clone(), ops));
+        self.mode = Mode::Pick {
+            title: format!("{title} · {}", e.display_name()),
+            editor: LineEditor::new(""),
+            shown: (0..names.len()).collect(),
+            labels: names.clone(),
+            names,
+            cursor: 0,
+        };
+        vec![]
+    }
+
+    /// Run `op` in the repo at `path`; one that can't be undone is asked
+    /// about first.
+    fn run_or_ask(&mut self, path: PathBuf, op: Op) -> Vec<Effect> {
+        let Some(e) = self.ws.get(&path) else {
+            return vec![];
+        };
+        if let Op::StashDrop { index, .. } = &op {
+            let message = e.status().and_then(|s| s.stashes.get(*index).cloned());
+            self.mode = Mode::Confirm {
+                question: format!(
+                    "Drop stash@{{{index}}} ({}) of {}? It can't be recovered.",
+                    message.unwrap_or_default(),
+                    e.display_name()
+                ),
+                then: Confirmed::Ops(vec![(path, op)]),
+            };
+            return vec![];
+        }
+        let jobs = self.job(&path, op).into_iter().collect();
+        self.start_jobs(jobs)
     }
 
     /// Stash each target repo (with paths, if any) using this session's
@@ -4205,14 +4252,9 @@ impl App {
                 let jobs = self.job(&path, op).into_iter().collect();
                 self.start_jobs(jobs)
             }
-            Prompt::StashMessage(paths) => {
-                let targets = paths
-                    .iter()
-                    .filter_map(|p| self.ws.index_of(p))
-                    .map(|i| (i, vec![]))
-                    .collect();
+            Prompt::StashMessage(kind) => {
                 let message = (!text.trim().is_empty()).then_some(text);
-                self.stash_jobs(targets, false, message)
+                self.stash_now(kind, message)
             }
             Prompt::SnoozeIssue(key, issue) => match argus_core::state::parse_duration(&text) {
                 Some(secs) => {

@@ -93,6 +93,15 @@ fn each_option_leaves_what_it_should() {
         &[],
         &[" M README", "?? new"],
     );
+    // (nor is the index kept: what's staged is what's being put away)
+    case(
+        "staged only, keep index asked for",
+        true,
+        true,
+        true,
+        &[],
+        &[" M README", "?? new"],
+    );
     case(
         "some paths",
         true,
@@ -100,6 +109,77 @@ fn each_option_leaves_what_it_should() {
         false,
         &["README", "new"],
         &["M  staged", "MM both"],
+    );
+}
+
+/// A stash that isn't the newest is popped by where it is, as long as
+/// it's still the stash that was meant.
+#[test]
+fn a_chosen_stash_is_popped_if_it_is_still_that_one() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "a", "1\n");
+    write(&r, "b", "1\n");
+    git(&r, &["add", "."]);
+    git(&r, &["commit", "-q", "-m", "files"]);
+    write(&r, "a", "older\n");
+    git(&r, &["stash", "push", "-q", "-m", "older"]);
+    write(&r, "b", "newer\n");
+    git(&r, &["stash", "push", "-q", "-m", "newer"]);
+    let s = st(&r);
+    let pop = |index: usize, id: &str| {
+        ops::run(
+            &r,
+            &Op::StashPopAt {
+                index,
+                id: id.into(),
+            },
+        )
+    };
+    assert_eq!(
+        Op::StashPopAt {
+            index: 1,
+            id: String::new()
+        }
+        .label(),
+        "pop stash@{1}"
+    );
+    // not the stash it was: refused, nothing popped
+    let o = pop(1, &s.stash_ids[0]);
+    assert!(
+        !o.success && o.output.contains("isn't the stash it was"),
+        "{}",
+        o.output
+    );
+    assert_eq!(st(&r).stashes.len(), 2);
+    // the older one: its change is back, the newer still stashed
+    let o = pop(1, &s.stash_ids[1]);
+    assert!(o.success, "{}", o.output);
+    assert_eq!(changes(&r), [" M a"]);
+    let left = st(&r);
+    assert_eq!(left.stash_ids, [s.stash_ids[0].clone()]);
+    // what the planner expects of it
+    let predicted = simulate(
+        &s,
+        &argus_core::fix::Fix {
+            kind: FixKind::StashPop,
+            op: Op::StashPopAt {
+                index: 1,
+                id: s.stash_ids[1].clone(),
+            },
+            reason: String::new(),
+            blocked: None,
+        },
+    );
+    assert_eq!(predicted.stash_ids, left.stash_ids);
+    // one that would conflict is refused, as the newest is
+    write(&r, "b", "in the way\n");
+    git(&r, &["commit", "-q", "-am", "b changed"]);
+    let o = pop(0, &s.stash_ids[0]);
+    assert!(
+        !o.success && o.output.contains("would conflict in b"),
+        "{}",
+        o.output
     );
 }
 
@@ -125,6 +205,11 @@ fn stash_args_and_labels() {
         args(&op(true, false, true, &[])),
         "stash push --staged --message -rf"
     );
+    assert_eq!(
+        args(&op(true, true, true, &[])),
+        "stash push --staged --message -rf"
+    );
+    assert_eq!(op(true, true, true, &[]).label(), "stash staged");
     // paths come after `--`, so none can be taken as an option
     assert_eq!(
         args(&op(false, false, false, &["-x", "b"])),
@@ -149,6 +234,7 @@ fn the_stash_fix_follows_the_config_defaults() {
     let keep = StashConfig {
         untracked: false,
         keep_index: true,
+        ..Default::default()
     };
     let fix = plan(&st(&r), &keep)
         .into_iter()
@@ -211,6 +297,7 @@ fn the_stash_fix_follows_the_config_defaults() {
     let no_untracked = StashConfig {
         untracked: false,
         keep_index: false,
+        ..Default::default()
     };
     assert_eq!(counts(no_untracked), (0, 0, 1, 1));
     // predicted: staged changes stay, untracked stays
@@ -234,6 +321,7 @@ fn the_stash_fix_follows_the_config_defaults() {
     let off = StashConfig {
         untracked: false,
         keep_index: false,
+        ..Default::default()
     };
     assert!(!plan(&st(&r), &off).iter().any(|f| f.kind == FixKind::Stash));
     assert!(

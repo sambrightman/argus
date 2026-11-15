@@ -85,6 +85,12 @@ pub enum Op {
     /// `git stash pop --index`, only when a trial merge says it applies
     /// without conflicts.
     StashPop,
+    /// [`Op::StashPop`] of `stash@{index}`, only if it's still the stash
+    /// `id`.
+    StashPopAt {
+        index: usize,
+        id: String,
+    },
     /// `git stash drop`, only if `stash@{index}` is still the stash `id`.
     /// Permanently destructive: callers confirm first.
     StashDrop {
@@ -92,7 +98,9 @@ pub enum Op {
         id: String,
     },
     /// `git stash push`. `staged` stashes only staged changes (untracked
-    /// files never, as git refuses the pair); `paths` limits it to those.
+    /// files never, as git refuses the pair; nor is the index kept, which
+    /// would take them out of the work tree only); `paths` limits it to
+    /// those.
     Stash {
         message: String,
         untracked: bool,
@@ -275,6 +283,9 @@ impl Op {
                 ]
             }
             Op::StashPop => v(&["stash", "pop", "--index"]),
+            Op::StashPopAt { index, .. } => {
+                v(&["stash", "pop", "--index", &format!("stash@{{{index}}}")])
+            }
             Op::StashDrop { index, .. } => {
                 vec!["stash".into(), "drop".into(), format!("stash@{{{index}}}")]
             }
@@ -292,7 +303,7 @@ impl Op {
                 if *untracked && !*staged {
                     a.push("--include-untracked".into());
                 }
-                if *keep_index {
+                if *keep_index && !*staged {
                     a.push("--keep-index".into());
                 }
                 if *staged {
@@ -431,6 +442,7 @@ impl Op {
                 )
             ),
             Op::StashPop => "pop stash".into(),
+            Op::StashPopAt { index, .. } => format!("pop stash@{{{index}}}"),
             Op::StashDrop { index, .. } => format!("drop stash@{{{index}}}"),
             Op::CreateBranch { name } => format!("create branch {name}"),
             Op::AddRemote { name, url } => format!("add remote {name} {url}"),
@@ -450,7 +462,7 @@ impl Op {
                     l.push_str(&format!(" {} path(s)", paths.len()));
                 }
                 let mut how = vec![];
-                if *keep_index {
+                if *keep_index && !*staged {
                     how.push("keeping index");
                 }
                 if !*untracked && !*staged {
@@ -823,7 +835,20 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
             };
         }
         Op::StashPop => {
-            if let Some(why) = pop_problem(&cwd) {
+            if let Some(why) = pop_problem(&cwd, 0) {
+                return refused(format!("not popping: {why}"), started);
+            }
+        }
+        Op::StashPopAt { index, id } => {
+            if !is_stash(&cwd, *index, id) {
+                return refused(
+                    format!(
+                        "not popping: stash@{{{index}}} isn't the stash it was (refresh and try again)"
+                    ),
+                    started,
+                );
+            }
+            if let Some(why) = pop_problem(&cwd, *index) {
                 return refused(format!("not popping: {why}"), started);
             }
         }
@@ -850,25 +875,13 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
                 );
             }
         }
-        Op::StashDrop { index, id } => {
-            let at = git(
-                &cwd,
-                &[
-                    "rev-parse".into(),
-                    "-q".into(),
-                    "--verify".into(),
-                    format!("stash@{{{index}}}"),
-                ],
+        Op::StashDrop { index, id } if !is_stash(&cwd, *index, id) => {
+            return refused(
+                format!(
+                    "not dropping: stash@{{{index}}} isn't the stash it was (refresh and try again)"
+                ),
                 started,
             );
-            if !at.success || at.output != *id {
-                return refused(
-                    format!(
-                        "not dropping: stash@{{{index}}} isn't the stash it was (refresh and try again)"
-                    ),
-                    started,
-                );
-            }
         }
         _ => {}
     }
@@ -904,10 +917,18 @@ fn refused(output: String, started: Instant) -> OpOutcome {
     }
 }
 
-/// Why popping `stash@{0}` would stop with conflicts, if it would: a trial
+/// Whether `stash@{index}` is the stash `id`.
+fn is_stash(cwd: &Path, index: usize, id: &str) -> bool {
+    let stash = format!("stash@{{{index}}}");
+    let at = git_in(cwd, &["rev-parse", "-q", "--verify", &stash]);
+    at.success && at.output.trim() == id
+}
+
+/// Why popping `stash@{index}` would stop with conflicts, if it would: a trial
 /// merge (`git merge-tree`) of the stash into HEAD, changing nothing. Their
 /// merge base is the commit the stash was made on, as for `git stash pop`.
-fn pop_problem(cwd: &Path) -> Option<String> {
+fn pop_problem(cwd: &Path, index: usize) -> Option<String> {
+    let stash = format!("stash@{{{index}}}");
     let o = git_in(
         cwd,
         &[
@@ -916,7 +937,7 @@ fn pop_problem(cwd: &Path) -> Option<String> {
             "--name-only",
             "--no-messages",
             "HEAD",
-            "stash@{0}",
+            &stash,
         ],
     );
     match o.code {
