@@ -637,6 +637,12 @@ fn save_state(ws: &Workspace, ctx: &Ctx) -> Result<()> {
     ws.state.save(&ctx.state_path).context("saving state")
 }
 
+/// Whether someone at the terminal says yes to `what`: never asked of a
+/// dry run, of JSON output, or with no terminal to ask at.
+fn agreed_at_terminal(what: &str, dry_run: bool, json: bool) -> bool {
+    !dry_run && !json && std::io::stdin().is_terminal() && confirm(what, false).is_ok()
+}
+
 /// Ask before a permanently destructive operation: proceed with `--yes`,
 /// else ask on the terminal; without one, refuse.
 fn confirm(what: &str, yes: bool) -> Result<()> {
@@ -1250,11 +1256,8 @@ fn pull_cmd(
     // a renamed repo's remote is pointed at its new name only when asked:
     // --yes, or yes at the terminal
     let renames = pull::follow_renames(ws, &tracks.orphans);
-    let asked = || {
-        let what = format!("point {} remote(s) at the new names", renames.len());
-        std::io::stdin().is_terminal() && !dry_run && !json && confirm(&what, false).is_ok()
-    };
-    let follow = !renames.is_empty() && (yes || asked());
+    let what = format!("point {} remote(s) at the new names", renames.len());
+    let follow = !renames.is_empty() && (yes || agreed_at_terminal(&what, dry_run, json));
     if follow {
         jobs.extend(renames);
     }

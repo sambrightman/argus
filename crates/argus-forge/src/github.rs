@@ -918,6 +918,17 @@ mod tests {
             ask(f).unwrap(),
             Whereabouts::Moved(RepoId::new("github.com", "other", "fresh"))
         );
+        // renamed under the same owner, or moved keeping its name
+        let f = Fake::default().route(&at, 200, &repo("acme", "fresh", false), None);
+        assert_eq!(
+            ask(f).unwrap(),
+            Whereabouts::Moved(RepoId::new("github.com", "acme", "fresh"))
+        );
+        let f = Fake::default().route(&at, 200, &repo("other", "old", false), None);
+        assert_eq!(
+            ask(f).unwrap(),
+            Whereabouts::Moved(RepoId::new("github.com", "other", "old"))
+        );
         // or not followed: the answer says where to look, once
         let moved =
             r#"{"message":"Moved Permanently","url":"https://api.github.com/repositories/42"}"#;

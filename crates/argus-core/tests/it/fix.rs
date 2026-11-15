@@ -2186,3 +2186,30 @@ fn a_submodule_with_modified_and_untracked_content_is_modified() {
         assert!(short.contains(" m lib"), "{short}");
     }
 }
+
+#[test]
+fn a_followed_rename_is_simulated_on_the_remote_it_names() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    let before = st(&r);
+    let set = |remote: &str| argus_core::fix::Fix {
+        kind: FixKind::AddRemote,
+        op: Op::SetRemoteUrl {
+            remote: remote.into(),
+            url: "git@github.com:other/fresh.git".into(),
+        },
+        reason: String::new(),
+        blocked: None,
+    };
+    let after = simulate(&before, &set("origin"));
+    assert_eq!(
+        after.remote_url.as_deref(),
+        Some("git@github.com:other/fresh.git")
+    );
+    // inverse: another remote's URL isn't the repo's
+    assert_eq!(
+        simulate(&before, &set("mirror")).remote_url,
+        before.remote_url
+    );
+}

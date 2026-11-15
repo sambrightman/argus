@@ -19,6 +19,7 @@ exclude_re = [
     # likewise in the CLI: asking before a destructive operation, the
     # progress line, and the TUI demo
     'crates/argus-cli/src/main\.rs:\d+:\d+: .* in confirm$',
+    'crates/argus-cli/src/main\.rs:\d+:\d+: (replace agreed_at_terminal |.* in agreed_at_terminal$)',
     'crates/argus-cli/src/main\.rs:\d+:\d+: (replace progress |.* in progress$)',
     'crates/argus-cli/src/main\.rs:\d+:\d+: (replace demo -> |.* in demo$)',
     # only saves work: a tag's object header is read before peeling it,

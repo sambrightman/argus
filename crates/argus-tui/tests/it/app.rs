@@ -5952,6 +5952,16 @@ fn a_textconv_diff_is_shown_converted_and_acts_as_its_file() {
     };
     assert!(line.diff.as_ref().is_none_or(|d| d.hunk.is_none()) && !line.is_body());
     assert!(!line.parts.iter().any(|p| p.1.contains("TWO")));
+    // every line of the converted diff, its hunk header included
+    for text in ["@@ -1,2 +1,2 @@", " ONE", "-TWO", "+THREE"] {
+        let body = app.rows.iter().find_map(|r| match r {
+            Row::Detail { line, .. } if line.parts.iter().any(|p| p.1 == text) => {
+                Some(line.is_body())
+            }
+            _ => None,
+        });
+        assert_eq!(body, Some(true), "{text}");
+    }
 }
 
 #[test]
@@ -6501,8 +6511,10 @@ fn pull_and_ignore_take_their_marks_keys_in_the_mark_menus() {
     // the owner's menu has them on the same keys
     app.on_key(key('o'));
     let items = menu_items(&app);
-    assert!(items.iter().any(|i| i.starts_with("P ")), "{items:?}");
-    assert!(items.iter().any(|i| i.starts_with("x ")), "{items:?}");
+    // each on its own item, not the other's
+    let of = |k: &str| items.iter().find(|i| i.starts_with(k)).cloned().unwrap();
+    assert!(of("P ").contains("pull"), "{items:?}");
+    assert!(of("x ").contains("ignor"), "{items:?}");
     assert!(
         !items
             .iter()

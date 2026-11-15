@@ -2411,14 +2411,14 @@ fn api_repo(owner: &str, name: &str) -> String {
     )
 }
 
-/// `acme` tracked, nothing pulled; the forge lists only `clean`, has
+/// `acme` tracked, only `clean` pulled; the forge lists only `clean`, has
 /// `dirty` under a new name and knows nothing of `feature`.
 fn orphaned(sb: &Sandbox) -> (std::path::PathBuf, String) {
     three(sb);
     let cfg = sb.path("cfg.toml");
     std::fs::write(
         &cfg,
-        "[marks.pull]\nrepos = ['!acme/*']\n[[track]]\nowner = 'acme'\nclone = 'notify'\n",
+        "[marks.pull]\nrepos = ['!acme/dirty', '!acme/feature']\n[[track]]\nowner = 'acme'\nclone = 'notify'\n",
     )
     .unwrap();
     let (base, _requests) = fake_api_routes(vec![
@@ -2486,6 +2486,11 @@ fn pull_says_what_became_of_orphans() {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let out = String::from_utf8(o.stdout).unwrap();
     assert!(out.contains("follow acme/dirty to other/fresh"), "{out}");
+    // only that is said to be followed: not the pull that also ran, and
+    // no hint to do what was just done
+    assert!(out.contains("2 jobs: 2 ok"), "{out}");
+    assert!(!out.contains("clean"), "{out}");
+    assert!(!out.contains("points its remote there"), "{out}");
     assert_eq!(
         url().trim(),
         before.trim().replace("acme/dirty", "other/fresh")

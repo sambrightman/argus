@@ -1504,4 +1504,25 @@ mod tests {
         clear_mark(&mut c, Mark::Pull, Some(&id), p).unwrap();
         assert_eq!(c.marks["pull"].repos, ["acme/*"]);
     }
+
+    #[test]
+    fn pull_and_ignore_are_had_by_their_flags_and_ignore_has_no_points() {
+        let f = |pull, ignored| Flags {
+            pull,
+            ignored,
+            ..Flags::default()
+        };
+        assert!(f(true, false).has("pull") && !f(true, false).has("ignore"));
+        assert!(f(false, true).has("ignore") && !f(false, true).has("pull"));
+        assert!(!f(false, false).has("pull") && !f(false, false).has("ignore"));
+        // inverse: a label of that name in the list isn't what counts
+        let named = Flags {
+            marks: vec!["pull".into(), "ignore".into()],
+            ..Flags::default()
+        };
+        assert!(!named.has("pull") && !named.has("ignore"));
+        let c = Config::parse("[marks.ignore]\nsort = 9\n[marks.pull]\nsort = 3\n").unwrap();
+        assert_eq!(Mark::Ignore.points(&c), 0);
+        assert_eq!(Mark::Pull.points(&c), 3);
+    }
 }

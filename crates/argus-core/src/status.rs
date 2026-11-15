@@ -1741,4 +1741,29 @@ mod tests {
             assert_eq!(without_path(msg, p), want, "{msg}");
         }
     }
+
+    #[test]
+    fn tracked_content_changed_is_asked_of_the_submodule_named() {
+        use crate::testkit::{Sandbox, commit, git, write};
+        let sb = Sandbox::new();
+        let src = sb.init("libsrc");
+        commit(&src, "l");
+        let r = sb.init("r");
+        for name in ["lib", "other"] {
+            let allow = ["-c", "protocol.file.allow=always"];
+            let add = ["submodule", "add", "-q", src.to_str().unwrap(), name];
+            git(&r, &[&allow[..], &add[..]].concat());
+        }
+        commit(&r, "subs");
+        let repo = crate::isolation::open(&r).unwrap();
+        assert!(!tracked_content_changed(&repo, "lib"));
+        // untracked alone isn't it
+        write(&r.join("lib"), "new", "x");
+        assert!(!tracked_content_changed(&repo, "lib"));
+        write(&r.join("lib"), "README", "changed\n");
+        assert!(tracked_content_changed(&repo, "lib"));
+        // the one asked about, not another; nor one there isn't
+        assert!(!tracked_content_changed(&repo, "other"));
+        assert!(!tracked_content_changed(&repo, "nope"));
+    }
 }

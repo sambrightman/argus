@@ -965,6 +965,20 @@ mod tests {
     }
 
     #[test]
+    fn marks_after_the_first_are_listed_briefly() {
+        let ex = example();
+        // the first is explained key by key; the others give their defaults
+        let fav = ex.find("# [marks.favourite]").unwrap();
+        let likewise: Vec<usize> = ex.match_indices("## Likewise").map(|m| m.0).collect();
+        assert_eq!(likewise.len(), 2, "pull and ignore");
+        assert!(likewise[0] > fav, "not before the first");
+        assert!(ex.contains("## Likewise, with its own defaults:\n# [marks.pull]\n# key = \"p\"\n# sort = 0\n# repos = []\n"));
+        assert!(ex.contains("# [marks.ignore]\n# key = \"I\"\n"));
+        // and the first one's keys each have their say
+        assert!(ex[fav..likewise[0]].contains("## Its key in the TUI's Mark menu"));
+    }
+
+    #[test]
     fn enum_choices_are_listed_from_the_code() {
         let ex = example();
         assert!(
