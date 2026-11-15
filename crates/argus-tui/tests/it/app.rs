@@ -7216,3 +7216,64 @@ impl DetailRows for App {
             .unwrap()
     }
 }
+
+#[test]
+fn the_same_commits_under_an_issue_and_under_their_branch_fold_separately() {
+    let (sb, mut app) = setup_with("", |sb| {
+        commit(&sb.path("dev/feature"), "unpushed work");
+    });
+    let f = sb.path("dev/feature");
+    let id = git(&f, &["rev-parse", "--short=7", "HEAD"]);
+    let commit_line = format!("{} unpushed work", id.trim());
+    let shown =
+        |app: &App, start: &str| trimmed(app).iter().filter(|t| t.starts_with(start)).count();
+    // unfolding the branch's commits leaves the issue's folded, and the
+    // cursor on the branch
+    cursor_on_detail(&mut app, "feature", "  * feat");
+    app.on_key(code(KeyCode::Tab));
+    assert_eq!(shown(&app, &commit_line), 1, "{:?}", trimmed(&app));
+    assert!(trimmed(&app)[app.cursor_line()].starts_with("* feat"));
+    assert!(trimmed(&app)[app.cursor_line() + 1].starts_with(&commit_line));
+    // and the other way round: the issue's, with the branch's as they were
+    cursor_on_detail(&mut app, "feature", "issue     1 unpushed commit");
+    app.on_key(code(KeyCode::Tab));
+    assert_eq!(shown(&app, &commit_line), 2);
+    assert!(trimmed(&app)[app.cursor_line()].starts_with("issue     1 unpushed"));
+    // a commit unfolded under the branch isn't under the issue
+    let under_branch = |app: &App| {
+        let t = trimmed(app);
+        let branch = t.iter().position(|l| l.starts_with("* feat")).unwrap();
+        branch + 1
+    };
+    app.cursor = app.row_of_detail(under_branch(&app));
+    app.on_key(code(KeyCode::Tab));
+    assert_eq!(shown(&app, "author "), 1, "{:?}", trimmed(&app));
+    assert_eq!(
+        app.cursor_line(),
+        under_branch(&app),
+        "the cursor stays put"
+    );
+    let t = trimmed(&app);
+    assert!(t[under_branch(&app) + 1].starts_with("commit "), "{t:?}");
+    // from a line of its message, Tab folds it: there, the cursor on the
+    // branch's copy of the commit, not the issue's
+    let msg = t.iter().rposition(|l| l == "unpushed work").unwrap();
+    assert!(msg > under_branch(&app));
+    app.cursor = app.row_of_detail(msg);
+    app.on_key(code(KeyCode::Tab));
+    assert_eq!(shown(&app, "author "), 0);
+    assert_eq!(app.cursor_line(), under_branch(&app));
+    // folding the issue's commits leaves the branch's
+    cursor_on_detail(&mut app, "feature", "issue     1 unpushed commit");
+    app.on_key(code(KeyCode::Tab));
+    assert_eq!(shown(&app, &commit_line), 1);
+    assert!(trimmed(&app)[under_branch(&app)].starts_with(&commit_line));
+    // a status coming back keeps the cursor on the branch's copy
+    app.cursor = app.row_of_detail(under_branch(&app));
+    cursor_on_detail(&mut app, "feature", "issue     1 unpushed commit");
+    app.on_key(code(KeyCode::Tab));
+    app.cursor = app.row_of_detail(under_branch(&app));
+    let st = argus_core::status::status(&f, Default::default()).unwrap();
+    app.on_msg(Msg::Status(f.clone(), Box::new(Ok(st))));
+    assert_eq!(app.cursor_line(), under_branch(&app));
+}

@@ -17,7 +17,7 @@ use argus_core::status::RepoStatus;
 use argus_core::{Entry, ViewFilter, Workspace, paths, plural};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::details::{DetailLine, DiffRef, Expand, Fold, Section, ago, describe, details};
+use crate::details::{DetailLine, DiffRef, Expand, Fold, Section, Site, ago, describe, details};
 use crate::input::{Edit, LineEditor};
 use crate::menu::{self, Item, Menu, MenuId};
 
@@ -191,7 +191,7 @@ const MAX_DIR_FILES: usize = 200;
 /// than it (six at least).
 fn unfolded_rows(
     cache: &mut HashMap<(PathBuf, Expand, usize), Vec<DetailLine>>,
-    unfolded: &BTreeSet<(PathBuf, Expand)>,
+    unfolded: &BTreeSet<(PathBuf, Site, Expand)>,
     repo: &std::path::Path,
     s: &RepoStatus,
     line: &DetailLine,
@@ -200,7 +200,7 @@ fn unfolded_rows(
         return vec![];
     };
     let indent = unfold_indent(line);
-    if !unfolded.contains(&(repo.to_path_buf(), x.clone())) {
+    if !unfolded.contains(&(repo.to_path_buf(), line.site.clone(), x.clone())) {
         return vec![];
     }
     let rows = cache
@@ -208,8 +208,10 @@ fn unfolded_rows(
         .or_insert_with(|| unfold(repo, s, x, indent))
         .clone();
     // each knows what was unfolded to show it, to fold it again from there
+    // and is where the line it's under is
     let child = |mut l: DetailLine| {
         l.parent = Some(Box::new(x.clone()));
+        l.site = line.site.clone();
         l
     };
     rows.into_iter().map(child).collect()
@@ -254,6 +256,7 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
             section: None,
             fold: None,
             parent: None,
+            site: None,
         }
     };
     let body = |parts| DetailLine {
@@ -404,6 +407,7 @@ type RowKey = (
     Option<(Side, Option<usize>, bool)>,
     Option<Expand>,
     Option<Section>,
+    Site,
 );
 
 /// The diff rows under an expanded file's line: that side's hunks (unless
@@ -440,6 +444,7 @@ fn diff_rows(
         section: Some(section),
         fold: None,
         parent: None,
+        site: None,
     };
     let mut v = vec![];
     {
@@ -748,7 +753,7 @@ pub struct App {
     /// Diffs read so far; a repo's go when its status changes.
     diffs: HashMap<(PathBuf, String, Side), Result<FileDiff, String>>,
     /// Details lines unfolded (Tab), by repo.
-    pub unfolded: BTreeSet<(PathBuf, Expand)>,
+    pub unfolded: BTreeSet<(PathBuf, Site, Expand)>,
     /// What they unfolded into, by indent, read once until the repo's
     /// status changes.
     unfold_cache: HashMap<(PathBuf, Expand, usize), Vec<DetailLine>>,
@@ -848,7 +853,14 @@ impl App {
     /// rows its file and diff position.
     fn row_key(&self, n: usize) -> Option<RowKey> {
         match self.rows.get(n)? {
-            Row::Repo(i) => Some((self.ws.entries[*i].path.clone(), None, None, None, None)),
+            Row::Repo(i) => Some((
+                self.ws.entries[*i].path.clone(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )),
             Row::Detail { repo, line } => Some((
                 self.ws.entries[*repo].path.clone(),
                 line.file.clone(),
@@ -857,6 +869,7 @@ impl App {
                     .map(|d| (d.side, d.hunk, d.line.is_some())),
                 line.expand.clone(),
                 line.section,
+                line.site.clone(),
             )),
         }
     }
@@ -870,7 +883,7 @@ impl App {
         let nested: Vec<(PathBuf, String)> = self
             .unfolded
             .iter()
-            .filter_map(|(p, x)| match x {
+            .filter_map(|(p, _, x)| match x {
                 Expand::Repo(rel) => Some((p.clone(), rel.clone())),
                 _ => None,
             })
@@ -952,7 +965,11 @@ impl App {
                     };
                     let inner = match &line.expand {
                         Some(x @ Expand::Repo(rel))
-                            if self.unfolded.contains(&(e.path.clone(), x.clone())) =>
+                            if self.unfolded.contains(&(
+                                e.path.clone(),
+                                line.site.clone(),
+                                x.clone(),
+                            )) =>
                         {
                             self.ws.entries.iter().position(|n| {
                                 n.nested
@@ -984,6 +1001,7 @@ impl App {
                     if commit_file && follows && !below.is_empty() {
                         let blank = DetailLine {
                             parent: line.expand.clone().map(Box::new),
+                            site: line.site.clone(),
                             ..crate::details::blank()
                         };
                         stack.push((r, pad, blank));
@@ -3783,7 +3801,7 @@ impl App {
         let Some(x) = line.expand.clone() else {
             return vec![];
         };
-        let key = (self.ws.entries[*repo].path.clone(), x);
+        let key = (self.ws.entries[*repo].path.clone(), line.site.clone(), x);
         if !self.unfolded.remove(&key) {
             self.unfolded.insert(key);
         }
@@ -3814,12 +3832,16 @@ impl App {
         let Some(parent) = line.parent.as_deref().cloned() else {
             return vec![];
         };
-        let path = self.ws.entries[*repo].path.clone();
-        self.unfolded.remove(&(path.clone(), parent.clone()));
+        let (path, site) = (self.ws.entries[*repo].path.clone(), line.site.clone());
+        self.unfolded
+            .remove(&(path.clone(), site.clone(), parent.clone()));
         self.rebuild();
+        // its line there, not another showing the same thing elsewhere
         let at = self.rows.iter().position(|r| {
             matches!(r, Row::Detail { repo, line }
-                if self.ws.entries[*repo].path == path && line.expand.as_ref() == Some(&parent))
+                if self.ws.entries[*repo].path == path
+                    && line.site == site
+                    && line.expand.as_ref() == Some(&parent))
         });
         self.cursor = at.unwrap_or(self.cursor);
         vec![]
@@ -3857,6 +3879,7 @@ impl App {
                     Some((side, Some(h), false)),
                     None,
                     section,
+                    None,
                 )));
             }
             None => {
@@ -3871,7 +3894,7 @@ impl App {
                     self.expanded_files.insert(key);
                 }
                 // the cursor stays on the file's line
-                self.rebuild_at(Some((path, Some(file), None, None, section)));
+                self.rebuild_at(Some((path, Some(file), None, None, section, None)));
             }
         }
         vec![]

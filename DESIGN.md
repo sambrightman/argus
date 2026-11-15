@@ -401,7 +401,12 @@ Two findings:
   commit's files; all open to begin with, `App::folded`). A line that
   something was unfolded to show knows what (`DetailLine::parent`: a
   commit's message, a diff under a commit's file) and folds it again,
-  the cursor going to its line. The blank line after a diff is the
+  the cursor going to its line. What's unfolded is remembered by place
+  as well as content (`DetailLine::site`: `issue unpushed`, `branch
+  feat`, `stash 0`, inherited by what a line unfolds into), because the
+  same commits show under an issue and under their branch: each copy
+  folds by itself, and the cursor's anchor includes the place, so it
+  isn't taken to the other copy. The blank line after a diff is the
   diff's: Tab there folds it. Diff lines are drawn by one function
   (`details::diff_line`) wherever they appear. When the
   line under the cursor goes (its file staged, its section emptied), the

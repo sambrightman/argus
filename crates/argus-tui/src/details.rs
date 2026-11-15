@@ -47,7 +47,16 @@ pub struct DetailLine {
     /// What was unfolded to show this line (a commit, a file's diff):
     /// Tab on it folds that again.
     pub parent: Option<Box<Expand>>,
+    /// Where the line is, when what it unfolds into can be shown in more
+    /// places than one (a branch's commits under its own line and under
+    /// an issue's): what's unfolded is remembered by place, so each folds
+    /// by itself. Lines it unfolds into are in the same place.
+    pub site: Site,
 }
+
+/// A place among a repo's details (see [`DetailLine::site`]): `issue
+/// unpushed`, `branch feat`, `stash 0`.
+pub type Site = Option<Box<str>>;
 
 /// A line's place in a group that folds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -220,6 +229,7 @@ fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
         section: None,
         fold: None,
         parent: None,
+        site: None,
     }
 }
 
@@ -479,6 +489,7 @@ pub fn details(
         let (role, text) = describe(issue, s.default_branch.as_deref());
         v.push(DetailLine {
             issue: Some(*issue),
+            site: Some(format!("issue {}", issue.name()).into()),
             expand: issue_expand(issue, s),
             ..line(vec![styled(Role::Dim, "issue     "), styled(role, text)])
         });
@@ -487,6 +498,7 @@ pub fn details(
         let (_, text) = describe(issue, s.default_branch.as_deref());
         v.push(DetailLine {
             issue: Some(*issue),
+            site: Some(format!("issue {}", issue.name()).into()),
             expand: issue_expand(issue, s),
             ignored: true,
             ..line(vec![
@@ -506,6 +518,7 @@ pub fn details(
             .unwrap_or_default();
         v.push(DetailLine {
             issue: Some(*issue),
+            site: Some(format!("issue {}", issue.name()).into()),
             expand: issue_expand(issue, s),
             ..line(vec![
                 styled(Role::Dim, "issue     "),
@@ -640,6 +653,7 @@ pub fn details(
             }
             v.push(DetailLine {
                 fold: Fold::member("branches"),
+                site: Some(format!("branch {}", b.name).into()),
                 links: link.into_iter().collect(),
                 branch: Some(b.name.clone()),
                 expand: unpushed.map(|_| {
@@ -719,6 +733,7 @@ pub fn details(
             let label = format!("          stash@{{{n}}} {message}");
             v.push(DetailLine {
                 fold: Fold::member("stashes"),
+                site: Some(format!("stash {n}").into()),
                 stash: Some(n),
                 expand: s.stash_ids.get(n).map(|id| Expand::Commit(id.clone())),
                 ..line(vec![if e.stash_ignored.get(n) == Some(&true) {
