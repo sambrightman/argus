@@ -7546,3 +7546,93 @@ fn lines_that_unfold_say_where_they_are() {
     };
     assert_eq!(below.as_deref(), Some("branch feat"));
 }
+
+#[test]
+fn a_question_from_the_background_waits_for_the_user_and_its_answer_for_a_busy_repo() {
+    use argus_core::identity::RepoId;
+    use argus_core::pull::{Orphan, OrphanState, PullPlan};
+    // dirty is pulled, so the pull that finds it renamed is running in it
+    let (sb, mut app) = setup("[marks.pull]\nrepos = ['acme/dirty']\n");
+    let d = sb.path("dev/dirty");
+    let renamed = || Msg::PullPlanned {
+        tracks: argus_core::State::default(),
+        plan: PullPlan {
+            orphans: vec![Orphan {
+                path: d.clone(),
+                id: RepoId::new("github.com", "acme", "dirty"),
+                forge: "github".into(),
+                state: OrphanState::Renamed(RepoId::new("github.com", "other", "fresh")),
+            }],
+            ..Default::default()
+        },
+        errors: vec![],
+    };
+    // while a filter is being typed, the answer arrives: the typing goes on
+    app.on_key(key('/'));
+    app.on_key(key('d'));
+    assert!(matches!(app.mode, Mode::Input { .. }));
+    let fx = app.on_msg(renamed());
+    assert!(matches!(app.mode, Mode::Input { .. }), "not replaced");
+    assert!(app.running.contains_key(&d), "its pull has started: {fx:?}");
+    app.on_key(key('i'));
+    assert_eq!(app.filter, "di");
+    // and the question is asked once that's finished with
+    app.on_key(code(KeyCode::Enter));
+    assert!(
+        matches!(&app.mode, Mode::Confirm { question, .. } if question.starts_with("acme/dirty is now other/fresh")),
+    );
+    // yes, with its pull still running: not dropped as busy, but started
+    // when the pull is done
+    let fx = app.on_key(key('y'));
+    assert!(!fx.iter().any(|e| matches!(e, Effect::Jobs(_))), "{fx:?}");
+    assert!(
+        app.message
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("1 to follow once its repo's job is done"),
+        "{:?}",
+        app.message
+    );
+    let other = sb.path("dev/clean");
+    let finished = |path: &std::path::PathBuf| Msg::JobFinished {
+        path: path.clone(),
+        label: "pull".into(),
+        op: Op::Fetch,
+        outcome: argus_core::ops::OpOutcome {
+            success: true,
+            code: Some(0),
+            output: String::new(),
+            duration: Default::default(),
+        },
+    };
+    // (another repo's job ending isn't it)
+    let fx = app.on_msg(finished(&other));
+    assert!(!fx.iter().any(|e| matches!(e, Effect::Jobs(_))), "{fx:?}");
+    let fx = app.on_msg(finished(&d));
+    let set_url = fx.iter().find_map(|e| match e {
+        Effect::Jobs(j) => Some(j[0].op.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        set_url,
+        Some(Op::SetRemoteUrl {
+            remote: "origin".into(),
+            url: "https://github.com/other/fresh.git".into()
+        })
+    );
+    // once, not again at the next job's end
+    app.running.clear();
+    let fx = app.on_msg(finished(&d));
+    assert!(!fx.iter().any(|e| matches!(e, Effect::Jobs(_))), "{fx:?}");
+    // two questions wait their turn
+    app.on_key(key('/'));
+    app.on_msg(renamed());
+    app.on_msg(renamed());
+    app.on_key(code(KeyCode::Enter));
+    assert!(matches!(app.mode, Mode::Confirm { .. }));
+    app.on_key(key('n'));
+    assert!(matches!(app.mode, Mode::Confirm { .. }), "the second");
+    app.on_key(key('n'));
+    assert!(matches!(app.mode, Mode::Normal));
+}

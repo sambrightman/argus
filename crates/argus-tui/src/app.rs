@@ -767,6 +767,12 @@ pub struct App {
     /// applied to each so far: when one's status is next read, its next
     /// fix starts.
     chains: HashMap<PathBuf, Vec<fix::Fix>>,
+    /// Questions from the background, waiting until nothing else is being
+    /// asked ([`Self::ask_when_free`]).
+    waiting: std::collections::VecDeque<(String, Confirmed)>,
+    /// Operations agreed to while their repo was busy, to start when it's
+    /// free ([`Self::start_queued`]).
+    queued: Vec<(PathBuf, Op)>,
     /// What each repo's forge was asked and has said (see [`ForgeLook`]).
     forge: HashMap<PathBuf, ForgeLook>,
     /// The repo the open ignore menu is for.
@@ -824,6 +830,8 @@ impl App {
             auto_fixes: (0, String::new()),
             chains: HashMap::new(),
             forge: HashMap::new(),
+            waiting: Default::default(),
+            queued: vec![],
             ignore_menu: None,
             gitignore: None,
             pick: None,
@@ -1167,6 +1175,44 @@ impl App {
     // ---------- keys ----------
 
     pub fn on_key(&mut self, k: KeyEvent) -> Vec<Effect> {
+        let fx = self.key(k);
+        self.show_waiting();
+        fx
+    }
+
+    /// Ask `question` once nothing else is being asked, typed or chosen:
+    /// at once from a key, but a question from the background (a forge's
+    /// answer, a job's end) never replaces what the user is in.
+    fn ask_when_free(&mut self, question: String, then: Confirmed) {
+        self.waiting.push_back((question, then));
+        self.show_waiting();
+    }
+
+    fn show_waiting(&mut self) {
+        if matches!(self.mode, Mode::Normal)
+            && let Some((question, then)) = self.waiting.pop_front()
+        {
+            self.mode = Mode::Confirm { question, then };
+        }
+    }
+
+    /// Start what was agreed to while its repo was busy, now that it isn't.
+    fn start_queued(&mut self) -> Vec<Effect> {
+        let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.queued)
+            .into_iter()
+            .partition(|(p, _)| !self.running.contains_key(p));
+        self.queued = waiting;
+        let jobs: Vec<Job> = ready
+            .into_iter()
+            .filter_map(|(p, op)| self.job(&p, op))
+            .collect();
+        match jobs.is_empty() {
+            true => vec![],
+            false => self.start_jobs(jobs),
+        }
+    }
+
+    fn key(&mut self, k: KeyEvent) -> Vec<Effect> {
         if matches!(self.mode, Mode::Normal) {
             self.message = None;
         }
@@ -3116,11 +3162,30 @@ impl App {
             }
             Confirmed::EditAgain => self.editing.iter().map(PatchEdit::open).collect(),
             Confirmed::Ops(ops) => {
-                let jobs = ops
+                // a remote to point elsewhere waits for its repo's running
+                // job (the pull that found it renamed) rather than be
+                // dropped as busy
+                let waits = |p: &PathBuf, op: &Op| {
+                    matches!(op, Op::SetRemoteUrl { .. }) && self.running.contains_key(p)
+                };
+                let (later, now): (Vec<_>, Vec<_>) =
+                    ops.into_iter().partition(|(p, op)| waits(p, op));
+                let jobs: Vec<Job> = now
                     .into_iter()
                     .filter_map(|(p, op)| self.job(&p, op))
                     .collect();
-                self.start_jobs(jobs)
+                let fx = match jobs.is_empty() {
+                    true => vec![],
+                    false => self.start_jobs(jobs),
+                };
+                if !later.is_empty() {
+                    self.add_note(&format!(
+                        "{} to follow once its repo's job is done",
+                        later.len()
+                    ));
+                    self.queued.extend(later);
+                }
+                fx
             }
             Confirmed::ClearMarks(keys) => {
                 // by key: a scan may have arrived while asking
@@ -4202,6 +4267,13 @@ impl App {
     // ---------- messages ----------
 
     pub fn on_msg(&mut self, m: Msg) -> Vec<Effect> {
+        let mut fx = self.msg(m);
+        fx.extend(self.start_queued());
+        self.show_waiting();
+        fx
+    }
+
+    fn msg(&mut self, m: Msg) -> Vec<Effect> {
         match m {
             Msg::Scanned { entries, truncated } => {
                 self.scanning = false;
@@ -4276,11 +4348,10 @@ impl App {
                         self.drop_edit();
                     } else {
                         e.applying = false;
-                        self.mode = Mode::Confirm {
-                            question: "The edited patch doesn't apply ($ for why): edit it again?"
-                                .into(),
-                            then: Confirmed::EditAgain,
-                        };
+                        self.ask_when_free(
+                            "The edited patch doesn't apply ($ for why): edit it again?".into(),
+                            Confirmed::EditAgain,
+                        );
                     }
                 }
                 if let Op::Clone { .. } = op {
@@ -4405,10 +4476,8 @@ impl App {
                     )),
                 };
                 if let Some(question) = question {
-                    self.mode = Mode::Confirm {
-                        question,
-                        then: Confirmed::Ops(renames.into_iter().map(|j| (j.path, j.op)).collect()),
-                    };
+                    let ops = renames.into_iter().map(|j| (j.path, j.op)).collect();
+                    self.ask_when_free(question, Confirmed::Ops(ops));
                 }
                 return fx;
             }

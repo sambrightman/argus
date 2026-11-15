@@ -415,6 +415,14 @@ Two findings:
   section's line, else the one before; the repo only when no changes are
   left. It doesn't follow the file to its new section, so `s s s` works
   down a list.
+* **A question from the background waits its turn.** A forge's answer or
+  a job's end may have something to ask (a renamed repo's remote, an
+  edited patch that didn't apply). It's asked at once only when nothing
+  else is being asked, typed or chosen; otherwise it waits
+  (`App::ask_when_free`) and never replaces what the user is in. An
+  answer for a repo that's busy isn't dropped either: pointing a remote
+  at its new name waits for the pull that found the rename
+  (`App::queued`).
 * **Discard is the unstaged side only.** `K` puts the work tree back as
   the index has it and deletes untracked files; what's staged is never
   touched (unstage it first), whether the file is discarded by its line,
