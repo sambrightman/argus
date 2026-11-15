@@ -1324,6 +1324,54 @@ fn the_message_switch_starts_as_config_says() {
     assert!(matches!(app.mode, Mode::Input { .. }));
 }
 
+/// With one stash there's nothing to pick: pop pops it, drop asks only
+/// whether to.
+#[test]
+fn pop_and_drop_take_a_repos_only_stash_without_asking_which() {
+    let (sb, mut app) = setup("");
+    let d = sb.path("dev/dirty");
+    git(&d, &["stash", "push", "-q", "-m", "only"]);
+    status_arrives(&mut app, &d);
+    let id = app.ws.get(&d).unwrap().status().unwrap().stash_ids[0].clone();
+    cursor_on_detail(&mut app, "dirty", "path");
+    app.on_key(key('z'));
+    match &app.mode {
+        Mode::Menu { menu, .. } => {
+            let label = |k: char| {
+                menu.items
+                    .iter()
+                    .find(|i| i.key == k)
+                    .unwrap()
+                    .label
+                    .clone()
+            };
+            assert_eq!((label('p').as_str(), label('d').as_str()), ("pop", "drop…"));
+        }
+        _ => panic!("no menu"),
+    }
+    match app.on_key(key('p')).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(
+            j[0].op,
+            Op::StashPopAt {
+                index: 0,
+                id: id.clone()
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
+    app.running.clear();
+    app.on_key(key('z'));
+    assert!(app.on_key(key('d')).is_empty());
+    assert!(
+        matches!(&app.mode, Mode::Confirm { question, .. } if question.starts_with("Drop stash@{0} (only)")),
+        "asked whether, not which"
+    );
+    match app.on_key(key('y')).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(j[0].op, Op::StashDrop { index: 0, id }),
+        other => panic!("{other:?}"),
+    }
+}
+
 /// Pop and drop take the stash under the cursor, else ask which (the
 /// newest first); drop asks before dropping either way.
 #[test]
@@ -1343,6 +1391,8 @@ fn pop_and_drop_take_the_cursors_stash_or_ask_which() {
     // on the repo's own line: asked which, the newest first
     cursor_on_detail(&mut app, "dirty", "path");
     app.on_key(key('z'));
+    assert!(matches!(&app.mode, Mode::Menu { menu, .. }
+        if menu.items.iter().any(|i| i.key == 'p' && i.label == "pop…")));
     app.on_key(key('p'));
     match &app.mode {
         Mode::Pick { title, labels, .. } => {
@@ -7855,7 +7905,8 @@ fn the_stash_menu_offers_only_what_applies() {
     cursor_on_detail(&mut app, "dirty", "path");
     let items = offered(&mut app);
     assert_eq!(keys(&mut app), "ukMzpd", "{:?}", trimmed(&app));
-    assert!(items.contains(&('p', "pop…".into())), "{items:?}");
+    // (one stash: nothing to ask before popping it)
+    assert!(items.contains(&('p', "pop".into())), "{items:?}");
     cursor_on_detail(&mut app, "dirty", "          stash@{0}");
     let items = offered(&mut app);
     assert_eq!(keys(&mut app), "ukMzpd");

@@ -3066,13 +3066,15 @@ impl App {
             Action::PopStash | Action::DropStash => stashes,
             _ => true,
         });
-        // with the cursor on a stash there's nothing more to ask before
-        // popping it (dropping always asks)
+        // with the cursor on a stash, or one stash in all, there's nothing
+        // to ask before popping it (dropping always asks)
+        let only = matches!(self.selected()[..], [i]
+            if self.ws.entries[i].status().is_some_and(|s| s.stashes.len() == 1));
         if let Some(pop) = menu
             .items
             .iter_mut()
             .find(|it| it.action == Action::PopStash)
-            && on_stash
+            && (on_stash || only)
         {
             pop.label = "pop".into();
         }
@@ -4007,8 +4009,9 @@ impl App {
         self.stash_jobs(targets, kind == StashKind::Staged, message)
     }
 
-    /// Pop or drop a stash: the one under the cursor, else one picked
-    /// from the repo's (the newest first, so Enter takes it).
+    /// Pop or drop a stash: the one under the cursor, else the repo's
+    /// only one, else one picked from them (the newest first, so Enter
+    /// takes it).
     fn stash_pick(&mut self, title: &str, op: fn(usize, String) -> Op) -> Vec<Effect> {
         if let Some(Row::Detail {
             repo,
@@ -4036,6 +4039,11 @@ impl App {
         }
         if names.is_empty() {
             return self.not_applicable("no stash");
+        }
+        // (the only one: nothing to pick)
+        if ops.len() == 1 {
+            let path = e.path.clone();
+            return self.run_or_ask(path, ops.remove(0));
         }
         self.picks = Some((e.path.clone(), ops));
         self.mode = Mode::Pick {
