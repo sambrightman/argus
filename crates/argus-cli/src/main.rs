@@ -31,7 +31,7 @@ use argus_core::pull;
 use argus_core::rules::{IssueList, Mark};
 use argus_core::runner::{self, Event};
 use argus_core::{Config, State, ViewFilter, Workspace, configfile, paths, plural};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand};
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Parser)]
@@ -120,8 +120,8 @@ enum Cmd {
     Fix {
         /// Fix kinds to apply instead of `[fix] auto`; comma-separated,
         /// repeatable.
-        #[arg(long = "kind", short = 'k', value_enum, value_delimiter = ',')]
-        kinds: Vec<FixArg>,
+        #[arg(long = "kind", short = 'k', value_parser = fix_kinds(), value_delimiter = ',')]
+        kinds: Vec<FixKind>,
         /// Show what would be fixed.
         #[arg(long, short = 'n')]
         dry_run: bool,
@@ -335,43 +335,12 @@ enum ForgeCmd {
     },
 }
 
-#[derive(Clone, Copy, ValueEnum)]
-enum FixArg {
-    SwitchDefault,
-    Push,
-    Publish,
-    PushBranches,
-    Reattach,
-    FastForward,
-    Pull,
-    Stash,
-    StashPop,
-    Abort,
-    DeleteBranches,
-    SubmoduleUpdate,
-    PruneWorktrees,
-    RemoveWorktree,
-}
-
-impl From<FixArg> for FixKind {
-    fn from(f: FixArg) -> Self {
-        match f {
-            FixArg::SwitchDefault => FixKind::SwitchDefault,
-            FixArg::Push => FixKind::Push,
-            FixArg::Publish => FixKind::Publish,
-            FixArg::PushBranches => FixKind::PushBranches,
-            FixArg::Reattach => FixKind::Reattach,
-            FixArg::FastForward => FixKind::FastForward,
-            FixArg::Pull => FixKind::Pull,
-            FixArg::Stash => FixKind::Stash,
-            FixArg::StashPop => FixKind::StashPop,
-            FixArg::SubmoduleUpdate => FixKind::SubmoduleUpdate,
-            FixArg::PruneWorktrees => FixKind::PruneWorktrees,
-            FixArg::RemoveWorktree => FixKind::RemoveWorktree,
-            FixArg::Abort => FixKind::Abort,
-            FixArg::DeleteBranches => FixKind::DeleteBranches,
-        }
-    }
+/// The fix kinds `-k` takes, by name: those that need nothing typed.
+fn fix_kinds() -> impl clap::builder::TypedValueParser<Value = FixKind> {
+    use clap::builder::TypedValueParser;
+    let kinds = || FixKind::ALL.into_iter().filter(|k| !k.needs_input());
+    clap::builder::PossibleValuesParser::new(kinds().map(FixKind::name))
+        .map(move |name| kinds().find(|k| k.name() == name).expect("one of them"))
 }
 
 struct Ctx {
@@ -530,7 +499,7 @@ fn run() -> Result<()> {
             let kinds: Vec<FixKind> = if kinds.is_empty() {
                 ws.config.fix.auto.clone()
             } else {
-                kinds.into_iter().map(Into::into).collect()
+                kinds
             };
             if fetch {
                 fetch_selected(&mut ws, &patterns);

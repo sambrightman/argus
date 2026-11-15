@@ -1,7 +1,7 @@
 //! The workspace: every discovered repo with its identity, flags and status.
 //! This is the model the CLI, TUI (and a future server) share.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -712,8 +712,23 @@ impl Workspace {
             (filter.show_hidden || !e.flags.hidden())
                 && (!filter.attention_only || e.needs_attention())
         };
-        let is_top =
-            |e: &Entry| !e.nested && e.parent.as_ref().is_none_or(|p| self.index_of(p).is_none());
+        // each listed entry's children, found once (not once per entry)
+        let listed: HashSet<&Path> = self.entries.iter().map(|e| e.path.as_path()).collect();
+        let mut children: HashMap<&Path, Vec<usize>> = HashMap::new();
+        for (c, e) in self.entries.iter().enumerate().filter(|(_, e)| !e.nested) {
+            if let Some(p) = &e.parent {
+                children.entry(p).or_default().push(c);
+            }
+        }
+        for kids in children.values_mut() {
+            kids.sort_by_key(|&c| (self.entries[c].kind, &self.entries[c].path));
+        }
+        let is_top = |e: &Entry| {
+            !e.nested
+                && e.parent
+                    .as_ref()
+                    .is_none_or(|p| !listed.contains(p.as_path()))
+        };
         let mut top: Vec<usize> = (0..self.entries.len())
             .filter(|&i| is_top(&self.entries[i]))
             .collect();
@@ -733,7 +748,7 @@ impl Workspace {
         let mut out = vec![];
         for t in top {
             let mut fam = vec![];
-            self.collect_children(t, &mut fam, &mut vec![t]);
+            self.collect_children(t, &children, &mut fam, &mut HashSet::from([t]));
             let parent_visible = visible(&self.entries[t]);
             let visible_kids: Vec<usize> = fam
                 .into_iter()
@@ -749,19 +764,24 @@ impl Workspace {
     }
 
     /// `seen` guards against parent cycles from inconsistent on-disk data.
-    fn collect_children(&self, i: usize, out: &mut Vec<usize>, seen: &mut Vec<usize>) {
-        let p = &self.entries[i].path;
-        let mut kids: Vec<usize> = (0..self.entries.len())
-            .filter(|&c| {
-                let e = &self.entries[c];
-                !e.nested && e.parent.as_ref() == Some(p) && !seen.contains(&c)
-            })
+    fn collect_children(
+        &self,
+        i: usize,
+        children: &HashMap<&Path, Vec<usize>>,
+        out: &mut Vec<usize>,
+        seen: &mut HashSet<usize>,
+    ) {
+        let kids = children.get(self.entries[i].path.as_path());
+        // (each once, whatever loops the parents make)
+        let new: Vec<usize> = kids
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|c| seen.insert(*c))
             .collect();
-        kids.sort_by_key(|&c| (self.entries[c].kind, self.entries[c].path.clone()));
-        seen.extend(&kids);
-        for c in kids {
+        for c in new {
             out.push(c);
-            self.collect_children(c, out, seen);
+            self.collect_children(c, children, out, seen);
         }
     }
 
