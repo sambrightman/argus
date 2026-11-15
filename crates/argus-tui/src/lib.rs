@@ -141,11 +141,7 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
                     // terminal shows it again
                     let _ = terminal.show_cursor();
                     ratatui::restore();
-                    println!(
-                        "argus: {} in {} — exit to return",
-                        program,
-                        argus_core::paths::contract_tilde(&cwd)
-                    );
+                    println!("{}", suspend_banner(&program, &cwd));
                     let r = run_suspended(&program, &args, &cwd, login_shell);
                     dirty = true;
                     terminal = ratatui::init();
@@ -182,6 +178,17 @@ pub fn run_suspended(
                 Err(format!("{program} exited with {s}"))
             }
         })
+}
+
+/// What's said on leaving the TUI for `program` in `cwd` (their names
+/// shown as text, whatever is in them).
+pub fn suspend_banner(program: &str, cwd: &Path) -> String {
+    let said = format!(
+        "argus: {} in {} — exit to return",
+        program,
+        argus_core::paths::contract_tilde(cwd)
+    );
+    argus_core::text::printable(&said).into_owned()
 }
 
 /// The command [`run_suspended`] runs. A login shell is started as a

@@ -1397,8 +1397,15 @@ fn pull_cmd(
 fn progress(done: &std::sync::atomic::AtomicUsize, total: usize, label: &str, show: bool) {
     let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     if show {
-        eprint!("\r\x1b[K[{n}/{total}] {label}");
+        eprint!("{}", progress_line(n, total, label));
     }
+}
+
+/// The progress line for job `n` of `total`, written over the one before.
+/// The label (a repo's name, from a forge or a folder) is shown as text.
+fn progress_line(n: usize, total: usize, label: &str) -> String {
+    let label = argus_core::text::printable(label);
+    format!("\r\x1b[K[{n}/{total}] {label}")
 }
 
 /// What the forge listings found (repos not cloned, clones no longer
@@ -2105,6 +2112,10 @@ mod tests {
             "\x1b[32ma\u{fffd}[2Jb\x1b[0m"
         );
         assert_eq!(plain.role(Role::Ahead, "a\x07b"), "a\u{fffd}b");
+        assert_eq!(
+            progress_line(2, 5, "clone acme/x\x1b]0;t\x07"),
+            "\r\x1b[K[2/5] clone acme/x\u{fffd}]0;t\u{fffd}"
+        );
         // in a line, the part that's linked and no other
         let mut l = argus_tui::details::blank();
         l.parts = vec![

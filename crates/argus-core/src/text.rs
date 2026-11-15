@@ -34,8 +34,13 @@ pub fn web_url(s: &str) -> Option<&str> {
 pub fn terminal_safe(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
+    // (a link left open would take in all that's written after it)
+    let mut linked = false;
     while let Some(c) = rest.chars().next() {
         if let Some(n) = own_sequence(rest) {
+            if let Some(address) = rest[..n].strip_prefix(LINK) {
+                linked = address != LINK_END;
+            }
             out.push_str(&rest[..n]);
             rest = &rest[n..];
             continue;
@@ -46,7 +51,25 @@ pub fn terminal_safe(s: &str) -> String {
         });
         rest = &rest[c.len_utf8()..];
     }
+    if linked {
+        out.push_str(LINK);
+        out.push_str(LINK_END);
+    }
     out
+}
+
+/// How a link sequence starts, before its address, and ends after it.
+const LINK: &str = "\x1b]8;;";
+const LINK_END: &str = "\x1b\\";
+
+/// The colour and style codes argus writes (and a theme may ask for):
+/// reset, bold, dim, italic, underline, reverse and their ends, and the
+/// sixteen foreground colours. Not concealed text, nor backgrounds.
+fn own_style(code: &str) -> bool {
+    match code.parse::<u8>() {
+        Ok(n) => matches!(n, 0..=4 | 7 | 22..=24 | 27 | 30..=37 | 39 | 90..=97),
+        Err(_) => code.is_empty(),
+    }
 }
 
 /// The length of the colour or link sequence `s` starts with, if it does.
@@ -56,12 +79,16 @@ fn own_sequence(s: &str) -> Option<usize> {
             .find(|c: char| !c.is_ascii_digit() && c != ';')
             .unwrap_or(sgr.len());
         let after = sgr[digits..].strip_prefix('m')?;
-        return Some(s.len() - after.len());
+        return sgr[..digits]
+            .split(';')
+            .all(own_style)
+            .then_some(s.len() - after.len());
     }
-    let link = s.strip_prefix("\x1b]8;;")?;
+    let link = s.strip_prefix(LINK)?;
     let end = link.find(|c: char| c.is_control())?;
-    let after = link[end..].strip_prefix("\x1b\\")?;
-    Some(s.len() - after.len())
+    let after = link[end..].strip_prefix(LINK_END)?;
+    // (to a web address, or to nothing: the end of a link)
+    (end == 0 || web_url(&link[..end]).is_some()).then_some(s.len() - after.len())
 }
 
 #[cfg(test)]
@@ -115,7 +142,7 @@ mod tests {
             ("\x1b]8;;\x1b\\\x07", format!("\x1b]8;;\x1b\\{r}")),
             (
                 "\x1b]8;;https://x/123\x1b\\\x07",
-                format!("\x1b]8;;https://x/123\x1b\\{r}"),
+                format!("\x1b]8;;https://x/123\x1b\\{r}\x1b]8;;\x1b\\"),
             ),
             // clear screen, cursor moves, the title, the clipboard, a bell
             ("x\x1b[2Jy", format!("x{r}[2Jy")),
@@ -129,6 +156,24 @@ mod tests {
                 format!("{r}]8;;https://x/{r}oops"),
             ),
             ("\x1b]8;;https://x", format!("{r}]8;;https://x")),
+            // a link to anything but a web address isn't kept as one
+            (
+                "\x1b]8;;file:///etc/passwd\x1b\\x",
+                format!("{r}]8;;file:///etc/passwd{r}\\x"),
+            ),
+            (
+                "\x1b]8;;javascript:alert(1)\x1b\\x",
+                format!("{r}]8;;javascript:alert(1){r}\\x"),
+            ),
+            // one never ended is ended, so it takes in nothing after it
+            (
+                "\x1b]8;;https://x/\x1b\\rest",
+                "\x1b]8;;https://x/\x1b\\rest\x1b]8;;\x1b\\".to_string(),
+            ),
+            // styles that hide text, or aren't ones argus writes
+            ("\x1b[8mhidden", format!("{r}[8mhidden")),
+            ("\x1b[30;40mx", format!("{r}[30;40mx")),
+            ("\x1b[38;2;0;0;0mx", format!("{r}[38;2;0;0;0mx")),
             // nor a colour sequence that isn't one
             ("\x1b[31", format!("{r}[31")),
             ("\x1b[?25l", format!("{r}[?25l")),

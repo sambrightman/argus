@@ -223,10 +223,13 @@ pub fn plan_tracks(
             };
             // one folder inside it, whatever the forge calls the repo
             let name = Path::new(&r.id.name);
+            // (nor `.git`, which would make the folder a repository of the
+            // forge's writing, nor a name with control characters in it)
             let plain = matches!(
                 name.components().collect::<Vec<_>>().as_slice(),
                 [std::path::Component::Normal(_)]
-            );
+            ) && !r.id.name.eq_ignore_ascii_case(".git")
+                && !r.id.name.chars().any(char::is_control);
             if !plain {
                 continue;
             }

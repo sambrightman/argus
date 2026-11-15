@@ -492,6 +492,19 @@ fn the_shell_is_a_login_shell_as_in_a_terminal() {
 }
 
 #[test]
+fn the_banner_on_leaving_shows_a_folders_name_as_text() {
+    let said = argus_tui::suspend_banner("zsh", Path::new("/r/evil\x1b]0;t\x07"));
+    assert_eq!(
+        said,
+        "argus: zsh in /r/evil\u{fffd}]0;t\u{fffd} — exit to return"
+    );
+    assert_eq!(
+        argus_tui::suspend_banner("zsh", Path::new("/r/fine")),
+        "argus: zsh in /r/fine — exit to return"
+    );
+}
+
+#[test]
 fn quitting() {
     let (_sb, mut app, mut rt) = setup("");
     run(&mut app, &mut rt, vec![Effect::Quit]);

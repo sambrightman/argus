@@ -2044,6 +2044,11 @@ fn a_forge_cannot_place_a_clone_outside_its_folder() {
                 ("/tmp/abs", false, false),
                 ("a/b", false, false),
                 ("", false, false),
+                // a repository's own folder, or a name to write to the
+                // terminal with
+                (".git", false, false),
+                (".GIT", false, false),
+                ("x\u{1b}[2J", false, false),
             ],
         ),
     );
