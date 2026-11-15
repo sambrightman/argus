@@ -407,8 +407,9 @@ fn diff_rows(
     folded: &BTreeSet<(PathBuf, String, Side, usize)>,
     repo: &std::path::Path,
     file: &str,
-    side: Side,
+    section: Section,
 ) -> Vec<DetailLine> {
+    let side = section.side();
     let indent = || (None, "      ".to_string());
     let row = |parts: Vec<(Option<Role>, String)>,
                side,
@@ -430,7 +431,7 @@ fn diff_rows(
         fix: None,
         body: false,
         links: vec![],
-        section: None,
+        section: Some(section),
     };
     let mut v = vec![];
     {
@@ -939,7 +940,7 @@ impl App {
                                     &self.folded_hunks,
                                     &e.path,
                                     f,
-                                    section.side(),
+                                    section,
                                 ),
                                 None => vec![],
                             },
@@ -1001,28 +1002,40 @@ impl App {
             !files.is_empty()
         });
         let exact = target.as_ref().and_then(|t| {
-            // its file's line in that section (a diff row's: by its side),
-            // else wherever the file now is
-            let wanted = t.4.or(t.2.map(|d| match d.0 {
-                Side::Staged => Section::Staged,
-                Side::Unstaged => Section::Unstaged,
-            }));
-            let file_line = |n: usize, any: bool| match self.rows.get(n) {
-                Some(Row::Detail { repo, line }) => {
-                    t.1.is_some()
-                        && self.ws.entries[*repo].path == t.0
-                        && line.file == t.1
-                        && line.diff.is_none()
-                        && (any
-                            || wanted
-                                .is_none_or(|w| line.section.is_some_and(|s| s.side() == w.side())))
+            let wanted = t.4;
+            // the lines of its repo's changes in that section: files (by
+            // path), and the sections' own lines
+            let in_repo = |n: usize| match self.rows.get(n) {
+                Some(Row::Detail { repo, line })
+                    if self.ws.entries[*repo].path == t.0 && line.diff.is_none() =>
+                {
+                    Some(line)
                 }
-                _ => false,
+                _ => None,
             };
-            (0..self.rows.len())
+            let same_side = |n: usize| {
+                let line = in_repo(n)?;
+                (wanted.is_some() && line.section == wanted).then_some(line.file.as_ref()?)
+            };
+            let heading = |n: usize| in_repo(n).and_then(Section::heads);
+            let rows = || 0..self.rows.len();
+            rows()
                 .find(|&n| self.row_key(n).as_ref() == Some(t))
-                .or_else(|| (0..self.rows.len()).find(|&n| file_line(n, false)))
-                .or_else(|| (0..self.rows.len()).find(|&n| file_line(n, true)))
+                // a diff row gone: its file's line
+                .or_else(|| {
+                    rows().find(|&n| same_side(n).is_some() && same_side(n) == t.1.as_ref())
+                })
+                // its file gone from the section: as magit moves on, the
+                // next one there, else the one before
+                .or_else(|| rows().find(|&n| same_side(n) > t.1.as_ref()))
+                .or_else(|| rows().rev().find(|&n| same_side(n).is_some()))
+                // the section gone: the next, else the one before
+                .or_else(|| rows().find(|&n| wanted.is_some() && heading(n) > wanted))
+                .or_else(|| {
+                    rows()
+                        .rev()
+                        .find(|&n| wanted.is_some() && heading(n).is_some())
+                })
         });
         self.cursor = exact
             .or_else(|| {
@@ -3773,9 +3786,10 @@ impl App {
         let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor) else {
             return vec![];
         };
-        let (path, file) = (
+        let (path, file, section) = (
             self.ws.entries[*repo].path.clone(),
             line.file.clone().unwrap(),
+            line.section,
         );
         match line.diff.as_ref().and_then(|d| d.hunk.map(|h| (d.side, h))) {
             Some((side, h)) => {
@@ -3788,7 +3802,7 @@ impl App {
                     Some(file),
                     Some((side, Some(h), false)),
                     None,
-                    None,
+                    section,
                 )));
             }
             None => {
@@ -3803,11 +3817,7 @@ impl App {
                     self.expanded_files.insert(key);
                 }
                 // the cursor stays on the file's line
-                let section = match side {
-                    Side::Staged => Section::Staged,
-                    Side::Unstaged => Section::Unstaged,
-                };
-                self.rebuild_at(Some((path, Some(file), None, None, Some(section))));
+                self.rebuild_at(Some((path, Some(file), None, None, section)));
             }
         }
         vec![]

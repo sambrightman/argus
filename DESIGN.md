@@ -391,7 +391,13 @@ Two findings:
   the status line says what to press instead. On a section's own line the
   keys take every file in it, and Tab folds it to that line
   (`App::folded_sections`). Titles stay short and lowercase, like the
-  other labels. `argus status --details` prints the same.
+  other labels. `argus status --details` prints the same. When the
+  line under the cursor goes (its file staged, its section emptied), the
+  cursor moves on as magit's point does: to the next file of that
+  section, else the one before; with the section gone, to the next
+  section's line, else the one before; the repo only when no changes are
+  left. It doesn't follow the file to its new section, so `s s s` works
+  down a list.
 * **Every issue has an icon in the row.** A repo is never listed as
   needing attention without its row saying why. `badges::issue_icon`
   names the icon of each kind of issue with no wildcard, so adding an

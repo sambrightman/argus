@@ -4077,7 +4077,7 @@ fn several_repos_untracked_files_go_to_each_files_directory() {
 }
 
 #[test]
-fn when_the_diff_line_under_the_cursor_goes_the_cursor_falls_back_to_its_file() {
+fn when_the_diff_under_the_cursor_goes_the_cursor_moves_within_its_section() {
     let (sb, mut app) = setup_with("", diff_fixture);
     to_file(&mut app, "both");
     app.on_key(code(KeyCode::Tab));
@@ -4094,11 +4094,33 @@ fn when_the_diff_line_under_the_cursor_goes_the_cursor_falls_back_to_its_file() 
         d.clone(),
         Box::new(Ok(app.ws.get(&d).unwrap().status().unwrap().clone())),
     ));
+    // the file has left the section: the one before it there (none is
+    // after), not the file's line under staged
     match &app.rows[app.cursor] {
         Row::Detail { line, .. } => {
-            assert_eq!(line.file.as_deref(), Some("both"));
-            assert!(line.diff.is_none(), "the file's own line: {:?}", line.parts);
+            assert_eq!(line.file.as_deref(), Some("README"));
+            assert_eq!(line.section, Some(argus_tui::details::Section::Unstaged));
+            assert!(line.diff.is_none(), "a file's own line: {:?}", line.parts);
         }
+        r => panic!("{r:?}"),
+    }
+    // a hunk gone but its file still there: the file's own line
+    write(&d, "README", "hello there\nand more\n");
+    app.ws.refresh(&d);
+    app.rebuild();
+    to_file(&mut app, "README");
+    app.on_key(code(KeyCode::Tab));
+    app.cursor += 2;
+    assert!(matches!(&app.rows[app.cursor], Row::Detail { line, .. } if line.diff.is_some()));
+    app.folded_hunks.insert((
+        d.clone(),
+        "README".into(),
+        argus_core::diff::Side::Unstaged,
+        0,
+    ));
+    app.rebuild();
+    match &app.rows[app.cursor] {
+        Row::Detail { line, .. } => assert_eq!(line.file.as_deref(), Some("README")),
         r => panic!("{r:?}"),
     }
 }
@@ -6952,4 +6974,60 @@ fn links_are_drawn_over_the_text_they_link() {
     );
     app.on_key(key('m'));
     assert!(draw(&mut app, 120, 40).0.is_empty());
+}
+
+#[test]
+fn the_cursor_moves_on_as_magit_does_when_its_line_goes() {
+    use argus_tui::details::Section;
+    let (sb, mut app) = setup_with("", diff_fixture);
+    let d = sb.path("dev/dirty");
+    let here = |app: &App| match &app.rows[app.cursor] {
+        Row::Detail { line, .. } => (
+            line.parts
+                .iter()
+                .map(|p| p.1.as_str())
+                .collect::<String>()
+                .trim()
+                .to_string(),
+            line.section,
+        ),
+        Row::Repo(i) => (app.ws.entries[*i].display_name(), None),
+    };
+    let after = |app: &mut App, args: &[&str]| {
+        git(&d, args);
+        app.ws.refresh(&d);
+        app.rebuild();
+    };
+    // a file staged: on to the next file of its section, not after it
+    to_file(&mut app, "README");
+    after(&mut app, &["add", "README"]);
+    assert_eq!(here(&app), ("M both".into(), Some(Section::Unstaged)));
+    // the last of its section, with none after: the one before
+    after(&mut app, &["reset", "-q", "README"]);
+    to_file(&mut app, "both");
+    assert_eq!(here(&app).1, Some(Section::Unstaged));
+    after(&mut app, &["add", "both"]);
+    assert_eq!(here(&app), ("M README".into(), Some(Section::Unstaged)));
+    // the section's last file: the section is gone, on to the next one
+    after(&mut app, &["add", "README"]);
+    assert_eq!(here(&app), ("staged (2)".into(), Some(Section::Staged)));
+    // a section gone from its own line, none after it: the one before
+    after(&mut app, &["reset", "-q"]);
+    to_section(&mut app, Section::Unstaged);
+    after(&mut app, &["checkout", "--", "."]);
+    assert_eq!(
+        here(&app),
+        ("untracked (2)".into(), Some(Section::Untracked))
+    );
+    // in a diff: its hunk gone with its file, on to the next file
+    after(&mut app, &["add", "-N", "bin", "new"]);
+    to_file(&mut app, "bin");
+    assert_eq!(here(&app).1, Some(Section::Unstaged));
+    after(&mut app, &["add", "bin"]);
+    assert_eq!(here(&app), ("A new".into(), Some(Section::Unstaged)));
+    // nothing of the kind left at all: the repo
+    after(&mut app, &["add", "new"]);
+    to_section(&mut app, Section::Staged);
+    after(&mut app, &["commit", "-q", "-m", "all"]);
+    assert_eq!(here(&app), ("acme/dirty".into(), None));
 }
