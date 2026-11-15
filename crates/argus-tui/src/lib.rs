@@ -85,6 +85,7 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
     // turns: even a frame that changes nothing writes to the terminal,
     // which terminals show as activity (iTerm's tab spinner).
     let mut dirty = true;
+    let mut drawn = std::time::Instant::now();
     let result = (|| -> Result<(), Error> {
         while !app.quit {
             // The View menu can switch theme and icons for the session.
@@ -102,15 +103,18 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
                 tick,
             };
             let busy = app.scanning || !app.running.is_empty();
-            if dirty || busy {
+            // (the spinner turns at its own pace however often results
+            // are looked for)
+            if dirty || (busy && drawn.elapsed() >= SPIN) {
                 tick = tick.wrapping_add(1);
                 let mut links = vec![];
                 terminal.draw(|f| links = ui::draw(f, &mut app, &view))?;
                 ui::write_links(terminal.backend_mut(), &links)?;
+                drawn = std::time::Instant::now();
             }
             dirty = false;
             let mut left = vec![];
-            if event::poll(Duration::from_millis(if busy { 80 } else { 250 }))? {
+            if event::poll(wait_for_key(rt.working(), busy))? {
                 // a resize too
                 dirty = true;
                 if let Event::Key(k) = event::read()?
@@ -203,6 +207,52 @@ pub fn suspended_command(
     c
 }
 
+/// How often the spinner turns while something runs.
+const SPIN: Duration = Duration::from_millis(80);
+
+/// How long the loop waits for a key before looking for results again.
+/// Nothing wakes it when one arrives, so while background work is out it
+/// looks often (a result shows within a frame, not a quarter of a second
+/// later); with only a spinner to turn, at the spinner's pace; idle,
+/// rarely.
+pub fn wait_for_key(working: bool, busy: bool) -> Duration {
+    match (working, busy) {
+        (true, _) => Duration::from_millis(10),
+        (false, true) => SPIN,
+        (false, false) => Duration::from_millis(250),
+    }
+}
+
+/// Lets so many through at once: the rest wait their turn.
+struct Gate {
+    free: std::sync::Mutex<usize>,
+    freed: std::sync::Condvar,
+}
+
+impl Gate {
+    fn new(n: usize) -> Self {
+        Gate {
+            free: std::sync::Mutex::new(n.max(1)),
+            freed: std::sync::Condvar::new(),
+        }
+    }
+
+    /// Run `work` once there's room.
+    fn run<R>(&self, work: impl FnOnce() -> R) -> R {
+        {
+            let mut free = self.free.lock().unwrap_or_else(|e| e.into_inner());
+            while *free == 0 {
+                free = self.freed.wait(free).unwrap_or_else(|e| e.into_inner());
+            }
+            *free -= 1;
+        }
+        let r = work();
+        *self.free.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        self.freed.notify_one();
+        r
+    }
+}
+
 /// Carries out the app's effects, except suspending the terminal: saving
 /// marks and state, opening URLs, and background work (scans, refreshes,
 /// jobs, fixes, planning pulls and clones) whose results come back as messages.
@@ -213,6 +263,9 @@ pub struct Runtime {
     cancel: Arc<AtomicBool>,
     /// Background work started and not yet finished (its messages sent).
     pending: Arc<AtomicUsize>,
+    /// Forge requests out at once: as many as other network work
+    /// (`concurrency.network`), however many repos are opened together.
+    forge_gate: Option<Arc<Gate>>,
     /// The forge clients made so far, by kind and host.
     forges: std::collections::HashMap<
         (String, String),
@@ -229,6 +282,7 @@ impl Runtime {
             opts,
             cancel: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(AtomicUsize::new(0)),
+            forge_gate: None,
             forges: Default::default(),
         }
     }
@@ -273,6 +327,11 @@ impl Runtime {
                 return false;
             }
         }
+    }
+
+    /// Whether background work is out, its results still to come.
+    pub fn working(&self) -> bool {
+        self.pending.load(Ordering::SeqCst) > 0
     }
 
     /// Run `work` on a thread, counted as pending until it returns.
@@ -390,9 +449,17 @@ impl Runtime {
                         f
                     }
                 };
+                let jobs = app.ws.config.network_jobs();
+                let gate = self
+                    .forge_gate
+                    .get_or_insert_with(|| Arc::new(Gate::new(jobs)))
+                    .clone();
                 self.spawn(move |tx| {
-                    let info = forge
-                        .and_then(|f| f.info(&id, &branches, &owners).map_err(|e| e.to_string()));
+                    let ask = |f: Arc<dyn argus_core::forge::Forge>| {
+                        gate.run(|| f.info(&id, &branches, &owners))
+                            .map_err(|e| e.to_string())
+                    };
+                    let info = forge.and_then(ask);
                     let _ = tx.send(Msg::Forge {
                         path,
                         branches,
@@ -438,6 +505,49 @@ impl Runtime {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn results_are_looked_for_often_only_while_work_is_out() {
+        use super::wait_for_key;
+        let ms = |working, busy| wait_for_key(working, busy).as_millis();
+        assert_eq!(ms(true, true), 10);
+        assert_eq!(ms(true, false), 10, "a refresh, with nothing spinning");
+        assert_eq!(ms(false, true), 80);
+        assert_eq!(ms(false, false), 250);
+    }
+
+    #[test]
+    fn a_gate_lets_only_so_many_through_at_once() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        for size in [1, 3] {
+            let gate = Arc::new(super::Gate::new(size));
+            let (inside, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+            let threads: Vec<_> = (0..12)
+                .map(|_| {
+                    let (gate, inside, most) = (gate.clone(), inside.clone(), most.clone());
+                    std::thread::spawn(move || {
+                        gate.run(|| {
+                            let now = inside.fetch_add(1, Ordering::SeqCst) + 1;
+                            most.fetch_max(now, Ordering::SeqCst);
+                            std::thread::sleep(std::time::Duration::from_millis(5));
+                            inside.fetch_sub(1, Ordering::SeqCst);
+                        })
+                    })
+                })
+                .collect();
+            for t in threads {
+                t.join().unwrap();
+            }
+            // all ran, never more than the size at once, and (with room
+            // for several) more than one
+            assert_eq!(inside.load(Ordering::SeqCst), 0);
+            let most = most.load(Ordering::SeqCst);
+            assert!(most <= size && (size == 1 || most > 1), "{size}: {most}");
+        }
+        // none is no gate at all: one
+        assert_eq!(*super::Gate::new(0).free.lock().unwrap(), 1);
+    }
+
     #[test]
     fn the_default_opener_is_the_platforms() {
         let want = if cfg!(target_os = "macos") {

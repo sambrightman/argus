@@ -534,3 +534,49 @@ fn a_forge_that_cannot_be_made_says_why() {
     });
     assert!(found);
 }
+
+#[test]
+fn forge_requests_go_out_a_few_at_a_time() {
+    use argus_core::forge::RepoInfo;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static INSIDE: AtomicUsize = AtomicUsize::new(0);
+    static MOST: AtomicUsize = AtomicUsize::new(0);
+    static ASKED: AtomicUsize = AtomicUsize::new(0);
+    struct Slow;
+    impl Forge for Slow {
+        fn kind(&self) -> &str {
+            "slow"
+        }
+        fn host(&self) -> &str {
+            "github.com"
+        }
+        fn list(&self, _: &str, _: Option<&str>) -> Result<Vec<RemoteRepo>, ForgeError> {
+            Ok(vec![])
+        }
+        fn info(
+            &self,
+            _: &argus_core::identity::RepoId,
+            _: &[String],
+            _: &[String],
+        ) -> Result<Option<RepoInfo>, ForgeError> {
+            let now = INSIDE.fetch_add(1, Ordering::SeqCst) + 1;
+            MOST.fetch_max(now, Ordering::SeqCst);
+            ASKED.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(30));
+            INSIDE.fetch_sub(1, Ordering::SeqCst);
+            Ok(None)
+        }
+    }
+    fn slow(_: &str, _: &str) -> Result<Box<dyn Forge>, ForgeError> {
+        Ok(Box::new(Slow))
+    }
+    // every repo opened at once, one network job allowed
+    let (sb, mut app, _) = setup("[concurrency]\nnetwork = 1");
+    app.ws.config.ui.forge_info = true;
+    let mut rt = runtime(&sb, &sb.path("config.toml"), "true", &slow);
+    let fx = app.act(Action::ExpandAll);
+    assert_eq!(fx.len(), 3, "{fx:?}");
+    run(&mut app, &mut rt, fx);
+    assert_eq!(ASKED.load(Ordering::SeqCst), 3, "all asked");
+    assert_eq!(MOST.load(Ordering::SeqCst), 1, "one at a time");
+}
