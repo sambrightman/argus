@@ -6733,7 +6733,7 @@ fn changes_are_listed_by_section_each_file_with_that_sides_letter() {
         .iter()
         .position(|r| matches!(r, Row::Detail { line, .. } if Section::heads(line).is_some()))
         .unwrap();
-    let listed: Vec<(String, Option<Section>, bool)> = app.rows[from - 1..]
+    let listed: Vec<(String, Option<Section>, bool)> = app.rows[from..]
         .iter()
         .map_while(|r| match r {
             Row::Detail { line, .. } => Some((
@@ -6745,15 +6745,12 @@ fn changes_are_listed_by_section_each_file_with_that_sides_letter() {
         })
         .collect();
     let want = [
-        ("", None, false),
         ("untracked (2)", Some(Section::Untracked), true),
         ("    bin", Some(Section::Untracked), false),
         ("    new", Some(Section::Untracked), false),
-        ("", None, false),
         ("unstaged (2)", Some(Section::Unstaged), true),
         ("    M README", Some(Section::Unstaged), false),
         ("    M both", Some(Section::Unstaged), false),
-        ("", None, false),
         ("staged (1)", Some(Section::Staged), true),
         ("    M both", Some(Section::Staged), false),
     ];
@@ -6777,11 +6774,35 @@ fn changes_are_listed_by_section_each_file_with_that_sides_letter() {
     assert_eq!(role("    M both", Section::Unstaged), Some(Role::Unstaged));
     assert_eq!(role("    M both", Section::Staged), Some(Role::Staged));
     assert_eq!(role("    new", Section::Untracked), Some(Role::Untracked));
-    // a blank line is nothing to stop at: `n` goes from heading to file
+    // no blank lines until a diff is open: then one after it, setting
+    // what follows apart, whether a file or a section
+    assert!(!trimmed(&app).contains(&String::new()));
+    to_file(&mut app, "README");
+    app.on_key(code(KeyCode::Tab));
+    let t = trimmed(&app);
+    let at = t.iter().position(|l| l == "M README").unwrap();
+    assert_eq!(
+        t[at + 1..at + 6],
+        ["@@ -1 +1 @@", "-hello world", "+hello there", "", "M both"]
+    );
+    assert_eq!(t.iter().filter(|l| l.is_empty()).count(), 1);
+    to_file(&mut app, "both");
+    app.on_key(code(KeyCode::Tab));
+    let t = trimmed(&app);
+    let at = t.iter().rposition(|l| l == "+three").unwrap();
+    assert_eq!(t[at + 1..at + 3], ["", "staged (1)"]);
+    // a blank line is nothing to stop at
+    let blank =
+        |line: &argus_tui::details::DetailLine| line.parts.iter().all(|p| p.1.trim().is_empty());
     assert!(app.rows.iter().all(|r| match r {
-        Row::Detail { line, .. } => !line.parts.is_empty() || line.is_body(),
+        Row::Detail { line, .. } => !blank(line) || line.is_body(),
         Row::Repo(_) => true,
     }));
+    // the last diff of all has nothing after it to set apart
+    to_staged(&mut app, "both");
+    app.on_key(code(KeyCode::Tab));
+    let t = trimmed(&app);
+    assert_eq!(t.last().map(String::as_str), Some("+two"), "{t:?}");
 }
 
 #[test]
@@ -6979,18 +7000,32 @@ fn links_are_drawn_over_the_text_they_link() {
 #[test]
 fn the_cursor_moves_on_as_magit_does_when_its_line_goes() {
     use argus_tui::details::Section;
-    let (sb, mut app) = setup_with("", diff_fixture);
+    let (sb, mut app) = setup_with("", |sb| {
+        diff_fixture(sb);
+        // another repo's changes, open too, are no part of it
+        write(&sb.path("dev/clean"), "README", "changed\n");
+        write(&sb.path("dev/clean"), "zz", "new\n");
+    });
+    app.act(Action::ExpandAll);
     let d = sb.path("dev/dirty");
+    let in_dirty = |app: &App| app.current().unwrap().path.ends_with("dirty");
+    // the cursor on dirty's own line of a section, or of a file in it
+    let dirty_line = |app: &mut App, section: Section, file: Option<&str>| {
+        app.cursor = (0..app.rows.len())
+            .find(|&n| {
+                matches!(&app.rows[n], Row::Detail { repo, line }
+                if app.ws.entries[*repo].path.ends_with("dirty")
+                    && line.section == Some(section)
+                    && line.diff.is_none()
+                    && line.file.as_deref() == file)
+            })
+            .unwrap();
+    };
     let here = |app: &App| match &app.rows[app.cursor] {
-        Row::Detail { line, .. } => (
-            line.parts
-                .iter()
-                .map(|p| p.1.as_str())
-                .collect::<String>()
-                .trim()
-                .to_string(),
-            line.section,
-        ),
+        Row::Detail { line, .. } => {
+            let text: String = line.parts.iter().map(|p| p.1.as_str()).collect();
+            (text.trim().to_string(), line.section)
+        }
         Row::Repo(i) => (app.ws.entries[*i].display_name(), None),
     };
     let after = |app: &mut App, args: &[&str]| {
@@ -6998,36 +7033,59 @@ fn the_cursor_moves_on_as_magit_does_when_its_line_goes() {
         app.ws.refresh(&d);
         app.rebuild();
     };
+    let at = |text: &str, section| (text.to_string(), Some(section));
     // a file staged: on to the next file of its section, not after it
-    to_file(&mut app, "README");
+    dirty_line(&mut app, Section::Unstaged, Some("README"));
     after(&mut app, &["add", "README"]);
-    assert_eq!(here(&app), ("M both".into(), Some(Section::Unstaged)));
+    assert_eq!(here(&app), at("M both", Section::Unstaged));
     // the last of its section, with none after: the one before
     after(&mut app, &["reset", "-q", "README"]);
-    to_file(&mut app, "both");
-    assert_eq!(here(&app).1, Some(Section::Unstaged));
+    dirty_line(&mut app, Section::Unstaged, Some("both"));
     after(&mut app, &["add", "both"]);
-    assert_eq!(here(&app), ("M README".into(), Some(Section::Unstaged)));
+    assert_eq!(here(&app), at("M README", Section::Unstaged));
+    assert!(in_dirty(&app), "its own repo's, not another's");
+    // the first section gone, two after it: the next, not the last
+    dirty_line(&mut app, Section::Untracked, None);
+    after(&mut app, &["add", "bin", "new"]);
+    assert_eq!(here(&app), at("unstaged (1)", Section::Unstaged));
+    assert!(in_dirty(&app));
+    after(&mut app, &["reset", "-q", "bin", "new"]);
     // the section's last file: the section is gone, on to the next one
+    dirty_line(&mut app, Section::Unstaged, Some("README"));
     after(&mut app, &["add", "README"]);
-    assert_eq!(here(&app), ("staged (2)".into(), Some(Section::Staged)));
+    assert_eq!(here(&app), at("staged (2)", Section::Staged));
+    assert!(in_dirty(&app));
     // a section gone from its own line, none after it: the one before
     after(&mut app, &["reset", "-q"]);
-    to_section(&mut app, Section::Unstaged);
+    dirty_line(&mut app, Section::Unstaged, None);
     after(&mut app, &["checkout", "--", "."]);
-    assert_eq!(
-        here(&app),
-        ("untracked (2)".into(), Some(Section::Untracked))
-    );
+    assert_eq!(here(&app), at("untracked (2)", Section::Untracked));
+    assert!(in_dirty(&app));
     // in a diff: its hunk gone with its file, on to the next file
     after(&mut app, &["add", "-N", "bin", "new"]);
-    to_file(&mut app, "bin");
-    assert_eq!(here(&app).1, Some(Section::Unstaged));
+    dirty_line(&mut app, Section::Unstaged, Some("bin"));
     after(&mut app, &["add", "bin"]);
-    assert_eq!(here(&app), ("A new".into(), Some(Section::Unstaged)));
+    assert_eq!(here(&app), at("A new", Section::Unstaged));
     // nothing of the kind left at all: the repo
     after(&mut app, &["add", "new"]);
-    to_section(&mut app, Section::Staged);
+    dirty_line(&mut app, Section::Staged, None);
     after(&mut app, &["commit", "-q", "-m", "all"]);
     assert_eq!(here(&app), ("acme/dirty".into(), None));
+    // a hunk folded away under the cursor, another file after its own in
+    // the section: its own file's line
+    write(&d, "README", "one more\n");
+    write(&d, "both", "and this\n");
+    app.ws.refresh(&d);
+    app.rebuild();
+    dirty_line(&mut app, Section::Unstaged, Some("README"));
+    app.on_key(code(KeyCode::Tab));
+    app.cursor += 2;
+    assert!(matches!(&app.rows[app.cursor], Row::Detail { line, .. } if line.diff.is_some()));
+    let side = argus_core::diff::Side::Unstaged;
+    app.folded_hunks
+        .insert((d.clone(), "README".into(), side, 0));
+    app.rebuild();
+    assert!(matches!(&app.rows[app.cursor], Row::Detail { line, .. }
+        if line.file.as_deref() == Some("README") && line.diff.is_none()));
+    assert!(in_dirty(&app));
 }

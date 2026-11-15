@@ -383,7 +383,7 @@ Two findings:
   fonts with better glyphs (e.g. ★); unknown names warn.
 * **Changes are listed by section, as magit has them:** `untracked`,
   `unstaged`, `staged`, in that order, each headed by its own line at the
-  label column after a blank one, its files below with that side's one
+  label column, its files below with that side's one
   letter (an untracked file is just its path). A file with changes on both
   sides is under both, and Tab on either line shows that side's diff only.
   The section says which side a key means: `s` under untracked or
@@ -391,7 +391,10 @@ Two findings:
   the status line says what to press instead. On a section's own line the
   keys take every file in it, and Tab folds it to that line
   (`App::folded_sections`). Titles stay short and lowercase, like the
-  other labels. `argus status --details` prints the same. When the
+  other labels. `argus status --details` prints the same. A blank line
+  follows an open diff when anything comes after it (another file, a
+  section): it sets the rest apart from the diff's noise, so there are
+  none until a diff is open. When the
   line under the cursor goes (its file staged, its section emptied), the
   cursor moves on as magit's point does: to the next file of that
   section, else the one before; with the section gone, to the next

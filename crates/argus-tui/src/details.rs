@@ -189,6 +189,14 @@ fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
     }
 }
 
+/// A blank line, nothing to stop at: after a diff, before what follows.
+pub fn blank() -> DetailLine {
+    DetailLine {
+        body: true,
+        ..line(vec![])
+    }
+}
+
 fn plain(s: impl Into<String>) -> (Option<Role>, String) {
     (None, s.into())
 }
@@ -590,8 +598,8 @@ pub fn details(
         }
     }
     // changes by section, as magit has them: each headed by its own line
-    // (which folds it) after a blank one, its files below, a file in every
-    // section it has changes in
+    // (which folds it), its files below, a file in every section it has
+    // changes in
     for section in Section::ALL {
         let files: Vec<_> = s
             .changes
@@ -602,10 +610,6 @@ pub fn details(
         if files.is_empty() {
             continue;
         }
-        v.push(DetailLine {
-            body: true,
-            ..line(vec![])
-        });
         v.push(DetailLine {
             section: Some(section),
             ..line(vec![styled(
@@ -642,13 +646,6 @@ pub fn details(
         }
     }
     if !s.stashes.is_empty() {
-        // (set off from the sections of changes, as they are from above)
-        if !s.changes.files.is_empty() {
-            v.push(DetailLine {
-                body: true,
-                ..line(vec![])
-            });
-        }
         let ignored = e.stash_ignored.iter().filter(|&&i| i).count();
         let mut parts = vec![
             styled(Role::Dim, "stashes   "),

@@ -2146,8 +2146,8 @@ fn status_details_prints_what_the_tui_details_show() {
         "    issue     1 uncommitted path(s)",
         "    branches",
         "      * feat  origin/feat",
-        // changes by section, after a blank line that stays blank
-        "\n\n    unstaged (1)\n        M README\n",
+        // changes by section
+        "\n    unstaged (1)\n        M README\n",
         // a fix the CLI can't run says where it can be
         "commit…  1 uncommitted path(s)  (in the TUI: c A)",
         // one it can names the command

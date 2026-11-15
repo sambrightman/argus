@@ -968,7 +968,11 @@ impl App {
                     };
                     let inner_pad = unfold_indent(&line);
                     rows.push(Row::Detail { repo: r, line });
-                    rows.extend(diff.into_iter().map(|line| Row::Detail {
+                    // a blank line after a diff sets what follows apart
+                    // from it
+                    let after_diff =
+                        (!diff.is_empty() && !stack.is_empty()).then(crate::details::blank);
+                    rows.extend(diff.into_iter().chain(after_diff).map(|line| Row::Detail {
                         repo: r,
                         line: padded(line, pad),
                     }));
@@ -1029,12 +1033,18 @@ impl App {
                 // next one there, else the one before
                 .or_else(|| rows().find(|&n| same_side(n) > t.1.as_ref()))
                 .or_else(|| rows().rev().find(|&n| same_side(n).is_some()))
-                // the section gone: the next, else the one before
-                .or_else(|| rows().find(|&n| wanted.is_some() && heading(n) > wanted))
+                // the section gone: the next there is, else the one before
                 .or_else(|| {
-                    rows()
-                        .rev()
-                        .find(|&n| wanted.is_some() && heading(n).is_some())
+                    let from = |all: Vec<Section>| {
+                        all.into_iter()
+                            .skip_while(move |s| Some(*s) != wanted)
+                            .skip(1)
+                    };
+                    let later = from(Section::ALL.to_vec());
+                    let earlier = from(Section::ALL.into_iter().rev().collect());
+                    later
+                        .chain(earlier)
+                        .find_map(|s| rows().find(|&n| heading(n) == Some(s)))
                 })
         });
         self.cursor = exact
