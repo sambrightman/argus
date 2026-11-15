@@ -36,7 +36,6 @@ pub struct Theme {
 const ROLE_NAMES: &[(Role, &str)] = &[
     (Role::New, "new"),
     (Role::Hidden, "hidden"),
-    (Role::Pull, "pull"),
     (Role::Branch, "branch"),
     (Role::DefaultBranch, "default-branch"),
     (Role::Detached, "detached"),
@@ -109,7 +108,7 @@ impl Theme {
         ROLE_NAMES
             .iter()
             .map(|(_, n)| *n)
-            .chain(["mark"])
+            .chain(["mark", "pull"])
             .chain(UI_NAMES.iter().map(|(_, n)| *n))
     }
 
@@ -136,12 +135,19 @@ impl Theme {
             .filter(|n| !marks.contains_key(*n))
             .map(|n| format!("colour for mark.{n}, which isn't a mark"))
             .collect();
-        let fallback = self.roles.get("mark").copied().unwrap_or_default();
+        let role = |name: &str| self.roles.get(name).copied();
         self.marks = marks
             .iter()
             .map(|(name, def)| {
                 if let Some(s) = self.roles.get(&format!("mark.{name}")) {
                     return *s;
+                }
+                // pull has a colour of its own in every theme (`pull`),
+                // which `[ui] colors` setting it puts before the mark's
+                let pull = (name == argus_core::config::PULL).then_some("pull");
+                let fallback = pull.and_then(role).or(role("mark")).unwrap_or_default();
+                if pull.is_some_and(|p| config.ui.colors.contains_key(p)) {
+                    return fallback;
                 }
                 match def.color.as_deref().map(|c| (c, parse_style(c))) {
                     Some((_, Some(s))) => s,
@@ -153,16 +159,6 @@ impl Theme {
                 }
             })
             .collect();
-        // pull shows as a state, in the `pull` role: the mark's colour is
-        // that role's, unless `[ui] colors` sets the role itself
-        let pull = &marks[argus_core::config::PULL];
-        let own = self.roles.get("mark.pull").copied().or_else(|| {
-            let given = pull.color.as_deref().and_then(parse_style);
-            given.filter(|_| !config.ui.colors.contains_key("pull"))
-        });
-        if let Some(style) = own {
-            self.roles.insert("pull".into(), style);
-        }
         if marks[argus_core::config::IGNORE].color.is_some() {
             warnings.push(
                 "[marks.ignore] color isn't used: ignored repos take [ui] colors hidden".into(),
@@ -418,7 +414,10 @@ mod tests {
         let pull = |cfg: &str| {
             let c = argus_core::Config::parse(cfg).unwrap();
             let (t, w) = Theme::build("terminal", &c.ui.colors).0.with_marks(&c);
-            (t.role(Role::Pull).fg, w)
+            (
+                t.role(Role::Mark(c.marks.get_index_of("pull").unwrap())).fg,
+                w,
+            )
         };
         let own = pull("").0;
         assert_ne!(own, Some(Color::Red));

@@ -882,10 +882,6 @@ struct Paint {
     color: bool,
     /// Each mark's colour code, in config order (see [`Paint::marks`]).
     marks: Vec<String>,
-    /// Where the pull mark is among them, and whether it's given a
-    /// colour (else pull keeps its own).
-    pull: usize,
-    pull_coloured: bool,
     /// Whether text can carry links (OSC 8): a terminal, coloured or not.
     links: bool,
 }
@@ -895,8 +891,6 @@ impl Paint {
         Self {
             color: std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none(),
             marks: vec![],
-            pull: 0,
-            pull_coloured: false,
             links: std::io::stdout().is_terminal(),
         }
     }
@@ -926,7 +920,7 @@ impl Paint {
 
     /// With `c`'s marks' colours: each one's `[ui] colors` `mark.<name>`,
     /// else its `color`, as far as the terminal's 16 colours and bold or
-    /// dim go; else yellow.
+    /// dim go; else yellow (blue for pull).
     fn marks(mut self, c: &argus_core::Config) -> Self {
         self.marks = c
             .marks
@@ -936,12 +930,14 @@ impl Paint {
                     c.ui.colors
                         .get(&format!("mark.{name}"))
                         .or(def.color.as_ref());
-                spec.and_then(|s| ansi(s)).unwrap_or_else(|| "33".into())
+                let own = if name == argus_core::config::PULL {
+                    "34"
+                } else {
+                    "33"
+                };
+                spec.and_then(|s| ansi(s)).unwrap_or_else(|| own.into())
             })
             .collect();
-        let pull = argus_core::config::PULL;
-        self.pull = c.marks.get_index_of(pull).unwrap_or(0);
-        self.pull_coloured = c.ui.colors.contains_key("mark.pull") || c.marks[pull].color.is_some();
         self
     }
 
@@ -955,11 +951,6 @@ impl Paint {
             Role::Mark(i) => self.marks.get(i).map_or("33", String::as_str),
             Role::New => "1;36",
             Role::Hidden | Role::Dim => "2",
-            Role::Pull => self
-                .marks
-                .get(self.pull)
-                .filter(|_| self.pull_coloured)
-                .map_or("34", String::as_str),
             Role::Branch => "35",
             Role::DefaultBranch => "2;35",
             Role::Detached => "1;35",
@@ -2092,8 +2083,6 @@ mod tests {
         let p = Paint {
             color: true,
             marks: vec![],
-            pull: 0,
-            pull_coloured: false,
             links: true,
         }
         .marks(&c);
@@ -2129,10 +2118,10 @@ mod tests {
             "a \x1b]8;;https://x\x1b\\\x1b[32mb\x1b[0m\x1b]8;;\x1b\\ c"
         );
         assert_eq!(plain.line(&l), "a b c");
-        assert_eq!(p.marks, ["1;34", "33", "33", "36", "33"]);
+        assert_eq!(p.marks, ["1;34", "34", "33", "36", "33"]);
         assert_eq!(p.role(Role::Mark(3), "W"), "\x1b[36mW\x1b[0m");
         // pull keeps its own colour unless its mark is given one
-        assert_eq!(p.role(Role::Pull, "p"), "\x1b[34mp\x1b[0m");
+        assert_eq!(p.role(Role::Mark(1), "p"), "\x1b[34mp\x1b[0m");
         for cfg in [
             "[marks.pull]\ncolor = 'bold red'\n",
             "[ui.colors]\n'mark.pull' = 'bold red'\n",
@@ -2141,12 +2130,10 @@ mod tests {
             let p = Paint {
                 color: true,
                 marks: vec![],
-                pull: 0,
-                pull_coloured: false,
                 links: false,
             }
             .marks(&c);
-            assert_eq!(p.role(Role::Pull, "p"), "\x1b[1;31mp\x1b[0m", "{cfg}");
+            assert_eq!(p.role(Role::Mark(1), "p"), "\x1b[1;31mp\x1b[0m", "{cfg}");
         }
         assert_eq!(
             p.role(Role::Mark(9), "?"),

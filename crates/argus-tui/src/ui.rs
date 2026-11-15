@@ -784,6 +784,10 @@ pub fn legend<'a>(i: &'a Icons, marks: &'a [(String, String)]) -> Vec<(&'a str, 
         .enumerate()
         .map(|(n, (name, icon))| (icon.as_str(), Role::Mark(n), format!("mark: {name}")))
         .collect();
+    let pull = marks
+        .iter()
+        .position(|(n, _)| n == argus_core::config::PULL);
+    let pull = Role::Mark(pull.unwrap_or(usize::MAX));
     let rest: Vec<(&str, Role, &str)> = vec![
         (
             &i.new,
@@ -791,7 +795,7 @@ pub fn legend<'a>(i: &'a Icons, marks: &'a [(String, String)]) -> Vec<(&'a str, 
             "new (cloned or found, not yet acknowledged)",
         ),
         (&i.ignored, Role::Hidden, "ignored"),
-        (&i.pull, Role::Pull, "pulled by argus pull (and F a)"),
+        (&i.pull, pull, "pulled by argus pull (and F a)"),
         (&i.snoozed, Role::Hidden, "snoozed"),
         (
             &i.branch,

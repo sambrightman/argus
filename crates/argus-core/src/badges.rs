@@ -17,7 +17,6 @@ pub enum Role {
     Mark(usize),
     New,
     Hidden,
-    Pull,
     Branch,
     DefaultBranch,
     Detached,
@@ -67,7 +66,9 @@ pub fn flags(e: &Entry, i: &Icons, marks: &[(String, String)]) -> Vec<Badge> {
     }
     // (never with ignored: ignore excludes pull)
     if e.flags.pull {
-        v.push(b(Role::Pull, &i.pull));
+        // (a mark like the others, shown here among the states)
+        let at = marks.iter().position(|(n, _)| n == crate::config::PULL);
+        v.push(b(Role::Mark(at.unwrap_or(usize::MAX)), &i.pull));
     }
     v
 }
