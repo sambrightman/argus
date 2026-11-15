@@ -810,10 +810,11 @@ impl App {
         let top = (0..=n.min(self.rows.len().checked_sub(1)?))
             .rev()
             .find(is_repo)?;
-        let end = (top + 1..self.rows.len())
+        let first = top + 1;
+        let end = (first..self.rows.len())
             .find(is_repo)
             .unwrap_or(self.rows.len());
-        Some((top, top + 1..end))
+        Some((top, first..end))
     }
 
     /// Row `n`'s place among its repo's details.
@@ -888,7 +889,8 @@ impl App {
                 continue;
             }
             let still = |seg: &Seg| now.iter().find(|(_, s)| *s == seg).map(|(n, _)| *n);
-            let after = before.iter().skip(nth + 1).find_map(still);
+            // (from where it was: it's gone, so the first found is after it)
+            let after = before.iter().skip(*nth).find_map(still);
             let earlier = || before.iter().take(*nth).rev().find_map(still);
             if let Some(n) = after.or_else(earlier) {
                 return Some(n);
