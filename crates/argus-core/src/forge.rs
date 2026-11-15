@@ -115,12 +115,47 @@ pub enum Whereabouts {
 pub struct RepoInfo {
     pub open_issues: usize,
     pub open_pulls: usize,
+    /// The repo this one is a fork of, where its issues and pull
+    /// requests mostly are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<ParentInfo>,
     /// A pull request from each of the branches asked about that has one:
     /// its open one, else its newest.
     pub pulls: Vec<PullRequest>,
 }
 
+/// The repo a fork came from: `owner/name` and its counts.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ParentInfo {
+    pub name: String,
+    pub open_issues: usize,
+    pub open_pulls: usize,
+}
+
 impl RepoInfo {
+    /// The counts in words: a fork's are its parent's, named, with its
+    /// own after them when it has any.
+    pub fn counts(&self) -> String {
+        let said = |issues: usize, pulls: usize| {
+            format!(
+                "{issues} open {}, {pulls} open pull {}",
+                crate::plural(issues, "issue", "issues"),
+                crate::plural(pulls, "request", "requests"),
+            )
+        };
+        let own = said(self.open_issues, self.open_pulls);
+        match &self.parent {
+            None => own,
+            Some(p) => {
+                let theirs = format!("{}: {}", p.name, said(p.open_issues, p.open_pulls));
+                match self.open_issues + self.open_pulls {
+                    0 => theirs,
+                    _ => format!("{theirs}; this fork: {own}"),
+                }
+            }
+        }
+    }
+
     pub fn pull(&self, branch: &str) -> Option<&PullRequest> {
         self.pulls.iter().find(|p| p.branch == branch)
     }
@@ -137,6 +172,22 @@ pub fn branches_to_ask(s: &crate::status::RepoStatus) -> Vec<String> {
         .collect();
     v.sort_by_key(|b| !b.is_head);
     v.into_iter().map(|b| b.name.clone()).collect()
+}
+
+/// Whose pull requests from this clone's branches may be, besides the
+/// repo's own owner: the owners of its other remotes on the same host
+/// (a fork pushed to beside the upstream it was cloned from).
+pub fn head_owners(id: &RepoId, s: &crate::status::RepoStatus) -> Vec<String> {
+    let mut v: Vec<String> = s
+        .other_remotes
+        .iter()
+        .filter_map(|u| RepoId::from_url(u))
+        .filter(|o| o.host == id.host && !o.owner.eq_ignore_ascii_case(&id.owner))
+        .map(|o| o.owner.to_lowercase())
+        .collect();
+    v.sort();
+    v.dedup();
+    v
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,8 +280,14 @@ pub trait Forge: Send + Sync {
         Ok(Whereabouts::Gone)
     }
     /// What the forge says of the repo, and of pull requests from
-    /// `branches`; `None` from a kind of forge with nothing to say.
-    fn info(&self, _id: &RepoId, _branches: &[String]) -> Result<Option<RepoInfo>, ForgeError> {
+    /// `branches` whose head is the repo's owner's or one of `owners`'
+    /// ([`head_owners`]); `None` from a kind of forge with nothing to say.
+    fn info(
+        &self,
+        _id: &RepoId,
+        _branches: &[String],
+        _owners: &[String],
+    ) -> Result<Option<RepoInfo>, ForgeError> {
         Ok(None)
     }
 }
@@ -321,6 +378,33 @@ mod tests {
     }
 
     #[test]
+    fn counts_are_the_parents_for_a_fork_with_its_own_when_it_has_any() {
+        let mut i = RepoInfo {
+            open_issues: 1,
+            open_pulls: 2,
+            ..Default::default()
+        };
+        assert_eq!(i.counts(), "1 open issue, 2 open pull requests");
+        i.parent = Some(ParentInfo {
+            name: "up/w".into(),
+            open_issues: 26,
+            open_pulls: 1,
+        });
+        assert_eq!(
+            i.counts(),
+            "up/w: 26 open issues, 1 open pull request; this fork: 1 open issue, 2 open pull requests"
+        );
+        (i.open_issues, i.open_pulls) = (0, 0);
+        assert_eq!(i.counts(), "up/w: 26 open issues, 1 open pull request");
+        // one of the two is enough to say the fork's own
+        i.open_pulls = 1;
+        assert!(
+            i.counts()
+                .ends_with("; this fork: 0 open issues, 1 open pull request")
+        );
+    }
+
+    #[test]
     fn info_finds_a_branchs_pull_request_and_a_forge_may_have_none() {
         let info = RepoInfo {
             pulls: vec![pr(PullState::Open, false)],
@@ -341,7 +425,7 @@ mod tests {
             }
         }
         let id = RepoId::new("h", "o", "n");
-        assert_eq!(Plain.info(&id, &[]).unwrap(), None);
+        assert_eq!(Plain.info(&id, &[], &[]).unwrap(), None);
         assert_eq!(Plain.whereabouts(&id).unwrap(), Whereabouts::Gone);
     }
 

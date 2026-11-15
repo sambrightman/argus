@@ -374,6 +374,7 @@ impl Runtime {
                 kind,
                 id,
                 branches,
+                owners,
             } => {
                 // one client per forge, so its token is found once
                 let key = (kind.clone(), id.host.clone());
@@ -388,8 +389,8 @@ impl Runtime {
                     }
                 };
                 self.spawn(move |tx| {
-                    let info =
-                        forge.and_then(|f| f.info(&id, &branches).map_err(|e| e.to_string()));
+                    let info = forge
+                        .and_then(|f| f.info(&id, &branches, &owners).map_err(|e| e.to_string()));
                     let _ = tx.send(Msg::Forge {
                         path,
                         branches,

@@ -472,13 +472,16 @@ fn a_forge_is_asked_in_the_background_with_one_client_for_all_its_repos() {
             &self,
             id: &argus_core::identity::RepoId,
             branches: &[String],
+            owners: &[String],
         ) -> Result<Option<RepoInfo>, ForgeError> {
+            assert!(owners.is_empty());
             match id.name.as_str() {
                 "dirty" => Err(ForgeError::NotFound("acme/dirty".into())),
                 _ => Ok(Some(RepoInfo {
                     open_issues: branches.len(),
                     open_pulls: 4,
                     pulls: vec![],
+                    ..Default::default()
                 })),
             }
         }

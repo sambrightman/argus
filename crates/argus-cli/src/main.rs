@@ -1129,7 +1129,9 @@ fn ask_forges(ws: &Workspace, order: &[usize]) -> HashMap<PathBuf, Said> {
             let (id, s) = (e.id.as_ref()?, e.status()?);
             let kind = ws.config.forge_kind(&id.host)?;
             let branches = argus_core::forge::branches_to_ask(s);
-            Some((&e.path, (kind.to_string(), id.host.clone()), id, branches))
+            let owners = argus_core::forge::head_owners(id, s);
+            let key = (kind.to_string(), id.host.clone());
+            Some((&e.path, key, id, branches, owners))
         })
         .collect();
     // one client per forge, so its token is found once
@@ -1147,11 +1149,11 @@ fn ask_forges(ws: &Workspace, order: &[usize]) -> HashMap<PathBuf, Said> {
             scope.spawn(|| {
                 loop {
                     let n = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    let Some((path, key, id, branches)) = questions.get(n) else {
+                    let Some((path, key, id, branches, owners)) = questions.get(n) else {
                         break;
                     };
                     let answer = match &clients[key] {
-                        Ok(f) => f.info(id, branches).map_err(|e| e.to_string()),
+                        Ok(f) => f.info(id, branches, owners).map_err(|e| e.to_string()),
                         Err(e) => Err(e.clone()),
                     };
                     if let Ok(mut said) = said.lock() {

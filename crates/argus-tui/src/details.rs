@@ -313,13 +313,7 @@ pub fn details(
     let forge_line = forge.map(|f| match f {
         ForgeView::Loading => styled(Role::Dim, "looking up pull requests and issues…"),
         ForgeView::Failed(why) => styled(Role::Warning, why),
-        ForgeView::Info(i) => plain(format!(
-            "{} open {}, {} open pull {}",
-            i.open_issues,
-            argus_core::plural(i.open_issues, "issue", "issues"),
-            i.open_pulls,
-            argus_core::plural(i.open_pulls, "request", "requests"),
-        )),
+        ForgeView::Info(i) => plain(i.counts()),
     });
     v.extend(forge_line.map(|l| line(vec![styled(Role::Dim, "forge     "), l])));
     for issue in &e.issues {

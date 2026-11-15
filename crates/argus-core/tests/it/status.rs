@@ -1160,3 +1160,41 @@ fn absorbed_into_a_local_main_is_still_unpushed_and_nothing_is_written() {
     assert!(b.absorbed && !b.is_unpushed(), "{b:?}");
     assert_eq!(objects(), before);
 }
+
+#[test]
+fn other_remotes_are_listed_by_url_and_their_owners_may_head_pull_requests() {
+    use argus_core::identity::RepoId;
+    let sb = Sandbox::new();
+    sb.remote("up", "w");
+    let r = sb.clone_as_github("up", "w", "dev/w");
+    assert!(st(&r).other_remotes.is_empty(), "only origin");
+    git(&r, &["remote", "add", "fork", "git@github.com:Me/w.git"]);
+    git(
+        &r,
+        &["remote", "add", "mirror", "https://gitlab.com/them/w.git"],
+    );
+    git(&r, &["remote", "add", "again", "https://github.com/me/w"]);
+    git(&r, &["remote", "add", "local", "/srv/git/w"]);
+    let s = st(&r);
+    assert_eq!(
+        s.other_remotes,
+        [
+            "https://github.com/me/w",
+            "git@github.com:Me/w.git",
+            "/srv/git/w",
+            "https://gitlab.com/them/w.git"
+        ],
+        "by remote name, as configured; not origin's"
+    );
+    // whose pull requests from this clone's branches may be: the owners
+    // of its other remotes on the same host, each once, not origin's own
+    let id = RepoId::from_url(s.remote_url.as_deref().unwrap()).unwrap();
+    assert_eq!(argus_core::forge::head_owners(&id, &s), ["me"]);
+    // inverse: with origin the fork, the upstream's owner is the other
+    let me = RepoId::new("github.com", "me", "w");
+    let mut t = s.clone();
+    t.other_remotes = vec!["git@github.com:up/w.git".into()];
+    assert_eq!(argus_core::forge::head_owners(&me, &t), ["up"]);
+    t.other_remotes = vec!["git@github.com:ME/other.git".into()];
+    assert!(argus_core::forge::head_owners(&me, &t).is_empty());
+}

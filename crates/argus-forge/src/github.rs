@@ -4,8 +4,8 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use argus_core::forge::{
-    Checks, Forge, ForgeError, Protocol, PullRequest, PullState, RemoteRepo, RepoInfo, Review,
-    Whereabouts,
+    Checks, Forge, ForgeError, ParentInfo, Protocol, PullRequest, PullState, RemoteRepo, RepoInfo,
+    Review, Whereabouts,
 };
 use argus_core::identity::RepoId;
 use serde::Deserialize;
@@ -300,7 +300,12 @@ impl Forge for GitHub {
     /// requests with that head name, here and in the repo this one is a
     /// fork of. Others' branches can share a name, so only those from this
     /// repo's owner count.
-    fn info(&self, id: &RepoId, branches: &[String]) -> Result<Option<RepoInfo>, ForgeError> {
+    fn info(
+        &self,
+        id: &RepoId,
+        branches: &[String],
+        owners: &[String],
+    ) -> Result<Option<RepoInfo>, ForgeError> {
         let Some(token) = self.token() else {
             return Err(ForgeError::Auth(
                 "pull requests and issues need a token: gh auth login, or set GH_TOKEN".into(),
@@ -334,9 +339,10 @@ impl Forge for GitHub {
             });
         };
         let ours = |n: &&ApiPull| {
-            n.head_repository_owner
-                .as_ref()
-                .is_some_and(|o| o.login.eq_ignore_ascii_case(&id.owner))
+            n.head_repository_owner.as_ref().is_some_and(|o| {
+                o.login.eq_ignore_ascii_case(&id.owner)
+                    || owners.iter().any(|w| o.login.eq_ignore_ascii_case(w))
+            })
         };
         let pulls = branches
             .iter()
@@ -364,6 +370,11 @@ impl Forge for GitHub {
         Ok(Some(RepoInfo {
             open_issues: repo.issues.total_count,
             open_pulls: repo.pull_requests.total_count,
+            parent: repo.parent.as_ref().map(|p| ParentInfo {
+                name: p.name_with_owner.clone(),
+                open_issues: p.issues.as_ref().map_or(0, |c| c.total_count),
+                open_pulls: p.pull_requests.as_ref().map_or(0, |c| c.total_count),
+            }),
             pulls,
         }))
     }
@@ -413,7 +424,10 @@ fn info_query(n: usize) -> String {
              issues(states: OPEN) {{ totalCount }} \
              pullRequests(states: OPEN) {{ totalCount }} \
              {pulls}\
-             parent {{ nameWithOwner {pulls}}} }} }}{fragment}"
+             parent {{ nameWithOwner \
+               issues(states: OPEN) {{ totalCount }} \
+               pullRequests(states: OPEN) {{ totalCount }} \
+               {pulls}}} }} }}{fragment}"
     )
 }
 
@@ -465,6 +479,8 @@ struct ApiInfo {
 #[serde(rename_all = "camelCase")]
 struct ApiParent {
     name_with_owner: String,
+    issues: Option<Count>,
+    pull_requests: Option<Count>,
     #[serde(flatten)]
     branches: std::collections::HashMap<String, Nodes<ApiPull>>,
 }
@@ -693,7 +709,7 @@ mod tests {
         let (g, f) = graphql(GQL, 200, &body);
         let id = RepoId::new("github.com", "me", "w");
         let branches = ["feat".to_string(), "none".into(), "done".into()];
-        let info = g.info(&id, &branches).unwrap().unwrap();
+        let info = g.info(&id, &branches, &[]).unwrap().unwrap();
         assert_eq!((info.open_issues, info.open_pulls), (7, 3));
         assert_eq!(info.pulls.len(), 2, "{:?}", info.pulls);
         let p = info.pull("feat").unwrap();
@@ -737,9 +753,45 @@ mod tests {
         );
         let (g, _) = graphql(GQL, 200, &body);
         let id = RepoId::new("github.com", "me", "w");
-        let info = g.info(&id, &["feat".to_string()]).unwrap().unwrap();
+        let info = g.info(&id, &["feat".to_string()], &[]).unwrap().unwrap();
         let p = info.pull("feat").unwrap();
         assert_eq!((p.number, p.into.as_deref()), (21, Some("up/w")));
+        // the parent's counts come along (none given: none)
+        assert_eq!(
+            info.parent,
+            Some(ParentInfo {
+                name: "up/w".into(),
+                open_issues: 0,
+                open_pulls: 0
+            })
+        );
+        let counted = r#"{"data":{"repository":{"issues":{"totalCount":0},"pullRequests":{"totalCount":1},
+            "parent":{"nameWithOwner":"up/w","issues":{"totalCount":26},"pullRequests":{"totalCount":7}}}}}"#;
+        let (g, f) = graphql(GQL, 200, counted);
+        let info = g.info(&id, &[], &[]).unwrap().unwrap();
+        let parent = info.parent.clone().unwrap();
+        assert_eq!((parent.open_issues, parent.open_pulls), (26, 7));
+        assert_eq!(
+            info.counts(),
+            "up/w: 26 open issues, 7 open pull requests; this fork: 0 open issues, 1 open pull request"
+        );
+        let sent = f.posted.lock().unwrap()[0].1.clone();
+        assert!(
+            sent.contains("parent { nameWithOwner issues(states: OPEN)"),
+            "{sent}"
+        );
+        // with the clone's other remotes' owners, their branches count too:
+        // a fork pushed to beside the upstream this was cloned from
+        let (g, _) = graphql(GQL, 200, &body);
+        let up = RepoId::new("github.com", "up", "w");
+        let none = g.info(&up, &["feat".to_string()], &[]).unwrap().unwrap();
+        assert!(none.pulls.is_empty(), "not the upstream owner's own");
+        let (g, _) = graphql(GQL, 200, &body);
+        let mine = g
+            .info(&up, &["feat".to_string()], &["ME".to_string()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(mine.pull("feat").map(|p| p.number), Some(21));
         assert_eq!(
             (p.draft, p.review, p.checks),
             (true, Some(Review::Required), Some(Checks::Pending))
@@ -756,7 +808,7 @@ mod tests {
             );
             let (g, _) = graphql(GQL, 200, &body);
             let id = RepoId::new("github.com", "me", "w");
-            let p = g.info(&id, &["f".to_string()]).unwrap().unwrap().pulls[0].clone();
+            let p = g.info(&id, &["f".to_string()], &[]).unwrap().unwrap().pulls[0].clone();
             (p.review, p.checks)
         };
         let checks = |state: &str| {
@@ -786,7 +838,7 @@ mod tests {
             );
             let (g, _) = graphql(GQL, 200, &body);
             let id = RepoId::new("github.com", "me", "w");
-            g.info(&id, &["f".to_string()]).unwrap().unwrap().pulls[0].state
+            g.info(&id, &["f".to_string()], &[]).unwrap().unwrap().pulls[0].state
         };
         assert_eq!(state("OPEN"), PullState::Open);
         assert_eq!(state("CLOSED"), PullState::Closed);
@@ -798,32 +850,32 @@ mod tests {
         let id = RepoId::new("github.com", "me", "w");
         let (g, _) = graphql(GQL, 401, r#"{"message":"Bad credentials"}"#);
         assert!(
-            matches!(g.info(&id, &[]), Err(ForgeError::Auth(m)) if m.contains("Bad credentials"))
+            matches!(g.info(&id, &[], &[]), Err(ForgeError::Auth(m)) if m.contains("Bad credentials"))
         );
         let gone = r#"{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Repository"}]}"#;
         let (g, _) = graphql(GQL, 200, gone);
-        assert!(matches!(g.info(&id, &[]), Err(ForgeError::NotFound(m)) if m == "me/w"));
+        assert!(matches!(g.info(&id, &[], &[]), Err(ForgeError::NotFound(m)) if m == "me/w"));
         let other = r#"{"errors":[{"message":"Something went wrong"}]}"#;
         let (g, _) = graphql(GQL, 200, other);
         assert!(
-            matches!(g.info(&id, &[]), Err(ForgeError::Other(m)) if m == "Something went wrong")
+            matches!(g.info(&id, &[], &[]), Err(ForgeError::Other(m)) if m == "Something went wrong")
         );
         let (g, _) = graphql(GQL, 502, "<html>");
-        assert!(matches!(g.info(&id, &[]), Err(ForgeError::Other(m)) if m == "HTTP 502"));
+        assert!(matches!(g.info(&id, &[], &[]), Err(ForgeError::Other(m)) if m == "HTTP 502"));
         let (g, _) = graphql(GQL, 200, "not json");
-        assert!(matches!(g.info(&id, &[]), Err(ForgeError::Other(_))));
+        assert!(matches!(g.info(&id, &[], &[]), Err(ForgeError::Other(_))));
         // without a token there's nothing to ask with, and nothing is sent
         let f = std::sync::Arc::new(Fake::default());
         let g = GitHub::with_http("github.com", Box::new(f.clone())).with_token(None);
         assert!(
-            matches!(g.info(&id, &[]), Err(ForgeError::Auth(m)) if m.contains("gh auth login"))
+            matches!(g.info(&id, &[], &[]), Err(ForgeError::Auth(m)) if m.contains("gh auth login"))
         );
         assert!(f.posted.lock().unwrap().is_empty());
         // enterprise
         let ok = r#"{"data":{"repository":{"issues":{"totalCount":1},"pullRequests":{"totalCount":2},"parent":null}}}"#;
         let (g, f) = graphql("https://ghe.corp/api/graphql", 200, ok);
         let info = g
-            .info(&RepoId::new("ghe.corp", "o", "n"), &[])
+            .info(&RepoId::new("ghe.corp", "o", "n"), &[], &[])
             .unwrap()
             .unwrap();
         assert_eq!((info.open_issues, info.open_pulls), (1, 2));
@@ -838,14 +890,15 @@ mod tests {
         let ok = r#"{"data":{"repository":{"issues":{"totalCount":0},"pullRequests":{"totalCount":0},"parent":null}}}"#;
         let (g, f) = graphql(GQL, 200, ok);
         let branches: Vec<String> = (0..30).map(|i| format!("br{i}")).collect();
-        g.info(&RepoId::new("github.com", "me", "w"), &branches)
+        g.info(&RepoId::new("github.com", "me", "w"), &branches, &[])
             .unwrap();
         let sent: serde_json::Value = serde_json::from_str(&f.posted.lock().unwrap()[0].1).unwrap();
         assert_eq!(sent["variables"]["b19"], "br19");
         assert!(sent["variables"].get("b20").is_none());
         assert!(sent["query"].as_str().unwrap().contains("fragment pr on"));
         // with no branch to ask about, no fragment: unused, it's refused
-        g.info(&RepoId::new("github.com", "me", "w"), &[]).unwrap();
+        g.info(&RepoId::new("github.com", "me", "w"), &[], &[])
+            .unwrap();
         let sent: serde_json::Value = serde_json::from_str(&f.posted.lock().unwrap()[1].1).unwrap();
         let q = sent["query"].as_str().unwrap();
         assert!(!q.contains("fragment") && !q.contains("...pr"), "{q}");

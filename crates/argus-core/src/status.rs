@@ -222,6 +222,10 @@ pub struct RepoStatus {
     /// Remote used for fetching, usually `origin`.
     pub remote: Option<String>,
     pub remote_url: Option<String>,
+    /// The other remotes' URLs as configured, by remote name: where else
+    /// this clone's branches may be pushed (a fork, say).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub other_remotes: Vec<String>,
     pub upstream: Option<Tracking>,
     pub changes: Changes,
     /// Each stash's message, newest (`stash@{0}`) first, without git's
@@ -567,6 +571,20 @@ pub fn remote_and_url(repo: &gix::Repository) -> (Option<String>, Option<String>
     (remote, url)
 }
 
+/// The URLs, as configured, of the remotes other than `remote`, by name.
+fn other_remotes(repo: &gix::Repository, remote: Option<&str>) -> Vec<String> {
+    repo.remote_names()
+        .into_iter()
+        .filter(|n| Some(n.to_str_lossy().as_ref()) != remote)
+        .filter_map(|n| {
+            let name: &gix::bstr::BStr = n.as_ref();
+            let r = repo.try_find_remote_without_url_rewrite(name)?.ok()?;
+            let url = r.url(Direction::Fetch)?;
+            Some(url.to_bstring().to_str_lossy().into_owned())
+        })
+        .collect()
+}
+
 /// Every ref of a repo, read once. Looking names up one at a time costs an
 /// `open` of the loose file (usually missing: clones pack their refs) and a
 /// packed-refs check each, and `open` dominated status's time.
@@ -702,6 +720,7 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         head_commit: head_id.map(|id| id.to_string()),
         tags,
         default_branch,
+        other_remotes: other_remotes(repo, remote.as_deref()),
         remote,
         remote_url,
         upstream,

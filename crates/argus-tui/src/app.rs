@@ -584,6 +584,9 @@ pub enum Effect {
         kind: String,
         id: argus_core::identity::RepoId,
         branches: Vec<String>,
+        /// Whose pull requests count besides the repo's owner's: its
+        /// other remotes' owners.
+        owners: Vec<String>,
     },
     /// Leave the TUI, run a command in a directory, come back.
     Suspend {
@@ -2084,6 +2087,7 @@ impl App {
                 kind: kind.to_string(),
                 id: id.clone(),
                 branches,
+                owners: argus_core::forge::head_owners(id, s),
             });
         }
         if !fx.is_empty() {

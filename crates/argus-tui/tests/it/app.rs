@@ -6203,11 +6203,13 @@ fn opening_details_asks_the_forge_once_and_shows_what_it_says() {
             kind,
             id,
             branches,
+            owners,
         },
     ] = fx.as_slice()
     else {
         panic!("{fx:?}")
     };
+    assert!(owners.is_empty(), "no other remote");
     assert_eq!((path, kind.as_str()), (&f, "github"));
     assert_eq!((id.owner.as_str(), id.name.as_str()), ("acme", "feature"));
     assert_eq!(branches, &["feat", "old"]);
@@ -6226,6 +6228,7 @@ fn opening_details_asks_the_forge_once_and_shows_what_it_says() {
         open_issues: 1,
         open_pulls: 3,
         pulls: vec![a_pull("feat", 12)],
+        parent: None,
     };
     app.on_msg(Msg::Forge {
         path: f.clone(),
@@ -6306,11 +6309,28 @@ fn a_forge_that_fails_or_has_nothing_to_say() {
             open_issues: 2,
             open_pulls: 1,
             pulls: vec![],
+            parent: Some(argus_core::forge::ParentInfo {
+                name: "up/feature".into(),
+                open_issues: 9,
+                open_pulls: 0,
+            }),
         })),
     });
     assert_eq!(
         forge_line(&app).unwrap(),
-        "forge     2 open issues, 1 open pull request"
+        "forge     up/feature: 9 open issues, 0 open pull requests; this fork: 2 open issues, 1 open pull request"
+    );
+    // a second remote's owner is one whose pull requests count: asked with
+    git(
+        &f,
+        &["remote", "add", "mine", "git@github.com:me/feature.git"],
+    );
+    app.ws.refresh(&f);
+    let fx = app.act(Action::Refresh);
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::Forge { owners, .. } if owners == &["me"])),
+        "{fx:?}"
     );
 }
 

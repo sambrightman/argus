@@ -709,7 +709,13 @@ rendering is snapshot-tested via `TestBackend`.
   the newest pull requests with that head name, here and in the repo a
   fork came from. Others' forks can have a branch of the same name, so
   only pull requests from this repo's owner count; an open one wins over
-  a newer closed one. GraphQL needs a token: without one the line says
+  a newer closed one. "This repo's owner" includes the owners of the
+  clone's other remotes on the host (`forge::head_owners`, from
+  `RepoStatus::other_remotes`): cloned from upstream with a fork added as
+  a second remote, the pull requests are the fork owner's. A fork's
+  counts are mostly zero, so the `forge` line gives its parent's, named
+  (`mjs/imapclient: 54 open issues, …`), and the fork's own after them
+  only when it has any. GraphQL needs a token: without one the line says
   so. The TUI asks again when the branches change or on `g`, keeping the
   old answer on screen meanwhile, and drops an answer to a question it
   has since replaced. `ARGUS_GITHUB_API` points the client elsewhere, for
