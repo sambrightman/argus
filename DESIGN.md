@@ -423,6 +423,18 @@ Two findings:
   answer for a repo that's busy isn't dropped either: pointing a remote
   at its new name waits for the pull that found the rename
   (`App::queued`).
+* **Text from outside is shown as text.** File names, commit subjects,
+  stash messages, a forge's titles and git's own output can carry escape
+  sequences. The TUI's cells drop control characters (ratatui). The CLI
+  prints through `text::terminal_safe`, which keeps the colours and links
+  argus writes and replaces everything else (its `println!` is shadowed,
+  so a new print can't forget). A link, in the CLI or written over the
+  TUI's frame, is only ever a plain web address around text without
+  control characters; a forge's address that isn't one is dropped, and
+  only a web address is handed to the opener. Clones land in one plainly
+  named folder inside the track's, whatever a forge calls the repo; the
+  patch being edited is a new file of the user's own (`create_new`,
+  0600).
 * **Discard is the unstaged side only.** `K` puts the work tree back as
   the index has it and deletes untracked files; what's staged is never
   touched (unstage it first), whether the file is discarded by its line,
@@ -784,7 +796,11 @@ rendering is snapshot-tested via `TestBackend`.
   so. The TUI asks again when the branches change or on `g`, keeping the
   old answer on screen meanwhile, and drops an answer to a question it
   has since replaced. `ARGUS_GITHUB_API` points the client elsewhere, for
-  the end-to-end tests (a stand-in server on a local port). The forge's
+  the end-to-end tests (a stand-in server on a local port), in debug
+  builds only: a release build ignores it, as it says where the token
+  goes. The token is sent only to the forge's own API: a next page or a
+  moved repo's address that an answer names is followed only on that
+  host. github.com's variables aren't used for another host. The forge's
   names, counts and pull requests are terminal hyperlinks (OSC 8): a
   detail line says which of its parts link where (`DetailLine::links`).
   The CLI wraps them when writing to a terminal. ratatui has no notion of

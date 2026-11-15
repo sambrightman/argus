@@ -104,11 +104,10 @@ impl GitHub {
             .build()
             .into();
         let mut g = Self::with_http(host, Box::new(Ureq(agent)));
-        // for tests of the programs: a stand-in for the API
-        if let Some(base) = std::env::var("ARGUS_GITHUB_API")
-            .ok()
-            .filter(|b| !b.is_empty())
-        {
+        // for tests of the programs: a stand-in for the API. Not in a
+        // release build, where it would send the token wherever it said.
+        let stand_in = std::env::var("ARGUS_GITHUB_API").ok();
+        if let Some(base) = stand_in.filter(|b| cfg!(debug_assertions) && !b.is_empty()) {
             g.graphql = format!("{base}/graphql");
             g.api = base;
         }
@@ -153,12 +152,27 @@ impl GitHub {
         self
     }
 
+    /// Whether `url` is on this forge's API: the only place its token
+    /// is sent, whatever address an answer names.
+    fn ours(&self, url: &str) -> bool {
+        // scheme and host, up to the path
+        let origin = |u: &str| {
+            let (scheme, rest) = u.split_once("://")?;
+            Some((scheme.to_string(), rest.split('/').next()?.to_lowercase()))
+        };
+        origin(url).is_some() && origin(url) == origin(&self.api)
+    }
+
     fn token(&self) -> Option<&str> {
         self.token
             .get_or_init(|| {
-                let env = ["GH_TOKEN", "GITHUB_TOKEN"]
-                    .iter()
-                    .find_map(|v| (self.env)(v));
+                // (as gh has it: github.com's variables aren't another
+                // host's)
+                let vars = match self.host.eq_ignore_ascii_case("github.com") {
+                    true => ["GH_TOKEN", "GITHUB_TOKEN"],
+                    false => ["GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"],
+                };
+                let env = vars.iter().find_map(|v| (self.env)(v));
                 env.filter(|t| !t.is_empty())
                     .or_else(|| (self.gh)(&["auth", "token", "--hostname", &self.host]))
             })
@@ -185,6 +199,11 @@ impl GitHub {
                 .map_err(|e| ForgeError::Other(format!("decoding {u}: {e}")))?;
             out.extend(page);
             url = r.link.as_deref().and_then(next_link);
+            if let Some(next) = url.as_deref().filter(|n| !self.ours(n)) {
+                return Err(ForgeError::Other(format!(
+                    "next page at {next}: not this forge's API"
+                )));
+            }
         }
         Ok(out)
     }
@@ -259,6 +278,21 @@ impl Forge for GitHub {
     /// The repo's own page in the API: GitHub sends a renamed or moved
     /// repo's on to what it is now.
     fn whereabouts(&self, id: &RepoId) -> Result<Whereabouts, ForgeError> {
+        // (the names come from a remote's address: only plain ones go
+        // into a request's path)
+        let plain = |s: &str| {
+            !s.is_empty()
+                && s != "."
+                && s != ".."
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+        };
+        if !plain(&id.owner) || !plain(&id.name) {
+            return Err(ForgeError::Other(format!(
+                "{}/{}: not a name to ask a forge about",
+                id.owner, id.name
+            )));
+        }
         let mut url = format!("{}/repos/{}/{}", self.api, id.owner, id.name);
         for _ in 0..2 {
             let r = self
@@ -286,6 +320,12 @@ impl Forge for GitHub {
                     }
                     let to: Moved = serde_json::from_str(&r.body)
                         .map_err(|_| ForgeError::Other(api_message(&r.body, r.status)))?;
+                    if !self.ours(&to.url) {
+                        return Err(ForgeError::Other(format!(
+                            "moved to {}: not this forge's API",
+                            to.url
+                        )));
+                    }
                     url = to.url;
                 }
                 404 => return Ok(Whereabouts::Gone),
@@ -1167,6 +1207,81 @@ mod tests {
         ];
         for (env, want) in cases {
             assert_eq!(sourced(env, gh).token(), Some(want));
+        }
+        // another host isn't sent github.com's token: its own variables,
+        // else gh's token for that host
+        let on = |env: EnvSource| {
+            let f = Box::new(std::sync::Arc::new(Fake::default()));
+            let gh: GhSource = |args| {
+                assert_eq!(args, ["auth", "token", "--hostname", "ghe.corp"]);
+                Some("ghe-from-gh".into())
+            };
+            let g = GitHub::with_http("ghe.corp", f).with_sources(env, gh);
+            g.token().map(String::from)
+        };
+        assert_eq!(
+            on(|v| (v == "GH_TOKEN").then(|| "a".into())).as_deref(),
+            Some("ghe-from-gh")
+        );
+        assert_eq!(
+            on(|v| (v == "GITHUB_TOKEN").then(|| "b".into())).as_deref(),
+            Some("ghe-from-gh")
+        );
+        assert_eq!(
+            on(|v| (v == "GH_ENTERPRISE_TOKEN").then(|| "e".into())).as_deref(),
+            Some("e")
+        );
+        assert_eq!(
+            on(|v| (v == "GITHUB_ENTERPRISE_TOKEN").then(|| "f".into())).as_deref(),
+            Some("f")
+        );
+    }
+
+    #[test]
+    fn the_token_only_goes_where_the_api_is() {
+        // a next page elsewhere isn't fetched
+        let p = format!("{API}/orgs/acme/repos?per_page=100&type=all");
+        let elsewhere = "https://evil.example/steal";
+        let f = Fake::default()
+            .route(&p, 200, "[]", Some(&format!("<{elsewhere}>; rel=\"next\"")))
+            .route(elsewhere, 200, "[]", None);
+        let (g, f) = gh_with(f);
+        assert!(
+            matches!(g.list("acme", None), Err(ForgeError::Other(m)) if m.contains("evil.example"))
+        );
+        assert_eq!(f.seen.lock().unwrap().len(), 1, "not asked");
+        // nor is a moved repo followed off the API's host
+        let at = format!("{API}/repos/acme/old");
+        let moved = format!(r#"{{"message":"Moved Permanently","url":"{elsewhere}"}}"#);
+        let f = Fake::default().route(&at, 301, &moved, None).route(
+            elsewhere,
+            200,
+            &repo("x", "y", false),
+            None,
+        );
+        let (g, f) = gh_with(f);
+        let id = RepoId::new("github.com", "acme", "old");
+        assert!(
+            matches!(g.whereabouts(&id), Err(ForgeError::Other(m)) if m.contains("evil.example"))
+        );
+        assert_eq!(f.seen.lock().unwrap().len(), 1);
+        // a host that merely starts the same isn't the same
+        let near = "https://api.github.com.evil.example/x";
+        let f = Fake::default().route(&p, 200, "[]", Some(&format!("<{near}>; rel=\"next\"")));
+        let (g, f) = gh_with(f);
+        assert!(g.list("acme", None).is_err());
+        assert_eq!(f.seen.lock().unwrap().len(), 1);
+        // a name that isn't a plain one doesn't go into a request path
+        for (owner, name) in [
+            ("acme", "x?y=1"),
+            ("acme", ".."),
+            ("a/b", "c"),
+            ("acme", "x#y"),
+        ] {
+            let (g, f) = gh_with(Fake::default());
+            let id = RepoId::new("github.com", owner, name);
+            assert!(g.whereabouts(&id).is_err(), "{owner}/{name}");
+            assert!(f.seen.lock().unwrap().is_empty());
         }
     }
 

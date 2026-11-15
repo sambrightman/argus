@@ -158,7 +158,9 @@ itself, so `pull.rebase`, `rebase.autoStash`, hooks, signing, credential
 helpers and ssh config all apply. Pulls, clones and branch switches also
 check out submodules, whatever `submodule.recurse` says; never over
 changes in a submodule (that submodule is left as it was, and reported). GitHub listing uses `GH_TOKEN`,
-`GITHUB_TOKEN` or `gh auth token`. Clone protocol follows `gh config get git_protocol`.
+`GITHUB_TOKEN` or `gh auth token` (for a GitHub Enterprise host:
+`GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` or `gh auth token
+--hostname`, as gh does; github.com's token isn't sent to another host). Clone protocol follows `gh config get git_protocol`.
 
 ## TUI keys
 

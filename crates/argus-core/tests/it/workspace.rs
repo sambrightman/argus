@@ -2018,3 +2018,38 @@ fn orphans_say_what_became_of_them_and_a_rename_can_be_followed() {
             .all(|o| o.describe().ends_with("(no such forge)"))
     );
 }
+
+#[test]
+fn a_forge_cannot_place_a_clone_outside_its_folder() {
+    let sb = Sandbox::new();
+    std::fs::create_dir_all(sb.path("dev/acme")).unwrap();
+    let w = ws(
+        &sb,
+        &format!(
+            "[[track]]\nowner='acme'\ninto='{}'",
+            sb.path("dev/acme").display()
+        ),
+    );
+    let mut l = BTreeMap::new();
+    l.insert(
+        "github.com/acme".to_string(),
+        listing(
+            &sb,
+            "acme",
+            &[
+                ("ok", false, false),
+                ("..", false, false),
+                (".", false, false),
+                ("../../elsewhere", false, false),
+                ("/tmp/abs", false, false),
+                ("a/b", false, false),
+                ("", false, false),
+            ],
+        ),
+    );
+    let plan = plan_tracks(&w, &l, Protocol::Https);
+    // only the plainly named one: every clone lands in the folder
+    let dests: Vec<_> = plan.clones().map(|j| j.path.clone()).collect();
+    assert_eq!(dests, [sb.path("dev/acme/ok")]);
+    assert!(plan.missing.is_empty(), "nor reported as clonable");
+}

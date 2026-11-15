@@ -3703,7 +3703,19 @@ impl App {
             std::process::id(),
             EDITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
-        if let Err(e) = std::fs::write(&file, patch + edit_instructions(reverse)) {
+        // a new file, the user's alone: never one somebody else put there
+        // (a shared temp directory), nor through a link
+        let written = {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&file)
+                .and_then(|mut f| f.write_all((patch + edit_instructions(reverse)).as_bytes()))
+        };
+        if let Err(e) = written {
             self.error(format!("{}: {e}", file.display()));
             return vec![];
         }

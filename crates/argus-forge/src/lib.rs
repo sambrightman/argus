@@ -1,6 +1,7 @@
 //! Forge implementations for argus: GitHub, and a directory of repos.
 //!
-//! Credentials are reused, never stored: `GH_TOKEN` / `GITHUB_TOKEN`, else
+//! Credentials are reused, never stored: `GH_TOKEN` / `GITHUB_TOKEN` (another
+//! host: `GH_ENTERPRISE_TOKEN` / `GITHUB_ENTERPRISE_TOKEN`), else
 //! `gh auth token`.
 
 pub mod dir;

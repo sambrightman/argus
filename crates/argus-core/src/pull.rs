@@ -1,7 +1,7 @@
 //! Pull planning: which repos to pull/fetch and which forge repos to clone.
 
 use std::collections::{BTreeMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -227,7 +227,16 @@ pub fn plan_tracks(
             let Some(dir) = ws.config.clone_dir(track) else {
                 continue;
             };
-            let dest = dir.join(&r.id.name);
+            // one folder inside it, whatever the forge calls the repo
+            let name = Path::new(&r.id.name);
+            let plain = matches!(
+                name.components().collect::<Vec<_>>().as_slice(),
+                [std::path::Component::Normal(_)]
+            );
+            if !plain {
+                continue;
+            }
+            let dest = dir.join(name);
             if ws.rules().ignores(&r.id, &dest) {
                 continue;
             }
