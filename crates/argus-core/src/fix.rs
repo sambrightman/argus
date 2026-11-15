@@ -190,8 +190,22 @@ pub fn turned_off_by(ignored: &[crate::attention::Issue]) -> Vec<FixKind> {
 pub fn plan(s: &RepoStatus, stash: &StashConfig) -> Vec<Fix> {
     let mut v = vec![];
     if !s.stale_worktrees.is_empty() {
+        // a folder gone along with its parent may be on a disk that isn't
+        // mounted just now: its record is the only way back to it
+        let away: Vec<String> = s
+            .stale_worktrees
+            .iter()
+            .filter(|p| p.parent().is_some_and(|d| !d.exists()))
+            .map(|p| p.display().to_string())
+            .collect();
         v.push(Fix {
-            blocked: None,
+            blocked: (!away.is_empty()).then(|| {
+                format!(
+                    "the parent folder of {} is missing too (a disk not mounted?); \
+                     `git worktree prune` if it's gone for good",
+                    list(&away, 3)
+                )
+            }),
             kind: FixKind::PruneWorktrees,
             op: Op::PruneWorktrees,
             reason: format!(

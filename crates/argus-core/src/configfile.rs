@@ -391,12 +391,7 @@ fn write(path: &Path, text: &str) -> Result<(), EditError> {
         path: path.into(),
         source,
     };
-    if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d).map_err(io)?;
-    }
-    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
-    std::fs::write(&tmp, text).map_err(io)?;
-    std::fs::rename(&tmp, path).map_err(io)
+    crate::paths::write_atomically(path, text).map_err(io)
 }
 
 fn load(path: &Path) -> Result<(String, toml_edit::DocumentMut), EditError> {

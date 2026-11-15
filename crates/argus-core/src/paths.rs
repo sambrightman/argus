@@ -70,6 +70,29 @@ fn state_file_in(env: Env) -> PathBuf {
         .unwrap_or_else(|| xdg(env, "XDG_STATE_HOME", ".local/state").join("argus/state.toml"))
 }
 
+/// Replace `path`'s contents with `text` in one step (a temporary file
+/// beside it, renamed over it), making its folder if need be. A symlink
+/// stays one: the file it points at is the one replaced.
+pub fn write_atomically(path: &Path, text: &str) -> std::io::Result<()> {
+    let mut target = path.to_path_buf();
+    // (a link to a link, and so on; a loop ends at the first rename)
+    for _ in 0..16 {
+        let Ok(to) = std::fs::read_link(&target) else {
+            break;
+        };
+        target = match target.parent() {
+            Some(d) => d.join(to),
+            None => to,
+        };
+    }
+    if let Some(d) = target.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    let tmp = target.with_extension(format!("tmp.{}", std::process::id()));
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, &target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,5 +168,48 @@ mod tests {
         assert_eq!(expand_tilde(Path::new("/a/~/b")), PathBuf::from("/a/~/b"));
         assert_eq!(expand_tilde(Path::new("~user/x")), PathBuf::from("~user/x"));
         assert_eq!(contract_tilde(Path::new("/elsewhere")), "/elsewhere");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writing_through_a_symlink_replaces_what_it_points_at() {
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("dotfiles/argus.toml");
+        std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+        std::fs::write(&real, "old").unwrap();
+        // a relative link, through a second link
+        std::fs::create_dir_all(d.path().join("cfg")).unwrap();
+        let mid = d.path().join("cfg/mid.toml");
+        std::os::unix::fs::symlink("../dotfiles/argus.toml", &mid).unwrap();
+        let link = d.path().join("cfg/config.toml");
+        std::os::unix::fs::symlink(&mid, &link).unwrap();
+        write_atomically(&link, "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "new");
+        for l in [&link, &mid] {
+            assert!(l.symlink_metadata().unwrap().is_symlink(), "{l:?}");
+        }
+        // nothing left beside either
+        for dir in ["cfg", "dotfiles"] {
+            let names: Vec<_> = std::fs::read_dir(d.path().join(dir))
+                .unwrap()
+                .map(|e| e.unwrap().file_name().into_string().unwrap())
+                .filter(|n| n.contains("tmp"))
+                .collect();
+            assert!(names.is_empty(), "{names:?}");
+        }
+        // a link to nothing yet: the file appears where it points
+        let dangling = d.path().join("cfg/later.toml");
+        std::os::unix::fs::symlink("../dotfiles/later.toml", &dangling).unwrap();
+        write_atomically(&dangling, "x").unwrap();
+        assert!(dangling.symlink_metadata().unwrap().is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("dotfiles/later.toml")).unwrap(),
+            "x"
+        );
+        // inverse: a plain file in a folder not there yet
+        let plain = d.path().join("new/dir/f.toml");
+        write_atomically(&plain, "p").unwrap();
+        assert_eq!(std::fs::read_to_string(&plain).unwrap(), "p");
+        assert!(!plain.symlink_metadata().unwrap().is_symlink());
     }
 }

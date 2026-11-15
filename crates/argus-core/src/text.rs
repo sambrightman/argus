@@ -55,11 +55,13 @@ fn own_sequence(s: &str) -> Option<usize> {
         let digits = sgr
             .find(|c: char| !c.is_ascii_digit() && c != ';')
             .unwrap_or(sgr.len());
-        return sgr[digits..].starts_with('m').then_some(2 + digits + 1);
+        let after = sgr[digits..].strip_prefix('m')?;
+        return Some(s.len() - after.len());
     }
     let link = s.strip_prefix("\x1b]8;;")?;
     let end = link.find(|c: char| c.is_control())?;
-    link[end..].starts_with("\x1b\\").then_some(5 + end + 2)
+    let after = link[end..].strip_prefix("\x1b\\")?;
+    Some(s.len() - after.len())
 }
 
 #[cfg(test)]
@@ -106,6 +108,15 @@ mod tests {
         assert_eq!(terminal_safe(ok), ok);
         let r = '\u{fffd}';
         for (bad, want) in [
+            // what follows a kept sequence is still looked at, however long
+            // the sequence
+            ("\x1b[m\x07", format!("\x1b[m{r}")),
+            ("\x1b[1;4;31m\x07", format!("\x1b[1;4;31m{r}")),
+            ("\x1b]8;;\x1b\\\x07", format!("\x1b]8;;\x1b\\{r}")),
+            (
+                "\x1b]8;;https://x/123\x1b\\\x07",
+                format!("\x1b]8;;https://x/123\x1b\\{r}"),
+            ),
             // clear screen, cursor moves, the title, the clipboard, a bell
             ("x\x1b[2Jy", format!("x{r}[2Jy")),
             ("x\x1b[10;10Hy", format!("x{r}[10;10Hy")),

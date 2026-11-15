@@ -4956,6 +4956,30 @@ fn hunks_and_lines_are_staged_unstaged_and_discarded() {
 /// across hunks, in one patch per file.
 #[test]
 fn marked_lines_are_staged_together() {
+    marked_lines_case(Then::Stage)
+}
+
+/// Marks and a region point into diffs as they were read: a rescan or a
+/// new status of their repo, which reads them again, drops them.
+#[test]
+fn marks_and_a_region_end_when_their_diff_is_read_again() {
+    marked_lines_case(Then::Rescan);
+    marked_lines_case(Then::Status("dirty"));
+}
+
+/// Inverse: another repo's status leaves them.
+#[test]
+fn marks_and_a_region_outlive_another_repos_status() {
+    marked_lines_case(Then::Status("clean"));
+}
+
+enum Then {
+    Stage,
+    Rescan,
+    Status(&'static str),
+}
+
+fn marked_lines_case(then: Then) {
     let (_sb, mut app) = setup_with("", |sb| {
         let d = sb.path("dev/dirty");
         let lines: String = (1..=30).map(|i| format!("line {i}\n")).collect();
@@ -4981,6 +5005,37 @@ fn marked_lines_are_staged_together() {
         app.on_key(key(' '));
     }
     assert_eq!(app.marked_lines.len(), 2);
+    match then {
+        Then::Stage => {}
+        Then::Rescan => {
+            app.on_key(ctrl(' '));
+            assert!(app.region.is_some());
+            let entries = app.ws.entries.clone();
+            app.on_msg(Msg::Scanned {
+                entries,
+                truncated: vec![],
+            });
+            assert!(app.marked_lines.is_empty() && app.region.is_none());
+            return;
+        }
+        Then::Status(name) => {
+            app.on_key(ctrl(' '));
+            assert!(app.region.is_some());
+            let p = app
+                .ws
+                .entries
+                .iter()
+                .find(|e| e.path.ends_with(name))
+                .unwrap();
+            let (path, st) = (p.path.clone(), p.status().unwrap().clone());
+            app.on_msg(Msg::Status(path, Box::new(Ok(st))));
+            assert_eq!(
+                (app.marked_lines.is_empty(), app.region.is_none()),
+                (name == "dirty", name == "dirty")
+            );
+            return;
+        }
+    }
     let screen = render(&mut app, 100, 60);
     let marked = screen
         .lines()

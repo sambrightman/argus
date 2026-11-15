@@ -1827,6 +1827,39 @@ fn stale_worktree_records_are_pruned() {
     );
 }
 
+/// A worktree whose parent folder is gone as well may be on a disk that
+/// isn't mounted: its record isn't pruned without being asked.
+#[test]
+fn a_stale_worktree_whose_parent_folder_is_missing_is_not_pruned() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    let wt = sb.path("disk/wt");
+    std::fs::create_dir_all(sb.path("disk")).unwrap();
+    git(
+        &r,
+        &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()],
+    );
+    std::fs::remove_dir_all(sb.path("disk")).unwrap();
+    let s = st(&r);
+    assert_eq!(s.stale_worktrees.len(), 1);
+    let fixes = of_kind(&r, FixKind::PruneWorktrees);
+    let [(_, Some(why))] = &fixes[..] else {
+        panic!("{fixes:?}")
+    };
+    assert!(why.contains("wt") && why.contains("parent folder"), "{why}");
+    assert_eq!(
+        argus_core::fix::choose(&s, &[FixKind::PruneWorktrees], &StashConfig::default()),
+        None
+    );
+    // inverse: the parent is there, only the worktree's folder is gone
+    std::fs::create_dir_all(sb.path("disk")).unwrap();
+    assert_eq!(
+        of_kind(&r, FixKind::PruneWorktrees),
+        [("prune stale worktree records".to_string(), None)]
+    );
+}
+
 /// A locked worktree (on a removable drive, say) isn't stale while its
 /// folder is away; a living worktree doesn't report its siblings.
 #[test]

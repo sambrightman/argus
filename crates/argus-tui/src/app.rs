@@ -4338,6 +4338,9 @@ impl App {
         self.ws.update_statuses(batch);
         self.diffs.retain(|k, _| !paths.contains(&k.0));
         self.marked_lines.retain(|k| !paths.contains(&k.0));
+        if self.region.as_ref().is_some_and(|r| paths.contains(&r.0)) {
+            self.region = None;
+        }
         self.unfold_cache.retain(|k, _| !paths.contains(&k.0));
         self.rebuild();
         let mut fx = self.opened();
@@ -4352,6 +4355,8 @@ impl App {
             Msg::Scanned { entries, truncated } => {
                 self.scanning = false;
                 self.diffs.clear();
+                self.marked_lines.clear();
+                self.region = None;
                 self.ws.entries = entries;
                 self.ws.truncated = truncated;
                 self.ws.resolve_flags();

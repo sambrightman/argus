@@ -271,6 +271,11 @@ pub struct Runtime {
         (String, String),
         Result<Arc<dyn argus_core::forge::Forge>, String>,
     >,
+    /// The state file as last read or written here: what has changed since
+    /// is what a save adds to the file (see [`State::save_merged`]).
+    ///
+    /// [`State::save_merged`]: argus_core::State::save_merged
+    state_base: argus_core::State,
 }
 
 impl Runtime {
@@ -279,11 +284,12 @@ impl Runtime {
         Self {
             tx,
             rx,
-            opts,
             cancel: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(AtomicUsize::new(0)),
             forge_gate: None,
             forges: Default::default(),
+            state_base: argus_core::State::load(&opts.state_path).unwrap_or_default(),
+            opts,
         }
     }
 
@@ -377,7 +383,11 @@ impl Runtime {
                 }
             }
             Effect::SaveState => {
-                if let Err(err) = app.ws.state.save(&self.opts.state_path) {
+                let saved = app
+                    .ws
+                    .state
+                    .save_merged(&self.opts.state_path, &mut self.state_base);
+                if let Err(err) = saved {
                     app.report_error(err.to_string());
                 }
             }

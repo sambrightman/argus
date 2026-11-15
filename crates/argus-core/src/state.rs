@@ -91,12 +91,32 @@ impl State {
             source,
         };
         let s = toml::to_string(self)?;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(io)?;
+        crate::paths::write_atomically(path, &s).map_err(io)
+    }
+
+    /// Save what changed since `base` (the state as last read or saved)
+    /// on top of what the file holds now, so that another argus's changes
+    /// in between are kept: `self` and `base` both become the result.
+    /// Where both changed the same thing, ours stays.
+    pub fn save_merged(&mut self, path: &Path, base: &mut State) -> Result<(), StateError> {
+        let theirs = Self::load(path)?;
+        if theirs != *base {
+            let merged = merge(
+                Some(&toml::Value::try_from(&*base)?),
+                Some(&toml::Value::try_from(&*self)?),
+                Some(&toml::Value::try_from(&theirs)?),
+            );
+            *self = match merged {
+                Some(v) => v.try_into().map_err(|source| StateError::Parse {
+                    path: path.into(),
+                    source,
+                })?,
+                None => Self::default(),
+            };
         }
-        let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
-        std::fs::write(&tmp, s).map_err(io)?;
-        std::fs::rename(&tmp, path).map_err(io)
+        self.save(path)?;
+        *base = self.clone();
+        Ok(())
     }
 
     pub fn is_snoozed(&self, key: &str, now: Timestamp) -> bool {
@@ -174,6 +194,47 @@ impl State {
         .map(|(k, l)| format!("{k} = {l}"))
         .collect::<Vec<_>>();
         Some(lines.join("\n"))
+    }
+}
+
+/// A three-way merge of values: a side that changed something wins over
+/// one that didn't; tables are merged key by key, lists (sets, here) item
+/// by item; anything else both changed is ours.
+fn merge(
+    base: Option<&toml::Value>,
+    ours: Option<&toml::Value>,
+    theirs: Option<&toml::Value>,
+) -> Option<toml::Value> {
+    use toml::Value;
+    if ours == theirs || theirs == base {
+        return ours.cloned();
+    }
+    if ours == base {
+        return theirs.cloned();
+    }
+    match (ours, theirs) {
+        (Some(Value::Table(o)), Some(Value::Table(t))) => {
+            let b = base.and_then(Value::as_table);
+            let keys: BTreeSet<&String> = o.keys().chain(t.keys()).collect();
+            let merged = keys
+                .into_iter()
+                .filter_map(|k| {
+                    let v = merge(b.and_then(|b| b.get(k)), o.get(k), t.get(k))?;
+                    Some((k.clone(), v))
+                })
+                .collect();
+            Some(Value::Table(merged))
+        }
+        (Some(Value::Array(o)), Some(Value::Array(t))) => {
+            let b = base.and_then(Value::as_array).map_or(&[][..], |b| &b[..]);
+            // what either took out of the base is out
+            let stays = |v: &&Value| !b.contains(v) || (o.contains(v) && t.contains(v));
+            let extra = t.iter().filter(|v| !o.contains(v));
+            Some(Value::Array(
+                o.iter().chain(extra).filter(stays).cloned().collect(),
+            ))
+        }
+        _ => ours.cloned(),
     }
 }
 
@@ -268,6 +329,84 @@ mod tests {
         assert_eq!(State::load(&p).unwrap().marks, s.marks);
         // inverse: nothing to show
         assert_eq!(State::default().old_marks_as_config(), None);
+    }
+
+    #[test]
+    fn saving_keeps_what_another_argus_wrote_meanwhile() {
+        let at = |s: &str| -> Timestamp { s.parse().unwrap() };
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("state.toml");
+        let mut start = State::default();
+        start.snoozed.insert("a".into(), at("2030-01-01T00:00:00Z"));
+        start.snoozed.insert("b".into(), at("2030-01-01T00:00:00Z"));
+        start.new = ["n1", "n2"].map(String::from).into();
+        start.save(&p).unwrap();
+        let (mut ours, mut base) = (start.clone(), start.clone());
+
+        // meanwhile, elsewhere: a snooze added, one changed, one "new"
+        // acknowledged, a pull
+        let mut theirs = start.clone();
+        theirs
+            .snoozed
+            .insert("c".into(), at("2031-01-01T00:00:00Z"));
+        theirs
+            .snoozed
+            .insert("b".into(), at("2032-01-01T00:00:00Z"));
+        theirs.new.remove("n1");
+        theirs.new.insert("n5".into());
+        theirs.last_pull = Some(at("2026-01-01T00:00:00Z"));
+        theirs
+            .tracks
+            .entry("t".into())
+            .or_default()
+            .repos
+            .insert("github.com/a/b".into());
+        theirs.save(&p).unwrap();
+
+        // here: a snooze removed, the same one changed, a "new" added, an
+        // issue snoozed
+        ours.snoozed.remove("a");
+        ours.snoozed.insert("b".into(), at("2033-01-01T00:00:00Z"));
+        ours.new.insert("n3".into());
+        ours.snooze_issue("k", Issue::Detached, at("2030-06-01T00:00:00Z"));
+        ours.save_merged(&p, &mut base).unwrap();
+
+        let mut want = theirs.clone();
+        want.snoozed.remove("a");
+        want.snoozed.insert("b".into(), at("2033-01-01T00:00:00Z"));
+        want.new.insert("n3".into());
+        want.snooze_issue("k", Issue::Detached, at("2030-06-01T00:00:00Z"));
+        assert_eq!(ours, want);
+        assert_eq!(base, want, "the next save starts from here");
+        assert_eq!(State::load(&p).unwrap(), want);
+
+        // inverse: nothing written meanwhile, ours goes in as it is
+        ours.snoozed.clear();
+        ours.new.clear();
+        ours.last_pull = None;
+        let alone = ours.clone();
+        ours.save_merged(&p, &mut base).unwrap();
+        assert_eq!(ours, alone);
+        assert_eq!(State::load(&p).unwrap(), alone);
+
+        // the file removed meanwhile: what it held is gone, ours stays
+        std::fs::remove_file(&p).unwrap();
+        ours.snoozed.insert("z".into(), at("2030-01-01T00:00:00Z"));
+        ours.save_merged(&p, &mut base).unwrap();
+        let mut kept = State::default();
+        kept.snoozed.insert("z".into(), at("2030-01-01T00:00:00Z"));
+        assert_eq!(ours, kept);
+    }
+
+    #[test]
+    fn a_state_file_that_cannot_be_read_is_not_written_over() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("state.toml");
+        std::fs::write(&p, "not [toml").unwrap();
+        let (mut ours, mut base) = (State::default(), State::default());
+        ours.new.insert("n".into());
+        assert!(ours.save_merged(&p, &mut base).is_err());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "not [toml");
     }
 }
 

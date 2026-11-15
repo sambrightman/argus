@@ -135,6 +135,28 @@ fn state_is_written() {
     );
 }
 
+/// `argus snooze` run while the TUI is open isn't undone by the TUI's
+/// next save.
+#[test]
+fn saving_state_keeps_what_was_written_to_the_file_meanwhile() {
+    let (sb, mut app, mut rt) = setup("");
+    let mut other = State::load(&sb.path("state.toml")).unwrap();
+    other.new.insert("elsewhere".into());
+    other.save(&sb.path("state.toml")).unwrap();
+    app.ws.state.new.insert("here".into());
+    rt.exec(&mut app, Effect::SaveState);
+    let want: std::collections::BTreeSet<String> = ["elsewhere", "here"].map(String::from).into();
+    assert_eq!(State::load(&sb.path("state.toml")).unwrap().new, want);
+    assert_eq!(app.ws.state.new, want, "and shown here");
+    // inverse: taken out here, it stays out
+    app.ws.state.new.remove("elsewhere");
+    rt.exec(&mut app, Effect::SaveState);
+    assert_eq!(
+        State::load(&sb.path("state.toml")).unwrap().new,
+        ["here".to_string()].into()
+    );
+}
+
 #[test]
 fn a_scan_finds_the_repos() {
     let (sb, _, mut rt) = setup("");
@@ -603,6 +625,17 @@ fn forge_requests_go_out_a_few_at_a_time() {
     run(&mut app, &mut rt, fx);
     assert_eq!(ASKED.load(Ordering::SeqCst), 3, "all asked");
     assert_eq!(MOST.load(Ordering::SeqCst), 1, "one at a time");
+}
+
+#[test]
+fn the_runtime_is_working_while_results_are_still_to_come() {
+    let (_sb, mut app, mut rt) = setup("");
+    assert!(!rt.working(), "nothing asked");
+    let all: Vec<PathBuf> = app.ws.entries.iter().map(|e| e.path.clone()).collect();
+    rt.exec(&mut app, Effect::Refresh(all));
+    assert!(rt.working(), "asked, not yet handled");
+    assert!(rt.settle(&mut app, WAIT));
+    assert!(!rt.working(), "all in");
 }
 
 #[test]
