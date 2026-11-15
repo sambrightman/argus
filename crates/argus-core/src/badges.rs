@@ -98,6 +98,31 @@ pub fn branch(e: &Entry, i: &Icons) -> Option<Badge> {
     })
 }
 
+/// The icon that says a repo has `issue`. Every issue has one, shown in
+/// the row: a repo is never listed as needing attention without its row
+/// saying why. (No wildcard here: a new issue can't be added without
+/// choosing its icon.) Uncommitted paths show by kind (staged, unstaged,
+/// untracked); this is the first of them.
+pub fn issue_icon<'a>(issue: &Issue, i: &'a Icons) -> &'a str {
+    match issue {
+        Issue::Conflicts(_) => &i.conflict,
+        Issue::InProgress => &i.in_progress,
+        Issue::Dirty(_) => &i.unstaged,
+        Issue::Unpushed(_) => &i.ahead,
+        Issue::UpstreamGone => &i.gone,
+        Issue::NoUpstream => &i.no_upstream,
+        Issue::UnpushedBranches(_) => &i.branches,
+        Issue::Detached => &i.detached,
+        Issue::DetachedCommits(_) => &i.detached_commits,
+        Issue::NonDefaultBranch => &i.off_default,
+        Issue::Stashes(_) => &i.stash,
+        Issue::Behind(_) => &i.behind,
+        Issue::NoRemote => &i.no_remote,
+        Issue::StaleWorktrees(_) => &i.stale_worktrees,
+        Issue::FinishedWorktree => &i.finished_worktree,
+    }
+}
+
 /// State badges after the branch: ahead/behind, changes, stashes, problems.
 ///
 /// A badge stating a fact about the repo (a count, where HEAD is) shows
@@ -164,9 +189,14 @@ pub fn state(e: &Entry, i: &Icons) -> Vec<Badge> {
         push(Role::Stash, format!("{}{}", i.stash, s.stashes.len()));
     }
     for issue in &e.issues {
+        let icon = issue_icon(issue, i);
         match issue {
-            Issue::UnpushedBranches(n) => push(Role::Warning, format!("{}{n}", i.branches)),
-            Issue::DetachedCommits(n) => push(Role::Conflict, format!("{}{n}", i.detached_commits)),
+            Issue::UnpushedBranches(n) => push(Role::Warning, format!("{icon}{n}")),
+            Issue::DetachedCommits(n) => push(Role::Conflict, format!("{icon}{n}")),
+            Issue::NonDefaultBranch => push(Role::Branch, icon.to_string()),
+            Issue::FinishedWorktree => push(Role::Branch, icon.to_string()),
+            Issue::StaleWorktrees(n) => push(Role::Warning, format!("{icon}{n}")),
+            // shown above, from the status
             _ => {}
         }
     }

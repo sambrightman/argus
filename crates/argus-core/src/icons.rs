@@ -30,6 +30,12 @@ pub struct Icons {
     pub no_upstream: Cow<'static, str>,
     pub no_remote: Cow<'static, str>,
     pub branches: Cow<'static, str>,
+    /// On a branch other than the default one.
+    pub off_default: Cow<'static, str>,
+    /// A linked worktree whose branch is merged and its upstream gone.
+    pub finished_worktree: Cow<'static, str>,
+    /// Worktree records whose folder is gone.
+    pub stale_worktrees: Cow<'static, str>,
     pub error: Cow<'static, str>,
     pub pull: Cow<'static, str>,
     pub worktree: Cow<'static, str>,
@@ -97,6 +103,9 @@ icon_names!(
     no_upstream,
     no_remote,
     branches,
+    off_default,
+    finished_worktree,
+    stale_worktrees,
     error,
     pull,
     worktree,
@@ -163,6 +172,9 @@ pub const UNICODE: Icons = Icons {
     no_upstream: s("↑?"),
     no_remote: s("↑×"),
     branches: s("»"),
+    off_default: s("◊"),
+    finished_worktree: s("├="),
+    stale_worktrees: s("├×"),
     error: s("!!"),
     pull: s("~"),
     worktree: s("├"),
@@ -180,26 +192,29 @@ pub const UNICODE: Icons = Icons {
 /// Nerd Font glyphs (codicons, Powerline). Each is followed by a space:
 /// non-Mono Nerd Fonts draw them up to two cells wide.
 pub const NERD: Icons = Icons {
-    new: s("\u{ec21} "),              // cod-sparkle_filled
-    ignored: s("\u{eae7} "),          // cod-eye_closed
-    snoozed: s("\u{ec08} "),          // cod-bell_slash
-    branch: s("\u{e0a0} "),           // Powerline branch
-    detached: s("\u{eafc} "),         // cod-git_commit
-    detached_commits: s("\u{ea82} "), // cod-history
-    ahead: s("\u{eaa0} "),            // cod-arrow_small_up
-    behind: s("\u{ea9d} "),           // cod-arrow_small_down
-    staged: s("\u{eadc} "),           // cod-diff_added
-    unstaged: s("\u{eade} "),         // cod-diff_modified
-    untracked: s("\u{eb32} "),        // cod-question
-    conflict: s("\u{ea76} "),         // cod-close
-    stash: s("\u{ea98} "),            // cod-archive
-    in_progress: s("\u{ea6c} "),      // cod-warning
-    gone: s("\u{eac1} "),             // cod-close_all
-    no_upstream: s("\u{ead0} "),      // cod-debug_disconnect
-    no_remote: s("\u{f4ad} "),        // oct-cloud_offline
-    branches: s("\u{ea63} "),         // cod-repo_forked
-    error: s("\u{ea87} "),            // cod-error
-    pull: s("\u{ea77} "),             // cod-sync
+    new: s("\u{ec21} "),               // cod-sparkle_filled
+    ignored: s("\u{eae7} "),           // cod-eye_closed
+    snoozed: s("\u{ec08} "),           // cod-bell_slash
+    branch: s("\u{e0a0} "),            // Powerline branch
+    detached: s("\u{eafc} "),          // cod-git_commit
+    detached_commits: s("\u{ea82} "),  // cod-history
+    ahead: s("\u{eaa0} "),             // cod-arrow_small_up
+    behind: s("\u{ea9d} "),            // cod-arrow_small_down
+    staged: s("\u{eadc} "),            // cod-diff_added
+    unstaged: s("\u{eade} "),          // cod-diff_modified
+    untracked: s("\u{eb32} "),         // cod-question
+    conflict: s("\u{ea76} "),          // cod-close
+    stash: s("\u{ea98} "),             // cod-archive
+    in_progress: s("\u{ea6c} "),       // cod-warning
+    gone: s("\u{eac1} "),              // cod-close_all
+    no_upstream: s("\u{ead0} "),       // cod-debug_disconnect
+    no_remote: s("\u{f4ad} "),         // oct-cloud_offline
+    branches: s("\u{ea63} "),          // cod-repo_forked
+    off_default: s("\u{ea68} "),       // cod-source_control
+    finished_worktree: s("\u{eba4} "), // cod-pass
+    stale_worktrees: s("\u{ea81} "),   // cod-trash
+    error: s("\u{ea87} "),             // cod-error
+    pull: s("\u{ea77} "),              // cod-sync
     worktree: s("├"),
     submodule: s("\u{eaec} "), // cod-file_submodule
     spinner: s("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
@@ -242,6 +257,9 @@ pub const ASCII: Icons = Icons {
     no_upstream: s("-u"),
     no_remote: s("-r"),
     branches: s("b"),
+    off_default: s("-d"),
+    finished_worktree: s("wt+"),
+    stale_worktrees: s("wt-"),
     error: s("ERR"),
     pull: s("~"),
     worktree: s("|"),

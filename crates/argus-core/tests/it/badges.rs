@@ -230,3 +230,76 @@ fn a_repo_without_a_remote_says_so_unless_that_is_ignored() {
     let w = sb.clone_as_github("acme", "w", "other/w");
     assert!(!state_badges(&w, "").contains(&UNICODE.no_remote.to_string()));
 }
+
+/// The badges of the entry at `path`, the workspace scanning `dev`.
+fn badges_at(sb: &Sandbox, path: &std::path::Path, extra: &str) -> Vec<String> {
+    let cfg = format!("roots = ['{}']\n{extra}", sb.path("dev").display());
+    let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    ws.scan();
+    let e = ws.entries.iter().find(|e| e.path == path).unwrap();
+    badges::state(e, &UNICODE)
+        .into_iter()
+        .map(|b| b.text)
+        .collect()
+}
+
+#[test]
+fn every_issue_has_an_icon_in_the_row() {
+    use argus_core::attention::Issue;
+    use argus_core::icons::{ASCII, NERD};
+    // the policy: a repo is never listed without its row saying why. Each
+    // kind of issue names its icon, in every set, and no two share one
+    for set in [&UNICODE, &NERD, &ASCII] {
+        let icons: Vec<&str> = Issue::ALL
+            .iter()
+            .map(|i| badges::issue_icon(i, set))
+            .collect();
+        assert!(icons.iter().all(|i| !i.trim().is_empty()), "{icons:?}");
+        let mut distinct = icons.clone();
+        distinct.sort();
+        distinct.dedup();
+        // (uncommitted paths show by kind: staged, unstaged, untracked)
+        assert_eq!(distinct.len(), icons.len(), "{icons:?}");
+    }
+    // the three that had none: off the default branch
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "dev/w");
+    assert!(!badges_at(&sb, &r, "").contains(&UNICODE.off_default.to_string()));
+    git(&r, &["switch", "-q", "-c", "wt-branch"]);
+    commit(&r, "work");
+    git(&r, &["push", "-q", "-u", "origin", "wt-branch"]);
+    assert!(badges_at(&sb, &r, "").contains(&UNICODE.off_default.to_string()));
+    // (a warning: gone when the issue is ignored)
+    let ignored = "[marks.ignore.issues]\nnon_default_branch = ['**']";
+    assert!(!badges_at(&sb, &r, ignored).contains(&UNICODE.off_default.to_string()));
+    // a finished worktree: merged, its upstream gone
+    git(&r, &["switch", "-q", "main"]);
+    let wt = sb.path("dev/wt");
+    git(
+        &r,
+        &["worktree", "add", "-q", wt.to_str().unwrap(), "wt-branch"],
+    );
+    let finished = UNICODE.finished_worktree.to_string();
+    assert!(!badges_at(&sb, &wt, "").contains(&finished));
+    git(&r, &["merge", "-q", "--no-edit", "--no-ff", "wt-branch"]);
+    git(&r, &["push", "-q"]);
+    git(&r, &["push", "-q", "origin", "--delete", "wt-branch"]);
+    git(&r, &["fetch", "-q", "--prune"]);
+    let wt = std::fs::canonicalize(&wt).unwrap();
+    assert!(
+        badges_at(&sb, &wt, "").contains(&finished),
+        "{:?}",
+        badges_at(&sb, &wt, "")
+    );
+    // its record with the folder gone: counted, on the main repo's row
+    let r = std::fs::canonicalize(&r).unwrap();
+    let stale = format!("{}1", UNICODE.stale_worktrees);
+    assert!(!badges_at(&sb, &r, "").contains(&stale));
+    std::fs::remove_dir_all(&wt).unwrap();
+    assert!(
+        badges_at(&sb, &r, "").contains(&stale),
+        "{:?}",
+        badges_at(&sb, &r, "")
+    );
+}

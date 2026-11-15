@@ -381,6 +381,16 @@ Two findings:
   space, since non-Mono Nerd Fonts draw them up to two cells wide.
   `[ui.icon_overrides]` replaces single icons on top of either set, for
   fonts with better glyphs (e.g. ★); unknown names warn.
+* **Every issue has an icon in the row.** A repo is never listed as
+  needing attention without its row saying why. `badges::issue_icon`
+  names the icon of each kind of issue with no wildcard, so adding an
+  issue means choosing its icon, and a test checks every kind has one in
+  every set and no two share one. Where the status already shows the fact
+  (counts of changes, ahead and behind, stashes, where HEAD is) that
+  badge is the icon; the rest come from the issues still counted, so an
+  ignored or snoozed one drops out: `off_default` (not on the default
+  branch, beside the branch name's colour), `finished_worktree` and
+  `stale_worktrees` among them.
 * **Detached on a tag** shows the tag (annotated first, then highest
   version by numeric comparison, `+N` for the rest). Tags on HEAD are
   found from packed refs' peeled ids, so this costs no object reads
@@ -812,8 +822,9 @@ faster binary. Symbols are kept (only debug info is stripped, as in any
 release build), so a panic's backtrace names functions; stripping them
 too saved 2.2 MB of 12.5 MB, not worth unreadable bug reports. argus is
 mostly bound by file-system calls and git processes, so the profile
-matters more for size than speed. Fat LTO, `panic = "abort"` and split,
-packed debug info kept aside are unmeasured (TODO.md).
+matters more for size than speed. Split, packed debug info kept aside (to turn a crash report's addresses
+into lines) is still to try (TODO.md); fat LTO and `panic = "abort"`
+were considered and left.
 
 ## 9. Not done yet / next steps
 

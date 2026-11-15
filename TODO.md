@@ -24,15 +24,11 @@ deferred.
 - **Terminals drawing ambiguous-width symbols two cells wide** (CJK
   setting): detect it and swap those icons. Today `demo --glyphs` marks
   them with `*`.
-- **Release profile options not measured:** fat LTO, `panic = "abort"`
-  (the TUI's panic hook still restores the terminal), and split, packed
-  debug info (a `.dSYM`) kept aside to symbolicate crash reports.
+- **Split debug info for releases:** full debug symbols packed in a
+  separate file (a `.dSYM`) kept aside to symbolicate crash reports.
+  Build it and compare size and what a backtrace then says.
 - **Editing a patch to discard** (`K` after `e`): reversed in the work
   tree, so it can't be undone; it would confirm after the editor closes.
-- **A row icon for worktree issues:** a warning mark on the main repo for
-  stale records, and on a finished worktree's own row.
-- **Caching the pruning checks** for trees with many symlinks, if they
-  ever show up as slow.
 
 ## Next steps
 
