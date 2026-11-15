@@ -2240,3 +2240,126 @@ fn fix_auto_stops_at_a_fix_that_fails() {
     assert!(!out.contains("switch"), "{out}");
     assert_eq!(git(&f, &["branch", "--show-current"]).trim(), "feat");
 }
+
+/// A stand-in for GitHub's API on a local port: answers every request
+/// with `body`, and gives back the requests it got.
+fn fake_api(body: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for mut s in listener.incoming().flatten() {
+            // headers, then as much body as Content-Length says
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = s.read(&mut buf).unwrap_or(0);
+                got.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&got).to_string();
+                let Some((head, sent)) = text.split_once("\r\n\r\n") else {
+                    if n == 0 {
+                        break;
+                    }
+                    continue;
+                };
+                let want = head
+                    .lines()
+                    .find_map(|l| {
+                        l.to_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                if sent.len() >= want || n == 0 {
+                    break;
+                }
+            }
+            let _ = tx.send(String::from_utf8_lossy(&got).to_string());
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (base, rx)
+}
+
+#[test]
+fn status_forge_asks_the_forge_and_shows_pull_requests_and_issues() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let body = r#"{"data":{"repository":{"issues":{"totalCount":2},"pullRequests":{"totalCount":1},
+        "b0":{"nodes":[{"number":7,"title":"Add feat","state":"OPEN","url":"https://github.com/acme/feature/pull/7",
+          "headRepositoryOwner":{"login":"acme"},"reviewDecision":"APPROVED"}]},"parent":null}}}"#;
+    let (base, requests) = fake_api(body);
+    let run = |args: &[&str]| {
+        let o = argus(&sb)
+            .env("ARGUS_GITHUB_API", &base)
+            .env("GH_TOKEN", "tok")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // it brings the details with it
+    let out = run(&["status", "--forge", "--filter", "feature"]);
+    assert!(
+        out.contains("    forge     2 open issues, 1 open pull request\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("      * feat  origin/feat  #7 open, approved  Add feat\n"),
+        "{out}"
+    );
+    // one question for the one repo listed, with the token, about its branch
+    let asked: Vec<String> = requests.try_iter().collect();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert!(asked[0].starts_with("POST /graphql "), "{}", asked[0]);
+    assert!(
+        asked[0]
+            .to_lowercase()
+            .contains("authorization: bearer tok")
+    );
+    assert!(asked[0].contains(r#""b0":"feat""#) && asked[0].contains(r#""name":"feature""#));
+    // inverse: nothing is asked without the flag, details or not
+    let out = run(&["status", "--details"]);
+    assert!(!out.contains("forge     "), "{out}");
+    assert_eq!(requests.try_iter().count(), 0);
+    // nor when turned off in config
+    let cfg = sb.path("off.toml");
+    std::fs::write(&cfg, "ui.forge_info = false\n").unwrap();
+    let out = run(&["--config", cfg.to_str().unwrap(), "status", "--forge"]);
+    assert!(
+        out.contains("path      ") && !out.contains("forge     "),
+        "{out}"
+    );
+    assert_eq!(requests.try_iter().count(), 0);
+}
+
+#[test]
+fn status_forge_says_why_a_forge_did_not_answer() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let (base, _requests) = fake_api(r#"{"errors":[{"message":"Something went wrong"}]}"#);
+    let o = argus(&sb)
+        .env("ARGUS_GITHUB_API", &base)
+        .env("GH_TOKEN", "tok")
+        .args(["status", "--forge", "--filter", "dirty"])
+        .output()
+        .unwrap();
+    assert!(o.status.success());
+    let out = String::from_utf8(o.stdout).unwrap();
+    assert!(
+        out.contains("    forge     Something went wrong\n"),
+        "{out}"
+    );
+    // and it isn't in --json yet: said, not silently left out
+    argus(&sb)
+        .args(["--json", "status", "--forge"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--forge"));
+}

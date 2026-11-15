@@ -682,6 +682,23 @@ rendering is snapshot-tested via `TestBackend`.
   kills a branch). There the next fix starts when the repo's refreshed
   status arrives after a fix that worked (`App::chains`), never while one
   is still running.
+* **Forge information** (pull requests, open issues) is for showing,
+  never for deciding: what's merged is worked out locally (ancestry, then
+  the trial merge), because a pull request's head needn't be the local
+  branch's tip. It's asked for lazily: when a repo's details open in the
+  TUI (`Effect::Forge`, answered by `Msg::Forge`; the screen never
+  waits), and on the command line only by `status --forge`, then and
+  there, so nothing stale is ever shown and plain `status` stays offline.
+  `Forge::info` is one GraphQL query per repo: the two counts, and for
+  each local branch but the default (20 at most, the current one first)
+  the newest pull requests with that head name, here and in the repo a
+  fork came from. Others' forks can have a branch of the same name, so
+  only pull requests from this repo's owner count; an open one wins over
+  a newer closed one. GraphQL needs a token: without one the line says
+  so. The TUI asks again when the branches change or on `g`, keeping the
+  old answer on screen meanwhile, and drops an answer to a question it
+  has since replaced. `ARGUS_GITHUB_API` points the client elsewhere, for
+  the end-to-end tests (a stand-in server on a local port).
 * **`status --details`** prints the TUI's details lines under each row:
   the same builder (`details::details`), told who reads them (`Hints`).
   For the CLI a fix names its command (`argus fix -k stash`), or the TUI

@@ -208,6 +208,15 @@ impl Hints {
     }
 }
 
+/// What's known from the repo's forge, to show.
+#[derive(Debug, Clone, Copy)]
+pub enum ForgeView<'a> {
+    /// Asked, not answered yet.
+    Loading,
+    Info(&'a argus_core::forge::RepoInfo),
+    Failed(&'a str),
+}
+
 /// Detail lines for `e`, with `icons` for ahead/behind. Fixes: the auto-fix (by `priority`, i.e. `[fix]
 /// auto`), what later auto-fixes would apply, then the other fixes.
 /// `state` has when its issue snoozes end.
@@ -218,6 +227,7 @@ pub fn details(
     icons: &Icons,
     state: &argus_core::State,
     hints: Hints,
+    forge: Option<ForgeView>,
 ) -> Vec<DetailLine> {
     let mut v = vec![line(vec![
         styled(Role::Dim, "path      "),
@@ -300,6 +310,18 @@ pub fn details(
             plain(fl.join(", ")),
         ]));
     }
+    let forge_line = forge.map(|f| match f {
+        ForgeView::Loading => styled(Role::Dim, "looking up pull requests and issues…"),
+        ForgeView::Failed(why) => styled(Role::Warning, why),
+        ForgeView::Info(i) => plain(format!(
+            "{} open {}, {} open pull {}",
+            i.open_issues,
+            argus_core::plural(i.open_issues, "issue", "issues"),
+            i.open_pulls,
+            argus_core::plural(i.open_pulls, "request", "requests"),
+        )),
+    });
+    v.extend(forge_line.map(|l| line(vec![styled(Role::Dim, "forge     "), l])));
     for issue in &e.issues {
         let (role, text) = describe(issue, s.default_branch.as_deref());
         v.push(DetailLine {
@@ -441,6 +463,21 @@ pub fn details(
             let ahead = b.upstream.as_ref().filter(|t| !t.gone).map(|t| t.ahead);
             if let Some(n) = unpushed.filter(|&n| ahead != Some(n)) {
                 parts.push(styled(Role::Dim, format!("  {n} on no remote")));
+            }
+            let pull = match forge {
+                Some(ForgeView::Info(i)) => i.pull(&b.name),
+                _ => None,
+            };
+            if let Some(p) = pull {
+                use argus_core::forge::{Checks, PullState, Review};
+                let role = match (p.state, p.review, p.checks) {
+                    (PullState::Open, Some(Review::ChangesRequested), _)
+                    | (PullState::Open, _, Some(Checks::Failing)) => Role::Warning,
+                    (PullState::Open, _, _) => Role::Ahead,
+                    _ => Role::Dim,
+                };
+                parts.push(styled(role, format!("  {}", p.summary())));
+                parts.push(styled(Role::Dim, format!("  {}", p.title)));
             }
             v.push(DetailLine {
                 branch: Some(b.name.clone()),

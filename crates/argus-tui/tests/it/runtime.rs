@@ -35,7 +35,7 @@ fn setup(extra: &str) -> (Sandbox, App, Runtime) {
     git(&f, &["push", "-q", "-u", "origin", "feat"]);
     let rt = runtime(&sb, &sb.path("config.toml"), "true", &no_forge);
     let cfg = format!(
-        "roots = ['{}']\n{extra}\n[ui]\nattention_only = false",
+        "roots = ['{}']\n{extra}\n[ui]\nattention_only = false\nforge_info = false",
         sb.path("dev").display()
     );
     let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
@@ -450,4 +450,84 @@ fn quitting() {
     let (_sb, mut app, mut rt) = setup("");
     run(&mut app, &mut rt, vec![Effect::Quit]);
     assert!(app.quit);
+}
+
+#[test]
+fn a_forge_is_asked_in_the_background_with_one_client_for_all_its_repos() {
+    use argus_core::forge::RepoInfo;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static MADE: AtomicUsize = AtomicUsize::new(0);
+    struct Fake;
+    impl Forge for Fake {
+        fn kind(&self) -> &str {
+            "fake"
+        }
+        fn host(&self) -> &str {
+            "github.com"
+        }
+        fn list(&self, _: &str, _: Option<&str>) -> Result<Vec<RemoteRepo>, ForgeError> {
+            Ok(vec![])
+        }
+        fn info(
+            &self,
+            id: &argus_core::identity::RepoId,
+            branches: &[String],
+        ) -> Result<Option<RepoInfo>, ForgeError> {
+            match id.name.as_str() {
+                "dirty" => Err(ForgeError::NotFound("acme/dirty".into())),
+                _ => Ok(Some(RepoInfo {
+                    open_issues: branches.len(),
+                    open_pulls: 4,
+                    pulls: vec![],
+                })),
+            }
+        }
+    }
+    fn fake(_: &str, _: &str) -> Result<Box<dyn Forge>, ForgeError> {
+        MADE.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(Fake))
+    }
+    let (sb, mut app, _) = setup("");
+    app.ws.config.ui.forge_info = true;
+    let mut rt = runtime(&sb, &sb.path("config.toml"), "true", &fake);
+    let fx = app.act(Action::ExpandAll);
+    assert_eq!(fx.len(), 3, "{fx:?}");
+    run(&mut app, &mut rt, fx);
+    let lines: Vec<String> = app
+        .rows
+        .iter()
+        .filter_map(|r| match r {
+            argus_tui::app::Row::Detail { line, .. } => {
+                Some(line.parts.iter().map(|p| p.1.as_str()).collect::<String>())
+            }
+            _ => None,
+        })
+        .filter(|l| l.starts_with("forge"))
+        .collect();
+    // feature has one branch besides main; an error is the forge's own words
+    assert_eq!(
+        lines,
+        [
+            "forge     not found: acme/dirty",
+            "forge     1 open issue, 4 open pull requests",
+            "forge     0 open issues, 4 open pull requests",
+        ]
+    );
+    assert_eq!(MADE.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_forge_that_cannot_be_made_says_why() {
+    let (sb, mut app, mut rt) = setup("");
+    app.ws.config.ui.forge_info = true;
+    select(&mut app, "acme/clean");
+    let fx = app.act(Action::ToggleExpand);
+    run(&mut app, &mut rt, fx);
+    let _ = sb;
+    let found = app.rows.iter().any(|r| {
+        matches!(r, argus_tui::app::Row::Detail { line, .. }
+        if line.parts.iter().map(|p| p.1.as_str()).collect::<String>()
+            == "forge     authentication: no forge in this test")
+    });
+    assert!(found);
 }

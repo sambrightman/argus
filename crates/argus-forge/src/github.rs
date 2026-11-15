@@ -3,7 +3,9 @@
 use std::process::Command;
 use std::sync::OnceLock;
 
-use argus_core::forge::{Forge, ForgeError, Protocol, RemoteRepo};
+use argus_core::forge::{
+    Checks, Forge, ForgeError, Protocol, PullRequest, PullState, RemoteRepo, RepoInfo, Review,
+};
 use argus_core::identity::RepoId;
 use serde::Deserialize;
 
@@ -17,6 +19,10 @@ pub struct Response {
 /// HTTP seam so the client can be tested without the network.
 pub trait Http: Send + Sync {
     fn get(&self, url: &str, token: Option<&str>) -> Result<Response, String>;
+    /// POST a JSON body (the GraphQL API).
+    fn post(&self, _url: &str, _token: Option<&str>, _body: &str) -> Result<Response, String> {
+        Err("POST isn't supported here".into())
+    }
 }
 
 struct Ureq(ureq::Agent);
@@ -45,6 +51,28 @@ impl Http for Ureq {
             .map_err(|e| e.to_string())?;
         Ok(Response { status, body, link })
     }
+
+    fn post(&self, url: &str, token: Option<&str>, body: &str) -> Result<Response, String> {
+        let mut req = self
+            .0
+            .post(url)
+            .header("Content-Type", "application/json")
+            .header("User-Agent", concat!("argus/", env!("CARGO_PKG_VERSION")));
+        if let Some(t) = token {
+            req = req.header("Authorization", &format!("Bearer {t}"));
+        }
+        let mut resp = req.send(body).map_err(|e| e.to_string())?;
+        let status = resp.status().as_u16();
+        let body = resp
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| e.to_string())?;
+        Ok(Response {
+            status,
+            body,
+            link: None,
+        })
+    }
 }
 
 /// Reads an environment variable.
@@ -55,6 +83,7 @@ pub type GhSource = fn(&[&str]) -> Option<String>;
 pub struct GitHub {
     host: String,
     api: String,
+    graphql: String,
     http: Box<dyn Http>,
     token: OnceLock<Option<String>>,
     protocol: OnceLock<Protocol>,
@@ -70,7 +99,16 @@ impl GitHub {
             .http_status_as_error(false)
             .build()
             .into();
-        Self::with_http(host, Box::new(Ureq(agent)))
+        let mut g = Self::with_http(host, Box::new(Ureq(agent)));
+        // for tests of the programs: a stand-in for the API
+        if let Some(base) = std::env::var("ARGUS_GITHUB_API")
+            .ok()
+            .filter(|b| !b.is_empty())
+        {
+            g.graphql = format!("{base}/graphql");
+            g.api = base;
+        }
+        g
     }
 
     pub fn with_http(host: &str, http: Box<dyn Http>) -> Self {
@@ -79,9 +117,14 @@ impl GitHub {
         } else {
             format!("https://{host}/api/v3")
         };
+        let graphql = match host.eq_ignore_ascii_case("github.com") {
+            true => "https://api.github.com/graphql".to_string(),
+            false => format!("https://{host}/api/graphql"),
+        };
         Self {
             host: host.to_string(),
             api,
+            graphql,
             http,
             token: OnceLock::new(),
             protocol: OnceLock::new(),
@@ -209,6 +252,78 @@ impl Forge for GitHub {
             .collect())
     }
 
+    /// One GraphQL query: the counts, and for each branch the newest pull
+    /// requests with that head name, here and in the repo this one is a
+    /// fork of. Others' branches can share a name, so only those from this
+    /// repo's owner count.
+    fn info(&self, id: &RepoId, branches: &[String]) -> Result<Option<RepoInfo>, ForgeError> {
+        let Some(token) = self.token() else {
+            return Err(ForgeError::Auth(
+                "pull requests and issues need a token: gh auth login, or set GH_TOKEN".into(),
+            ));
+        };
+        let branches = &branches[..branches.len().min(MAX_BRANCHES)];
+        let body = serde_json::json!({
+            "query": info_query(branches.len()),
+            "variables": info_variables(id, branches),
+        })
+        .to_string();
+        let url = &self.graphql;
+        let r = self
+            .http
+            .post(url, Some(token), &body)
+            .map_err(ForgeError::Other)?;
+        match r.status {
+            200 => {}
+            401 | 403 => return Err(ForgeError::Auth(api_message(&r.body, r.status))),
+            s => return Err(ForgeError::Other(api_message(&r.body, s))),
+        }
+        let answer: GraphQl = serde_json::from_str(&r.body)
+            .map_err(|e| ForgeError::Other(format!("decoding {url}: {e}")))?;
+        let Some(repo) = answer.data.and_then(|d| d.repository) else {
+            return Err(match answer.errors.into_iter().next() {
+                Some(e) if e.kind.as_deref() == Some("NOT_FOUND") => {
+                    ForgeError::NotFound(format!("{}/{}", id.owner, id.name))
+                }
+                Some(e) => ForgeError::Other(e.message),
+                None => ForgeError::Other("no answer".into()),
+            });
+        };
+        let ours = |n: &&ApiPull| {
+            n.head_repository_owner
+                .as_ref()
+                .is_some_and(|o| o.login.eq_ignore_ascii_case(&id.owner))
+        };
+        let pulls = branches
+            .iter()
+            .enumerate()
+            .filter_map(|(i, branch)| {
+                let key = format!("b{i}");
+                let here = repo.branches.get(&key).into_iter().flat_map(|c| &c.nodes);
+                let parent = repo.parent.as_ref();
+                let there = parent
+                    .and_then(|p| p.branches.get(&key))
+                    .into_iter()
+                    .flat_map(|c| &c.nodes);
+                let all: Vec<(&ApiPull, Option<&str>)> = here
+                    .map(|n| (n, None))
+                    .chain(there.map(|n| (n, parent.map(|p| p.name_with_owner.as_str()))))
+                    .filter(|(n, _)| ours(n))
+                    .collect();
+                let (n, into) = all
+                    .iter()
+                    .find(|(n, _)| n.state == "OPEN")
+                    .or(all.first())?;
+                Some(n.convert(branch, *into))
+            })
+            .collect();
+        Ok(Some(RepoInfo {
+            open_issues: repo.issues.total_count,
+            open_pulls: repo.pull_requests.total_count,
+            pulls,
+        }))
+    }
+
     fn protocol(&self) -> Protocol {
         *self.protocol.get_or_init(|| {
             match (self.gh)(&["config", "get", "git_protocol", "--host", &self.host]).as_deref() {
@@ -222,6 +337,162 @@ impl Forge for GitHub {
 #[derive(Deserialize)]
 struct ApiOwner {
     login: String,
+}
+
+/// How many branches one [`Forge::info`] asks about: each adds to the
+/// query's cost, and a repo with more has mostly forgotten ones.
+const MAX_BRANCHES: usize = 20;
+
+/// The query for `n` branches, named by the variables `$b0`, `$b1`, ….
+fn info_query(n: usize) -> String {
+    let vars: String = (0..n).map(|i| format!(", $b{i}: String!")).collect();
+    let pulls: String = (0..n)
+        .map(|i| {
+            format!(
+                "b{i}: pullRequests(headRefName: $b{i}, first: 5, \
+                 orderBy: {{field: CREATED_AT, direction: DESC}}) {{ nodes {{ ...pr }} }} "
+            )
+        })
+        .collect();
+    // (a fragment nothing uses is an error)
+    let fragment = match n {
+        0 => "",
+        _ => {
+            " fragment pr on PullRequest { number title state isDraft url reviewDecision \
+             headRepositoryOwner { login } \
+             commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } }"
+        }
+    };
+    format!(
+        "query($owner: String!, $name: String!{vars}) {{ \
+           repository(owner: $owner, name: $name) {{ \
+             issues(states: OPEN) {{ totalCount }} \
+             pullRequests(states: OPEN) {{ totalCount }} \
+             {pulls}\
+             parent {{ nameWithOwner {pulls}}} }} }}{fragment}"
+    )
+}
+
+fn info_variables(id: &RepoId, branches: &[String]) -> serde_json::Value {
+    let mut v = serde_json::json!({"owner": id.owner, "name": id.name});
+    for (i, b) in branches.iter().enumerate() {
+        v[format!("b{i}")] = b.as_str().into();
+    }
+    v
+}
+
+#[derive(Deserialize)]
+struct GraphQl {
+    data: Option<GraphQlData>,
+    #[serde(default)]
+    errors: Vec<GraphQlError>,
+}
+
+#[derive(Deserialize)]
+struct GraphQlData {
+    repository: Option<ApiInfo>,
+}
+
+#[derive(Deserialize)]
+struct GraphQlError {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct Count {
+    #[serde(rename = "totalCount")]
+    total_count: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiInfo {
+    issues: Count,
+    pull_requests: Count,
+    parent: Option<ApiParent>,
+    /// `b0`, `b1`, …: the pull requests with each branch's name.
+    #[serde(flatten)]
+    branches: std::collections::HashMap<String, Nodes<ApiPull>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiParent {
+    name_with_owner: String,
+    #[serde(flatten)]
+    branches: std::collections::HashMap<String, Nodes<ApiPull>>,
+}
+
+#[derive(Deserialize)]
+struct Nodes<T> {
+    nodes: Vec<T>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiPull {
+    number: u64,
+    title: String,
+    state: String,
+    #[serde(default)]
+    is_draft: bool,
+    url: String,
+    review_decision: Option<String>,
+    head_repository_owner: Option<ApiOwner>,
+    commits: Option<Nodes<ApiPullCommit>>,
+}
+
+#[derive(Deserialize)]
+struct ApiPullCommit {
+    commit: ApiCommit,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiCommit {
+    status_check_rollup: Option<ApiRollup>,
+}
+
+#[derive(Deserialize)]
+struct ApiRollup {
+    state: String,
+}
+
+impl ApiPull {
+    fn convert(&self, branch: &str, into: Option<&str>) -> PullRequest {
+        let rollup = self
+            .commits
+            .iter()
+            .flat_map(|c| &c.nodes)
+            .find_map(|c| c.commit.status_check_rollup.as_ref());
+        PullRequest {
+            branch: branch.to_string(),
+            number: self.number,
+            title: self.title.clone(),
+            state: match self.state.as_str() {
+                "MERGED" => PullState::Merged,
+                "CLOSED" => PullState::Closed,
+                _ => PullState::Open,
+            },
+            draft: self.is_draft,
+            url: self.url.clone(),
+            review: self.review_decision.as_deref().and_then(|r| match r {
+                "APPROVED" => Some(Review::Approved),
+                "CHANGES_REQUESTED" => Some(Review::ChangesRequested),
+                "REVIEW_REQUIRED" => Some(Review::Required),
+                _ => None,
+            }),
+            checks: rollup.and_then(|r| match r.state.as_str() {
+                "SUCCESS" => Some(Checks::Passing),
+                "FAILURE" | "ERROR" => Some(Checks::Failing),
+                "PENDING" | "EXPECTED" => Some(Checks::Pending),
+                _ => None,
+            }),
+            into: into.map(String::from),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -287,6 +558,9 @@ mod tests {
     struct Fake {
         routes: HashMap<String, (u16, String, Option<String>)>,
         seen: Mutex<Vec<(String, Option<String>)>>,
+        /// What a POST to a URL answers, and the bodies posted.
+        posts: HashMap<String, (u16, String)>,
+        posted: Mutex<Vec<(String, String)>>,
     }
 
     impl Fake {
@@ -310,6 +584,213 @@ mod tests {
             ));
             Ok(Response { status, body, link })
         }
+
+        fn post(&self, url: &str, token: Option<&str>, body: &str) -> Result<Response, String> {
+            assert_eq!(token, Some("tok"));
+            self.posted.lock().unwrap().push((url.into(), body.into()));
+            let (status, body) = self.posts.get(url).cloned().ok_or("unreachable")?;
+            Ok(Response {
+                status,
+                body,
+                link: None,
+            })
+        }
+    }
+
+    fn graphql(url: &str, status: u16, body: &str) -> (GitHub, std::sync::Arc<Fake>) {
+        let mut f = Fake::default();
+        f.posts.insert(url.into(), (status, body.into()));
+        let host = match url.contains("api.github.com") {
+            true => "github.com",
+            false => "ghe.corp",
+        };
+        let f = std::sync::Arc::new(f);
+        (
+            GitHub::with_http(host, Box::new(f.clone())).with_token(Some("tok".into())),
+            f,
+        )
+    }
+
+    fn node(n: u64, state: &str, owner: &str, rest: &str) -> String {
+        format!(
+            r#"{{"number":{n},"title":"PR {n}","state":"{state}",
+                "url":"https://github.com/x/pull/{n}","headRepositoryOwner":{{"login":"{owner}"}}{rest}}}"#
+        )
+    }
+
+    const GQL: &str = "https://api.github.com/graphql";
+
+    #[test]
+    fn info_is_one_query_for_counts_and_each_branchs_pull_request() {
+        let body = format!(
+            r#"{{"data":{{"repository":{{
+                "issues":{{"totalCount":7}},"pullRequests":{{"totalCount":3}},
+                "b0":{{"nodes":[{}, {}, {}]}},
+                "b1":{{"nodes":[]}},
+                "b2":{{"nodes":[{}]}},
+                "parent":null}}}}}}"#,
+            // someone else's branch of the same name: not ours
+            node(9, "OPEN", "stranger", ""),
+            // ours: an older open one wins over a newer closed one
+            node(8, "CLOSED", "Me", ""),
+            node(
+                5,
+                "OPEN",
+                "me",
+                r#","reviewDecision":"CHANGES_REQUESTED","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}"#
+            ),
+            node(
+                4,
+                "MERGED",
+                "me",
+                r#","reviewDecision":null,"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}"#
+            ),
+        );
+        let (g, f) = graphql(GQL, 200, &body);
+        let id = RepoId::new("github.com", "me", "w");
+        let branches = ["feat".to_string(), "none".into(), "done".into()];
+        let info = g.info(&id, &branches).unwrap().unwrap();
+        assert_eq!((info.open_issues, info.open_pulls), (7, 3));
+        assert_eq!(info.pulls.len(), 2, "{:?}", info.pulls);
+        let p = info.pull("feat").unwrap();
+        assert_eq!((p.number, p.state), (5, PullState::Open));
+        assert_eq!(p.title, "PR 5");
+        assert_eq!(p.url, "https://github.com/x/pull/5");
+        assert_eq!(
+            (p.review, p.checks, p.into.clone()),
+            (Some(Review::ChangesRequested), Some(Checks::Failing), None)
+        );
+        let p = info.pull("done").unwrap();
+        assert_eq!((p.number, p.state), (4, PullState::Merged));
+        assert_eq!((p.review, p.checks), (None, None));
+        assert!(info.pull("none").is_none());
+        // one request, the names sent as variables, not spliced into the query
+        let posted = f.posted.lock().unwrap();
+        assert_eq!(posted.len(), 1);
+        let sent: serde_json::Value = serde_json::from_str(&posted[0].1).unwrap();
+        assert_eq!(sent["variables"]["owner"], "me");
+        assert_eq!(sent["variables"]["name"], "w");
+        assert_eq!(sent["variables"]["b0"], "feat");
+        assert_eq!(sent["variables"]["b2"], "done");
+        let q = sent["query"].as_str().unwrap();
+        assert!(!q.contains("feat") && q.contains("headRefName: $b2"), "{q}");
+    }
+
+    #[test]
+    fn info_looks_in_the_repo_a_fork_came_from_too() {
+        let body = format!(
+            r#"{{"data":{{"repository":{{
+                "issues":{{"totalCount":0}},"pullRequests":{{"totalCount":0}},
+                "b0":{{"nodes":[]}},
+                "parent":{{"nameWithOwner":"up/w","b0":{{"nodes":[{}, {}]}}}}}}}}}}"#,
+            node(30, "OPEN", "other", ""),
+            node(
+                21,
+                "OPEN",
+                "me",
+                r#","isDraft":true,"reviewDecision":"REVIEW_REQUIRED","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"PENDING"}}}]}"#
+            ),
+        );
+        let (g, _) = graphql(GQL, 200, &body);
+        let id = RepoId::new("github.com", "me", "w");
+        let info = g.info(&id, &["feat".to_string()]).unwrap().unwrap();
+        let p = info.pull("feat").unwrap();
+        assert_eq!((p.number, p.into.as_deref()), (21, Some("up/w")));
+        assert_eq!(
+            (p.draft, p.review, p.checks),
+            (true, Some(Review::Required), Some(Checks::Pending))
+        );
+    }
+
+    #[test]
+    fn info_maps_every_review_and_check_state() {
+        let one = |rest: &str| {
+            let body = format!(
+                r#"{{"data":{{"repository":{{"issues":{{"totalCount":0}},"pullRequests":{{"totalCount":0}},
+                    "b0":{{"nodes":[{}]}},"parent":null}}}}}}"#,
+                node(1, "OPEN", "me", rest)
+            );
+            let (g, _) = graphql(GQL, 200, &body);
+            let id = RepoId::new("github.com", "me", "w");
+            let p = g.info(&id, &["f".to_string()]).unwrap().unwrap().pulls[0].clone();
+            (p.review, p.checks)
+        };
+        let checks = |state: &str| {
+            one(&format!(
+                r#","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{{"state":"{state}"}}}}}}]}}"#
+            ))
+            .1
+        };
+        assert_eq!(checks("SUCCESS"), Some(Checks::Passing));
+        assert_eq!(checks("FAILURE"), Some(Checks::Failing));
+        assert_eq!(checks("ERROR"), Some(Checks::Failing));
+        assert_eq!(checks("PENDING"), Some(Checks::Pending));
+        assert_eq!(checks("EXPECTED"), Some(Checks::Pending));
+        assert_eq!(checks("SOMETHING_NEW"), None);
+        assert_eq!(
+            one(r#","reviewDecision":"APPROVED""#).0,
+            Some(Review::Approved)
+        );
+        assert_eq!(one(r#","reviewDecision":"NEW""#).0, None);
+        assert_eq!(one(""), (None, None));
+    }
+
+    #[test]
+    fn info_errors_are_classified_and_enterprise_has_its_own_endpoint() {
+        let id = RepoId::new("github.com", "me", "w");
+        let (g, _) = graphql(GQL, 401, r#"{"message":"Bad credentials"}"#);
+        assert!(
+            matches!(g.info(&id, &[]), Err(ForgeError::Auth(m)) if m.contains("Bad credentials"))
+        );
+        let gone = r#"{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Repository"}]}"#;
+        let (g, _) = graphql(GQL, 200, gone);
+        assert!(matches!(g.info(&id, &[]), Err(ForgeError::NotFound(m)) if m == "me/w"));
+        let other = r#"{"errors":[{"message":"Something went wrong"}]}"#;
+        let (g, _) = graphql(GQL, 200, other);
+        assert!(
+            matches!(g.info(&id, &[]), Err(ForgeError::Other(m)) if m == "Something went wrong")
+        );
+        let (g, _) = graphql(GQL, 502, "<html>");
+        assert!(matches!(g.info(&id, &[]), Err(ForgeError::Other(m)) if m == "HTTP 502"));
+        let (g, _) = graphql(GQL, 200, "not json");
+        assert!(matches!(g.info(&id, &[]), Err(ForgeError::Other(_))));
+        // without a token there's nothing to ask with, and nothing is sent
+        let f = std::sync::Arc::new(Fake::default());
+        let g = GitHub::with_http("github.com", Box::new(f.clone())).with_token(None);
+        assert!(
+            matches!(g.info(&id, &[]), Err(ForgeError::Auth(m)) if m.contains("gh auth login"))
+        );
+        assert!(f.posted.lock().unwrap().is_empty());
+        // enterprise
+        let ok = r#"{"data":{"repository":{"issues":{"totalCount":1},"pullRequests":{"totalCount":2},"parent":null}}}"#;
+        let (g, f) = graphql("https://ghe.corp/api/graphql", 200, ok);
+        let info = g
+            .info(&RepoId::new("ghe.corp", "o", "n"), &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!((info.open_issues, info.open_pulls), (1, 2));
+        assert_eq!(
+            f.posted.lock().unwrap()[0].0,
+            "https://ghe.corp/api/graphql"
+        );
+    }
+
+    #[test]
+    fn info_asks_about_at_most_twenty_branches() {
+        let ok = r#"{"data":{"repository":{"issues":{"totalCount":0},"pullRequests":{"totalCount":0},"parent":null}}}"#;
+        let (g, f) = graphql(GQL, 200, ok);
+        let branches: Vec<String> = (0..30).map(|i| format!("br{i}")).collect();
+        g.info(&RepoId::new("github.com", "me", "w"), &branches)
+            .unwrap();
+        let sent: serde_json::Value = serde_json::from_str(&f.posted.lock().unwrap()[0].1).unwrap();
+        assert_eq!(sent["variables"]["b19"], "br19");
+        assert!(sent["variables"].get("b20").is_none());
+        assert!(sent["query"].as_str().unwrap().contains("fragment pr on"));
+        // with no branch to ask about, no fragment: unused, it's refused
+        g.info(&RepoId::new("github.com", "me", "w"), &[]).unwrap();
+        let sent: serde_json::Value = serde_json::from_str(&f.posted.lock().unwrap()[1].1).unwrap();
+        let q = sent["query"].as_str().unwrap();
+        assert!(!q.contains("fragment") && !q.contains("...pr"), "{q}");
     }
 
     fn repo(owner: &str, name: &str, archived: bool) -> String {

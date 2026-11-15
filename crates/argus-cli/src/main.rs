@@ -1,5 +1,6 @@
 //! `argus`: the command-line front-end. With no subcommand it starts the TUI.
 
+use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -76,6 +77,12 @@ enum Cmd {
         /// issues, the fixes on offer, its branches, changes and stashes.
         #[arg(long)]
         details: bool,
+        /// With the details, what each repo's forge says: its open issues
+        /// and pull requests, and the pull request of each branch. Asks
+        /// the forge now, once per repo listed (GitHub, with the token
+        /// `gh` or `GH_TOKEN` gives).
+        #[arg(long)]
+        forge: bool,
     },
     /// Pull the repos marked for pull; list tracked owners and clone their
     /// new repos.
@@ -470,7 +477,11 @@ fn run() -> Result<()> {
             filter,
             mark,
             details,
+            forge,
         } => {
+            if forge && json {
+                bail!("--forge isn't part of --json output yet: leave one of them out");
+            }
             scan(&mut ws);
             for m in &mark {
                 mark_named(&ws, m)?;
@@ -481,7 +492,7 @@ fn run() -> Result<()> {
                 .chain(filter)
                 .collect::<Vec<_>>()
                 .join(" ");
-            status(&ws, view.into(), &query, json, details)?;
+            status(&ws, view.into(), &query, json, details || forge, forge)?;
         }
         Cmd::Pull {
             dry_run,
@@ -987,6 +998,7 @@ fn status(
     query: &str,
     json: bool,
     details: bool,
+    forge: bool,
 ) -> Result<()> {
     let (marks, text) = argus_core::rules::MarkFilter::parse(query);
     let mut fuzzy = (!text.is_empty()).then(|| argus_tui::fuzzy::Fuzzy::new(&text));
@@ -1007,6 +1019,10 @@ fn status(
     let marks = ws.config.mark_icons();
     let hints = argus_tui::details::Hints::Commands {
         describe_limit: ws.config.describe_limit,
+    };
+    let asked = match forge && ws.config.ui.forge_info {
+        true => ask_forges(ws, &order),
+        false => Default::default(),
     };
     let rows: Vec<(String, String, String, String, Vec<String>)> = order
         .iter()
@@ -1034,7 +1050,12 @@ fn status(
                 p.badges(&badges::state(e, &ic)),
                 if details {
                     let (fix, stash) = (&ws.config.fix.auto, &ws.config.stash);
-                    argus_tui::details::details(e, fix, stash, &ic, &ws.state, hints)
+                    let said = asked.get(&e.path).and_then(|r| match r {
+                        Ok(Some(info)) => Some(argus_tui::details::ForgeView::Info(info)),
+                        Ok(None) => None,
+                        Err(why) => Some(argus_tui::details::ForgeView::Failed(why)),
+                    });
+                    argus_tui::details::details(e, fix, stash, &ic, &ws.state, hints, said)
                         .iter()
                         .map(|l| {
                             let parts = l.parts.iter().map(|(role, text)| match role {
@@ -1083,6 +1104,55 @@ fn status(
     }
     writeln!(out, "{}", p.role(Role::Dim, &summary))?;
     Ok(())
+}
+
+/// What a forge said of a repo, or why it didn't.
+type Said = std::result::Result<Option<argus_core::forge::RepoInfo>, String>;
+
+/// What the forges say of the repos at `order`, each asked once, several
+/// at a time; none for a repo with no forge to ask.
+fn ask_forges(ws: &Workspace, order: &[usize]) -> HashMap<PathBuf, Said> {
+    type Client = std::result::Result<Box<dyn argus_core::forge::Forge>, String>;
+    let questions: Vec<_> = order
+        .iter()
+        .filter_map(|&i| {
+            let e = &ws.entries[i];
+            let (id, s) = (e.id.as_ref()?, e.status()?);
+            let kind = ws.config.forge_kind(&id.host)?;
+            let branches = argus_core::forge::branches_to_ask(s);
+            Some((&e.path, (kind.to_string(), id.host.clone()), id, branches))
+        })
+        .collect();
+    // one client per forge, so its token is found once
+    let mut clients: HashMap<(String, String), Client> = HashMap::new();
+    for (_, key, ..) in &questions {
+        clients
+            .entry(key.clone())
+            .or_insert_with(|| forge_factory()(&key.0, &key.1).map_err(|e| e.to_string()));
+    }
+    // a few at a time: workers taking the next question until none is left
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let said = std::sync::Mutex::new(HashMap::new());
+    std::thread::scope(|scope| {
+        for _ in 0..ws.config.network_jobs().clamp(1, questions.len().max(1)) {
+            scope.spawn(|| {
+                loop {
+                    let n = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let Some((path, key, id, branches)) = questions.get(n) else {
+                        break;
+                    };
+                    let answer = match &clients[key] {
+                        Ok(f) => f.info(id, branches).map_err(|e| e.to_string()),
+                        Err(e) => Err(e.clone()),
+                    };
+                    if let Ok(mut said) = said.lock() {
+                        said.insert((*path).clone(), answer);
+                    }
+                }
+            });
+        }
+    });
+    said.into_inner().unwrap_or_default()
 }
 
 /// Footer counts, naming the flag that shows whatever the filter left out.
@@ -1329,6 +1399,8 @@ fn demo_config(
         ..Config::default()
     };
     config.ui.attention_only = false;
+    // its repos are on no forge
+    config.ui.forge_info = false;
     if let Some(t) = theme {
         config.ui.theme = t;
     }

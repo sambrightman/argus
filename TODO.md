@@ -38,11 +38,10 @@ deferred.
 
 - **Marks next:** pull and ignore as marks with behaviour fields (they
   keep their own rules for now; see DESIGN.md §9, custom marks).
-- **Pull request and issue details:** looked up in the background (never
-  holding up the screen; one search for all repos) and shown in a repo's
-  details: number, title, review and CI state. For display, not safety:
-  merged-by-squash is detected locally. In the CLI only behind a flag
-  that fetches them then, never from a stale cache.
+- **More from the forge:** the details show GitHub's open issue and pull
+  request counts and each branch's pull request (`[ui] forge_info`,
+  `status --forge`). Not yet: in `--json`; the counts of the repo a fork
+  came from (a fork's own are shown); forges other than GitHub.
 - **Orphans** (local clones the forge no longer lists): reported only, no
   archive/move action.
 - **GitLab/Gitea forges** (implement `argus_core::forge::Forge`); a **jj

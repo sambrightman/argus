@@ -577,6 +577,14 @@ pub enum Effect {
     /// Describe a detached HEAD however far back its tag is; answer with
     /// [`Msg::Described`].
     Describe(PathBuf),
+    /// Ask the forge of this `kind` about the repo and pull requests from
+    /// `branches`; answer with [`Msg::Forge`].
+    Forge {
+        path: PathBuf,
+        kind: String,
+        id: argus_core::identity::RepoId,
+        branches: Vec<String>,
+    },
     /// Leave the TUI, run a command in a directory, come back.
     Suspend {
         program: String,
@@ -593,11 +601,26 @@ pub enum Effect {
     Quit,
 }
 
+/// A repo's forge, as far as it has been asked.
+#[derive(Debug, Default)]
+struct ForgeLook {
+    /// The branches the last question was about.
+    asked: Option<Vec<String>>,
+    /// The last answer: kept while a newer question is out.
+    answer: Option<Result<Option<argus_core::forge::RepoInfo>, String>>,
+}
+
 /// Results coming back from the runtime.
 #[derive(Debug)]
 pub enum Msg {
     /// A full describe finished (its answer is remembered by status).
     Described(PathBuf),
+    /// What a forge said of a repo, asked about these branches.
+    Forge {
+        path: PathBuf,
+        branches: Vec<String>,
+        info: Result<Option<argus_core::forge::RepoInfo>, String>,
+    },
     Scanned {
         entries: Vec<Entry>,
         /// Directories skipped because of `max_depth`.
@@ -751,6 +774,8 @@ pub struct App {
     /// applied to each so far: when one's status is next read, its next
     /// fix starts.
     chains: HashMap<PathBuf, Vec<fix::Fix>>,
+    /// What each repo's forge was asked and has said (see [`ForgeLook`]).
+    forge: HashMap<PathBuf, ForgeLook>,
     /// The repo the open ignore menu is for.
     ignore_menu: Option<PathBuf>,
     /// The untracked files the open gitignore menu is for, by repo, and
@@ -804,6 +829,7 @@ impl App {
             running: HashMap::new(),
             auto_fixes: (0, String::new()),
             chains: HashMap::new(),
+            forge: HashMap::new(),
             ignore_menu: None,
             gitignore: None,
             pick: None,
@@ -891,6 +917,7 @@ impl App {
                     &icons,
                     &self.ws.state,
                     crate::details::Hints::Keys,
+                    self.forge_view(&e.path),
                 );
                 if self.stale_main(i).is_some() {
                     lines.extend(crate::details::gone_lines(true));
@@ -950,6 +977,7 @@ impl App {
                             &icons,
                             &self.ws.state,
                             crate::details::Hints::Keys,
+                            None,
                         );
                         stack.extend(
                             lines
@@ -1340,7 +1368,7 @@ impl App {
                     {
                         self.cursor = i;
                     }
-                    return self.describe_opened();
+                    return self.opened();
                 }
             }
             ExpandAll => {
@@ -1350,7 +1378,7 @@ impl App {
                     .map(|i| self.ws.entries[i].path.clone())
                     .collect();
                 self.rebuild();
-                return self.describe_opened();
+                return self.opened();
             }
             CollapseAll => {
                 self.expanded.clear();
@@ -1594,7 +1622,12 @@ impl App {
             }
             Refresh => {
                 let paths: Vec<PathBuf> = self.ws.entries.iter().map(|e| e.path.clone()).collect();
-                return vec![Effect::Refresh(paths)];
+                // and ask the forges again, of the repos whose details are open
+                self.forge.clear();
+                self.rebuild();
+                let mut fx = vec![Effect::Refresh(paths)];
+                fx.extend(self.forge_opened());
+                return fx;
             }
             DropGone => {
                 let gone: Vec<PathBuf> = self
@@ -1958,6 +1991,9 @@ impl App {
                 let Some(e) = self.current() else {
                     return vec![];
                 };
+                if let Some(p) = self.pull_under_cursor() {
+                    return vec![Effect::Open(p.url.clone())];
+                }
                 match &e.id {
                     Some(id) => {
                         return vec![Effect::Open(format!(
@@ -2014,6 +2050,73 @@ impl App {
         }
         self.rebuild();
         vec![Effect::SaveMarks(Box::new(before))]
+    }
+
+    /// What opened details set going in the background.
+    fn opened(&mut self) -> Vec<Effect> {
+        let mut fx = self.describe_opened();
+        fx.extend(self.forge_opened());
+        fx
+    }
+
+    /// Questions for the forges of repos whose details are open, about
+    /// each one not asked yet, or asked about other branches than it has
+    /// now. What was known stays shown until the answer comes.
+    fn forge_opened(&mut self) -> Vec<Effect> {
+        if !self.ws.config.ui.forge_info {
+            return vec![];
+        }
+        let mut fx = vec![];
+        for p in &self.expanded {
+            let Some(e) = self.ws.get(p) else { continue };
+            let (Some(id), Some(s)) = (&e.id, e.status()) else {
+                continue;
+            };
+            let Some(kind) = self.ws.config.forge_kind(&id.host) else {
+                continue;
+            };
+            let branches = argus_core::forge::branches_to_ask(s);
+            let look = self.forge.entry(p.clone()).or_default();
+            if look.asked.as_ref() == Some(&branches) {
+                continue;
+            }
+            look.asked = Some(branches.clone());
+            fx.push(Effect::Forge {
+                path: p.clone(),
+                kind: kind.to_string(),
+                id: id.clone(),
+                branches,
+            });
+        }
+        if !fx.is_empty() {
+            // the details say it's being looked up
+            self.rebuild();
+        }
+        fx
+    }
+
+    /// What to show of the forge of the repo at `path`.
+    fn forge_view(&self, path: &std::path::Path) -> Option<crate::details::ForgeView<'_>> {
+        use crate::details::ForgeView;
+        let look = self.forge.get(path)?;
+        match &look.answer {
+            Some(Ok(Some(info))) => Some(ForgeView::Info(info)),
+            Some(Ok(None)) => None,
+            Some(Err(e)) => Some(ForgeView::Failed(e)),
+            None => look.asked.is_some().then_some(ForgeView::Loading),
+        }
+    }
+
+    /// The pull request of the branch under the cursor, as far as known.
+    fn pull_under_cursor(&self) -> Option<&argus_core::forge::PullRequest> {
+        let Some(Row::Detail { line, .. }) = self.rows.get(self.cursor) else {
+            return None;
+        };
+        let look = self.forge.get(&self.current()?.path)?;
+        match &look.answer {
+            Some(Ok(Some(info))) => info.pull(line.branch.as_deref()?),
+            _ => None,
+        }
     }
 
     /// Full describes for repos whose details are open and whose walk for
@@ -3907,9 +4010,22 @@ impl App {
                 self.marked_lines.retain(|k| k.0 != path);
                 self.unfold_cache.retain(|k, _| k.0 != path);
                 self.rebuild();
-                let mut fx = self.describe_opened();
+                let mut fx = self.opened();
                 fx.extend(self.continue_chain(&path));
                 return fx;
+            }
+            Msg::Forge {
+                path,
+                branches,
+                info,
+            } => {
+                // an answer to an earlier question than the last is stale
+                if let Some(look) = self.forge.get_mut(&path)
+                    && look.asked.as_ref() == Some(&branches)
+                {
+                    look.answer = Some(info);
+                    self.rebuild();
+                }
             }
             Msg::Described(path) => {
                 self.describing.remove(&path);

@@ -211,6 +211,11 @@ pub struct Runtime {
     cancel: Arc<AtomicBool>,
     /// Background work started and not yet finished (its messages sent).
     pending: Arc<AtomicUsize>,
+    /// The forge clients made so far, by kind and host.
+    forges: std::collections::HashMap<
+        (String, String),
+        Result<Arc<dyn argus_core::forge::Forge>, String>,
+    >,
 }
 
 impl Runtime {
@@ -222,6 +227,7 @@ impl Runtime {
             opts,
             cancel: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(AtomicUsize::new(0)),
+            forges: Default::default(),
         }
     }
 
@@ -361,6 +367,34 @@ impl Runtime {
                             let _ = tx.send(Msg::FixDone { path: p, applied });
                         });
                     })
+                });
+            }
+            Effect::Forge {
+                path,
+                kind,
+                id,
+                branches,
+            } => {
+                // one client per forge, so its token is found once
+                let key = (kind.clone(), id.host.clone());
+                let forge = match self.forges.get(&key) {
+                    Some(f) => f.clone(),
+                    None => {
+                        let f = (self.opts.forge_factory)(&kind, &id.host)
+                            .map(Arc::<dyn argus_core::forge::Forge>::from)
+                            .map_err(|e| e.to_string());
+                        self.forges.insert(key, f.clone());
+                        f
+                    }
+                };
+                self.spawn(move |tx| {
+                    let info =
+                        forge.and_then(|f| f.info(&id, &branches).map_err(|e| e.to_string()));
+                    let _ = tx.send(Msg::Forge {
+                        path,
+                        branches,
+                        info,
+                    });
                 });
             }
             Effect::Describe(path) => self.spawn(move |tx| {

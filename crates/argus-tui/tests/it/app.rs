@@ -51,6 +51,10 @@ fn setup_with(extra: &str, prep: impl Fn(&Sandbox)) -> (Sandbox, App) {
         // Most tests look at every repo; the default view has its own test.
         config.ui.attention_only = false;
     }
+    if !extra.contains("forge_info") {
+        // No forge lookups unless a test is about them.
+        config.ui.forge_info = false;
+    }
     let mut ws = Workspace::new(config, State::default()).unwrap();
     ws.scan();
     (sb, App::new(ws))
@@ -6117,6 +6121,7 @@ fn details_for_the_command_line_name_commands_not_keys() {
             &argus_core::icons::UNICODE,
             &app.ws.state,
             hints,
+            None,
         )
         .iter()
         .map(|l| l.parts.iter().map(|p| p.1.as_str()).collect::<String>())
@@ -6144,4 +6149,225 @@ fn details_for_the_command_line_name_commands_not_keys() {
             "fix       gitignore…  1 untracked path(s)  (i)",
         ]
     );
+}
+
+/// `feature` open with forge lookups on: the lookup its opening asks for.
+fn forge_setup(extra: &str) -> (Sandbox, App, Vec<Effect>) {
+    let (sb, mut app) = setup_with(&format!("ui.forge_info = true\n{extra}"), |sb| {
+        git(&sb.path("dev/feature"), &["branch", "-q", "old"]);
+    });
+    while current(&app) != "acme/feature" {
+        app.act(Action::Down);
+    }
+    let fx = app.act(Action::ToggleExpand);
+    (sb, app, fx)
+}
+
+fn forge_line(app: &App) -> Option<String> {
+    detail_texts(app)
+        .into_iter()
+        .find(|t| t.starts_with("forge"))
+}
+
+fn a_pull(branch: &str, number: u64) -> argus_core::forge::PullRequest {
+    argus_core::forge::PullRequest {
+        branch: branch.into(),
+        number,
+        title: format!("Title {number}"),
+        state: argus_core::forge::PullState::Open,
+        draft: false,
+        url: format!("https://github.com/acme/feature/pull/{number}"),
+        review: None,
+        checks: Some(argus_core::forge::Checks::Failing),
+        into: None,
+    }
+}
+
+#[test]
+fn opening_details_asks_the_forge_once_and_shows_what_it_says() {
+    let (sb, mut app, fx) = forge_setup("");
+    let f = sb.path("dev/feature");
+    // asked about the branches that aren't the default, the current first
+    let [
+        Effect::Forge {
+            path,
+            kind,
+            id,
+            branches,
+        },
+    ] = fx.as_slice()
+    else {
+        panic!("{fx:?}")
+    };
+    assert_eq!((path, kind.as_str()), (&f, "github"));
+    assert_eq!((id.owner.as_str(), id.name.as_str()), ("acme", "feature"));
+    assert_eq!(branches, &["feat", "old"]);
+    assert_eq!(
+        forge_line(&app).unwrap(),
+        "forge     looking up pull requests and issues…"
+    );
+    // not asked again while that's on its way, nor once it's answered
+    let st = || {
+        Box::new(Ok(
+            argus_core::status::status(&f, Default::default()).unwrap()
+        ))
+    };
+    assert!(app.on_msg(Msg::Status(f.clone(), st())).is_empty());
+    let info = argus_core::forge::RepoInfo {
+        open_issues: 1,
+        open_pulls: 3,
+        pulls: vec![a_pull("feat", 12)],
+    };
+    app.on_msg(Msg::Forge {
+        path: f.clone(),
+        branches: branches.clone(),
+        info: Ok(Some(info)),
+    });
+    assert_eq!(
+        forge_line(&app).unwrap(),
+        "forge     1 open issue, 3 open pull requests"
+    );
+    let texts = detail_texts(&app);
+    let feat = texts.iter().find(|t| t.starts_with("  * feat")).unwrap();
+    assert!(
+        feat.ends_with("  #12 open, checks failing  Title 12"),
+        "{feat}"
+    );
+    // inverse: a branch with no pull request says nothing of one
+    let old = texts.iter().find(|t| t.starts_with("    old")).unwrap();
+    assert!(!old.contains('#'), "{old}");
+    assert!(app.on_msg(Msg::Status(f.clone(), st())).is_empty());
+    // folding and opening again doesn't ask again either
+    app.act(Action::ToggleExpand);
+    assert!(app.act(Action::ToggleExpand).is_empty());
+    // a new branch is one it hasn't been asked about: asked again, what's
+    // known shown meanwhile
+    git(&f, &["branch", "-q", "newer"]);
+    let fx = app.on_msg(Msg::Status(f.clone(), st()));
+    assert!(
+        matches!(fx.as_slice(), [Effect::Forge { branches, .. }] if branches == &["feat", "newer", "old"]),
+        "{fx:?}"
+    );
+    assert_eq!(
+        forge_line(&app).unwrap(),
+        "forge     1 open issue, 3 open pull requests"
+    );
+}
+
+#[test]
+fn a_forge_that_fails_or_has_nothing_to_say() {
+    let (sb, mut app, fx) = forge_setup("");
+    let f = sb.path("dev/feature");
+    let [Effect::Forge { branches, .. }] = fx.as_slice() else {
+        panic!("{fx:?}")
+    };
+    app.on_msg(Msg::Forge {
+        path: f.clone(),
+        branches: branches.clone(),
+        info: Err("authentication: no token".into()),
+    });
+    assert_eq!(
+        forge_line(&app).unwrap(),
+        "forge     authentication: no token"
+    );
+    // refreshing asks again, for the repos whose details are open
+    let fx = app.act(Action::Refresh);
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::Forge { path, .. } if path == &f))
+    );
+    assert_eq!(
+        fx.iter()
+            .filter(|e| matches!(e, Effect::Forge { .. }))
+            .count(),
+        1
+    );
+    // nothing to say: no line at all
+    app.on_msg(Msg::Forge {
+        path: f.clone(),
+        branches: branches.clone(),
+        info: Ok(None),
+    });
+    assert_eq!(forge_line(&app), None);
+    // counts agree with their nouns
+    app.on_msg(Msg::Forge {
+        path: f.clone(),
+        branches: branches.clone(),
+        info: Ok(Some(argus_core::forge::RepoInfo {
+            open_issues: 2,
+            open_pulls: 1,
+            pulls: vec![],
+        })),
+    });
+    assert_eq!(
+        forge_line(&app).unwrap(),
+        "forge     2 open issues, 1 open pull request"
+    );
+}
+
+#[test]
+fn the_forge_is_not_asked_when_turned_off_or_unknown() {
+    // turned off
+    let (_sb, mut app) = setup("ui.forge_info = false");
+    while current(&app) != "acme/feature" {
+        app.act(Action::Down);
+    }
+    assert!(app.act(Action::ToggleExpand).is_empty());
+    assert_eq!(forge_line(&app), None);
+    assert!(
+        !app.act(Action::Refresh)
+            .iter()
+            .any(|e| matches!(e, Effect::Forge { .. }))
+    );
+    // a repo with no identity on a forge
+    let (_sb, mut app) = setup_with("ui.forge_info = true", |sb| {
+        sb.init("dev/local");
+    });
+    app.act(Action::Top);
+    while !app.current().unwrap().path.ends_with("local") {
+        app.act(Action::Down);
+    }
+    assert!(app.act(Action::ToggleExpand).is_empty());
+    assert_eq!(forge_line(&app), None);
+    // opening every repo asks about each that has one
+    let fx = app.act(Action::ExpandAll);
+    assert_eq!(
+        fx.iter()
+            .filter(|e| matches!(e, Effect::Forge { .. }))
+            .count(),
+        3,
+        "{fx:?}"
+    );
+}
+
+#[test]
+fn browse_on_a_branch_with_a_pull_request_opens_it() {
+    let (sb, mut app, fx) = forge_setup("");
+    let f = sb.path("dev/feature");
+    let [Effect::Forge { branches, .. }] = fx.as_slice() else {
+        panic!("{fx:?}")
+    };
+    app.on_msg(Msg::Forge {
+        path: f.clone(),
+        branches: branches.clone(),
+        info: Ok(Some(argus_core::forge::RepoInfo {
+            pulls: vec![a_pull("feat", 12)],
+            ..Default::default()
+        })),
+    });
+    cursor_on_detail(&mut app, "feature", "  * feat");
+    let fx = app.act(Action::Browse);
+    assert!(
+        matches!(fx.as_slice(), [Effect::Open(u)] if u == "https://github.com/acme/feature/pull/12"),
+        "{fx:?}"
+    );
+    // inverse: on a branch without one, and on the repo: the repo's page
+    for at in ["    old", "path"] {
+        cursor_on_detail(&mut app, "feature", at);
+        let fx = app.act(Action::Browse);
+        assert!(
+            matches!(fx.as_slice(), [Effect::Open(u)] if u == "https://github.com/acme/feature"),
+            "{at}: {fx:?}"
+        );
+    }
 }

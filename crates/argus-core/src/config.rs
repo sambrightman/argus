@@ -475,6 +475,10 @@ pub struct UiConfig {
     /// Highlight the changed words in diffs: in every hunk, only the hunk
     /// under the cursor, or none.
     pub refine: Refine,
+    /// Look up a repo's pull requests and open issues on its forge when
+    /// its details are opened, to show there (GitHub, with the token `gh`
+    /// or `GH_TOKEN` gives).
+    pub forge_info: bool,
 }
 
 #[derive(
@@ -504,6 +508,7 @@ impl Default for UiConfig {
             icon_overrides: BTreeMap::new(),
             attention_only: true,
             refine: Refine::All,
+            forge_info: true,
         }
     }
 }
@@ -880,6 +885,20 @@ impl Config {
         auto_disk_jobs(performance_cores(), cpus)
     }
 
+    /// The kind of forge at `host` that can be asked about a repo: what a
+    /// `[[track]]` of that host says, `github` for github.com; none for a
+    /// host nothing is known of, or a directory.
+    pub fn forge_kind(&self, host: &str) -> Option<&str> {
+        let tracked = self
+            .tracks
+            .iter()
+            .find(|t| t.host.eq_ignore_ascii_case(host));
+        match tracked {
+            Some(t) => Some(t.forge.as_str()).filter(|k| *k != crate::forge::DIR),
+            None => host.eq_ignore_ascii_case("github.com").then_some("github"),
+        }
+    }
+
     /// Identities for clones of the directory forges tracked.
     pub fn local_forges(&self) -> crate::forge::LocalForges {
         crate::forge::LocalForges::new(
@@ -1192,6 +1211,28 @@ mod tests {
         assert_eq!(
             Config::load(&d.path().join("nope.toml")).unwrap(),
             Config::default()
+        );
+    }
+
+    #[test]
+    fn the_forge_to_ask_about_a_repo_goes_by_its_host() {
+        let c = Config::parse(
+            "[[track]]\nforge = 'github'\nhost = 'GHE.corp'\nowner = 'o'\n\
+             [[track]]\nforge = 'dir'\nhost = '/srv/git'\nowner = 'o'\n",
+        )
+        .unwrap();
+        assert_eq!(c.forge_kind("github.com"), Some("github"));
+        assert_eq!(c.forge_kind("GitHub.com"), Some("github"));
+        assert_eq!(c.forge_kind("ghe.corp"), Some("github"));
+        // a directory has nothing to say, nor has a host nothing tracks
+        assert_eq!(c.forge_kind("/srv/git"), None);
+        assert_eq!(c.forge_kind("gitlab.com"), None);
+        assert!(c.ui.forge_info, "on unless turned off");
+        assert!(
+            !Config::parse("ui.forge_info = false")
+                .unwrap()
+                .ui
+                .forge_info
         );
     }
 }
