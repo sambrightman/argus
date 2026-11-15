@@ -4163,8 +4163,16 @@ impl App {
                     );
                 }
                 for o in &plan.orphans {
-                    self.push_log(o, "no longer listed by forge".into(), false, String::new());
+                    // the clone may be the only copy left: hiding it is
+                    // all that's offered
+                    let hint = match o.state {
+                        pull::OrphanState::Gone => " (m I ignores it)",
+                        _ => "",
+                    };
+                    let label = format!("orphan: {}{hint}", o.describe());
+                    self.push_log(&o.path, label, false, String::new());
                 }
+                let renames = pull::follow_renames(&self.ws, &plan.orphans);
                 let mut jobs = plan.jobs;
                 jobs.extend(pull::plan_updates(&self.ws));
                 self.ws.state.last_pull = Some(jiff::Timestamp::now());
@@ -4177,6 +4185,30 @@ impl App {
                 }
                 fx.push(Effect::SaveState);
                 self.rebuild();
+                // a renamed repo's remote is pointed at its new name only
+                // when asked
+                let names: Vec<String> = renames
+                    .iter()
+                    .filter_map(|j| Some(self.ws.get(&j.path)?.display_name()))
+                    .collect();
+                let question = match (renames.as_slice(), names.as_slice()) {
+                    ([], _) => None,
+                    ([j], [name]) => Some(format!(
+                        "{name} is now {} on the forge: point its remote there?",
+                        j.label.rsplit(" to ").next().unwrap_or_default()
+                    )),
+                    _ => Some(format!(
+                        "{} repos have new names on the forge ({}): point their remotes there?",
+                        renames.len(),
+                        fix::list(&names, 3)
+                    )),
+                };
+                if let Some(question) = question {
+                    self.mode = Mode::Confirm {
+                        question,
+                        then: Confirmed::Ops(renames.into_iter().map(|j| (j.path, j.op)).collect()),
+                    };
+                }
                 return fx;
             }
             Msg::Suspended(r) if self.editing.as_ref().is_some_and(|e| !e.applying) => {

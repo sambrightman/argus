@@ -98,6 +98,17 @@ pub enum ForgeError {
     Other(String),
 }
 
+/// What became of a repo its owner's listing no longer has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Whereabouts {
+    /// Still there under its name (the listing leaves it out).
+    Here,
+    /// Renamed, or moved to another owner: what it is now.
+    Moved(RepoId),
+    /// Deleted, or out of reach of the token.
+    Gone,
+}
+
 /// What a forge says of a repo beyond what git has: for showing, never
 /// what argus decides by.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -211,6 +222,11 @@ pub trait Forge: Send + Sync {
     /// Preferred clone protocol (e.g. from `gh config get git_protocol`).
     fn protocol(&self) -> Protocol {
         Protocol::Https
+    }
+    /// Where a repo the forge no longer lists has gone. A forge that
+    /// can't say more than its listing did: gone.
+    fn whereabouts(&self, _id: &RepoId) -> Result<Whereabouts, ForgeError> {
+        Ok(Whereabouts::Gone)
     }
     /// What the forge says of the repo, and of pull requests from
     /// `branches`; `None` from a kind of forge with nothing to say.
@@ -326,6 +342,7 @@ mod tests {
         }
         let id = RepoId::new("h", "o", "n");
         assert_eq!(Plain.info(&id, &[]).unwrap(), None);
+        assert_eq!(Plain.whereabouts(&id).unwrap(), Whereabouts::Gone);
     }
 
     #[test]

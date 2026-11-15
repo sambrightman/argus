@@ -823,6 +823,11 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
             s.remote = Some(name.clone());
             s.remote_url = Some(url.clone());
         }
+        Op::SetRemoteUrl { remote, url } => {
+            if s.remote.as_ref() == Some(remote) {
+                s.remote_url = Some(url.clone());
+            }
+        }
         Op::Abort { .. } => {
             s.in_progress = None;
         }

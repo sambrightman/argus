@@ -289,6 +289,15 @@ A daily crontab entry:
 
 `pull` exits 2 if any job failed.
 
+A clone of a tracked owner's repo that the owner's listing no longer has
+is an orphan, and `pull` says what became of it (GitHub is asked about
+each): `now other/new-name` when it was renamed or moved to another
+owner, `gone from the forge, or out of reach` when it was deleted or the
+token can't see it. For a renamed one, `argus pull --yes` (or yes when
+asked, at a terminal or in the TUI) points the clone's remote at the new
+name, the URL otherwise as it was. A gone one is never touched: the clone
+may be the only copy left. `argus mark ignore` hides it.
+
 ## What counts as needing attention
 
 Repos needing attention come before clean ones; within each group, by

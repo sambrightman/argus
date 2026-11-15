@@ -406,7 +406,8 @@ impl Runtime {
                 let factory = self.opts.forge_factory;
                 self.spawn(move |tx| {
                     let listings = pull::list_tracks(&mut ws, factory);
-                    let plan = pull::plan_tracks(&ws, &listings.repos, listings.protocol);
+                    let mut plan = pull::plan_tracks(&ws, &listings.repos, listings.protocol);
+                    pull::locate_orphans(&mut plan, factory);
                     let _ = tx.send(Msg::PullPlanned {
                         tracks: ws.state,
                         plan,

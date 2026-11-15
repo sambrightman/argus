@@ -6484,3 +6484,89 @@ fn pull_and_ignore_take_their_marks_keys_in_the_mark_menus() {
     let items = menu_items(&app);
     assert!(items.iter().any(|i| i.starts_with("p ")) && items.iter().any(|i| i.starts_with("I ")));
 }
+
+#[test]
+fn a_pull_says_what_became_of_orphans_and_asks_before_following_a_rename() {
+    use argus_core::identity::RepoId;
+    use argus_core::pull::{Orphan, OrphanState, PullPlan};
+    let (sb, mut app) = setup("[marks.pull]\nrepos = ['!acme/*']\n");
+    let orphan = |name: &str, state: OrphanState| Orphan {
+        path: sb.path(&format!("dev/{name}")),
+        id: RepoId::new("github.com", "acme", name),
+        forge: "github".into(),
+        state,
+    };
+    let plan = |orphans: Vec<Orphan>| Msg::PullPlanned {
+        tracks: app_state(),
+        plan: PullPlan {
+            orphans,
+            ..Default::default()
+        },
+        errors: vec![],
+    };
+    fn app_state() -> argus_core::State {
+        argus_core::State::default()
+    }
+    let renamed = OrphanState::Renamed(RepoId::new("github.com", "other", "fresh"));
+    let msg = plan(vec![
+        orphan("dirty", renamed.clone()),
+        orphan("feature", OrphanState::Gone),
+    ]);
+    let fx = app.on_msg(msg);
+    assert!(!fx.iter().any(|e| matches!(e, Effect::Jobs(_))), "{fx:?}");
+    let logged: Vec<(String, String)> = app
+        .log
+        .iter()
+        .map(|l| (l.repo.clone(), l.label.clone()))
+        .collect();
+    assert!(
+        logged.contains(&("acme/dirty".into(), "orphan: now other/fresh".into())),
+        "{logged:?}"
+    );
+    assert!(
+        logged.contains(&(
+            "acme/feature".into(),
+            "orphan: gone from the forge, or out of reach (m I ignores it)".into()
+        )),
+        "{logged:?}"
+    );
+    // asked first; no leaves the remote as it is
+    let Mode::Confirm { question, .. } = &app.mode else {
+        panic!("not asked")
+    };
+    assert_eq!(
+        question,
+        "acme/dirty is now other/fresh on the forge: point its remote there?"
+    );
+    assert!(app.on_key(key('n')).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
+    // yes runs it
+    app.on_msg(plan(vec![orphan("dirty", renamed.clone())]));
+    let fx = app.on_key(key('y'));
+    match fx.as_slice() {
+        [Effect::Jobs(j)] => {
+            assert_eq!(j.len(), 1);
+            assert_eq!(j[0].path, sb.path("dev/dirty"));
+            assert_eq!(
+                j[0].op,
+                Op::SetRemoteUrl {
+                    remote: "origin".into(),
+                    url: "https://github.com/other/fresh.git".into()
+                }
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    app.running.clear();
+    // several: counted; and with none renamed, nothing is asked
+    app.on_msg(plan(vec![
+        orphan("dirty", renamed.clone()),
+        orphan("clean", renamed),
+    ]));
+    assert!(
+        matches!(&app.mode, Mode::Confirm { question, .. } if question == "2 repos have new names on the forge (acme/dirty, acme/clean): point their remotes there?")
+    );
+    app.on_key(key('n'));
+    app.on_msg(plan(vec![orphan("feature", OrphanState::Gone)]));
+    assert!(matches!(app.mode, Mode::Normal));
+}

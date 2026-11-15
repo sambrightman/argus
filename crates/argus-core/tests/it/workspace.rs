@@ -397,7 +397,15 @@ fn track_clones_missing_and_reports_orphans() {
         vec!["clone acme/missing"],
         "archived, forks, ignored and existing skipped"
     );
-    assert_eq!(plan.orphans, vec![sb.path("dev/acme/deleted")]);
+    let orphans: Vec<_> = plan.orphans.iter().map(|o| o.path.clone()).collect();
+    assert_eq!(orphans, vec![sb.path("dev/acme/deleted")]);
+    let o = &plan.orphans[0];
+    assert_eq!(
+        (o.id.slug(), o.forge.as_str()),
+        ("acme/deleted".into(), "github")
+    );
+    // not asked yet: only that the listing hasn't got it
+    assert_eq!(o.describe(), "no longer listed by the forge");
     assert!(plan.missing.is_empty());
 
     let res = run_jobs(&plan.jobs, 2, &AtomicBool::new(false), &|_| {});
@@ -1901,4 +1909,112 @@ fn pulls_sort_points_count_and_ignores_do_not() {
         e.flags.sort
     };
     assert_eq!((sort("a"), sort("b"), sort("c")), (1, 3, 0));
+}
+
+/// A forge that says what became of repos by name.
+struct Mover;
+
+impl argus_core::forge::Forge for Mover {
+    fn kind(&self) -> &str {
+        "github"
+    }
+    fn host(&self) -> &str {
+        "github.com"
+    }
+    fn list(
+        &self,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<Vec<argus_core::forge::RemoteRepo>, argus_core::forge::ForgeError> {
+        Ok(vec![])
+    }
+    fn whereabouts(
+        &self,
+        id: &argus_core::identity::RepoId,
+    ) -> Result<argus_core::forge::Whereabouts, argus_core::forge::ForgeError> {
+        use argus_core::forge::{ForgeError, Whereabouts};
+        match id.name.as_str() {
+            "renamed" => Ok(Whereabouts::Moved(argus_core::identity::RepoId::new(
+                "github.com",
+                "other",
+                "fresh",
+            ))),
+            "unlisted" => Ok(Whereabouts::Here),
+            "deleted" => Ok(Whereabouts::Gone),
+            _ => Err(ForgeError::Auth("no token".into())),
+        }
+    }
+}
+
+#[test]
+fn orphans_say_what_became_of_them_and_a_rename_can_be_followed() {
+    use argus_core::pull::{OrphanState, follow_renames, locate_orphans};
+    let sb = Sandbox::new();
+    for n in ["renamed", "unlisted", "deleted", "unknown"] {
+        sb.remote("acme", n);
+        sb.clone_as_github("acme", n, &format!("dev/acme/{n}"));
+    }
+    let w = ws(&sb, "[[track]]\nowner='acme'");
+    let mut l = BTreeMap::new();
+    l.insert("github.com/acme".to_string(), vec![]);
+    let mut plan = plan_tracks(&w, &l, Protocol::Https);
+    assert_eq!(plan.orphans.len(), 4);
+    let made = std::sync::atomic::AtomicUsize::new(0);
+    locate_orphans(&mut plan, &|kind, host| {
+        assert_eq!((kind, host), ("github", "github.com"));
+        made.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(Box::new(Mover))
+    });
+    assert_eq!(made.into_inner(), 1, "one client for the forge");
+    let said: BTreeMap<String, String> = plan
+        .orphans
+        .iter()
+        .map(|o| (o.id.name.clone(), o.describe()))
+        .collect();
+    assert_eq!(said["renamed"], "now other/fresh");
+    assert_eq!(
+        said["unlisted"],
+        "still on the forge, but not in acme's listing"
+    );
+    assert_eq!(said["deleted"], "gone from the forge, or out of reach");
+    assert_eq!(
+        said["unknown"],
+        "no longer listed by the forge (authentication: no token)"
+    );
+    // only the renamed one has anything to do: its remote, pointed at the
+    // new name, the URL otherwise as it was
+    let jobs = follow_renames(&w, &plan.orphans);
+    assert_eq!(jobs.len(), 1, "{jobs:?}");
+    let r = sb.path("dev/acme/renamed");
+    assert_eq!(jobs[0].path, r);
+    assert_eq!(jobs[0].label, "follow acme/renamed to other/fresh");
+    // (as configured: the sandbox rewrites it to a local path when used)
+    let before = git(&r, &["config", "remote.origin.url"]);
+    let want = before.trim().replace("acme/renamed", "other/fresh");
+    assert_eq!(
+        jobs[0].op,
+        argus_core::ops::Op::SetRemoteUrl {
+            remote: "origin".into(),
+            url: want.clone()
+        }
+    );
+    assert_eq!(jobs[0].op.label(), format!("point origin at {want}"));
+    // run, it's no longer that repo; nothing else was touched
+    assert!(argus_core::ops::run(&r, &jobs[0].op).success);
+    assert_eq!(git(&r, &["config", "remote.origin.url"]).trim(), want);
+    let gone = sb.path("dev/acme/deleted");
+    assert!(gone.join(".git").exists());
+    assert!(matches!(
+        plan.orphans.iter().find(|o| o.path == gone).unwrap().state,
+        OrphanState::Gone
+    ));
+    // a forge that can't be made says why, for each
+    locate_orphans(&mut plan, &|_, _| {
+        Err(argus_core::forge::ForgeError::Other("no such forge".into()))
+    });
+    assert!(
+        plan.orphans
+            .iter()
+            .all(|o| o.describe().ends_with("(no such forge)"))
+    );
 }

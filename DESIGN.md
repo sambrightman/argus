@@ -671,6 +671,19 @@ rendering is snapshot-tested via `TestBackend`.
 * **`fix --fetch`** fetches only the selected repos (once per family, as
   worktrees share refs), then refreshes their status before planning.
   Fetch failures are reported and planning continues with what is known.
+* **Orphans** (clones of a tracked owner's repos that its listing no
+  longer has) say what became of them: `Forge::whereabouts` asks the
+  forge about each (GitHub: the repo's own API page, which redirects a
+  renamed or transferred repo to what it is now; 404 is gone, or out of
+  the token's reach). Renamed: `pull::follow_renames` plans `git remote
+  set-url` with the old URL's form, run only when asked (`argus pull
+  --yes`, or yes at the terminal or in the TUI): it isn't destructive,
+  but it's the forge's word changing a clone's config. Gone: nothing is
+  ever done to the clone, which may be the only copy left; the report
+  says how to hide it. No archive folder, no deleting. The knowledge
+  lasts as long as the pull that asked: status never fetches, and
+  nothing about it is kept in state, so an orphan isn't an issue on its
+  row.
 * **`fix --auto`** applies fixes to a repo one after another instead of
   one per run. It doesn't follow the predicted chain: after each fix the
   repo's status is read again and the next fix chosen from that, so a

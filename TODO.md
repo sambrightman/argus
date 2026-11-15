@@ -43,8 +43,6 @@ deferred.
   request counts and each branch's pull request (`[ui] forge_info`,
   `status --forge`). Not yet: in `--json`; the counts of the repo a fork
   came from (a fork's own are shown); forges other than GitHub.
-- **Orphans** (local clones the forge no longer lists): reported only, no
-  archive/move action.
 - **GitLab/Gitea forges** (implement `argus_core::forge::Forge`); a **jj
   backend**.
 - **`argus-server`** (axum, JSON over the same `Workspace`).

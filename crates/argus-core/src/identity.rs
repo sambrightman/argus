@@ -28,6 +28,20 @@ impl RepoId {
         format!("{}/{}", self.owner, self.name)
     }
 
+    /// `url`, a remote URL of this repo, as it is once the repo is `new`
+    /// (renamed or moved to another owner on the same host): the same
+    /// protocol, user and `.git` ending. `None` if `url` doesn't name it.
+    pub fn renamed_url(&self, url: &str, new: &RepoId) -> Option<String> {
+        let old = self.slug().to_lowercase();
+        let at = url.to_lowercase().rfind(&old)?;
+        // the whole of `owner/name`: not the end of a longer owner, nor
+        // the start of a longer name
+        let rest = &url[at + old.len()..];
+        let whole = (at == 0 || url[..at].ends_with(['/', ':']))
+            && (rest.is_empty() || rest == ".git" || rest == "/" || rest == ".git/");
+        whole.then(|| format!("{}{}{rest}", &url[..at], new.slug()))
+    }
+
     /// Parse a git remote URL. Supports scp-like (`git@host:o/n.git`),
     /// `ssh://`, `git://`, `http(s)://` forms. Returns `None` for local paths
     /// and URLs without at least an owner and a name.
@@ -134,5 +148,40 @@ mod tests {
         assert_eq!(id("./a:acme/widget"), None, "a path");
         assert_eq!(id("https://github.com//widget"), None, "no owner");
         assert_eq!(id("https://github.com/~/widget"), None, "no owner");
+    }
+
+    #[test]
+    fn a_renamed_repos_url_keeps_its_form() {
+        let old = RepoId::new("github.com", "Acme", "old");
+        let new = RepoId::new("github.com", "other", "new-name");
+        for (url, want) in [
+            (
+                "git@github.com:acme/old.git",
+                "git@github.com:other/new-name.git",
+            ),
+            (
+                "https://github.com/Acme/Old",
+                "https://github.com/other/new-name",
+            ),
+            (
+                "https://github.com/acme/old.git/",
+                "https://github.com/other/new-name.git/",
+            ),
+            (
+                "ssh://git@github.com:22/acme/old.git",
+                "ssh://git@github.com:22/other/new-name.git",
+            ),
+        ] {
+            assert_eq!(old.renamed_url(url, &new).as_deref(), Some(want), "{url}");
+        }
+        // inverse: a URL of another repo is left alone
+        for url in [
+            "git@github.com:acme/older.git",
+            "git@github.com:notacme/old.git",
+            "https://github.com/acme/old/tree/main",
+            "/srv/git/somewhere",
+        ] {
+            assert_eq!(old.renamed_url(url, &new), None, "{url}");
+        }
     }
 }

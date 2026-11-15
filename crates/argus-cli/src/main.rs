@@ -500,7 +500,7 @@ fn run() -> Result<()> {
             patterns,
         } => {
             scan(&mut ws);
-            pull_cmd(&mut ws, &ctx, dry_run, no_clone, &patterns, json)?;
+            pull_cmd(&mut ws, &ctx, dry_run, no_clone, &patterns, json, cli.yes)?;
         }
         Cmd::Fix {
             kinds,
@@ -1205,6 +1205,7 @@ fn pull_cmd(
     no_clone: bool,
     patterns: &[String],
     json: bool,
+    yes: bool,
 ) -> Result<()> {
     let p = Paint::detect();
     let mut jobs = vec![];
@@ -1215,7 +1216,19 @@ fn pull_cmd(
             eprintln!("{} {k}: {e}", p.role(Role::Error, "forge error"));
         }
         tracks = pull::plan_tracks(ws, &listings.repos, listings.protocol);
+        pull::locate_orphans(&mut tracks, forge_factory());
         jobs.extend(tracks.jobs.iter().cloned());
+    }
+    // a renamed repo's remote is pointed at its new name only when asked:
+    // --yes, or yes at the terminal
+    let renames = pull::follow_renames(ws, &tracks.orphans);
+    let asked = || {
+        let what = format!("point {} remote(s) at the new names", renames.len());
+        std::io::stdin().is_terminal() && !dry_run && !json && confirm(&what, false).is_ok()
+    };
+    let follow = !renames.is_empty() && (yes || asked());
+    if follow {
+        jobs.extend(renames);
     }
     let mut updates = pull::plan_updates(ws);
     if !patterns.is_empty() {
@@ -1229,10 +1242,20 @@ fn pull_cmd(
     jobs.extend(updates);
 
     let new_on_forge: Vec<String> = tracks.missing.iter().map(|r| r.id.slug()).collect();
-    let orphans: Vec<String> = tracks
+    let orphans: Vec<serde_json::Value> = tracks
         .orphans
         .iter()
-        .map(|o| paths::contract_tilde(o))
+        .map(|o| {
+            serde_json::json!({
+                "path": paths::contract_tilde(&o.path),
+                "repo": o.id.slug(),
+                "found": o.describe(),
+                "now": match &o.state {
+                    pull::OrphanState::Renamed(to) => Some(to.slug()),
+                    _ => None,
+                },
+            })
+        })
         .collect();
     let job_json = |j: &pull::Job, outcome: &str, output: Option<&str>| {
         serde_json::json!({
@@ -1250,7 +1273,7 @@ fn pull_cmd(
             "jobs": jobs.iter().map(|j| job_json(j, "planned", None)).collect::<Vec<_>>(),
         }));
     }
-    print_forge_news(&p, &tracks, &[], json);
+    print_forge_news(&p, &tracks, &[], json, follow);
     if dry_run {
         for j in &jobs {
             println!("would {}", j.label);
@@ -1282,7 +1305,16 @@ fn pull_cmd(
         eprint!("\r\x1b[K");
     }
     let added = pull::record_clones(ws, &jobs, &results);
-    print_forge_news(&p, &pull::PullPlan::default(), &added, json);
+    print_forge_news(&p, &pull::PullPlan::default(), &added, json, follow);
+    if !json {
+        let followed = jobs.iter().zip(&results).filter(|(j, r)| {
+            matches!(j.op, argus_core::ops::Op::SetRemoteUrl { .. })
+                && r.as_ref().is_some_and(|o| o.success)
+        });
+        for (j, _) in followed {
+            println!("{}", j.label);
+        }
+    }
     let failed = results
         .iter()
         .filter(|r| r.as_ref().is_some_and(|o| !o.success))
@@ -1336,7 +1368,13 @@ fn progress(done: &std::sync::atomic::AtomicUsize, total: usize, label: &str, sh
 
 /// What the forge listings found (repos not cloned, clones no longer
 /// listed) and what was cloned, for people (JSON has its own fields).
-fn print_forge_news(p: &Paint, tracks: &pull::PullPlan, cloned: &[PathBuf], json: bool) {
+fn print_forge_news(
+    p: &Paint,
+    tracks: &pull::PullPlan,
+    cloned: &[PathBuf],
+    json: bool,
+    follow: bool,
+) {
     if json {
         return;
     }
@@ -1348,10 +1386,21 @@ fn print_forge_news(p: &Paint, tracks: &pull::PullPlan, cloned: &[PathBuf], json
         );
     }
     for o in &tracks.orphans {
+        // what can be done about it: never anything to the clone itself
+        let hint = match &o.state {
+            pull::OrphanState::Renamed(_) if !follow => {
+                " (argus pull --yes points its remote there)".to_string()
+            }
+            pull::OrphanState::Gone => {
+                format!(" (to hide it: argus mark ignore {})", o.id.slug())
+            }
+            _ => String::new(),
+        };
         println!(
-            "{} {} (no longer listed by the forge)",
+            "{} {}: {}{hint}",
             p.role(Role::Warning, "orphan:"),
-            paths::contract_tilde(o)
+            paths::contract_tilde(&o.path),
+            o.describe()
         );
     }
     for a in cloned {

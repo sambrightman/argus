@@ -49,6 +49,11 @@ pub enum Op {
         name: String,
         url: String,
     },
+    /// `git remote set-url`: for a repo renamed or moved on its forge.
+    SetRemoteUrl {
+        remote: String,
+        url: String,
+    },
     /// End the operation in progress (`git merge --abort`, `git bisect
     /// reset`…), losing its progress. Permanently destructive: callers
     /// confirm first.
@@ -275,6 +280,7 @@ impl Op {
             }
             Op::CreateBranch { name } => v(&["switch", "-c", name]),
             Op::AddRemote { name, url } => v(&["remote", "add", "--", name, url]),
+            Op::SetRemoteUrl { remote, url } => v(&["remote", "set-url", "--", remote, url]),
             Op::Stash {
                 message,
                 untracked,
@@ -425,6 +431,7 @@ impl Op {
             Op::StashDrop { index, .. } => format!("drop stash@{{{index}}}"),
             Op::CreateBranch { name } => format!("create branch {name}"),
             Op::AddRemote { name, url } => format!("add remote {name} {url}"),
+            Op::SetRemoteUrl { remote, url } => format!("point {remote} at {url}"),
             Op::Stash {
                 untracked,
                 keep_index,

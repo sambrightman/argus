@@ -1754,7 +1754,10 @@ fn pull_reports_what_a_directory_forge_has_and_no_longer_has() {
     );
     // (the sandbox is home)
     assert!(
-        stdout.contains("orphan: ~/dev/acme/gone (no longer listed by the forge)\n"),
+        stdout.contains(
+            "orphan: ~/dev/acme/gone: gone from the forge, or out of reach \
+             (to hide it: argus mark ignore acme/gone)\n"
+        ),
         "{stdout}"
     );
     assert!(
@@ -2266,6 +2269,14 @@ fn fix_auto_stops_at_a_fix_that_fails() {
 /// A stand-in for GitHub's API on a local port: answers every request
 /// with `body`, and gives back the requests it got.
 fn fake_api(body: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
+    fake_api_routes(vec![("", body.to_string())])
+}
+
+/// The same, answering by path: the first route whose path the request's
+/// starts with, else 404.
+fn fake_api_routes(
+    routes: Vec<(&'static str, String)>,
+) -> (String, std::sync::mpsc::Receiver<String>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -2297,10 +2308,16 @@ fn fake_api(body: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
                     break;
                 }
             }
-            let _ = tx.send(String::from_utf8_lossy(&got).to_string());
+            let request = String::from_utf8_lossy(&got).to_string();
+            let path = request.split(' ').nth(1).unwrap_or_default().to_string();
+            let _ = tx.send(request);
+            let (status, body) = match routes.iter().find(|(p, _)| path.starts_with(p)) {
+                Some((_, body)) => ("200 OK", body.clone()),
+                None => ("404 Not Found", r#"{"message":"Not Found"}"#.to_string()),
+            };
             let _ = write!(
                 s,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
         }
@@ -2384,4 +2401,93 @@ fn status_forge_says_why_a_forge_did_not_answer() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("--forge"));
+}
+
+fn api_repo(owner: &str, name: &str) -> String {
+    format!(
+        r#"{{"name":"{name}","owner":{{"login":"{owner}"}},"ssh_url":"git@github.com:{owner}/{name}.git","clone_url":"https://github.com/{owner}/{name}.git"}}"#
+    )
+}
+
+/// `acme` tracked, nothing pulled; the forge lists only `clean`, has
+/// `dirty` under a new name and knows nothing of `feature`.
+fn orphaned(sb: &Sandbox) -> (std::path::PathBuf, String) {
+    three(sb);
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(
+        &cfg,
+        "[marks.pull]\nrepos = ['!acme/*']\n[[track]]\nowner = 'acme'\nclone = 'notify'\n",
+    )
+    .unwrap();
+    let (base, _requests) = fake_api_routes(vec![
+        (
+            "/orgs/acme/repos",
+            format!("[{}]", api_repo("acme", "clean")),
+        ),
+        ("/repos/acme/dirty", api_repo("other", "fresh")),
+    ]);
+    (cfg, base)
+}
+
+#[test]
+fn pull_says_what_became_of_orphans() {
+    let sb = Sandbox::new();
+    let (cfg, base) = orphaned(&sb);
+    let run = |args: &[&str]| {
+        argus(&sb)
+            .env("ARGUS_GITHUB_API", &base)
+            .env("GH_TOKEN", "tok")
+            .arg("--config")
+            .arg(&cfg)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let url = || git(&sb.path("dev/dirty"), &["config", "remote.origin.url"]);
+    let before = url();
+    let o = run(&["pull"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let out = String::from_utf8(o.stdout).unwrap();
+    // renamed: where to, and how to follow it (nothing is done unasked)
+    assert!(
+        out.contains(
+            "orphan: ~/dev/dirty: now other/fresh (argus pull --yes points its remote there)\n"
+        ),
+        "{out}"
+    );
+    // gone: the clone may be the only copy, so only hiding it is offered
+    assert!(
+        out.contains("orphan: ~/dev/feature: gone from the forge, or out of reach (to hide it: argus mark ignore acme/feature)\n"),
+        "{out}"
+    );
+    assert!(!out.contains("clean"), "{out}");
+    assert_eq!(url(), before, "not followed without being asked");
+    // a dry run says what --yes would do, and does nothing
+    let out = String::from_utf8(run(&["--yes", "pull", "-n"]).stdout).unwrap();
+    assert!(
+        out.contains("would follow acme/dirty to other/fresh\n"),
+        "{out}"
+    );
+    assert_eq!(url(), before);
+    // as JSON: each orphan, what became of it and what it is now
+    let v: serde_json::Value =
+        serde_json::from_slice(&run(&["--json", "pull", "-n"]).stdout).unwrap();
+    assert_eq!(
+        v["orphans"],
+        serde_json::json!([
+            {"path": "~/dev/dirty", "repo": "acme/dirty", "found": "now other/fresh", "now": "other/fresh"},
+            {"path": "~/dev/feature", "repo": "acme/feature", "found": "gone from the forge, or out of reach", "now": null},
+        ])
+    );
+    // --yes follows the rename: the remote, otherwise as it was
+    let o = run(&["--yes", "pull"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let out = String::from_utf8(o.stdout).unwrap();
+    assert!(out.contains("follow acme/dirty to other/fresh"), "{out}");
+    assert_eq!(
+        url().trim(),
+        before.trim().replace("acme/dirty", "other/fresh")
+    );
+    // the gone one is still there, untouched
+    assert!(sb.path("dev/feature/.git").exists());
 }

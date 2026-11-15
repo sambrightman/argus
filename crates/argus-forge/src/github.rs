@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 
 use argus_core::forge::{
     Checks, Forge, ForgeError, Protocol, PullRequest, PullState, RemoteRepo, RepoInfo, Review,
+    Whereabouts,
 };
 use argus_core::identity::RepoId;
 use serde::Deserialize;
@@ -97,6 +98,9 @@ impl GitHub {
     pub fn new(host: &str) -> Self {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
+            // a renamed repo's page redirects within the API: the token
+            // goes along, or a private one would look gone
+            .redirect_auth_headers(ureq::config::RedirectAuthHeaders::SameHost)
             .build()
             .into();
         let mut g = Self::with_http(host, Box::new(Ureq(agent)));
@@ -250,6 +254,46 @@ impl Forge for GitHub {
             .into_iter()
             .filter(|r| r.id.owner.eq_ignore_ascii_case(owner))
             .collect())
+    }
+
+    /// The repo's own page in the API: GitHub sends a renamed or moved
+    /// repo's on to what it is now.
+    fn whereabouts(&self, id: &RepoId) -> Result<Whereabouts, ForgeError> {
+        let mut url = format!("{}/repos/{}/{}", self.api, id.owner, id.name);
+        for _ in 0..2 {
+            let r = self
+                .http
+                .get(&url, self.token())
+                .map_err(ForgeError::Other)?;
+            match r.status {
+                200 => {
+                    let now: ApiRepo = serde_json::from_str(&r.body)
+                        .map_err(|e| ForgeError::Other(format!("decoding {url}: {e}")))?;
+                    let same = now.owner.login.eq_ignore_ascii_case(&id.owner)
+                        && now.name.eq_ignore_ascii_case(&id.name);
+                    return Ok(match same {
+                        true => Whereabouts::Here,
+                        false => {
+                            Whereabouts::Moved(RepoId::new(&self.host, now.owner.login, now.name))
+                        }
+                    });
+                }
+                // not followed by the client: where it says, once
+                301 | 302 | 307 | 308 => {
+                    #[derive(Deserialize)]
+                    struct Moved {
+                        url: String,
+                    }
+                    let to: Moved = serde_json::from_str(&r.body)
+                        .map_err(|_| ForgeError::Other(api_message(&r.body, r.status)))?;
+                    url = to.url;
+                }
+                404 => return Ok(Whereabouts::Gone),
+                401 | 403 => return Err(ForgeError::Auth(api_message(&r.body, r.status))),
+                s => return Err(ForgeError::Other(api_message(&r.body, s))),
+            }
+        }
+        Err(ForgeError::Other(format!("{url}: redirected again")))
     }
 
     /// One GraphQL query: the counts, and for each branch the newest pull
@@ -805,6 +849,57 @@ mod tests {
         let sent: serde_json::Value = serde_json::from_str(&f.posted.lock().unwrap()[1].1).unwrap();
         let q = sent["query"].as_str().unwrap();
         assert!(!q.contains("fragment") && !q.contains("...pr"), "{q}");
+    }
+
+    #[test]
+    fn whereabouts_tells_renamed_from_gone() {
+        let id = RepoId::new("github.com", "acme", "old");
+        let at = format!("{API}/repos/acme/old");
+        let ask = |f: Fake| gh_with(f).0.whereabouts(&id);
+        // still there, whatever the capitals
+        let f = Fake::default().route(&at, 200, &repo("Acme", "Old", false), None);
+        assert_eq!(ask(f).unwrap(), Whereabouts::Here);
+        // followed to its new name by the HTTP client
+        let f = Fake::default().route(&at, 200, &repo("other", "fresh", false), None);
+        assert_eq!(
+            ask(f).unwrap(),
+            Whereabouts::Moved(RepoId::new("github.com", "other", "fresh"))
+        );
+        // or not followed: the answer says where to look, once
+        let moved =
+            r#"{"message":"Moved Permanently","url":"https://api.github.com/repositories/42"}"#;
+        let f = Fake::default().route(&at, 301, moved, None).route(
+            "https://api.github.com/repositories/42",
+            200,
+            &repo("other", "fresh", false),
+            None,
+        );
+        let (g, f) = gh_with(f);
+        assert_eq!(
+            g.whereabouts(&id).unwrap(),
+            Whereabouts::Moved(RepoId::new("github.com", "other", "fresh"))
+        );
+        let seen = f.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[1].1.as_deref(), Some("tok"), "the token goes along");
+        drop(seen);
+        // a redirect to nowhere isn't chased
+        let f = Fake::default().route(&at, 301, moved, None).route(
+            "https://api.github.com/repositories/42",
+            301,
+            moved,
+            None,
+        );
+        assert!(matches!(ask(f), Err(ForgeError::Other(_))));
+        // gone, or not ours to see
+        assert_eq!(ask(Fake::default()).unwrap(), Whereabouts::Gone);
+        // anything else is an error, not a guess
+        let f = Fake::default().route(&at, 401, r#"{"message":"Bad credentials"}"#, None);
+        assert!(matches!(ask(f), Err(ForgeError::Auth(m)) if m.contains("Bad credentials")));
+        let f = Fake::default().route(&at, 500, "", None);
+        assert!(matches!(ask(f), Err(ForgeError::Other(m)) if m == "HTTP 500"));
+        let f = Fake::default().route(&at, 200, "not json", None);
+        assert!(matches!(ask(f), Err(ForgeError::Other(_))));
     }
 
     fn repo(owner: &str, name: &str, archived: bool) -> String {

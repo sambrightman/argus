@@ -8,6 +8,7 @@ use serde::Serialize;
 use crate::config::{CloneMode, Track};
 use crate::discover::RepoKind;
 use crate::forge::{Protocol, RemoteRepo};
+use crate::identity::RepoId;
 use crate::ops::Op;
 use crate::status::{Head, Integration};
 use crate::workspace::Workspace;
@@ -28,7 +29,101 @@ pub struct PullPlan {
     pub missing: Vec<RemoteRepo>,
     /// Local repos of a tracked owner that the forge no longer lists
     /// (deleted, renamed or transferred).
-    pub orphans: Vec<PathBuf>,
+    pub orphans: Vec<Orphan>,
+}
+
+/// A local repo of a tracked owner that the owner's listing hasn't got.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Orphan {
+    pub path: PathBuf,
+    pub id: RepoId,
+    /// The kind of forge to ask about it.
+    #[serde(skip)]
+    pub forge: String,
+    pub state: OrphanState,
+}
+
+/// What became of an orphan, once its forge was asked
+/// ([`locate_orphans`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrphanState {
+    /// Not asked, or the forge couldn't say (why).
+    Unknown(String),
+    /// Still there under its name: only the listing leaves it out.
+    Unlisted,
+    /// Renamed or moved to another owner: what it is now.
+    Renamed(RepoId),
+    /// Deleted, or out of the token's reach. The clone may be the only
+    /// copy left: nothing is ever done to it.
+    Gone,
+}
+
+impl Orphan {
+    /// What became of it, in words.
+    pub fn describe(&self) -> String {
+        match &self.state {
+            OrphanState::Unknown(why) if why.is_empty() => {
+                "no longer listed by the forge".to_string()
+            }
+            OrphanState::Unknown(why) => format!("no longer listed by the forge ({why})"),
+            OrphanState::Unlisted => {
+                format!("still on the forge, but not in {}'s listing", self.id.owner)
+            }
+            OrphanState::Renamed(to) => format!("now {}", to.slug()),
+            OrphanState::Gone => "gone from the forge, or out of reach".to_string(),
+        }
+    }
+}
+
+/// Ask each orphan's forge what became of it (in parallel, one client
+/// per forge).
+pub fn locate_orphans(plan: &mut PullPlan, factory: ForgeFactory) {
+    use rayon::prelude::*;
+    let mut clients = BTreeMap::new();
+    for o in &plan.orphans {
+        clients
+            .entry((o.forge.clone(), o.id.host.clone()))
+            .or_insert_with(|| factory(&o.forge, &o.id.host).map_err(|e| e.to_string()));
+    }
+    let clients = &clients;
+    plan.orphans.par_iter_mut().for_each(|o| {
+        use crate::forge::Whereabouts;
+        let said = match &clients[&(o.forge.clone(), o.id.host.clone())] {
+            Ok(f) => f.whereabouts(&o.id).map_err(|e| e.to_string()),
+            Err(e) => Err(e.clone()),
+        };
+        o.state = match said {
+            Ok(Whereabouts::Here) => OrphanState::Unlisted,
+            Ok(Whereabouts::Moved(to)) => OrphanState::Renamed(to),
+            Ok(Whereabouts::Gone) => OrphanState::Gone,
+            Err(why) => OrphanState::Unknown(why),
+        };
+    });
+}
+
+/// For each orphan that was renamed or moved: pointing its clone's remote
+/// at what it is now, the URL otherwise as it was. Never run unasked.
+pub fn follow_renames(ws: &Workspace, orphans: &[Orphan]) -> Vec<Job> {
+    orphans
+        .iter()
+        .filter_map(|o| {
+            let OrphanState::Renamed(to) = &o.state else {
+                return None;
+            };
+            let s = ws.get(&o.path)?.status()?;
+            let (remote, url) = (s.remote.clone()?, s.remote_url.as_deref()?);
+            Some(Job {
+                path: o.path.clone(),
+                family: o.path.clone(),
+                label: format!("follow {} to {}", o.id.slug(), to.slug()),
+                op: Op::SetRemoteUrl {
+                    remote,
+                    url: o.id.renamed_url(url, to)?,
+                },
+            })
+        })
+        .collect()
 }
 
 impl PullPlan {
@@ -161,7 +256,12 @@ pub fn plan_tracks(
                     && id.owner.eq_ignore_ascii_case(&track.owner)
                     && !listed.contains(&id.to_string().to_lowercase())
                 {
-                    plan.orphans.push(e.path.clone());
+                    plan.orphans.push(Orphan {
+                        path: e.path.clone(),
+                        id: id.clone(),
+                        forge: track.forge.clone(),
+                        state: OrphanState::Unknown(String::new()),
+                    });
                 }
             }
         }
