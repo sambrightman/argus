@@ -506,13 +506,27 @@ impl Workspace {
     /// A repo whose folder is gone (deleted outside argus) shows its error
     /// once: it leaves the list when it was gone at the last refresh too.
     pub fn update_status(&mut self, path: &Path, r: Result<RepoStatus, String>) {
-        let Some(i) = self.index_of(path) else { return };
-        let gone = r.is_err() && path.symlink_metadata().is_err();
-        if gone && self.entries[i].error().is_some() {
-            self.entries.remove(i);
-        } else {
-            let ids = self.config.local_forges();
-            self.entries[i].set_status(r, &ids);
+        self.update_statuses([(path.to_path_buf(), r)]);
+    }
+
+    /// [`Self::update_status`] for several at once: each applied, then
+    /// what follows from them (children, parents, flags) worked out once
+    /// for all, as a refresh of everything brings them in together.
+    pub fn update_statuses(
+        &mut self,
+        statuses: impl IntoIterator<Item = (PathBuf, Result<RepoStatus, String>)>,
+    ) {
+        let ids = self.config.local_forges();
+        for (path, r) in statuses {
+            let Some(i) = self.index_of(&path) else {
+                continue;
+            };
+            let gone = r.is_err() && path.symlink_metadata().is_err();
+            if gone && self.entries[i].error().is_some() {
+                self.entries.remove(i);
+            } else {
+                self.entries[i].set_status(r, &ids);
+            }
         }
         self.add_children();
         self.link_parents();

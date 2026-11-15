@@ -777,6 +777,9 @@ pub struct App {
     /// applied to each so far: when one's status is next read, its next
     /// fix starts.
     chains: HashMap<PathBuf, Chain>,
+    /// How many times the rows have been rebuilt (for tests of batching).
+    #[doc(hidden)]
+    pub rebuilds: usize,
     /// Questions from the background, waiting until nothing else is being
     /// asked ([`Self::ask_when_free`]).
     waiting: std::collections::VecDeque<(String, Confirmed)>,
@@ -840,6 +843,7 @@ impl App {
             auto_fixes: (0, String::new()),
             chains: HashMap::new(),
             forge: HashMap::new(),
+            rebuilds: 0,
             waiting: Default::default(),
             queued: vec![],
             ignore_menu: None,
@@ -896,6 +900,7 @@ impl App {
     /// exact row if it's still there (a diff line's position within its
     /// hunk isn't kept), else its file's line, else its repo.
     fn rebuild_at(&mut self, target: Option<RowKey>) {
+        self.rebuilds += 1;
         let keep = target.as_ref().map(|t| t.0.clone());
         // nested repos unfolded: entries of their own (again, after a scan)
         let nested: Vec<(PathBuf, String)> = self
@@ -4316,6 +4321,32 @@ impl App {
         fx
     }
 
+    /// Statuses that arrived together (a refresh of every repo brings one
+    /// each): all applied, then the rows rebuilt once for the lot.
+    pub fn on_statuses(
+        &mut self,
+        batch: Vec<(PathBuf, Result<RepoStatus, String>)>,
+    ) -> Vec<Effect> {
+        let mut fx = self.statuses(batch);
+        fx.extend(self.start_queued());
+        self.show_waiting();
+        fx
+    }
+
+    fn statuses(&mut self, batch: Vec<(PathBuf, Result<RepoStatus, String>)>) -> Vec<Effect> {
+        let paths: Vec<PathBuf> = batch.iter().map(|(p, _)| p.clone()).collect();
+        self.ws.update_statuses(batch);
+        self.diffs.retain(|k, _| !paths.contains(&k.0));
+        self.marked_lines.retain(|k| !paths.contains(&k.0));
+        self.unfold_cache.retain(|k, _| !paths.contains(&k.0));
+        self.rebuild();
+        let mut fx = self.opened();
+        for path in &paths {
+            fx.extend(self.continue_chain(path));
+        }
+        fx
+    }
+
     fn msg(&mut self, m: Msg) -> Vec<Effect> {
         match m {
             Msg::Scanned { entries, truncated } => {
@@ -4336,14 +4367,7 @@ impl App {
                 self.rebuild();
             }
             Msg::Status(path, st) => {
-                self.ws.update_status(&path, *st);
-                self.diffs.retain(|k, _| k.0 != path);
-                self.marked_lines.retain(|k| k.0 != path);
-                self.unfold_cache.retain(|k, _| k.0 != path);
-                self.rebuild();
-                let mut fx = self.opened();
-                fx.extend(self.continue_chain(&path));
-                return fx;
+                return self.statuses(vec![(path, *st)]);
             }
             Msg::Forge {
                 path,

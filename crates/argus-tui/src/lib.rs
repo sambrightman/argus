@@ -293,10 +293,31 @@ impl Runtime {
     pub fn drain(&mut self, app: &mut App) -> (Vec<Effect>, bool) {
         let mut left = vec![];
         let mut received = false;
+        // statuses that came in together are applied together: a refresh
+        // of every repo is one rebuild, not one each
+        let mut statuses = vec![];
         for _ in 0..512 {
             let Ok(m) = self.rx.try_recv() else { break };
             received = true;
+            let m = match m {
+                Msg::Status(path, st) => {
+                    statuses.push((path, *st));
+                    continue;
+                }
+                other => other,
+            };
+            // (in the order they came: those before another message first)
+            if !statuses.is_empty() {
+                for e in app.on_statuses(std::mem::take(&mut statuses)) {
+                    left.extend(self.exec(app, e));
+                }
+            }
             for e in app.on_msg(m) {
+                left.extend(self.exec(app, e));
+            }
+        }
+        if !statuses.is_empty() {
+            for e in app.on_statuses(statuses) {
                 left.extend(self.exec(app, e));
             }
         }

@@ -890,34 +890,65 @@ fn default_tip(refs: &Refs, remote: Option<&str>, default: &str) -> Option<(gix:
 /// net change since it split off (empty commits, a change and its
 /// revert), which nothing absorbed.
 fn absorbed(repo: &gix::Repository, tip: gix::ObjectId, default: gix::ObjectId) -> bool {
+    // the answer is the two commits' alone, and commits don't change:
+    // worked out once for a pair, not at every status (a repo with many
+    // stale branches would pay for each of them every time)
+    static KNOWN: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<(gix::ObjectId, gix::ObjectId), bool>>,
+    > = std::sync::OnceLock::new();
+    let known = KNOWN.get_or_init(Default::default);
+    if let Some(answer) = known
+        .lock()
+        .ok()
+        .and_then(|k| k.get(&(tip, default)).copied())
+    {
+        return answer;
+    }
+    TRIAL_MERGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let answer = trial_merge(repo, tip, default);
+    // (a merge that couldn't be tried at all, objects missing say, isn't
+    // an answer to keep)
+    if let (Some(answer), Ok(mut known)) = (answer, known.lock()) {
+        if known.len() >= 100_000 {
+            known.clear();
+        }
+        known.insert((tip, default), answer);
+    }
+    answer.unwrap_or(false)
+}
+
+static TRIAL_MERGES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many trial merges this process has run (for tests of the memory).
+#[doc(hidden)]
+pub fn trial_merges() -> usize {
+    TRIAL_MERGES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// [`absorbed`], worked out: `None` when the merge couldn't be tried.
+fn trial_merge(repo: &gix::Repository, tip: gix::ObjectId, default: gix::ObjectId) -> Option<bool> {
     use gix::merge::tree::TreatAsUnresolved;
     let repo = repo.clone().with_object_memory();
-    let merged = (|| {
-        let options = repo
-            .tree_merge_options()
-            .ok()?
-            .with_fail_on_conflict(Some(TreatAsUnresolved::git()));
-        let mut out = repo
-            .merge_commits(default, tip, Default::default(), options.into())
-            .ok()?;
-        if out
-            .tree_merge
-            .has_unresolved_conflicts(TreatAsUnresolved::git())
-        {
-            return None;
-        }
-        let theirs = repo.find_commit(tip).ok()?.tree_id().ok()?.detach();
-        if theirs == out.merge_base_tree_id {
-            return None;
-        }
-        Some(out.tree_merge.tree.write().ok()?.detach())
-    })();
-    let ours = repo
-        .find_commit(default)
-        .ok()
-        .and_then(|c| c.tree_id().ok())
-        .map(|t| t.detach());
-    merged.is_some() && merged == ours
+    let options = repo
+        .tree_merge_options()
+        .ok()?
+        .with_fail_on_conflict(Some(TreatAsUnresolved::git()));
+    let mut out = repo
+        .merge_commits(default, tip, Default::default(), options.into())
+        .ok()?;
+    if out
+        .tree_merge
+        .has_unresolved_conflicts(TreatAsUnresolved::git())
+    {
+        return Some(false);
+    }
+    let theirs = repo.find_commit(tip).ok()?.tree_id().ok()?.detach();
+    if theirs == out.merge_base_tree_id {
+        return Some(false);
+    }
+    let merged = out.tree_merge.tree.write().ok()?.detach();
+    let ours = repo.find_commit(default).ok()?.tree_id().ok()?.detach();
+    Some(merged == ours)
 }
 
 /// Number of commits reachable from `a` but not from `b`.

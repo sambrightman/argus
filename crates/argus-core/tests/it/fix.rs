@@ -2213,3 +2213,44 @@ fn a_followed_rename_is_simulated_on_the_remote_it_names() {
         before.remote_url
     );
 }
+
+/// Whether a branch's changes are in the default branch already depends
+/// only on the two commits, so it's worked out once for a pair.
+#[test]
+fn the_squash_merge_check_is_done_once_for_the_same_two_commits() {
+    use argus_core::status::trial_merges;
+    let sb = Sandbox::new();
+    let r = squash_merged(&sb, "main");
+    let absorbed = |r: &std::path::Path| {
+        let s = st(r);
+        s.branches
+            .iter()
+            .find(|b| b.name == "feat")
+            .unwrap()
+            .absorbed
+    };
+    let before = trial_merges();
+    assert!(absorbed(&r));
+    assert_eq!(trial_merges(), before + 1);
+    // again, and through a repo kept open: remembered
+    assert!(absorbed(&r));
+    let kept = argus_core::status::KeptRepos::default();
+    assert!(
+        kept.status(&r, Default::default())
+            .unwrap()
+            .branches
+            .iter()
+            .any(|b| b.absorbed)
+    );
+    assert_eq!(trial_merges(), before + 1, "not merged again");
+    // the branch moves: a different pair, checked afresh (and no longer so)
+    git(&r, &["switch", "-q", "feat"]);
+    write(&r, "h", "not in main\n");
+    git(&r, &["add", "h"]);
+    git(&r, &["commit", "-q", "-m", "more work"]);
+    git(&r, &["switch", "-q", "main"]);
+    assert!(!absorbed(&r));
+    assert_eq!(trial_merges(), before + 2);
+    assert!(!absorbed(&r));
+    assert_eq!(trial_merges(), before + 2);
+}

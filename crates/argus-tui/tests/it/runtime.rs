@@ -604,3 +604,30 @@ fn forge_requests_go_out_a_few_at_a_time() {
     assert_eq!(ASKED.load(Ordering::SeqCst), 3, "all asked");
     assert_eq!(MOST.load(Ordering::SeqCst), 1, "one at a time");
 }
+
+#[test]
+fn statuses_arriving_together_are_one_rebuild() {
+    let (sb, mut app, mut rt) = setup("");
+    for n in ["clean", "dirty", "feature"] {
+        write(&sb.path(&format!("dev/{n}")), "new-file", "x\n");
+    }
+    let all: Vec<PathBuf> = app.ws.entries.iter().map(|e| e.path.clone()).collect();
+    rt.exec(&mut app, Effect::Refresh(all.clone()));
+    // (let them all arrive before looking)
+    let deadline = std::time::Instant::now() + WAIT;
+    while rt.working() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let before = app.rebuilds;
+    let (_, received) = rt.drain(&mut app);
+    assert!(received);
+    assert_eq!(app.rebuilds, before + 1, "three statuses, one rebuild");
+    for p in &all {
+        let s = app.ws.get(p).unwrap().status().unwrap();
+        assert_eq!(s.changes.untracked, 1, "{}", p.display());
+    }
+    // inverse: nothing waiting, nothing rebuilt
+    let (_, received) = rt.drain(&mut app);
+    assert!(!received);
+    assert_eq!(app.rebuilds, before + 1);
+}

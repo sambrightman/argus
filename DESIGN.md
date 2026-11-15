@@ -415,6 +415,17 @@ Two findings:
   section's line, else the one before; the repo only when no changes are
   left. It doesn't follow the file to its new section, so `s s s` works
   down a list.
+* **Results show within a frame.** Nothing wakes the loop when a result
+  arrives, so while background work is out it looks every 10 ms
+  (`wait_for_key`); idle, every 250 ms as before, writing nothing.
+  Statuses that arrive together are applied together
+  (`Workspace::update_statuses`, `App::on_statuses`): a refresh of every
+  repo is one pass over the workspace and one rebuild, not one each.
+  Whether a branch is absorbed (squash-merged) is worked out once for a
+  pair of commits and remembered for the process: the answer is theirs
+  alone, and a repo with many stale branches no longer pays for each at
+  every status. Forge requests from the TUI go through a gate as wide as
+  `concurrency.network`.
 * **A question from the background waits its turn.** A forge's answer or
   a job's end may have something to ask (a renamed repo's remote, an
   edited patch that didn't apply). It's asked at once only when nothing
