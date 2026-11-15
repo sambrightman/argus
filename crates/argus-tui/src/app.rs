@@ -328,11 +328,17 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
             Err(e) => failed(e.to_string()),
             Ok(FileDiff::Binary) => vec![line(vec![dim("binary file".into())])],
             Ok(FileDiff::External) => vec![line(vec![dim("external diff configured".into())])],
-            Ok(FileDiff::Text(hunks)) if hunks.is_empty() => {
+            Ok(FileDiff::Text(hunks) | FileDiff::Converted(hunks)) if hunks.is_empty() => {
                 vec![line(vec![dim("no change in content".into())])]
             }
-            Ok(FileDiff::Text(hunks)) => {
+            Ok(d @ (FileDiff::Text(_) | FileDiff::Converted(_))) => {
                 let mut rows = vec![];
+                if matches!(d, FileDiff::Converted(_)) {
+                    rows.push(line(vec![dim("converted to text (textconv)".into())]));
+                }
+                let (FileDiff::Text(hunks) | FileDiff::Converted(hunks)) = d else {
+                    unreachable!()
+                };
                 for h in hunks {
                     rows.push(line(vec![(Some(Role::DiffHunk), h.header())]));
                     for l in &h.lines {
@@ -460,7 +466,43 @@ fn diff_rows(
             )),
             Ok(FileDiff::Binary) => v.push(note("binary file")),
             Ok(FileDiff::External) => v.push(note("external diff configured")),
-            Ok(FileDiff::Text(hunks)) if hunks.is_empty() => v.push(note("no change in content")),
+            Ok(FileDiff::Text(hunks) | FileDiff::Converted(hunks)) if hunks.is_empty() => {
+                v.push(note("no change in content"))
+            }
+            // no patch of the real content to apply: every line stands
+            // for the file
+            Ok(FileDiff::Converted(hunks)) => {
+                v.push(note(
+                    "converted to text (textconv): staged or discarded as a whole file",
+                ));
+                for hunk in hunks.iter() {
+                    v.push(DetailLine {
+                        body: true,
+                        ..row(
+                            vec![indent(), (Some(Role::DiffHunk), hunk.header())],
+                            side,
+                            None,
+                            None,
+                        )
+                    });
+                    for l in &hunk.lines {
+                        let (role, mark) = match l.kind {
+                            LineKind::Add => (Some(Role::DiffAdd), '+'),
+                            LineKind::Remove => (Some(Role::DiffRemove), '-'),
+                            LineKind::Context => (None, ' '),
+                        };
+                        v.push(DetailLine {
+                            body: true,
+                            ..row(
+                                vec![indent(), (role, format!("{mark}{}", l.text))],
+                                side,
+                                None,
+                                None,
+                            )
+                        });
+                    }
+                }
+            }
             Ok(FileDiff::Text(hunks)) => {
                 for (h, hunk) in hunks.iter().enumerate() {
                     let header = vec![indent(), (Some(Role::DiffHunk), hunk.header())];

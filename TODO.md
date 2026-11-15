@@ -18,8 +18,6 @@ deferred.
   action beside today's one-fix-per-repo one, which is renamed "fix once"
   (`argus fix --auto` on the CLI). Status is re-read between steps; it
   stops at a failure or a fix that asks first.
-- **textconv in diffs,** through gix's blob pipeline if it runs the
-  configured program; such diffs are for viewing only (no staging).
 - **Glyph font gaps:** `◆` is missing from SF Mono, `✓` from Hack, `✗` from
   Fira Code, Hack and Source Code Pro; Monaco and kitty's default font
   aren't checked. Rerun the counts once the other fonts are installed, and
@@ -63,7 +61,6 @@ deferred.
 
 - A git config include file created after a repo was opened isn't noticed
   until the including file changes.
-- Diffs don't apply textconv.
 - `git clone` in a test's setup once failed copying `maintenance.lock`
   (rerun passed): watch for it.
 - For a submodule with both modified and untracked files, whether its

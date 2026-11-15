@@ -5841,3 +5841,106 @@ fn deleting_a_branch_of_a_repo_without_a_remote_says_its_commits_are_only_here()
     assert!(matches!(&app.mode, Mode::Confirm { question, .. }
         if question.contains("has no remote") && question.ends_with("They'd be lost.")));
 }
+
+#[test]
+fn a_textconv_diff_is_shown_converted_and_acts_as_its_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_sb, mut app) = setup_with("", |sb| {
+        let d = sb.path("dev/dirty");
+        let conv = sb.path("conv.sh");
+        std::fs::write(&conv, "#!/bin/sh\ntr -d '\\000' < \"$1\" | tr a-z A-Z\n").unwrap();
+        std::fs::set_permissions(&conv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write(&d, ".gitattributes", "*.dat diff=upper\n");
+        std::fs::write(d.join("f.dat"), b"\0one\ntwo\n").unwrap();
+        commit(&d, "data");
+        std::fs::write(d.join("f.dat"), b"\0one\nthree\n").unwrap();
+        git(
+            &d,
+            &["config", "diff.upper.textconv", conv.to_str().unwrap()],
+        );
+    });
+    to_file(&mut app, "f.dat");
+    app.act(Action::ToggleExpand);
+    let t = trimmed(&app);
+    let at = t.iter().position(|l| l.ends_with("f.dat")).unwrap();
+    assert_eq!(
+        t[at + 1..at + 7],
+        [
+            "unstaged changes",
+            "converted to text (textconv): staged or discarded as a whole file",
+            "@@ -1,2 +1,2 @@",
+            "ONE",
+            "-TWO",
+            "+THREE"
+        ]
+    );
+    // on a line of it: the whole file is staged, there being no patch of
+    // the real content to apply
+    app.cursor = app
+        .rows
+        .iter()
+        .position(
+            |r| matches!(r, Row::Detail { line, .. } if line.parts.iter().any(|p| p.1 == "+THREE")),
+        )
+        .unwrap();
+    match app.act(Action::StageFiles).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(
+            j[0].op,
+            Op::AddTracked {
+                paths: vec!["f.dat".into()]
+            }
+        ),
+        other => panic!("{other:?}"),
+    }
+    app.running.clear();
+    // and there's no hunk to edit
+    assert!(app.act(Action::EditPatch).is_empty());
+    assert!(app.editing.is_none());
+    // its lines are body text: `n` from the file goes past them
+    to_file(&mut app, "f.dat");
+    app.act(Action::NextSection);
+    let Row::Detail { line, .. } = &app.rows[app.cursor] else {
+        panic!()
+    };
+    assert!(line.diff.as_ref().is_none_or(|d| d.hunk.is_none()) && !line.is_body());
+    assert!(!line.parts.iter().any(|p| p.1.contains("TWO")));
+}
+
+#[test]
+fn a_commits_textconv_diff_says_it_is_converted() {
+    use std::os::unix::fs::PermissionsExt;
+    let (sb, mut app) = setup_with("", |sb| {
+        let f = sb.path("dev/feature");
+        let conv = sb.path("conv.sh");
+        std::fs::write(&conv, "#!/bin/sh\ntr -d '\\000' < \"$1\" | tr a-z A-Z\n").unwrap();
+        std::fs::set_permissions(&conv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        git(
+            &f,
+            &["config", "diff.upper.textconv", conv.to_str().unwrap()],
+        );
+        write(&f, ".gitattributes", "*.dat diff=upper\n");
+        std::fs::write(f.join("f.dat"), b"\0one\n").unwrap();
+        write(&f, "plain", "x\n");
+        git(&f, &["add", "."]);
+        git(&f, &["commit", "-q", "-m", "Add data"]);
+    });
+    let f = sb.path("dev/feature");
+    cursor_on_detail(&mut app, "feature", "issue     1 unpushed commit(s)");
+    app.act(Action::ToggleExpand);
+    let id = git(&f, &["rev-parse", "HEAD"]);
+    cursor_on_detail(&mut app, "feature", &format!("      {}", &id[..7]));
+    app.act(Action::ToggleExpand);
+    cursor_on_detail(&mut app, "feature", "          A f.dat");
+    app.act(Action::ToggleExpand);
+    assert_eq!(
+        below(&app, "          A f.dat", 10),
+        ["converted to text (textconv)", "@@ -0,0 +1 @@", "+ONE"]
+    );
+    // inverse: an ordinary file's diff says nothing of the kind
+    cursor_on_detail(&mut app, "feature", "          A plain");
+    app.act(Action::ToggleExpand);
+    assert_eq!(
+        below(&app, "          A plain", 10),
+        ["@@ -0,0 +1 @@", "+x"]
+    );
+}

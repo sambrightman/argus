@@ -15,7 +15,7 @@ fn st(r: &Path) -> RepoStatus {
 /// The diff as `git diff` would print its body: hunk headers, then lines
 /// prefixed with ` `, `-` or `+`.
 fn text(d: &FileDiff) -> Vec<String> {
-    let FileDiff::Text(hunks) = d else {
+    let (FileDiff::Text(hunks) | FileDiff::Converted(hunks)) = d else {
         panic!("not text: {d:?}")
     };
     let mut v = vec![];
@@ -602,4 +602,50 @@ fn lines_from_several_hunks_stage_together() {
     );
     assert!(index.contains("line 28\nadded\n"), "{index}");
     assert!(!index.contains("line two"), "{index}");
+}
+
+#[test]
+fn textconv_is_applied_and_says_so() {
+    use std::os::unix::fs::PermissionsExt;
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    let conv = sb.path("conv.sh");
+    std::fs::write(&conv, "#!/bin/sh\ntr -d '\\000' < \"$1\" | tr a-z A-Z\n").unwrap();
+    std::fs::set_permissions(&conv, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write(&r, ".gitattributes", "*.dat diff=upper\n");
+    std::fs::write(r.join("f.dat"), b"\0one\ntwo\n").unwrap();
+    git(&r, &["add", "."]);
+    commit(&r, "data");
+    std::fs::write(r.join("f.dat"), b"\0one\nthree\n").unwrap();
+    // inverse: no program configured for the driver, so it's just binary
+    assert_eq!(
+        file_diff(&r, "f.dat", Side::Unstaged).unwrap(),
+        FileDiff::Binary
+    );
+    git(
+        &r,
+        &["config", "diff.upper.textconv", conv.to_str().unwrap()],
+    );
+    let lines = |d: FileDiff| {
+        assert!(matches!(d, FileDiff::Converted(_)), "{d:?}");
+        text(&d)
+    };
+    let want = ["@@ -1,2 +1,2 @@", " ONE", "-TWO", "+THREE"];
+    assert_eq!(lines(file_diff(&r, "f.dat", Side::Unstaged).unwrap()), want);
+    // as git shows it
+    let body = git_body(&r, &["--", "f.dat"]);
+    assert_eq!(body, want, "{body:?}");
+    git(&r, &["add", "f.dat"]);
+    assert_eq!(lines(file_diff(&r, "f.dat", Side::Staged).unwrap()), want);
+    commit(&r, "three");
+    assert_eq!(
+        lines(argus_core::diff::commit_file_diff(&r, "HEAD", "f.dat").unwrap()),
+        want
+    );
+    // inverse: a file the driver doesn't cover stays an ordinary diff
+    write(&r, "README", "changed\n");
+    assert!(matches!(
+        file_diff(&r, "README", Side::Unstaged).unwrap(),
+        FileDiff::Text(_)
+    ));
 }

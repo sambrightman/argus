@@ -73,6 +73,9 @@ impl Hunk {
 pub enum FileDiff {
     /// No hunks: no changes on that side.
     Text(Vec<Hunk>),
+    /// The hunks of a side converted to text for comparing (the file's
+    /// `diff.<driver>.textconv` program): for reading, not for applying.
+    Converted(Vec<Hunk>),
     Binary,
     /// An external diff program is configured for the file (`diff=…`).
     External,
@@ -210,7 +213,7 @@ fn blob_diff(
     new_root: Option<std::path::PathBuf>,
 ) -> Result<FileDiff, Box<dyn std::error::Error + Send + Sync>> {
     let mut cache = repo.diff_resource_cache(
-        Mode::ToGit,
+        Mode::ToGitUnlessBinaryToTextIsPresent,
         WorktreeRoots {
             old_root: None,
             new_root,
@@ -225,6 +228,7 @@ fn blob_diff(
         &repo.objects,
     )?;
     let outcome = cache.prepare_diff()?;
+    let converted = outcome.old_or_new_is_derived;
     let algorithm = match outcome.operation {
         Operation::InternalDiff { algorithm } => algorithm,
         Operation::SourceOrDestinationIsBinary => return Ok(FileDiff::Binary),
@@ -236,7 +240,11 @@ fn blob_diff(
     let diff = blob::diff_with_slider_heuristics(algorithm, &input);
     let hunks =
         UnifiedDiff::new(&diff, &input, Collect(vec![]), ContextSize::symmetrical(3)).consume()?;
-    Ok(FileDiff::Text(hunks))
+    Ok(if converted {
+        FileDiff::Converted(hunks)
+    } else {
+        FileDiff::Text(hunks)
+    })
 }
 
 struct Collect(Vec<Hunk>);
