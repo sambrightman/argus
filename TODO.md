@@ -36,9 +36,6 @@ deferred.
 
 ## Next steps
 
-- **Behaviour fields for marks:** pull and ignore are marks whose
-  behaviour goes by their names; fields any mark could set (`pulls =
-  true`, issues not to flag) aren't there yet.
 - **More from the forge:** the details show GitHub's open issue and pull
   request counts and each branch's pull request (`[ui] forge_info`,
   `status --forge`). Not yet: in `--json`; forges other than GitHub.
