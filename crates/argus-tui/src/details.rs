@@ -98,6 +98,13 @@ impl Seg {
         )
     }
 
+    /// Whether a line like this is known by what's in it, so that a
+    /// change to it makes it another line in the same place (the rest
+    /// are known by name: gone is gone).
+    pub fn by_content(&self) -> bool {
+        matches!(self, Seg::Hunk(..) | Seg::Commit(_) | Seg::Stash(_))
+    }
+
     /// The hunks' steps, in order.
     pub fn hunks(hunks: &[argus_core::diff::Hunk]) -> Vec<Seg> {
         use std::hash::{Hash, Hasher};

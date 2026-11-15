@@ -1296,10 +1296,13 @@ fn stash_with_a_message() {
 #[test]
 fn files_marked_in_details_can_be_stashed() {
     let (sb, mut app) = setup_with("", |sb| write(&sb.path("dev/dirty"), "other", "x\n"));
-    // nothing marked yet
+    // nothing marked yet: not offered, and said if asked for anyway
     app.on_key(key('z'));
-    let fx = app.on_key(key('f'));
-    assert!(fx.is_empty());
+    assert!(
+        matches!(&app.mode, Mode::Menu { menu, .. } if menu.items.iter().all(|i| i.key != 'f'))
+    );
+    app.on_key(code(KeyCode::Esc));
+    assert!(app.act(Action::Stash(StashKind::MarkedFiles)).is_empty());
     assert!(
         app.message.as_ref().unwrap().0.contains("mark files"),
         "{:?}",
@@ -7599,6 +7602,87 @@ fn tab_on_a_line_with_nothing_under_it_folds_what_it_is_under() {
     app.on_key(code(KeyCode::Tab));
     assert!(!app.expanded.contains(&d));
     assert!(matches!(app.rows[app.cursor], Row::Repo(_)));
+}
+
+/// The last file of a section staged: the cursor goes to the line now
+/// where its section was, not after the file into another section.
+#[test]
+fn staging_a_sections_last_file_moves_on_to_the_next_line_not_after_the_file() {
+    let (sb, mut app) = setup_with("", |sb| {
+        write(&sb.path("dev/clean"), "zz", "new\n");
+        write(&sb.path("dev/dirty"), "zz", "new\n");
+    });
+    app.act(Action::ExpandAll);
+    let text = |app: &App| trimmed(app)[app.cursor_line()].clone();
+    let stage = |app: &mut App, name: &str| {
+        let repo = sb.path(&format!("dev/{name}"));
+        app.cursor = (0..app.rows.len())
+            .find(|&n| {
+                matches!(&app.rows[n], Row::Detail { repo: r, line }
+                    if app.ws.entries[*r].path == repo && line.file.as_deref() == Some("zz"))
+            })
+            .unwrap();
+        git(&repo, &["add", "zz"]);
+        status_arrives(app, &repo);
+        assert!(app.current().unwrap().path.ends_with(name));
+    };
+    // nothing else changed: the staged section, new, is where untracked was
+    stage(&mut app, "clean");
+    assert_eq!(text(&app), "staged (1)");
+    // unstaged changes too: on to them
+    stage(&mut app, "dirty");
+    assert_eq!(text(&app), "unstaged (1)");
+}
+
+/// The stash menu offers what there is something to do with.
+#[test]
+fn the_stash_menu_offers_only_what_applies() {
+    let (sb, mut app) = setup("");
+    let d = sb.path("dev/dirty");
+    let offered = |app: &mut App| -> Vec<(char, String)> {
+        app.on_key(key('z'));
+        let items = match &app.mode {
+            Mode::Menu { menu, .. } => menu
+                .items
+                .iter()
+                .map(|i| (i.key, i.label.clone()))
+                .collect(),
+            _ => panic!("no menu"),
+        };
+        app.on_key(code(KeyCode::Esc));
+        items
+    };
+    let keys = |app: &mut App| -> String { offered(app).iter().map(|i| i.0).collect() };
+    // unstaged changes only: no staged, marked, pop or drop
+    cursor_on_detail(&mut app, "dirty", "path");
+    assert_eq!(keys(&mut app), "ukzm");
+    // something staged
+    git(&d, &["add", "README"]);
+    status_arrives(&mut app, &d);
+    assert_eq!(keys(&mut app), "ukzim");
+    // a file marked
+    git(&d, &["reset", "-q"]);
+    status_arrives(&mut app, &d);
+    to_file(&mut app, "README");
+    app.act(Action::ToggleMark);
+    let items = offered(&mut app);
+    assert!(
+        items.contains(&('f', "stash marked files".into())),
+        "{items:?}"
+    );
+    app.marked_files.clear();
+    // a stash: pop; drop only with the cursor on it
+    git(&d, &["stash", "push", "-q", "-m", "mine"]);
+    write(&d, "README", "more\n");
+    status_arrives(&mut app, &d);
+    cursor_on_detail(&mut app, "dirty", "path");
+    let items = offered(&mut app);
+    assert_eq!(keys(&mut app), "ukzmp", "{:?}", trimmed(&app));
+    assert!(items.contains(&('p', "pop".into())), "{items:?}");
+    cursor_on_detail(&mut app, "dirty", "          stash@{0}");
+    let items = offered(&mut app);
+    assert_eq!(keys(&mut app), "ukzmpd");
+    assert!(items.contains(&('d', "drop…".into())), "{items:?}");
 }
 
 /// Fold the hunk whose line the cursor is on, as if from elsewhere: the

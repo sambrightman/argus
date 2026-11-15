@@ -175,11 +175,11 @@ impl MenuId {
                     ),
                     item(
                         'f',
-                        "stash files marked in details",
+                        "stash marked files",
                         Action::Stash(StashKind::MarkedFiles),
                     ),
-                    item('p', "pop the newest stash", Action::PopStash),
-                    item('d', "drop the stash under the cursor…", Action::DropStash),
+                    item('p', "pop", Action::PopStash),
+                    item('d', "drop…", Action::DropStash),
                 ],
             ),
             MenuId::Commit => (

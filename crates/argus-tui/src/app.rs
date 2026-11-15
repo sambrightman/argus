@@ -878,9 +878,11 @@ impl App {
             }
             let now = self.under(range.clone(), &id[..d - 1]);
             let (before, nth) = &place.beside[d - 1];
-            // one of the same kind where it was, that wasn't there: it,
-            // and under it what the cursor was under
+            // something known by what's in it (a hunk, a commit), with
+            // another where it was that wasn't there: it changed. That
+            // one, and under it what the cursor was under
             if let Some((_, seg)) = now.get(*nth)
+                && id[d - 1].by_content()
                 && std::mem::discriminant(*seg) == std::mem::discriminant(&id[d - 1])
                 && !before.contains(seg)
             {
@@ -888,12 +890,14 @@ impl App {
                 d = id.len();
                 continue;
             }
-            let still = |seg: &Seg| now.iter().find(|(_, s)| *s == seg).map(|(n, _)| *n);
-            // (from where it was: it's gone, so the first found is after it)
-            let after = before.iter().skip(*nth).find_map(still);
-            let earlier = || before.iter().take(*nth).rev().find_map(still);
-            if let Some(n) = after.or_else(earlier) {
-                return Some(n);
+            // else the line now where it was: the one after the nearest
+            // before it that's still there (the first, with none), or
+            // that one itself when nothing follows it
+            let still = |seg: &Seg| now.iter().position(|(_, s)| *s == seg);
+            let from = before.iter().take(*nth).rev().find_map(still);
+            let at = from.map_or(0, |p| (p + 1).min(now.len().saturating_sub(1)));
+            if let Some((n, _)) = now.get(at) {
+                return Some(*n);
             }
             d -= 1;
         }
@@ -3050,6 +3054,22 @@ impl App {
                     && !matches!(it.action, Action::Fixup { .. })
             });
         }
+        // stashing: what there's something to stash of, or a stash for
+        let stashes = self.selected().iter().any(|&i| {
+            let s = self.ws.entries[i].status();
+            s.is_some_and(|s| !s.stashes.is_empty())
+        });
+        let on_stash = matches!(
+            self.rows.get(self.cursor),
+            Some(Row::Detail { line, .. }) if line.stash.is_some()
+        );
+        menu.items.retain(|it| match it.action {
+            Action::Stash(StashKind::Staged) => staged,
+            Action::Stash(StashKind::MarkedFiles) => !self.marked_files.is_empty(),
+            Action::PopStash => stashes,
+            Action::DropStash => on_stash,
+            _ => true,
+        });
         // a repo without a forge identity has no owner to mark
         if self.owner().is_none() {
             menu.items
