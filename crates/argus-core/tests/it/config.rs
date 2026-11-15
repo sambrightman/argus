@@ -210,32 +210,35 @@ fn in_a_file_with_both_keys_an_unmark_goes_last_so_it_wins() {
     let main = write(
         t.path(),
         "config.toml",
-        "pull = []\nextend_pull = ['acme/*']\n",
+        "marks.pull.repos = []\nmarks.pull.extend_repos = ['acme/*']\n",
     );
     let before = Config::load(&main).unwrap();
     let mut after = before.clone();
-    after.pull.push("!acme/big".into());
+    after.marks["pull"].repos.push("!acme/big".into());
     update_mark_lists(&main, &before, &after).unwrap();
-    // extend_pull applies after pull, so the ! entry belongs there
-    assert_eq!(Config::load(&main).unwrap().pull, ["acme/*", "!acme/big"]);
+    // marks.pull.extend_repos applies after pull, so the ! entry belongs there
+    assert_eq!(
+        Config::load(&main).unwrap().marks["pull"].repos,
+        ["acme/*", "!acme/big"]
+    );
 }
 
 #[test]
 fn marks_are_added_to_the_main_files_own_list_when_it_has_one() {
     let t = tempfile::tempdir().unwrap();
     let d = t.path();
-    write(d, "marks.toml", "pull = ['acme/*']\n");
+    write(d, "marks.toml", "marks.pull.repos = ['acme/*']\n");
     let main = write(
         d,
         "config.toml",
-        "extend = ['marks.toml']\nextend_pull = ['x/y']\n",
+        "extend = ['marks.toml']\nmarks.pull.extend_repos = ['x/y']\n",
     );
     let before = Config::load(&main).unwrap();
     let mut after = before.clone();
-    after.pull.push("!acme/big".into());
+    after.marks["pull"].repos.push("!acme/big".into());
     update_mark_lists(&main, &before, &after).unwrap();
     let c = Config::load(&main).unwrap();
-    assert_eq!(c.pull, ["acme/*", "x/y", "!acme/big"]);
+    assert_eq!(c.marks["pull"].repos, ["acme/*", "x/y", "!acme/big"]);
     let text = std::fs::read_to_string(&main).unwrap();
     assert!(!text.contains("\npull ="), "{text}");
 }
@@ -268,67 +271,89 @@ fn an_unmark_alone_is_saved_in_the_file_holding_the_entry() {
 fn issue_lists_are_saved_into_ignore_by_the_same_rule() {
     let t = tempfile::tempdir().unwrap();
     let d = t.path();
-    // none yet: an [ignore] section in the main file
+    // none yet: a [marks.ignore.issues] section in the main file
     let main = write(d, "config.toml", "max_depth = 3\n");
     let before = Config::load(&main).unwrap();
     let mut after = before.clone();
-    after.ignore.detached.push("acme/dep@v1.2".into());
+    after
+        .ignore_issues_mut()
+        .detached
+        .push("acme/dep@v1.2".into());
     update_mark_lists(&main, &before, &after).unwrap();
     let c = Config::load(&main).unwrap();
-    assert_eq!(c.ignore.detached, ["acme/dep@v1.2"]);
+    assert_eq!(c.ignore_issues().detached, ["acme/dep@v1.2"]);
     assert_eq!(c.max_depth, 3);
     // an extended file has the list: it goes there
-    let team = write(d, "team.toml", "[ignore]\nstashes = ['acme/a']\n");
+    let team = write(
+        d,
+        "team.toml",
+        "[marks.ignore.issues]\nstashes = ['acme/a']\n",
+    );
     let main = write(d, "config.toml", "extend = ['team.toml']\n");
     let before = Config::load(&main).unwrap();
     let mut after = before.clone();
-    after.ignore.stashes.push("acme/b".into());
-    after.ignore.repos.push("acme/old".into());
+    after.ignore_issues_mut().stashes.push("acme/b".into());
+    after.marks["ignore"].repos.push("acme/old".into());
     update_mark_lists(&main, &before, &after).unwrap();
     let c = Config::load(&main).unwrap();
-    assert_eq!(c.ignore.stashes, ["acme/a", "acme/b"]);
+    assert_eq!(c.ignore_issues().stashes, ["acme/a", "acme/b"]);
     assert!(std::fs::read_to_string(&team).unwrap().contains("acme/b"));
-    assert_eq!(c.ignore.repos, ["acme/old"], "repos: new, in the main file");
-    // an empty extend_ list in the main file's [ignore] keeps additions there
-    let team = write(d, "team.toml", "[ignore]\nstashes = ['acme/a']\n");
+    assert_eq!(
+        c.marks["ignore"].repos,
+        ["acme/old"],
+        "repos: new, in the main file"
+    );
+    // an empty extend_ list in the main file's [marks.ignore.issues] keeps additions there
+    let team = write(
+        d,
+        "team.toml",
+        "[marks.ignore.issues]\nstashes = ['acme/a']\n",
+    );
     let main = write(
         d,
         "config.toml",
-        "extend = ['team.toml']\n[ignore]\nextend_stashes = []\n",
+        "extend = ['team.toml']\n[marks.ignore.issues]\nextend_stashes = []\n",
     );
     let before = Config::load(&main).unwrap();
     let mut after = before.clone();
-    after.ignore.stashes.push("acme/b".into());
+    after.ignore_issues_mut().stashes.push("acme/b".into());
     update_mark_lists(&main, &before, &after).unwrap();
     assert_eq!(
         std::fs::read_to_string(&team).unwrap(),
-        "[ignore]\nstashes = ['acme/a']\n"
+        "[marks.ignore.issues]\nstashes = ['acme/a']\n"
     );
     assert_eq!(
-        Config::load(&main).unwrap().ignore.stashes,
+        Config::load(&main).unwrap().ignore_issues().stashes,
         ["acme/a", "acme/b"]
     );
     // dotted keys are edited where they are
-    let main = write(d, "config.toml", "ignore.behind = ['acme/x']\n");
+    let main = write(
+        d,
+        "config.toml",
+        "marks.ignore.issues.behind = ['acme/x']\n",
+    );
     let before = Config::load(&main).unwrap();
     let mut after = before.clone();
-    after.ignore.behind = vec!["acme/y".into()];
+    after.ignore_issues_mut().behind = vec!["acme/y".into()];
     update_mark_lists(&main, &before, &after).unwrap();
     assert_eq!(
         std::fs::read_to_string(&main).unwrap(),
-        "ignore.behind = ['acme/y']\n".replace("'acme/y'", "\"acme/y\"")
+        "marks.ignore.issues.behind = ['acme/y']\n".replace("'acme/y'", "\"acme/y\"")
     );
 }
 
 #[test]
 fn stashes_default_to_ignoring_all_but_argus_own_and_a_list_replaces_that() {
     let c = Config::default();
-    assert_eq!(c.ignore.stashes, ["**", "!**@argus *"]);
-    assert_eq!(Config::parse("").unwrap().ignore.stashes, c.ignore.stashes);
-    let c = Config::parse("[ignore]\nstashes = ['acme/a']").unwrap();
-    assert_eq!(c.ignore.stashes, ["acme/a"]);
-    let c = Config::parse("[ignore]\nextend_stashes = ['acme/a']").unwrap();
-    assert_eq!(c.ignore.stashes, ["**", "!**@argus *", "acme/a"]);
+    assert_eq!(c.ignore_issues().stashes, ["**", "!**@argus *"]);
+    assert_eq!(
+        Config::parse("").unwrap().ignore_issues().stashes,
+        c.ignore_issues().stashes
+    );
+    let c = Config::parse("[marks.ignore.issues]\nstashes = ['acme/a']").unwrap();
+    assert_eq!(c.ignore_issues().stashes, ["acme/a"]);
+    let c = Config::parse("[marks.ignore.issues]\nextend_stashes = ['acme/a']").unwrap();
+    assert_eq!(c.ignore_issues().stashes, ["**", "!**@argus *", "acme/a"]);
 }
 
 #[test]
@@ -338,9 +363,9 @@ fn an_addition_to_a_list_with_a_default_extends_it_rather_than_replacing_it() {
     let main = write(d, "config.toml", "# mine\n");
     let before = Config::load(&main).unwrap();
     let mut after = before.clone();
-    after.ignore.stashes.push("acme/a".into());
+    after.ignore_issues_mut().stashes.push("acme/a".into());
     // inverse: a list without a default gets the plain key
-    after.ignore.behind.push("acme/b".into());
+    after.ignore_issues_mut().behind.push("acme/b".into());
     update_mark_lists(&main, &before, &after).unwrap();
     let text = std::fs::read_to_string(&main).unwrap();
     assert!(text.contains("extend_stashes = [\"acme/a\"]"), "{text}");
@@ -349,8 +374,8 @@ fn an_addition_to_a_list_with_a_default_extends_it_rather_than_replacing_it() {
         "{text}"
     );
     let c = Config::load(&main).unwrap();
-    assert_eq!(c.ignore.stashes, ["**", "!**@argus *", "acme/a"]);
-    assert_eq!(c.ignore.behind, ["acme/b"]);
+    assert_eq!(c.ignore_issues().stashes, ["**", "!**@argus *", "acme/a"]);
+    assert_eq!(c.ignore_issues().behind, ["acme/b"]);
 }
 
 #[test]
@@ -373,7 +398,15 @@ fn auto_fix_kinds_that_are_never_automatic_are_warned_about() {
 fn marks_are_tables_with_defaults_for_favourite() {
     let c = Config::default();
     let names: Vec<&String> = c.marks.keys().collect();
-    assert_eq!(names, ["favourite"]);
+    assert_eq!(names, ["favourite", "pull", "ignore"]);
+    let (pull, ignore) = (&c.marks["pull"], &c.marks["ignore"]);
+    assert_eq!((pull.key, pull.sort, &pull.icon), (Some('p'), 0, &None));
+    assert_eq!((ignore.key, ignore.sort), (Some('I'), 0));
+    assert!(pull.repos.is_empty() && ignore.repos.is_empty());
+    // only ignore has issues not to flag: by default, stashes not argus's
+    assert!(pull.issues.is_empty() && !ignore.issues.is_empty());
+    assert_eq!(ignore.issues.stashes.len(), 2);
+    assert!(ignore.issues.behind.is_empty());
     let fav = &c.marks["favourite"];
     assert_eq!((fav.key, fav.sort), (Some('f'), 1));
     assert!(fav.repos.is_empty());
@@ -386,7 +419,7 @@ fn marks_are_tables_with_defaults_for_favourite() {
     let names: Vec<&String> = c.marks.keys().collect();
     assert_eq!(
         names,
-        ["favourite", "work", "home"],
+        ["favourite", "pull", "ignore", "work", "home"],
         "defaults first, then as written"
     );
     assert_eq!(c.marks["favourite"].repos, ["acme/app"]);
@@ -428,13 +461,23 @@ fn bad_marks_are_explained() {
         "empty"
     );
     assert!(err(Config::parse("[marks.w]\nkey = 'ww'\n")).contains("key"));
-    for taken in ["pull", "ignore"] {
-        let e = err(Config::parse(&format!("[marks.{taken}]\n")));
-        assert!(
-            e.contains(taken) && e.contains("isn't a mark of its own"),
-            "{e}"
-        );
-    }
+    // pull and ignore are marks like any other, with their own keys to set
+    let c = Config::parse("[marks.pull]\nkey = 'P'\nrepos = ['a/b']\n[marks.ignore]\nicon = 'x'\n")
+        .unwrap();
+    assert_eq!(c.marks["pull"].key, Some('P'));
+    assert_eq!(c.marks["pull"].repos, ["a/b"]);
+    assert_eq!(c.marks["ignore"].key, Some('I'), "defaults kept");
+    // but only ignore lists issues
+    let e = err(Config::parse("[marks.work.issues]\nbehind = ['a/b']\n"));
+    assert!(
+        e.contains("[marks.work] issues: only [marks.ignore]"),
+        "{e}"
+    );
+    assert!(Config::parse("[marks.ignore.issues]\nbehind = ['a/b']\n").is_ok());
+    assert!(
+        err(Config::parse("[marks.ignore.issues]\nnope = []\n")).contains("nope"),
+        "an unknown issue"
+    );
     assert!(err(Config::parse("favourite = ['acme/app']\n")).contains("[marks.favourite] repos"));
     assert!(err(Config::parse("[marks.w]\nrepo = []\n")).contains("repo"));
 }

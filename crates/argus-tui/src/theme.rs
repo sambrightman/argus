@@ -153,6 +153,21 @@ impl Theme {
                 }
             })
             .collect();
+        // pull shows as a state, in the `pull` role: the mark's colour is
+        // that role's, unless `[ui] colors` sets the role itself
+        let pull = &marks[argus_core::config::PULL];
+        let own = self.roles.get("mark.pull").copied().or_else(|| {
+            let given = pull.color.as_deref().and_then(parse_style);
+            given.filter(|_| !config.ui.colors.contains_key("pull"))
+        });
+        if let Some(style) = own {
+            self.roles.insert("pull".into(), style);
+        }
+        if marks[argus_core::config::IGNORE].color.is_some() {
+            warnings.push(
+                "[marks.ignore] color isn't used: ignored repos take [ui] colors hidden".into(),
+            );
+        }
         (self, warnings)
     }
 
@@ -392,12 +407,36 @@ mod tests {
         let (t, w) = Theme::build("terminal", &c.ui.colors);
         assert!(w.is_empty(), "{w:?}");
         let (t, w) = t.with_marks(&c);
-        let fg = |i| t.role(Role::Mark(i)).fg;
-        assert_eq!(fg(0), Some(Color::Yellow), "favourite: the theme's own");
-        assert_eq!(fg(1), Some(Color::Cyan), "work: its own");
-        assert_eq!(fg(2), t.roles["mark"].fg, "plain: the theme's for marks");
-        assert_eq!(fg(3), t.roles["mark"].fg, "bad: the same, warned");
-        assert_eq!(fg(4), Some(Color::Magenta), "mine: config first");
+        let fg = |name: &str| t.role(Role::Mark(c.marks.get_index_of(name).unwrap())).fg;
+        assert_eq!(fg("favourite"), Some(Color::Yellow), "the theme's own");
+        assert_eq!(fg("work"), Some(Color::Cyan), "work: its own");
+        assert_eq!(fg("plain"), t.roles["mark"].fg, "the theme's for marks");
+        assert_eq!(fg("bad"), t.roles["mark"].fg, "bad: the same, warned");
+        assert_eq!(fg("mine"), Some(Color::Magenta), "mine: config first");
+        // pull shows in its own role: its mark's colour is that role's,
+        // unless `[ui] colors` sets the role (or names the mark)
+        let pull = |cfg: &str| {
+            let c = argus_core::Config::parse(cfg).unwrap();
+            let (t, w) = Theme::build("terminal", &c.ui.colors).0.with_marks(&c);
+            (t.role(Role::Pull).fg, w)
+        };
+        let own = pull("").0;
+        assert_ne!(own, Some(Color::Red));
+        assert_eq!(pull("[marks.pull]\ncolor = 'red'\n").0, Some(Color::Red));
+        assert_eq!(
+            pull("[marks.pull]\ncolor = 'red'\n[ui.colors]\npull = 'green'\n").0,
+            Some(Color::Green)
+        );
+        assert_eq!(
+            pull("[ui.colors]\npull = 'green'\n'mark.pull' = 'red'\n").0,
+            Some(Color::Red)
+        );
+        // an ignored repo's colour is the hidden role's: said, not dropped
+        let said = pull("[marks.ignore]\ncolor = 'red'\n").1;
+        assert!(
+            said.len() == 1 && said[0].contains("[ui] colors hidden"),
+            "{said:?}"
+        );
         assert_eq!(w.len(), 2, "{w:?}");
         assert!(w.iter().any(|w| w.contains("ghost")) && w.iter().any(|w| w.contains("nocolour")));
     }

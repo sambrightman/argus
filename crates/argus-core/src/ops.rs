@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::status::InProgress;
 
 /// The first word of the stash fix's messages (`argus 2026-11-08 12:00`),
-/// which `[ignore] stashes` doesn't cover by default.
+/// which `[marks.ignore.issues] stashes` doesn't cover by default.
 pub const STASH_PREFIX: &str = "argus";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

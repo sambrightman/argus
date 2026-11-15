@@ -450,7 +450,7 @@ fn pull_pulls_marked_repos_and_reports_failures_with_exit_code() {
     three(&sb);
     sb.advance_remote("acme", "clean", "upstream-file");
     let cfg = sb.path("cfg.toml");
-    std::fs::write(&cfg, "pull = ['acme/clean']\n").unwrap();
+    std::fs::write(&cfg, "marks.pull.repos = ['acme/clean']\n").unwrap();
     argus(&sb)
         .arg("--config")
         .arg(&cfg)
@@ -1104,7 +1104,7 @@ fn marks_are_written_to_the_config_lists() {
     let sb = Sandbox::new();
     three(&sb);
     let cfg = sb.path("cfg.toml");
-    std::fs::write(&cfg, "# mine\npull = ['acme/*']\n").unwrap();
+    std::fs::write(&cfg, "# mine\nmarks.pull.repos = ['acme/*']\n").unwrap();
     let run = |args: &[&str]| {
         argus(&sb)
             .arg("--config")
@@ -1121,14 +1121,14 @@ fn marks_are_written_to_the_config_lists() {
     assert_eq!(c.marks["favourite"].repos, ["github.com/acme/clean"]);
     // ignoring also turns off pulling, which the pattern gave it
     assert_eq!(
-        c.pull,
+        c.marks["pull"].repos,
         [
             "acme/*",
             "!github.com/acme/dirty",
             "!github.com/acme/feature"
         ]
     );
-    assert_eq!(c.ignore.repos, ["github.com/acme/feature"]);
+    assert_eq!(c.marks["ignore"].repos, ["github.com/acme/feature"]);
     assert!(text.starts_with("# mine\n"), "{text}");
     // --all: the repo's own entries go; what patterns still give is said
     let clear = |repo: &str| {
@@ -1142,7 +1142,10 @@ fn marks_are_written_to_the_config_lists() {
     assert_eq!(clear("acme/dirty"), "acme/dirty: still pull (acme/*)\n");
     let c = argus_core::Config::parse(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
     // only acme/dirty's entries went; ignored acme/feature keeps its own
-    assert_eq!(c.pull, ["acme/*", "!github.com/acme/feature"]);
+    assert_eq!(
+        c.marks["pull"].repos,
+        ["acme/*", "!github.com/acme/feature"]
+    );
     // inverse: nothing left, nothing said
     std::fs::write(&cfg, "marks.favourite.repos = ['acme/clean']\n").unwrap();
     assert_eq!(clear("acme/clean"), "");
@@ -1359,7 +1362,7 @@ fn fix_leaves_an_ignored_state_alone() {
     let cfg = sb.path("cfg.toml");
     std::fs::write(
         &cfg,
-        "[ignore]\nnon_default_branch = ['acme/feature@feat']\n",
+        "[marks.ignore.issues]\nnon_default_branch = ['acme/feature@feat']\n",
     )
     .unwrap();
     let fix = |args: &[&str]| {
@@ -1377,7 +1380,7 @@ fn fix_leaves_an_ignored_state_alone() {
     // inverse: pinned to another branch, it's fixed as before
     std::fs::write(
         &cfg,
-        "[ignore]\nnon_default_branch = ['acme/feature@other']\n",
+        "[marks.ignore.issues]\nnon_default_branch = ['acme/feature@other']\n",
     )
     .unwrap();
     fix(&["fix"]).stdout(predicate::str::contains("switch main"));
@@ -1393,7 +1396,7 @@ fn issues_are_ignored_and_unignored() {
     let read = || argus_core::Config::parse(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
     run(&["ignore-issue", "non-default-branch", "acme/feature"]).success();
     assert_eq!(
-        read().ignore.non_default_branch,
+        read().ignore_issues().non_default_branch,
         ["github.com/acme/feature@feat"]
     );
     // --no-pin and --pin choose the other way from the list's default
@@ -1406,17 +1409,17 @@ fn issues_are_ignored_and_unignored() {
     ])
     .success();
     assert_eq!(
-        read().ignore.non_default_branch,
+        read().ignore_issues().non_default_branch,
         ["github.com/acme/feature"]
     );
     run(&["unignore-issue", "non-default-branch", "acme/feature"]).success();
     let r = sb.path("dev/clean");
     write(&r, "README", "x\n");
     git(&r, &["stash", "push", "-q", "-m", "argus 2026-01-02 09:30"]);
-    let mut stashes = read().ignore.stashes;
+    let mut stashes = read().ignore_issues().stashes.clone();
     run(&["ignore-issue", "stashes", "acme/clean"]).success();
     stashes.push("github.com/acme/clean".into());
-    assert_eq!(read().ignore.stashes, stashes);
+    assert_eq!(read().ignore_issues().stashes, stashes);
     assert!(
         std::fs::read_to_string(&cfg)
             .unwrap()
@@ -1426,9 +1429,9 @@ fn issues_are_ignored_and_unignored() {
     run(&["unignore-issue", "stashes", "acme/clean"]).success();
     run(&["ignore-issue", "stashes", "acme/clean", "--pin"]).success();
     *stashes.last_mut().unwrap() = "github.com/acme/clean@argus 2026-01-02 09:30".into();
-    assert_eq!(read().ignore.stashes, stashes);
+    assert_eq!(read().ignore_issues().stashes, stashes);
     run(&["unignore-issue", "non-default-branch", "acme/feature"]).success();
-    assert!(read().ignore.non_default_branch.is_empty());
+    assert!(read().ignore_issues().non_default_branch.is_empty());
     // unknown or not ignorable: an error naming the ones that are
     run(&["ignore-issue", "dirty", "acme/dirty"])
         .failure()
@@ -1549,7 +1552,7 @@ fn pull_takes_patterns_indents_failures_and_json_says_failed() {
     let sb = Sandbox::new();
     three(&sb);
     let cfg = sb.path("cfg.toml");
-    std::fs::write(&cfg, "pull = ['acme/clean', 'acme/feature']\n").unwrap();
+    std::fs::write(&cfg, "marks.pull.repos = ['acme/clean', 'acme/feature']\n").unwrap();
     argus(&sb)
         .arg("--config")
         .arg(&cfg)
@@ -1848,13 +1851,13 @@ fn mark_owner_marks_the_repos_owners_as_a_whole() {
         c.marks["favourite"].repos.is_empty(),
         "ignore excludes favourite"
     );
-    assert_eq!(c.ignore.repos, ["github.com/acme/*"]);
+    assert_eq!(c.marks["ignore"].repos, ["github.com/acme/*"]);
     assert!(
         run(&["unmark", "ignore", "acme/*", "--owner"])
             .status
             .success()
     );
-    assert!(read().ignore.repos.is_empty());
+    assert!(read().marks["ignore"].repos.is_empty());
     // only for marking and unmarking one mark
     for args in [
         &["unmark", "--all", "--owner", "acme/clean"][..],
@@ -1971,7 +1974,7 @@ fn marks_of_your_own_are_set_and_shown() {
     let o = run(&["mark", "home", "acme/clean"]);
     assert!(!o.status.success());
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(err.contains("favourite, work, pull, ignore"), "{err}");
+    assert!(err.contains("favourite, pull, ignore, work"), "{err}");
     // and one patterns don't name: nothing marked
     let o = run(&["unmark", "work"]);
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("which repos"));
@@ -2013,6 +2016,25 @@ fn status_filters_by_marks() {
     assert_eq!(shown(&["--filter", "#work"]), ["clean", "dirty"]);
     assert_eq!(shown(&["--filter", "!#work"]), ["feature"]);
     assert_eq!(shown(&["--filter", "#work | #home"]).len(), 3);
+    // pull and ignore filter as marks do
+    std::fs::write(
+        &cfg,
+        "[marks.work]\nrepos = ['acme/clean', 'acme/dirty']\n[marks.home]\nrepos = ['acme/feature']\n\
+         [marks.pull]\nrepos = ['acme/dirty']\n[marks.ignore]\nrepos = ['acme/feature']\n",
+    )
+    .unwrap();
+    assert_eq!(shown(&["--filter", "#pull"]), ["dirty"]);
+    assert_eq!(shown(&["--mark", "pull"]), ["dirty"]);
+    assert_eq!(shown(&["--hidden", "--filter", "#ignore"]), ["feature"]);
+    assert_eq!(
+        shown(&["--hidden", "--filter", "!#ignore !#pull"]),
+        ["clean"]
+    );
+    std::fs::write(
+        &cfg,
+        "[marks.work]\nrepos = ['acme/clean', 'acme/dirty']\n[marks.home]\nrepos = ['acme/feature']\n",
+    )
+    .unwrap();
     assert_eq!(shown(&["--filter", "#work cln"]), ["clean"]);
     // text matches the key too: github.com/acme/…
     assert_eq!(shown(&["--filter", "#work gthb"]), ["clean", "dirty"]);
@@ -2028,7 +2050,7 @@ fn status_filters_by_marks() {
         .output()
         .unwrap();
     assert!(!o.status.success());
-    assert!(String::from_utf8_lossy(&o.stderr).contains("favourite, work, home"));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("favourite, pull, ignore, work, home"));
     // the footer says how many matched
     let out = argus(&sb)
         .arg("--config")

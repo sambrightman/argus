@@ -51,12 +51,13 @@ roots = ["~/dev", "~/work"]
 extend_exclude_paths = ["build-cache"]  # any list: extend_<name> adds instead of replacing
 max_depth = 6                    # levels below each root; 0: no limit
 
-# repos or globs on github.com/org/repo, org/repo or path; later entries
-# win, ! turns off; marking in the TUI or `argus mark` edits these lists
-pull = ["someone/dotfiles", "my-org/*", "!my-org/huge-monorepo"]   # by `argus pull`
-
+# marks: `repos` are repos or globs on github.com/org/repo, org/repo or
+# path; later entries win, ! turns off; marking in the TUI or `argus mark`
+# edits these lists
 [marks.favourite]                # built in: sort points 1, `f` in the Mark menu
 repos = ["my-org/core-*"]
+[marks.pull]                     # built in: what `argus pull` pulls
+repos = ["someone/dotfiles", "my-org/*", "!my-org/huge-monorepo"]
 [marks.work]                     # your own: a label in the flag column, and a filter
 key = "w"                        # in the Mark menu
 icon = "W"                       # or by set: { unicode = "◆", nerd = "…", ascii = "*" }
@@ -64,8 +65,9 @@ color = "cyan"
 sort = 0                         # sort points: repos sort by the sum of their marks'
 repos = ["my-org/*"]
 
-[ignore]                         # what not to flag; same kind of entries
-repos = ["~/dev/scratch/**"]     # hidden, and left out of pulls, clones and bulk actions
+[marks.ignore]                   # built in: hidden, and left out of pulls, clones and bulk actions
+repos = ["~/dev/scratch/**"]
+[marks.ignore.issues]            # what not to flag in repos that stay listed
 non_default_branch = ["my-org/legacy@release-*"]  # normally on that branch: another is flagged
 detached = ["my-org/pinned@v1.2.0"]        # a tag, its describe, or the commit
 behind = ["my-org/big"]          # also no_remote, no_upstream, unpushed_branches, stashes
@@ -126,8 +128,10 @@ the repo's details looks all the way back, in the background, and the
 answer then replaces the commit id. Details list the commit, its tags and
 the describe line.
 
-Marks live in config: favourite and your own (`[marks.<name>]`, a table
-each), pull and ignore. Marking a repo in the TUI or with `argus mark`
+Marks live in config, a table each (`[marks.<name>]`): favourite, your
+own, and the two argus acts on, pull and ignore, which take the same
+`key`, `icon`, `color` and `sort` and filter the same way (`#pull`,
+`!#ignore`). Marking a repo in the TUI or with `argus mark`
 adds its name to the list (or `!name` to turn off what a pattern says) and
 saves the change, keeping the rest of the file as written; `argus unmark
 --all` removes the repo's own entries, and says which marks patterns (or
@@ -257,7 +261,7 @@ module cache under a root). Roots are always scanned.
 The scan stops at each repo; `scan_inside_repos = true` keeps walking its
 work tree for repos nested inside (slower; submodules are found from
 their parent either way).
-To keep scanning repos but hide them, list them in `[ignore] repos`.
+To keep scanning repos but hide them, list them in `[marks.ignore] repos`.
 Hidden repos (ignored or snoozed; `H` shows them) are never part of a
 bulk action such as fetch all or fix all, even while shown; choosing one
 explicitly still works. Pulls are the exception for snoozed repos: they're
@@ -446,7 +450,7 @@ and re-applies your changes there.
 false` leaves untracked files alone, and `keep_index = true` leaves staged
 changes in the index after stashing them.
 
-Stashes are judged one by one. By default `[ignore] stashes = ["**",
+Stashes are judged one by one. By default `[marks.ignore.issues] stashes = ["**",
 "!**@argus *"]`: your own stashes don't need attention, while those the
 stash fix made (`argus <date>`) do until you pop or drop them. An entry
 `repo@message` covers the stashes whose message (after git's

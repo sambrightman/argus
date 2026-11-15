@@ -68,7 +68,7 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
     let (mut theme, mut warnings) = theme::Theme::for_config(&ws.config);
     warnings.extend(menu::mark_key_clashes(&ws.config));
     let mut theme_name = ws.config.ui.theme.clone();
-    let (mut icons, icon_warnings) = ws.config.ui.icons();
+    let (mut icons, icon_warnings) = ws.config.icons();
     let mut icons_name = ws.config.ui.icons.clone();
     let mut app = App::new(ws);
     app.notices = opts.notices.clone();
@@ -94,7 +94,7 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
             }
             if app.ws.config.ui.icons != icons_name {
                 icons_name = app.ws.config.ui.icons.clone();
-                icons = app.ws.config.ui.icons().0;
+                icons = app.ws.config.icons().0;
             }
             let view = ui::View {
                 theme: &theme,

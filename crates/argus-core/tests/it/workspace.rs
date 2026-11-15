@@ -133,7 +133,7 @@ fn ignored_and_snoozed_hidden_by_default() {
         sb.remote("acme", n);
         sb.clone_as_github("acme", n, &format!("dev/{n}"));
     }
-    let mut w = ws(&sb, "ignore.repos = ['acme/gone']");
+    let mut w = ws(&sb, "marks.ignore.repos = ['acme/gone']");
     w.state.snoozed.insert(
         "github.com/acme/nap".into(),
         "2999-01-01T00:00:00Z".parse().unwrap(),
@@ -249,7 +249,7 @@ fn pull_pulls_repos_marked_for_pull_snoozed_too_but_not_ignored() {
     sb.init("dev/local");
     let mut w = ws(
         &sb,
-        "pull = ['acme/*', '!acme/nopull', '**/local']\nignore.repos = ['acme/excl']",
+        "marks.pull.repos = ['acme/*', '!acme/nopull', '**/local']\nmarks.ignore.repos = ['acme/excl']",
     );
     // snoozed: hidden for a while, still kept up to date
     let s2 = w
@@ -301,7 +301,7 @@ fn pull_uses_fetch_when_pull_is_impossible() {
     sb.remote("acme", "d");
     let r = sb.clone_as_github("acme", "d", "dev/d");
     git(&r, &["checkout", "-q", "--detach"]);
-    let w = ws(&sb, "pull = ['acme/*']");
+    let w = ws(&sb, "marks.pull.repos = ['acme/*']");
     assert_eq!(plan_updates(&w)[0].op, Op::Fetch);
 }
 
@@ -367,7 +367,7 @@ fn track_clones_missing_and_reports_orphans() {
     let mut w = ws(
         &sb,
         &format!(
-            "ignore.repos = ['acme/secret']\n[[track]]\nowner='acme'\ninclude_forks=false\ninto='{}'",
+            "marks.ignore.repos = ['acme/secret']\n[[track]]\nowner='acme'\ninclude_forks=false\ninto='{}'",
             sb.path("dev/acme").display()
         ),
     );
@@ -594,7 +594,7 @@ fn pull_fetches_instead_when_a_pull_would_not_be_clean() {
         .envs(argus_core::testkit::subprocess_env(&sb.root()))
         .output()
         .unwrap();
-    let w = ws(&sb, "pull = ['acme/*']");
+    let w = ws(&sb, "marks.pull.repos = ['acme/*']");
     let mut labels: Vec<_> = plan_updates(&w).into_iter().map(|j| j.label).collect();
     labels.sort();
     assert_eq!(
@@ -612,7 +612,7 @@ fn marking_edits_the_config_lists() {
         sb.clone_as_github("acme", n, &format!("dev/{n}"));
     }
     sb.init("dev/local");
-    let mut w = ws(&sb, "pull = ['acme/*']");
+    let mut w = ws(&sb, "marks.pull.repos = ['acme/*']");
     let at = |w: &Workspace, name: &str| {
         w.entries
             .iter()
@@ -630,13 +630,16 @@ fn marking_edits_the_config_lists() {
     // a repo without an identity is named by its path
     w.set_mark(&[local], Mark::Ignore, true).unwrap();
     assert_eq!(
-        w.config.ignore.repos,
+        w.config.marks["ignore"].repos,
         [contract_tilde(&w.entries[local].path)]
     );
     assert!(w.entries[local].flags.ignored);
     // off against a pattern: a `!` entry
     w.set_mark(&[big], Mark::Pull, false).unwrap();
-    assert_eq!(w.config.pull, ["acme/*", "!github.com/acme/big"]);
+    assert_eq!(
+        w.config.marks["pull"].repos,
+        ["acme/*", "!github.com/acme/big"]
+    );
     assert!(!w.entries[big].flags.pull && w.entries[app].flags.pull);
     // marked: repos with entries of their own (patterns don't count)
     assert_eq!(w.marked_count(&[app, lib, big, local]), 4);
@@ -644,7 +647,7 @@ fn marking_edits_the_config_lists() {
     // clearing: own entries go, patterns decide again
     w.clear_marks(&[app, big]).unwrap();
     assert_eq!(w.config.marks["favourite"].repos, ["github.com/acme/lib"]);
-    assert_eq!(w.config.pull, ["acme/*"]);
+    assert_eq!(w.config.marks["pull"].repos, ["acme/*"]);
     assert!(w.entries[big].flags.pull && !w.entries[app].flags.has("favourite"));
     assert_eq!(w.marked_count(&[app, big]), 0);
 }
@@ -661,10 +664,10 @@ fn unmarking_a_tracked_repo_for_pull_writes_a_bang() {
     w.set_mark(&[0], Mark::Label(0), true).unwrap();
     assert_eq!(w.config.marks["favourite"].repos, ["github.com/acme/app"]);
     w.set_mark(&[0], Mark::Pull, false).unwrap();
-    assert_eq!(w.config.pull, ["!github.com/acme/app"]);
+    assert_eq!(w.config.marks["pull"].repos, ["!github.com/acme/app"]);
     assert!(!w.entries[0].flags.pull);
     w.set_mark(&[0], Mark::Pull, true).unwrap();
-    assert!(w.config.pull.is_empty() && w.entries[0].flags.pull);
+    assert!(w.config.marks["pull"].repos.is_empty() && w.entries[0].flags.pull);
 }
 
 #[test]
@@ -801,7 +804,7 @@ fn an_ignored_issue_stops_counting_and_a_pin_to_another_value_doesnt() {
     let entry = |extra: &str| ws(&sb, extra).entries[0].clone();
     let e = entry("");
     assert!(e.issues.contains(&Issue::NonDefaultBranch) && e.needs_attention());
-    let e = entry("[ignore]\nnon_default_branch = ['acme/w@feat']");
+    let e = entry("[marks.ignore.issues]\nnon_default_branch = ['acme/w@feat']");
     assert!(
         !e.issues.contains(&Issue::NonDefaultBranch),
         "{:?}",
@@ -811,7 +814,7 @@ fn an_ignored_issue_stops_counting_and_a_pin_to_another_value_doesnt() {
     assert!(!e.needs_attention());
     assert!(!e.flags.hidden(), "still shown: only the issue is ignored");
     // pinned to another branch: this one is flagged
-    let e = entry("[ignore]\nnon_default_branch = ['acme/w@release']");
+    let e = entry("[marks.ignore.issues]\nnon_default_branch = ['acme/w@release']");
     assert!(e.issues.contains(&Issue::NonDefaultBranch) && e.ignored_issues.is_empty());
 }
 
@@ -823,7 +826,12 @@ fn fix_kinds_leave_out_those_undoing_an_ignored_state() {
     let r = sb.clone_as_github("acme", "w", "dev/w");
     git(&r, &["switch", "-q", "-c", "feat"]);
     let kinds = [FixKind::SwitchDefault, FixKind::Push];
-    let e = ws(&sb, "[ignore]\nnon_default_branch = ['acme/w']").entries[0].clone();
+    let e = ws(
+        &sb,
+        "[marks.ignore.issues]\nnon_default_branch = ['acme/w']",
+    )
+    .entries[0]
+        .clone();
     assert_eq!(e.fix_kinds(&kinds), [FixKind::Push]);
     let e = ws(&sb, "").entries[0].clone();
     assert_eq!(e.fix_kinds(&kinds), kinds);
@@ -840,13 +848,13 @@ fn ignoring_an_issue_through_the_workspace_pins_it_and_resolves_it() {
     w.set_issue_ignored(&[0], IssueList::NonDefaultBranch, true, None)
         .unwrap();
     assert_eq!(
-        w.config.ignore.non_default_branch,
+        w.config.ignore_issues().non_default_branch,
         ["github.com/acme/w@feat"]
     );
     assert_eq!(w.entries[0].ignored_issues, [Issue::NonDefaultBranch]);
     w.set_issue_ignored(&[0], IssueList::NonDefaultBranch, false, None)
         .unwrap();
-    assert!(w.config.ignore.non_default_branch.is_empty());
+    assert!(w.config.ignore_issues().non_default_branch.is_empty());
     assert!(w.entries[0].issues.contains(&Issue::NonDefaultBranch));
 }
 
@@ -1015,7 +1023,7 @@ fn own_stashes_are_ignored_by_default_and_argus_stashes_are_not() {
     );
     assert!(e.needs_attention());
     // inverse: an empty list ignores none
-    let e = ws(&sb, "[ignore]\nstashes = []").entries[0].clone();
+    let e = ws(&sb, "[marks.ignore.issues]\nstashes = []").entries[0].clone();
     assert_eq!(stash_issues(&e), (vec![Issue::Stashes(3)], vec![]));
 }
 
@@ -1026,8 +1034,9 @@ fn a_pinned_stash_ignore_covers_only_matching_messages() {
     let r = sb.clone_as_github("acme", "w", "dev/w");
     stash(&r, Some("experiment"));
     stash(&r, Some("mail me@host"));
-    let issues =
-        |list: &str| stash_issues(&ws(&sb, &format!("[ignore]\nstashes = {list}")).entries[0]);
+    let issues = |list: &str| {
+        stash_issues(&ws(&sb, &format!("[marks.ignore.issues]\nstashes = {list}")).entries[0])
+    };
     assert_eq!(
         issues("['acme/w@experiment']"),
         (vec![Issue::Stashes(1)], vec![Issue::Stashes(1)])
@@ -1059,36 +1068,39 @@ fn ignoring_stashes_is_unpinned_unless_asked_and_pins_each_message_literally() {
     stash(&r, Some("experiment"));
     // all already ignored (the default covers both): nothing to add
     let mut w = ws(&sb, "");
-    let before = w.config.ignore.stashes.clone();
+    let before = w.config.ignore_issues().stashes.clone();
     w.set_issue_ignored(&[0], IssueList::Stashes, true, Some(true))
         .unwrap();
-    assert_eq!(w.config.ignore.stashes, before);
+    assert_eq!(w.config.ignore_issues().stashes, before);
     // one stash already covered by a pattern's pin: ignoring adds the rest
-    let mut w = ws(&sb, "[ignore]\nstashes = ['acme/*@experiment']");
+    let mut w = ws(
+        &sb,
+        "[marks.ignore.issues]\nstashes = ['acme/*@experiment']",
+    );
     w.set_issue_ignored(&[0], IssueList::Stashes, true, None)
         .unwrap();
     assert_eq!(
-        w.config.ignore.stashes,
+        w.config.ignore_issues().stashes,
         ["acme/*@experiment", "github.com/acme/w"]
     );
-    let mut w = ws(&sb, "[ignore]\nstashes = []");
+    let mut w = ws(&sb, "[marks.ignore.issues]\nstashes = []");
     w.set_issue_ignored(&[0], IssueList::Stashes, true, None)
         .unwrap();
-    assert_eq!(w.config.ignore.stashes, ["github.com/acme/w"]);
+    assert_eq!(w.config.ignore_issues().stashes, ["github.com/acme/w"]);
     assert_eq!(
         stash_issues(&w.entries[0]),
         (vec![], vec![Issue::Stashes(2)])
     );
     w.set_issue_ignored(&[0], IssueList::Stashes, false, None)
         .unwrap();
-    assert!(w.config.ignore.stashes.is_empty());
+    assert!(w.config.ignore_issues().stashes.is_empty());
     w.set_issue_ignored(&[0], IssueList::Stashes, true, Some(true))
         .unwrap();
     assert_eq!(
-        w.config.ignore.stashes.len(),
+        w.config.ignore_issues().stashes.len(),
         2,
         "{:?}",
-        w.config.ignore.stashes
+        w.config.ignore_issues().stashes
     );
     assert_eq!(
         stash_issues(&w.entries[0]),
@@ -1097,8 +1109,8 @@ fn ignoring_stashes_is_unpinned_unless_asked_and_pins_each_message_literally() {
     // a new stash isn't covered, not even one the pinned glob characters
     // would have matched
     stash(&r, Some("fix x anything"));
-    let cfg = toml::to_string(&w.config.ignore).unwrap();
-    let e = ws(&sb, &format!("[ignore]\n{cfg}")).entries[0].clone();
+    let cfg = toml::to_string(w.config.ignore_issues()).unwrap();
+    let e = ws(&sb, &format!("[marks.ignore.issues]\n{cfg}")).entries[0].clone();
     assert_eq!(
         stash_issues(&e),
         (vec![Issue::Stashes(1)], vec![Issue::Stashes(2)])
@@ -1115,13 +1127,16 @@ fn ignoring_a_branch_is_pinned_unless_asked_not_to() {
     let mut w = ws(&sb, "");
     w.set_issue_ignored(&[0], IssueList::NonDefaultBranch, true, Some(false))
         .unwrap();
-    assert_eq!(w.config.ignore.non_default_branch, ["github.com/acme/w"]);
+    assert_eq!(
+        w.config.ignore_issues().non_default_branch,
+        ["github.com/acme/w"]
+    );
     w.set_issue_ignored(&[0], IssueList::NonDefaultBranch, false, None)
         .unwrap();
     w.set_issue_ignored(&[0], IssueList::NonDefaultBranch, true, None)
         .unwrap();
     assert_eq!(
-        w.config.ignore.non_default_branch,
+        w.config.ignore_issues().non_default_branch,
         ["github.com/acme/w@feat"]
     );
 }
@@ -1137,7 +1152,7 @@ fn pinning_a_detached_head_writes_one_of_its_names() {
     let mut w = ws(&sb, "");
     w.set_issue_ignored(&[0], IssueList::Detached, true, None)
         .unwrap();
-    assert_eq!(w.config.ignore.detached, ["github.com/acme/w@v1"]);
+    assert_eq!(w.config.ignore_issues().detached, ["github.com/acme/w@v1"]);
 }
 
 #[test]
@@ -1257,7 +1272,7 @@ fn a_bare_repo_is_fetched_even_with_an_upstream() {
     git(&bare, &["fetch", "-q"]);
     git(&bare, &["config", "branch.main.remote", "origin"]);
     git(&bare, &["config", "branch.main.merge", "refs/heads/main"]);
-    let w = ws(&sb, "pull = ['acme/*']");
+    let w = ws(&sb, "marks.pull.repos = ['acme/*']");
     let s = w.entries[0].status().unwrap();
     assert!(s.bare && s.upstream.is_some(), "{s:?}");
     assert_eq!(plan_updates(&w)[0].op, Op::Fetch);
@@ -1513,13 +1528,13 @@ fn an_issue_state_is_written_to_the_config_and_followed() {
     w.set_issue_state(&[0], IssueList::NonDefaultBranch, IgnoreState::Pinned)
         .unwrap();
     assert_eq!(
-        w.config.ignore.non_default_branch,
+        w.config.ignore_issues().non_default_branch,
         ["github.com/acme/app@feat"]
     );
     assert!(!w.entries[0].issues.contains(&Issue::NonDefaultBranch));
     w.set_issue_state(&[0], IssueList::NonDefaultBranch, IgnoreState::Counted)
         .unwrap();
-    assert!(w.config.ignore.non_default_branch.is_empty());
+    assert!(w.config.ignore_issues().non_default_branch.is_empty());
     assert!(w.entries[0].issues.contains(&Issue::NonDefaultBranch));
 }
 
@@ -1534,7 +1549,7 @@ fn ignore_excludes_favourite_and_pull() {
         sb.remote("acme", n);
         sb.clone_as_github("acme", n, &format!("dev/{n}"));
     }
-    let mut w = ws(&sb, "pull = ['acme/*']");
+    let mut w = ws(&sb, "marks.pull.repos = ['acme/*']");
     let app = w
         .entries
         .iter()
@@ -1547,12 +1562,15 @@ fn ignore_excludes_favourite_and_pull() {
     let f = &w.entries[app].flags;
     assert!(f.ignored && !f.has("favourite") && !f.pull, "{f:?}");
     assert!(w.config.marks["favourite"].repos.is_empty());
-    assert_eq!(w.config.pull, ["acme/*", "!github.com/acme/app"]);
+    assert_eq!(
+        w.config.marks["pull"].repos,
+        ["acme/*", "!github.com/acme/app"]
+    );
     // marking for pull stops ignoring it
     w.set_mark(&[app], Mark::Pull, true).unwrap();
     let f = &w.entries[app].flags;
     assert!(f.pull && !f.ignored, "{f:?}");
-    assert!(w.config.ignore.repos.is_empty());
+    assert!(w.config.marks["ignore"].repos.is_empty());
     // and so does marking favourite
     w.set_mark(&[app], Mark::Ignore, true).unwrap();
     w.set_mark(&[app], Mark::Label(0), true).unwrap();
@@ -1564,7 +1582,7 @@ fn ignore_excludes_favourite_and_pull() {
     // patterns saying both: ignore wins
     let w = ws(
         &sb,
-        "marks.favourite.repos = ['acme/*']\npull = ['acme/*']\nignore.repos = ['acme/old']",
+        "marks.favourite.repos = ['acme/*']\nmarks.pull.repos = ['acme/*']\nmarks.ignore.repos = ['acme/old']",
     );
     let old = w
         .entries
@@ -1598,29 +1616,31 @@ fn an_owner_can_be_marked_as_a_whole() {
     w.set_owner_mark(&[lib], Mark::Label(0), false).unwrap();
     assert!(w.config.marks["favourite"].repos.is_empty());
     // against a wider pattern: a `!` for the owner
-    let mut w = ws(&sb, "pull = ['**']");
+    let mut w = ws(&sb, "marks.pull.repos = ['**']");
     w.set_owner_mark(&[app], Mark::Pull, false).unwrap();
-    assert_eq!(w.config.pull, ["**", "!github.com/acme/*"]);
+    assert_eq!(w.config.marks["pull"].repos, ["**", "!github.com/acme/*"]);
     assert!(!w.entries[app].flags.pull && w.entries[x].flags.pull);
     // a tracked owner is pulled by default: off is a `!` too
     let mut w = ws(&sb, "[[track]]\nowner = 'acme'");
     assert_eq!(w.owner_marked(app, Mark::Pull), Some(true));
     w.set_owner_mark(&[app], Mark::Pull, false).unwrap();
-    assert_eq!(w.config.pull, ["!github.com/acme/*"]);
+    assert_eq!(w.config.marks["pull"].repos, ["!github.com/acme/*"]);
     // ignoring the owner turns its favourite and pull off
     let mut w = ws(&sb, "");
     w.set_owner_mark(&[app], Mark::Label(0), true).unwrap();
     w.set_owner_mark(&[app], Mark::Pull, true).unwrap();
     w.set_owner_mark(&[app], Mark::Ignore, true).unwrap();
-    assert!(w.config.marks["favourite"].repos.is_empty() && w.config.pull.is_empty());
-    assert_eq!(w.config.ignore.repos, ["github.com/acme/*"]);
+    assert!(
+        w.config.marks["favourite"].repos.is_empty() && w.config.marks["pull"].repos.is_empty()
+    );
+    assert_eq!(w.config.marks["ignore"].repos, ["github.com/acme/*"]);
     // and favouriting it stops ignoring it
     w.set_owner_mark(&[app], Mark::Label(0), true).unwrap();
-    assert!(w.config.ignore.repos.is_empty());
+    assert!(w.config.marks["ignore"].repos.is_empty());
     // patterns saying both for the owner: ignore wins
     let w = ws(
         &sb,
-        "marks.favourite.repos = ['github.com/acme/*']\nignore.repos = ['github.com/acme/*']",
+        "marks.favourite.repos = ['github.com/acme/*']\nmarks.ignore.repos = ['github.com/acme/*']",
     );
     assert_eq!(w.owner_marked(app, Mark::Ignore), Some(true));
     assert_eq!(w.owner_marked(app, Mark::Label(0)), Some(false));
@@ -1752,7 +1772,7 @@ fn a_snoozed_issue_does_not_count_until_it_ends() {
     assert_eq!(w.entries[i].snoozed_issues, [Issue::Stashes(2)]);
 
     // ignored wins: listed as ignored, not snoozed
-    let mut ign = ws(&sb, "[ignore]\nstashes = ['acme/app']");
+    let mut ign = ws(&sb, "[marks.ignore.issues]\nstashes = ['acme/app']");
     ign.state.snooze_issue(&key, Issue::Stashes(1), later);
     ign.resolve_flags();
     let e = &ign.entries[ign.index_of(&app).unwrap()];
@@ -1861,4 +1881,24 @@ fn custom_marks_label_sort_and_give_way_to_ignore() {
         Some(false),
         "points give way"
     );
+}
+
+#[test]
+fn pulls_sort_points_count_and_ignores_do_not() {
+    let sb = Sandbox::new();
+    for n in ["a", "b", "c"] {
+        sb.remote("acme", n);
+        sb.clone_as_github("acme", n, &format!("dev/{n}"));
+    }
+    let w = ws(
+        &sb,
+        "[marks.pull]\nsort = 3\nrepos = ['acme/b']\n\
+         [marks.ignore]\nsort = 9\nrepos = ['acme/c']\n\
+         [marks.favourite]\nrepos = ['acme/a']\n",
+    );
+    let sort = |n: &str| {
+        let e = w.entries.iter().find(|e| e.path.ends_with(n)).unwrap();
+        e.flags.sort
+    };
+    assert_eq!((sort("a"), sort("b"), sort("c")), (1, 3, 0));
 }

@@ -1,6 +1,6 @@
-//! Resolution of per-repo flags from tracked owners, the `favourite`, `pull`
-//! and `ignore.repos` lists in config, and state (snoozes, "new"); and which
-//! issues the other `[ignore]` lists turn off.
+//! Resolution of per-repo flags from tracked owners, the marks' `repos`
+//! lists in config (pull and ignore among them), and state (snoozes,
+//! "new"); and which issues the `[marks.ignore.issues]` lists turn off.
 
 use std::path::Path;
 
@@ -40,12 +40,16 @@ impl Flags {
 
     /// Whether the repo has the mark named `name`.
     pub fn has(&self, name: &str) -> bool {
-        self.marks.iter().any(|m| m == name)
+        match name {
+            crate::config::PULL => self.pull,
+            crate::config::IGNORE => self.ignored,
+            _ => self.marks.iter().any(|m| m == name),
+        }
     }
 }
 
 /// The per-repo settings kept as lists in config: each of `[marks]`, by its
-/// place there, then `pull` and `ignore.repos`.
+/// place there, but the two argus acts on, which have their own variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Mark {
     Label(usize),
@@ -56,15 +60,31 @@ pub enum Mark {
 impl Mark {
     /// Every mark of `c`: its `[marks]` in order, then pull and ignore.
     pub fn all(c: &Config) -> Vec<Mark> {
-        (0..c.marks.len())
-            .map(Mark::Label)
+        c.marks
+            .keys()
+            .enumerate()
+            .filter(|(_, n)| !crate::config::acts(n))
+            .map(|(i, _)| Mark::Label(i))
             .chain([Mark::Pull, Mark::Ignore])
             .collect()
     }
 
     /// The mark of `c`'s `[marks]` named `name`.
     pub fn label(c: &Config, name: &str) -> Option<Mark> {
-        c.marks.get_index_of(name).map(Mark::Label)
+        match name {
+            crate::config::PULL => Some(Mark::Pull),
+            crate::config::IGNORE => Some(Mark::Ignore),
+            _ => c.marks.get_index_of(name).map(Mark::Label),
+        }
+    }
+
+    /// Its table in `[marks]`.
+    pub fn table(self, c: &Config) -> &crate::config::MarkDef {
+        match self {
+            Mark::Label(i) => Self::def(c, i).1,
+            Mark::Pull => &c.marks[crate::config::PULL],
+            Mark::Ignore => &c.marks[crate::config::IGNORE],
+        }
     }
 
     fn def(c: &Config, i: usize) -> (&String, &crate::config::MarkDef) {
@@ -75,32 +95,22 @@ impl Mark {
     pub fn path(self, c: &Config) -> String {
         match self {
             Mark::Label(i) => format!("marks.{}.repos", Self::def(c, i).0),
-            Mark::Pull => "pull".into(),
-            Mark::Ignore => "ignore.repos".into(),
+            Mark::Pull => "marks.pull.repos".into(),
+            Mark::Ignore => "marks.ignore.repos".into(),
         }
     }
 
     pub fn list(self, c: &Config) -> &Vec<String> {
-        match self {
-            Mark::Label(i) => &Self::def(c, i).1.repos,
-            Mark::Pull => &c.pull,
-            Mark::Ignore => &c.ignore.repos,
-        }
+        &self.table(c).repos
     }
 
     pub fn list_mut(self, c: &mut Config) -> &mut Vec<String> {
-        match self {
-            Mark::Label(i) => {
-                &mut c
-                    .marks
-                    .get_index_mut(i)
-                    .expect("a mark of this config")
-                    .1
-                    .repos
-            }
-            Mark::Pull => &mut c.pull,
-            Mark::Ignore => &mut c.ignore.repos,
-        }
+        let def = match self {
+            Mark::Label(i) => c.marks.get_index_mut(i).expect("a mark of this config").1,
+            Mark::Pull => &mut c.marks[crate::config::PULL],
+            Mark::Ignore => &mut c.marks[crate::config::IGNORE],
+        };
+        &mut def.repos
     }
 
     pub fn of(self, f: &Flags, c: &Config) -> bool {
@@ -123,8 +133,9 @@ impl Mark {
     /// Its sort points: a mark with some gives way to ignoring.
     pub fn points(self, c: &Config) -> i32 {
         match self {
-            Mark::Label(i) => Self::def(c, i).1.sort,
-            _ => 0,
+            // hiding a repo is all ignoring does to its place
+            Mark::Ignore => 0,
+            _ => self.table(c).sort,
         }
     }
 }
@@ -183,7 +194,7 @@ impl MarkFilter {
     }
 }
 
-/// Issues that can be ignored for some repos: the `[ignore]` lists other
+/// Issues that can be ignored for some repos: the `[marks.ignore.issues]` lists other
 /// than `repos`. Conflicts, operations in progress and commits only a
 /// detached HEAD holds can't be: they risk losing work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -208,7 +219,7 @@ impl IssueList {
         IssueList::Behind,
     ];
 
-    /// The key in `[ignore]`.
+    /// The key in `[marks.ignore.issues]`.
     pub fn name(self) -> &'static str {
         match self {
             IssueList::NonDefaultBranch => "non_default_branch",
@@ -291,7 +302,7 @@ impl IssueList {
     }
 
     pub fn list(self, c: &Config) -> &Vec<String> {
-        let i = &c.ignore;
+        let i = c.ignore_issues();
         match self {
             IssueList::NonDefaultBranch => &i.non_default_branch,
             IssueList::Detached => &i.detached,
@@ -304,7 +315,7 @@ impl IssueList {
     }
 
     pub fn list_mut(self, c: &mut Config) -> &mut Vec<String> {
-        let i = &mut c.ignore;
+        let i = c.ignore_issues_mut();
         match self {
             IssueList::NonDefaultBranch => &mut i.non_default_branch,
             IssueList::Detached => &mut i.detached,
@@ -333,11 +344,11 @@ impl List {
             .chain(IssueList::ALL.into_iter().map(List::Issue))
     }
 
-    /// The config key, dotted (`ignore.detached`).
+    /// The config key, dotted (`marks.ignore.issues.detached`).
     pub fn path(self, c: &Config) -> String {
         match self {
             List::Mark(m) => m.path(c),
-            List::Issue(l) => format!("ignore.{}", l.name()),
+            List::Issue(l) => format!("marks.ignore.issues.{}", l.name()),
         }
     }
 
@@ -391,7 +402,7 @@ impl Entry {
     }
 }
 
-/// An `[ignore]` issue list entry: the repo part, and the pinned value
+/// An `[marks.ignore.issues]` issue list entry: the repo part, and the pinned value
 /// after `@`, if any.
 #[derive(Clone)]
 struct IssueEntry {
@@ -701,7 +712,7 @@ pub fn set_issue_ignored(
     Ok(())
 }
 
-/// Where a repo's issue stands in its `[ignore]` list.
+/// Where a repo's issue stands in its `[marks.ignore.issues]` list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IgnoreState {
     /// Not ignored: it counts towards attention.
@@ -855,6 +866,9 @@ pub fn resolve(
         labels.retain(|m| m.points(config) == 0);
     }
     f.sort = labels.iter().map(|m| m.points(config)).sum();
+    if f.pull {
+        f.sort += Mark::Pull.points(config);
+    }
     f.marks = labels.iter().map(|m| m.label_text(config)).collect();
     f.snoozed = state.is_snoozed(key, now);
     f.new = state.new.contains(key);
@@ -918,7 +932,7 @@ mod tests {
         assert!(!fav("marks.favourite.repos = ['/r/*']", URL, "/r/a/widget"));
     }
 
-    /// Whether `[ignore] <list>` in `cfg` ignores the issue for the widget
+    /// Whether `[marks.ignore.issues] <list>` in `cfg` ignores the issue for the widget
     /// repo in a state with these values.
     fn ignores(cfg: &str, list: IssueList, values: &[&str]) -> bool {
         let c = Config::parse(cfg).unwrap();
@@ -935,28 +949,28 @@ mod tests {
     fn issue_lists_pin_values_and_take_globs() {
         let off = IssueList::NonDefaultBranch;
         assert!(ignores(
-            "[ignore]\nnon_default_branch = ['acme/widget']",
+            "[marks.ignore.issues]\nnon_default_branch = ['acme/widget']",
             off,
             &["any"]
         ));
         assert!(ignores(
-            "[ignore]\nnon_default_branch = ['acme/widget@release-2']",
+            "[marks.ignore.issues]\nnon_default_branch = ['acme/widget@release-2']",
             off,
             &["release-2"]
         ));
         assert!(ignores(
-            "[ignore]\nnon_default_branch = ['acme/*@release-*']",
+            "[marks.ignore.issues]\nnon_default_branch = ['acme/*@release-*']",
             off,
             &["release-3"]
         ));
         // inverse: another value, another repo, or no list at all
         assert!(!ignores(
-            "[ignore]\nnon_default_branch = ['acme/widget@release-2']",
+            "[marks.ignore.issues]\nnon_default_branch = ['acme/widget@release-2']",
             off,
             &["main"]
         ));
         assert!(!ignores(
-            "[ignore]\nnon_default_branch = ['acme/other']",
+            "[marks.ignore.issues]\nnon_default_branch = ['acme/other']",
             off,
             &["x"]
         ));
@@ -965,28 +979,28 @@ mod tests {
         let det = IssueList::Detached;
         let state = ["v1.2", "v1.2-0-g1a2b3c4", "1a2b3c4", "1a2b3c4d5e6f"];
         assert!(ignores(
-            "[ignore]\ndetached = ['acme/widget@1a2b3c4']",
+            "[marks.ignore.issues]\ndetached = ['acme/widget@1a2b3c4']",
             det,
             &state
         ));
         assert!(ignores(
-            "[ignore]\ndetached = ['acme/widget@v1.*']",
+            "[marks.ignore.issues]\ndetached = ['acme/widget@v1.*']",
             det,
             &state
         ));
         assert!(!ignores(
-            "[ignore]\ndetached = ['acme/widget@v2.0']",
+            "[marks.ignore.issues]\ndetached = ['acme/widget@v2.0']",
             det,
             &state
         ));
         // the last match wins; ! turns it off
         assert!(!ignores(
-            "[ignore]\nstashes = ['acme/*', '!acme/widget']",
+            "[marks.ignore.issues]\nstashes = ['acme/*', '!acme/widget']",
             IssueList::Stashes,
             &[]
         ));
         assert!(ignores(
-            "[ignore]\nstashes = ['!acme/*', 'acme/widget']",
+            "[marks.ignore.issues]\nstashes = ['!acme/*', 'acme/widget']",
             IssueList::Stashes,
             &[]
         ));
@@ -1035,14 +1049,29 @@ mod tests {
     #[test]
     fn only_some_issue_lists_take_a_value() {
         for (cfg, ok) in [
-            ("[ignore]\nstashes = ['acme/widget@wip']", true),
-            ("[ignore]\nstashes = ['acme/widget@']", false),
-            ("[ignore]\nbehind = ['acme/widget@x']", false),
-            ("[ignore]\nunpushed_branches = ['acme/widget@x']", false),
-            ("[ignore]\nno_remote = ['acme/widget@x']", false),
-            ("[ignore]\nnon_default_branch = ['acme/widget@']", false),
-            ("[ignore]\nno_upstream = ['acme/widget@feat']", true),
-            ("[ignore]\nnon_default_branch = ['acme/widget@feat']", true),
+            ("[marks.ignore.issues]\nstashes = ['acme/widget@wip']", true),
+            ("[marks.ignore.issues]\nstashes = ['acme/widget@']", false),
+            ("[marks.ignore.issues]\nbehind = ['acme/widget@x']", false),
+            (
+                "[marks.ignore.issues]\nunpushed_branches = ['acme/widget@x']",
+                false,
+            ),
+            (
+                "[marks.ignore.issues]\nno_remote = ['acme/widget@x']",
+                false,
+            ),
+            (
+                "[marks.ignore.issues]\nnon_default_branch = ['acme/widget@']",
+                false,
+            ),
+            (
+                "[marks.ignore.issues]\nno_upstream = ['acme/widget@feat']",
+                true,
+            ),
+            (
+                "[marks.ignore.issues]\nnon_default_branch = ['acme/widget@feat']",
+                true,
+            ),
         ] {
             let c = Config::parse(cfg).unwrap();
             assert_eq!(RuleSet::new(&c).is_ok(), ok, "{cfg}");
@@ -1069,19 +1098,25 @@ mod tests {
             .unwrap()
         };
         set(&mut c, true);
-        assert_eq!(c.ignore.non_default_branch, ["acme/widget@release-2"]);
+        assert_eq!(
+            c.ignore_issues().non_default_branch,
+            ["acme/widget@release-2"]
+        );
         set(&mut c, true);
         assert_eq!(
-            c.ignore.non_default_branch,
+            c.ignore_issues().non_default_branch,
             ["acme/widget@release-2"],
             "once"
         );
         set(&mut c, false);
-        assert!(c.ignore.non_default_branch.is_empty());
+        assert!(c.ignore_issues().non_default_branch.is_empty());
         // a pattern ignores it: unignoring adds `!`
-        c.ignore.non_default_branch = vec!["acme/*".into()];
+        c.ignore_issues_mut().non_default_branch = vec!["acme/*".into()];
         set(&mut c, false);
-        assert_eq!(c.ignore.non_default_branch, ["acme/*", "!acme/widget"]);
+        assert_eq!(
+            c.ignore_issues().non_default_branch,
+            ["acme/*", "!acme/widget"]
+        );
         // lists without values, or without one now, aren't pinned
         for list in [IssueList::Behind, IssueList::NonDefaultBranch] {
             let mut c = Config::default();
@@ -1116,20 +1151,20 @@ mod tests {
         let mut c = Config::default();
         let nd = IssueList::NonDefaultBranch;
         assert_eq!(go(&mut c, nd, &branch, Pinned), Pinned);
-        assert_eq!(c.ignore.non_default_branch, ["acme/widget@feat"]);
+        assert_eq!(c.ignore_issues().non_default_branch, ["acme/widget@feat"]);
         assert_eq!(go(&mut c, nd, &branch, Ignored), Ignored);
-        assert_eq!(c.ignore.non_default_branch, ["acme/widget"]);
+        assert_eq!(c.ignore_issues().non_default_branch, ["acme/widget"]);
         assert_eq!(go(&mut c, nd, &branch, Counted), Counted);
-        assert!(c.ignore.non_default_branch.is_empty());
+        assert!(c.ignore_issues().non_default_branch.is_empty());
         // a list that doesn't pin ignores, whatever values it's given
         let mut c = Config::default();
         assert_eq!(go(&mut c, IssueList::Behind, &branch, Pinned), Ignored);
-        assert_eq!(c.ignore.behind, ["acme/widget"]);
+        assert_eq!(c.ignore_issues().behind, ["acme/widget"]);
         // stashes, under the default patterns (all but argus's own)
         let stashes = vec!["wip".to_string(), "argus 2026-01-01 10:00".to_string()];
         let mut c = Config::default();
         let st = IssueList::Stashes;
-        let defaults = c.ignore.stashes.clone();
+        let defaults = c.ignore_issues().stashes.clone();
         assert_eq!(
             RuleSet::new(&c)
                 .unwrap()
@@ -1138,11 +1173,11 @@ mod tests {
             "argus's stash still counts"
         );
         assert_eq!(go(&mut c, st, &stashes, Ignored), Ignored);
-        assert_eq!(c.ignore.stashes[defaults.len()..], ["acme/widget"]);
+        assert_eq!(c.ignore_issues().stashes[defaults.len()..], ["acme/widget"]);
         // pinned: these two only, so the patterns are overruled first
         assert_eq!(go(&mut c, st, &stashes, Pinned), Pinned);
         assert_eq!(
-            c.ignore.stashes[defaults.len()..],
+            c.ignore_issues().stashes[defaults.len()..],
             [
                 "!acme/widget",
                 "acme/widget@wip",
@@ -1157,19 +1192,22 @@ mod tests {
         );
         // counted: overrules the patterns
         assert_eq!(go(&mut c, st, &stashes, Counted), Counted);
-        assert_eq!(c.ignore.stashes[defaults.len()..], ["!acme/widget"]);
+        assert_eq!(
+            c.ignore_issues().stashes[defaults.len()..],
+            ["!acme/widget"]
+        );
         // a list that doesn't pin goes straight to ignored
         let mut c = Config::default();
         assert_eq!(go(&mut c, IssueList::Behind, &[], Pinned), Ignored);
-        assert_eq!(c.ignore.behind, ["acme/widget"]);
+        assert_eq!(c.ignore_issues().behind, ["acme/widget"]);
         // ignored by a pattern alone: ignored, not pinned, and asking for
         // ignored writes nothing more
         let mut c = Config::default();
-        c.ignore.non_default_branch = vec!["acme/*".into()];
+        c.ignore_issues_mut().non_default_branch = vec!["acme/*".into()];
         let rules = RuleSet::new(&c).unwrap();
         assert_eq!(rules.issue_state(nd, id.as_ref(), path, &branch), Ignored);
         assert_eq!(go(&mut c, nd, &branch, Ignored), Ignored);
-        assert_eq!(c.ignore.non_default_branch, ["acme/*"]);
+        assert_eq!(c.ignore_issues().non_default_branch, ["acme/*"]);
     }
 
     #[test]
@@ -1191,7 +1229,7 @@ mod tests {
 
     #[test]
     fn later_entries_win_and_bang_turns_off() {
-        let cfg = "pull = ['acme/*', '!acme/widget']";
+        let cfg = "marks.pull.repos = ['acme/*', '!acme/widget']";
         assert!(!flags(cfg, &State::default(), URL, "/x").pull);
         assert!(
             flags(
@@ -1210,7 +1248,7 @@ mod tests {
         ));
         // the lists are independent
         let f = flags(
-            "marks.favourite.repos = ['acme/*']\nignore.repos = ['!acme/*']",
+            "marks.favourite.repos = ['acme/*']\nmarks.ignore.repos = ['!acme/*']",
             &State::default(),
             URL,
             "/x",
@@ -1227,7 +1265,7 @@ mod tests {
         assert!(!flags("[[track]]\nowner='acme'\npull=false", &s, URL, "/x").pull);
         assert!(
             !flags(
-                "pull = ['!acme/widget']\n[[track]]\nowner='acme'",
+                "marks.pull.repos = ['!acme/widget']\n[[track]]\nowner='acme'",
                 &s,
                 URL,
                 "/x"
@@ -1284,7 +1322,7 @@ mod tests {
     #[test]
     fn repos_without_identity_match_by_path_only() {
         let f = flags(
-            "ignore.repos = ['/local/**']",
+            "marks.ignore.repos = ['/local/**']",
             &State::default(),
             "",
             "/local/thing",
@@ -1331,7 +1369,14 @@ mod tests {
     #[test]
     fn each_mark_reads_its_own_flag() {
         let c = Config::parse("[marks.work]\n").unwrap();
-        let (fav, work) = (Mark::Label(0), Mark::Label(1));
+        let fav = Mark::label(&c, "favourite").unwrap();
+        let work = Mark::label(&c, "work").unwrap();
+        assert!(matches!((fav, work), (Mark::Label(_), Mark::Label(_))));
+        // the two argus acts on are found by name too, as themselves
+        assert_eq!(Mark::label(&c, "pull"), Some(Mark::Pull));
+        assert_eq!(Mark::label(&c, "ignore"), Some(Mark::Ignore));
+        assert!(!Mark::all(&c).iter().any(|m| matches!(m, Mark::Label(i) if c.marks.get_index(*i).is_some_and(|(n, _)| crate::config::acts(n)))));
+        assert_eq!(Mark::all(&c).len(), 4);
         let f = |marks: &[&str], pull, ignored| Flags {
             marks: marks.iter().map(|s| s.to_string()).collect(),
             pull,
@@ -1354,8 +1399,8 @@ mod tests {
             (work.path(&c), Mark::Pull.path(&c), Mark::Ignore.path(&c)),
             (
                 "marks.work.repos".into(),
-                "pull".into(),
-                "ignore.repos".into()
+                "marks.pull.repos".into(),
+                "marks.ignore.repos".into()
             )
         );
         assert_eq!(
@@ -1442,7 +1487,7 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(c.pull, ["!github.com/acme/widget"]);
+        assert_eq!(c.marks["pull"].repos, ["!github.com/acme/widget"]);
         set_mark(
             &mut c,
             Mark::Pull,
@@ -1453,10 +1498,10 @@ mod tests {
             true,
         )
         .unwrap();
-        assert!(c.pull.is_empty());
+        assert!(c.marks["pull"].repos.is_empty());
         // clearing drops its own entries only
-        c.pull = vec!["acme/*".into(), "!acme/widget".into()];
+        c.marks["pull"].repos = vec!["acme/*".into(), "!acme/widget".into()];
         clear_mark(&mut c, Mark::Pull, Some(&id), p).unwrap();
-        assert_eq!(c.pull, ["acme/*"]);
+        assert_eq!(c.marks["pull"].repos, ["acme/*"]);
     }
 }

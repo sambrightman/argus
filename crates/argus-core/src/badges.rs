@@ -52,7 +52,8 @@ pub fn flags(e: &Entry, i: &Icons, marks: &[(String, String)]) -> Vec<Badge> {
         text: text.to_string(),
     };
     for (n, (name, icon)) in marks.iter().enumerate() {
-        if e.flags.has(name) {
+        // (pull and ignore show as states, below)
+        if !crate::config::acts(name) && e.flags.has(name) {
             v.push(b(Role::Mark(n), icon));
         }
     }

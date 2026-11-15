@@ -35,11 +35,11 @@ pub struct Entry {
     pub status: Option<Result<RepoStatus, String>>,
     /// Issues that count: those of the status, less ignored ones.
     pub issues: Vec<Issue>,
-    /// Issues the status shows that `[ignore]` turns off for this repo.
+    /// Issues the status shows that `[marks.ignore.issues]` turns off for this repo.
     pub ignored_issues: Vec<Issue>,
     /// Issues the status shows that are snoozed (until their snooze ends).
     pub snoozed_issues: Vec<Issue>,
-    /// For each of the status's stashes, whether `[ignore] stashes` covers it.
+    /// For each of the status's stashes, whether `[marks.ignore.issues] stashes` covers it.
     pub stash_ignored: Vec<bool>,
     /// Every issue of the status, before ignoring.
     all_issues: Vec<Issue>,

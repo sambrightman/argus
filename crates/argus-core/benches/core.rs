@@ -177,10 +177,8 @@ fn config(c: &mut Criterion) {
 }
 
 fn rules(c: &mut Criterion) {
-    let mut config = Config {
-        pull: (0..20).map(|i| format!("!org{i}/legacy-*")).collect(),
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.marks["pull"].repos = (0..20).map(|i| format!("!org{i}/legacy-*")).collect();
     config.marks["favourite"].repos = (0..20).map(|i| format!("org{i}/*")).collect();
     let rs = RuleSet::new(&config).unwrap();
     let ids: Vec<RepoId> = (0..1000)

@@ -87,13 +87,40 @@ pub fn example() -> String {
         let item = g.resolve(&g.resolve(p)["additionalProperties"]);
         g.doc(&mut out, item);
         let entries = |v: &Json| v.as_object().cloned().unwrap_or_default();
-        for (entry, value) in entries(&p["default"]) {
+        for (n, (entry, value)) in entries(&p["default"]).into_iter().enumerate() {
+            if n > 0 {
+                out.push_str("##\n## Likewise, with its own defaults:\n");
+            }
             out.push_str(&format!("# [{name}.{entry}]\n"));
-            for (k, mut kp) in properties(item) {
+            let (tables, keys): (Vec<_>, Vec<_>) = properties(item)
+                .into_iter()
+                .partition(|(_, kp)| g.kind(kp) == Kind::Table);
+            for (k, mut kp) in keys {
                 if let Some(v) = value.get(&k) {
                     kp["default"] = v.clone();
                 }
-                g.key(&mut out, &k, &kp, false);
+                // each key is explained once, under the first entry:
+                // after it, only the ones with a default
+                if n == 0 {
+                    g.key(&mut out, &k, &kp, false);
+                } else if let Some(d) = kp.get("default").filter(|d| !d.is_null()) {
+                    for line in render(&k, d).lines() {
+                        out.push_str(&format!("# {line}\n"));
+                    }
+                }
+            }
+            // a table of its own, for the entry that has one by default
+            for (k, kp) in tables {
+                let Some(value) = value.get(&k) else { continue };
+                out.push('\n');
+                g.doc(&mut out, g.resolve(&kp));
+                out.push_str(&format!("# [{name}.{entry}.{k}]\n"));
+                for (k, mut kp) in properties(g.resolve(&kp)) {
+                    if let Some(v) = value.get(&k) {
+                        kp["default"] = v.clone();
+                    }
+                    g.key(&mut out, &k, &kp, false);
+                }
             }
         }
         for (entry, value) in p["examples"]
@@ -505,7 +532,7 @@ fn add_target(docs: &[Doc], key: &str) -> Option<(usize, String)> {
     })
 }
 
-/// A dotted key's tables and last part: `ignore.repos` is (`[ignore]`,
+/// A dotted key's tables and last part: `marks.ignore.repos` is (`[marks.ignore]`,
 /// `repos`).
 fn split_path(path: &str) -> (Vec<&str>, &str) {
     let mut parts: Vec<&str> = path.split('.').collect();
@@ -521,8 +548,8 @@ fn default_is_empty(key: &str) -> bool {
         .is_none_or(|l| l.get(&defaults).is_empty())
 }
 
-/// The `extend_` form of a dotted key: `ignore.repos` is
-/// `ignore.extend_repos`.
+/// The `extend_` form of a dotted key: `marks.ignore.repos` is
+/// `marks.ignore.extend_repos`.
 fn extend_path(path: &str) -> String {
     match path.rsplit_once('.') {
         Some((tables, key)) => format!("{tables}.extend_{key}"),
@@ -530,7 +557,7 @@ fn extend_path(path: &str) -> String {
     }
 }
 
-/// The table at `tables` (`[ignore]`, or dotted keys `ignore.x = …`),
+/// The table at `tables` (`[marks.ignore]`, or dotted keys `marks.ignore.x = …`),
 /// created when `create`.
 fn table_mut<'a>(
     doc: &'a mut toml_edit::DocumentMut,
@@ -861,8 +888,12 @@ mod tests {
         assert_eq!(c.ui.theme, d.ui.theme);
         assert!(c.roots.is_empty(), "roots are never guessed");
         assert!(
-            c.marks["favourite"].repos.is_empty() && c.pull.is_empty() && c.ignore.repos.is_empty()
+            ["favourite", "pull", "ignore"]
+                .iter()
+                .all(|m| c.marks[*m].repos.is_empty()),
+            "no repo is marked by default"
         );
+        assert_eq!(c.ignore_issues(), d.ignore_issues());
         assert_eq!(c.tracks.len(), 1);
         assert_eq!(
             c.tracks[0].host, "github.com",
@@ -893,8 +924,12 @@ mod tests {
                 "tools",
                 "ui",
                 "marks",
-                "pull",
-                "ignore",
+                "marks.favourite",
+                "marks.pull",
+                "marks.ignore",
+                "marks.ignore.issues",
+                "stashes",
+                "non_default_branch",
                 "track",
                 "owner",
                 "team",
@@ -921,7 +956,8 @@ mod tests {
         let lines: Vec<&str> = ex.lines().collect();
         let mut example = false;
         for (i, l) in lines.iter().enumerate() {
-            example = (example || l.starts_with("## One of your own")) && !l.is_empty();
+            let brief = l.starts_with("## One of your own") || l.starts_with("## Likewise");
+            example = (example || brief) && !l.is_empty();
             if l.starts_with("# ") && l.contains(" = ") && !l.starts_with("#   ") && !example {
                 assert!(i > 0 && lines[i - 1].starts_with("##"), "undocumented: {l}");
             }
@@ -1159,13 +1195,13 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&p).unwrap(), text);
         let mut after = before.clone();
         after.marks["favourite"].repos = vec!["b/*".into(), "c/y".into()];
-        after.ignore.repos = vec!["!d/z".into()];
+        after.marks["ignore"].repos = vec!["!d/z".into()];
         update_mark_lists(&p, &before, &after).unwrap();
         let out = std::fs::read_to_string(&p).unwrap();
         let c = Config::parse(&out).unwrap();
         assert_eq!(c.marks["favourite"].repos, ["b/*", "c/y"]);
-        assert_eq!(c.ignore.repos, ["!d/z"], "created when missing");
-        assert!(c.pull.is_empty());
+        assert_eq!(c.marks["ignore"].repos, ["!d/z"], "created when missing");
+        assert!(c.marks["pull"].repos.is_empty());
         // the rest of the file is as written
         assert!(
             out.starts_with("# my config\nroots = [\"~/dev\"]\n"),
@@ -1183,13 +1219,11 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("new/config.toml");
         let before = Config::default();
-        let after = Config {
-            pull: vec!["acme/*".into()],
-            ..Config::default()
-        };
+        let mut after = Config::default();
+        after.marks["pull"].repos = vec!["acme/*".into()];
         update_mark_lists(&p, &before, &after).unwrap();
         let c = Config::parse(&std::fs::read_to_string(&p).unwrap()).unwrap();
-        assert_eq!(c.pull, ["acme/*"]);
+        assert_eq!(c.marks["pull"].repos, ["acme/*"]);
         assert_eq!(c.max_depth, Config::default().max_depth);
     }
 }

@@ -893,7 +893,7 @@ impl App {
         // `#work` / `!#work` terms by marks, the rest fuzzily
         let (marks, text) = argus_core::rules::MarkFilter::parse(&self.filter);
         let mut fuzzy = (!text.is_empty()).then(|| crate::fuzzy::Fuzzy::new(&text));
-        let (icons, _) = self.ws.config.ui.icons();
+        let (icons, _) = self.ws.config.icons();
         let mut rows = vec![];
         for i in self.ws.ordered(self.view) {
             let e = &self.ws.entries[i];
@@ -2555,7 +2555,7 @@ impl App {
         if lists.is_empty() {
             return None;
         }
-        let (icons, _) = self.ws.config.ui.icons();
+        let (icons, _) = self.ws.config.icons();
         let (mut counted, mut ignored) = (0, 0);
         let mut items: Vec<Item> = vec![];
         for (n, (list, issue)) in lists.iter().enumerate() {
@@ -2897,6 +2897,21 @@ impl App {
             if menu.items.iter().any(|it| it.key == key) {
                 continue;
             }
+            // pull and ignore have their items already: they take the key
+            if let Some(m) = Some(name.as_str())
+                .filter(|n| argus_core::config::acts(n))
+                .and_then(|n| Mark::label(&self.ws.config, n))
+            {
+                let theirs = |a: &Action| match (m, a) {
+                    (Mark::Pull, Action::TogglePull) | (Mark::Ignore, Action::ToggleIgnore) => true,
+                    (_, Action::ToggleOwnerMark(o)) => *o == m,
+                    _ => false,
+                };
+                if let Some(it) = menu.items.iter_mut().find(|it| theirs(&it.action)) {
+                    it.key = key;
+                }
+                continue;
+            }
             let (label, action) = match menu.id {
                 MenuId::Owner => (String::new(), Action::ToggleOwnerMark(Mark::Label(i))),
                 _ if first.is_some_and(|f| f.has(name)) => {
@@ -2913,12 +2928,14 @@ impl App {
     /// unmark (by the first selected repo, as toggling goes), show or hide.
     fn state_labels(&self, menu: &mut Menu) {
         let first = self.selected().first().map(|&i| &self.ws.entries[i].flags);
+        let key_of = |a: Action| menu.items.iter().find(|it| it.action == a).map(|it| it.key);
+        let (pull, ignore) = (key_of(Action::TogglePull), key_of(Action::ToggleIgnore));
         let label = |key: char| -> Option<&'static str> {
             Some(match (menu.id, key) {
-                (MenuId::Mark, 'p') if first?.pull => "stop pulling",
-                (MenuId::Mark, 'p') => "pull (with F a and argus pull)",
-                (MenuId::Mark, 'I') if first?.ignored => "unignore repo",
-                (MenuId::Mark, 'I') => "ignore repo",
+                (MenuId::Mark, k) if Some(k) == pull && first?.pull => "stop pulling",
+                (MenuId::Mark, k) if Some(k) == pull => "pull (with F a and argus pull)",
+                (MenuId::Mark, k) if Some(k) == ignore && first?.ignored => "unignore repo",
+                (MenuId::Mark, k) if Some(k) == ignore => "ignore repo",
                 (MenuId::View, 'a') if self.view.attention_only => "show all repos",
                 (MenuId::View, 'a') => "show only repos needing attention",
                 (MenuId::View, 'h') if self.view.show_hidden => "hide ignored and snoozed repos",

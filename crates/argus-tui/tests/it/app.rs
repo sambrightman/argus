@@ -529,7 +529,7 @@ fn auto_fix_only_targets_repos_with_applicable_fixes() {
 #[test]
 fn auto_fix_all_leaves_hidden_repos_alone_even_when_shown() {
     // feature is the one repo with an applicable fix (see above)
-    let (_sb, mut app) = setup("ignore.repos = ['acme/feature']");
+    let (_sb, mut app) = setup("marks.ignore.repos = ['acme/feature']");
     app.on_key(key('H'));
     assert_eq!(names(&app).len(), 3, "shown");
     assert!(app.act(Action::AutoFix(Scope::All)).is_empty());
@@ -538,7 +538,7 @@ fn auto_fix_all_leaves_hidden_repos_alone_even_when_shown() {
 #[test]
 fn auto_fix_leaves_an_ignored_state_alone() {
     // feature's only fix switches it to main; its branch is ignored
-    let (_sb, mut app) = setup("[ignore]\nnon_default_branch = ['acme/feature@feat']");
+    let (_sb, mut app) = setup("[marks.ignore.issues]\nnon_default_branch = ['acme/feature@feat']");
     assert!(app.act(Action::AutoFix(Scope::All)).is_empty());
     let texts: Vec<String> = {
         app.cursor = app
@@ -1149,7 +1149,7 @@ fn clearing_marks_of_several_repos_asks_first() {
     );
     let fx = app.act(Action::ClearMarks);
     assert!(fx.contains(&Effect::SaveState) && matches!(app.mode, Mode::Normal));
-    assert!(app.ws.config.ignore.repos.is_empty() && app.ws.state.snoozed.is_empty());
+    assert!(app.ws.config.marks["ignore"].repos.is_empty() && app.ws.state.snoozed.is_empty());
 }
 
 /// The stash ops in `fx`'s jobs, by repo name.
@@ -1686,7 +1686,12 @@ fn discarding_always_asks() {
 #[test]
 fn the_stash_list_says_how_many_are_ignored_and_stops_after_ten() {
     for (n, extra, first, more) in [
-        (10, "[ignore]\nstashes = []", "stashes   10", None),
+        (
+            10,
+            "[marks.ignore.issues]\nstashes = []",
+            "stashes   10",
+            None,
+        ),
         (11, "", "stashes   11 (11 ignored)", Some("… 1 more")),
     ] {
         let (_sb, mut app) = setup_with(extra, |sb| {
@@ -2157,7 +2162,7 @@ fn the_ignore_menu_steps_an_issue_through_its_states() {
         }
         _ => panic!("no menu"),
     }
-    let nd = |app: &App| app.ws.config.ignore.non_default_branch.clone();
+    let nd = |app: &App| app.ws.config.ignore_issues().non_default_branch.clone();
     assert_eq!(
         menu_items(&app),
         [
@@ -2215,23 +2220,23 @@ fn all_ignores_the_remaining_issues_and_none_stops_ignoring_them() {
             "n none: stop ignoring 1 issue(s)"
         ]
     );
-    let stashes = app.ws.config.ignore.stashes.clone();
+    let stashes = app.ws.config.ignore_issues().stashes.clone();
     // each its default way; the ignored one left as it was
     app.on_key(key('a'));
     assert_eq!(
-        app.ws.config.ignore.non_default_branch,
+        app.ws.config.ignore_issues().non_default_branch,
         ["github.com/acme/feature@feat"]
     );
-    assert_eq!(app.ws.config.ignore.stashes, stashes);
+    assert_eq!(app.ws.config.ignore_issues().stashes, stashes);
     assert_eq!(menu_items(&app)[2..], ["n none: stop ignoring 2 issue(s)"]);
     // nothing remaining: a isn't there, and changes nothing
     assert!(app.on_key(key('a')).is_empty());
-    assert_eq!(app.ws.config.ignore.stashes, stashes);
+    assert_eq!(app.ws.config.ignore_issues().stashes, stashes);
     let fx = app.on_key(key('n'));
     assert!(matches!(fx.as_slice(), [Effect::SaveMarks(_)]), "{fx:?}");
-    assert!(app.ws.config.ignore.non_default_branch.is_empty());
+    assert!(app.ws.config.ignore_issues().non_default_branch.is_empty());
     assert_eq!(
-        app.ws.config.ignore.stashes[stashes.len()..],
+        app.ws.config.ignore_issues().stashes[stashes.len()..],
         ["!github.com/acme/feature"]
     );
     assert_eq!(
@@ -2257,7 +2262,7 @@ fn none_leaves_issues_that_arent_ignored() {
     });
     cursor_on_detail(&mut app, "feature", "issue     not on default branch");
     app.act(Action::IgnoreIssues);
-    let stashes = app.ws.config.ignore.stashes.clone();
+    let stashes = app.ws.config.ignore_issues().stashes.clone();
     app.on_key(key('1'));
     // in the same order as before
     assert_eq!(
@@ -2268,8 +2273,8 @@ fn none_leaves_issues_that_arent_ignored() {
         ]
     );
     app.on_key(key('n'));
-    assert!(app.ws.config.ignore.non_default_branch.is_empty());
-    assert_eq!(app.ws.config.ignore.stashes, stashes);
+    assert!(app.ws.config.ignore_issues().non_default_branch.is_empty());
+    assert_eq!(app.ws.config.ignore_issues().stashes, stashes);
 }
 
 #[test]
@@ -2281,8 +2286,11 @@ fn stashes_step_through_all_pinned_to_their_messages_and_counted() {
         write(&r, "README", "fix's\n");
         git(&r, &["stash", "push", "-q", "-m", "argus 2026-01-02 09:30"]);
     });
-    let defaults = argus_core::Config::default().ignore.stashes;
-    let own = |app: &App| app.ws.config.ignore.stashes[defaults.len()..].to_vec();
+    let defaults = argus_core::Config::default()
+        .ignore_issues()
+        .stashes
+        .clone();
+    let own = |app: &App| app.ws.config.ignore_issues().stashes[defaults.len()..].to_vec();
     while current(&app) != "acme/clean" {
         app.act(Action::Down);
     }
@@ -3328,13 +3336,13 @@ fn all_leaves_issues_already_ignored_another_way() {
     app.on_key(key('1'));
     app.on_key(key('1'));
     assert_eq!(
-        app.ws.config.ignore.non_default_branch,
+        app.ws.config.ignore_issues().non_default_branch,
         ["github.com/acme/feature"]
     );
     app.on_key(key('a'));
     assert_eq!(menu_items(&app)[1], "2 ● 1 stash(es) [ignored]");
     assert_eq!(
-        app.ws.config.ignore.non_default_branch,
+        app.ws.config.ignore_issues().non_default_branch,
         ["github.com/acme/feature"]
     );
 }
@@ -3423,7 +3431,7 @@ fn branch_lines_show_upstream_state_merged_and_unpushed_work() {
 #[test]
 fn detail_lines_carry_their_issue_fix_and_unfolding() {
     use argus_core::attention::Issue;
-    let (_sb, mut app) = setup_with("[ignore]\nbehind = ['acme/clean']", |sb| {
+    let (_sb, mut app) = setup_with("[marks.ignore.issues]\nbehind = ['acme/clean']", |sb| {
         let seed = sb.path("seed/acme/clean");
         commit(&seed, "upstream");
         let bare = sb.path("forge/acme/clean.git");
@@ -4208,8 +4216,9 @@ fn clearing_marks_says_what_patterns_still_give() {
 /// aligned however many flags a row has, in every icon set.
 #[test]
 fn rows_show_the_pull_mark_and_names_stay_aligned() {
-    let (_sb, mut app) =
-        setup("marks.favourite.repos = ['acme/clean']\npull = ['acme/clean', 'acme/dirty']");
+    let (_sb, mut app) = setup(
+        "marks.favourite.repos = ['acme/clean']\nmarks.pull.repos = ['acme/clean', 'acme/dirty']",
+    );
     for (icons, set) in [
         (argus_core::icons::UNICODE, "unicode"),
         (argus_core::icons::NERD, "nerd"),
@@ -6431,4 +6440,47 @@ fn a_pull_request_is_coloured_by_how_it_stands() {
         });
         assert_eq!(r, Some(Role::Dim), "{state:?}");
     }
+}
+
+#[test]
+fn pull_and_ignore_take_their_marks_keys_in_the_mark_menus() {
+    let (_sb, mut app) = setup("[marks.pull]\nkey = 'P'\n[marks.ignore]\nkey = 'x'\n");
+    while current(&app) != "acme/clean" {
+        app.act(Action::Down);
+    }
+    app.on_key(key('m'));
+    let items = menu_items(&app);
+    assert!(
+        items.contains(&"P pull (with F a and argus pull)".to_string()),
+        "{items:?}"
+    );
+    assert!(items.contains(&"x ignore repo".to_string()), "{items:?}");
+    assert!(
+        !items
+            .iter()
+            .any(|i| i.starts_with("p ") || i.starts_with("I ")),
+        "{items:?}"
+    );
+    // and the keys do it, the label then saying how to undo it
+    app.on_key(key('P'));
+    assert!(app.current().unwrap().flags.pull);
+    app.on_key(key('m'));
+    assert!(menu_items(&app).contains(&"P stop pulling".to_string()));
+    // the owner's menu has them on the same keys
+    app.on_key(key('o'));
+    let items = menu_items(&app);
+    assert!(items.iter().any(|i| i.starts_with("P ")), "{items:?}");
+    assert!(items.iter().any(|i| i.starts_with("x ")), "{items:?}");
+    assert!(
+        !items
+            .iter()
+            .any(|i| i.starts_with("p ") || i.starts_with("I ")),
+        "{items:?}"
+    );
+    app.on_key(ctrl('g'));
+    // inverse: by default they are where they were
+    let (_sb, mut app) = setup("");
+    app.on_key(key('m'));
+    let items = menu_items(&app);
+    assert!(items.iter().any(|i| i.starts_with("p ")) && items.iter().any(|i| i.starts_with("I ")));
 }

@@ -138,13 +138,12 @@ Two findings:
   `node_modules`, `target`, `.git` internals and configurable globs.
 * **Identity.** `host/owner/name` parsed from the `origin` remote URL (or the
   first remote).
-* **Marks: `[marks.<name>] repos` (favourite and yours), `pull`,
-  `ignore.repos`** are lists in config, one per kind (see §9, custom
-  marks). An entry is a repo or a glob, matched against identity, `owner/name`
+* **Marks: `[marks.<name>] repos`** (favourite, yours, pull and ignore)
+  are lists in config, one per mark (see §9, custom marks). An entry is a repo or a glob, matched against identity, `owner/name`
   or path; the last matching entry wins and `!` turns the mark off, as in
-  gitignore. Names: `ignore.repos` hides a repo and leaves it out of
+  gitignore. Names: `[marks.ignore] repos` hides a repo and leaves it out of
   pulls, clones and bulk actions; *hidden* is the wider set, ignored or
-  snoozed. The other `[ignore]` lists turn off one issue (non-default-branch,
+  snoozed. The `[marks.ignore.issues]` lists turn off one issue (non-default-branch,
   detached, no remote, no upstream, stashes, unpushed branches, behind):
   ignoring a whole repo is the special case of ignoring everything about
   it, so one section holds both. `repo@value` pins the branch, tag,
@@ -213,7 +212,7 @@ Two findings:
   neither anywhere, start the list in the main file (`roots` at the
   top). Nothing above that file sets the list, so the addition counts;
   and when a shared base sets a list that the main file extends,
-  additions stay in the main file (an empty `extend_pull = []`
+  additions stay in the main file (an empty `marks.pull.extend_repos = []`
   there steers them). Precedence: the main file, then a later extended
   file before an earlier one, a file before the files it extends
   (`Layers.files` reversed). Removal takes an entry out of every file
@@ -454,7 +453,7 @@ rendering is snapshot-tested via `TestBackend`.
   such operation is tested declined, refused and confirmed. Recoverable
   operations (stash, commit, switch, fast-forward, pull, push) don't ask.
   Clearing marks asks when more than one repo has entries of its own in
-  the marks', pull and ignore.repos lists; snoozes and "new" flags don't count. `root remove` doesn't ask.
+  the marks' `repos` lists (pull and ignore among them); snoozes and "new" flags don't count. `root remove` doesn't ask.
 
 * **Absorbed: merged by content.** A forge's squash- or rebase-merge
   leaves the branch's commits out of the default branch's history, so
@@ -805,8 +804,8 @@ In [TODO.md](TODO.md). Planned in detail:
 
 The aim: built-in marks aren't special. All of a mark's style and
 behaviour could come from config, though the defaults stay in code like
-every other default; favourite is the first to be unified, pull and
-ignore later.
+every other default. favourite was the first to be unified; pull and
+ignore are marks too now, their behaviour found by name.
 
 * **A table per mark**, favourite included (its defaults in code, any
   field overridable):
@@ -823,8 +822,25 @@ ignore later.
   error saying to move it to `[marks.favourite] repos` (no compatibility).
 * **Behaviour: labels plus filtering, and sort points.** Repos sort by
   attention, then the *sum* of their marks' `sort`, then severity and the
-  rest. pull and ignore keep their own rules (ignore turns off favourite
-  and pull) until they become marks with behaviour fields.
+  rest.
+* **pull and ignore are `[marks.pull]` and `[marks.ignore]`**, with the
+  same fields, and what they do is hard-coded to those names: `argus
+  pull` pulls the repos with `pull` (a tracked owner's have it unless an
+  entry turns it off); `ignore` hides a repo, keeps it out of pulls and
+  bulk actions, and turns off pull and marks with sort points. Behaviour
+  fields any mark could set (`pulls = true`) can come later without
+  changing this. The lists of issues not to flag are `[marks.ignore.issues]`,
+  one place for everything ignored; only that mark takes `issues` (another
+  is an error). Their entries keep the repo part (`acme/legacy@release-*`):
+  it's what says which repos the issue is ignored in, and those aren't
+  the hidden ones in `repos`. They show as states, as before: after the
+  labels in the flag column, with the icon set's `pull` and `ignored`
+  glyphs (`[ui] icon_overrides`) unless the mark has an `icon`; pull in
+  the `pull` colour role unless the mark has a `color`; an ignored repo
+  in `hidden`, which `[marks.ignore] color` can't change (a warning says
+  so). Their `key` moves their items in the Mark and Owner menus. `#pull`
+  and `#ignore` filter. Top-level `pull`, `extend_pull` and `[ignore]`
+  are errors saying where they moved.
 * **Theming.** A mark's colour: `[ui] colors` naming it (`"mark.work" =
   "bold cyan"`), else the theme's own entry for it (built-in themes keep
   favourite's as `mark.favourite`), else the mark's `color`, else the
@@ -851,7 +867,9 @@ ignore later.
   lists. Snoozes and ignored issues aren't marks: `argus snooze PATTERNS
   --for 3d [--issue …]`, `argus unsnooze`, `argus ignore-issue` /
   `unignore-issue`.
-* **Done this way:** `Mark` is `Label(index) | Pull | Ignore`, the index
+* **Done this way:** `Mark` is `Label(index) | Pull | Ignore` (the two
+  keep their variants: code asks for them by what they do, and
+  `Mark::all` leaves their indices out of the labels), the index
   into `[marks]` (config doesn't change during a session), so it stays
   `Copy` for menu actions. Badges carry `Role::Mark(index)`; the theme
   resolves each mark's style once (`Theme::with_marks`). The CLI maps a

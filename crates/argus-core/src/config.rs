@@ -67,15 +67,14 @@ pub struct Config {
     /// Marks, each a table: `favourite` (sort points 1, `f` in the Mark
     /// menu) and any of your own, `[marks.<name>]`, a word of letters,
     /// digits, `-` and `_`. They show in the flag column and filter (`/`
-    /// with `#name`, `argus status --mark name`).
+    /// with `#name`, `argus status --mark name`). Two do something:
+    /// `pull` is the repos `argus pull` pulls (a tracked owner's are,
+    /// unless an entry turns one off: `"!acme/huge-monorepo"`), and
+    /// `ignore` the repos hidden and left out of pulls, clones and bulk
+    /// operations, with `[marks.ignore.issues]` for what not to flag in
+    /// repos that stay listed.
     #[schemars(example = example_marks())]
     pub marks: IndexMap<String, MarkDef>,
-    /// Repos pulled by `argus pull`; entries as for a mark's `repos`. Tracked
-    /// owners' repos are pulled unless an entry here turns them off (`!`).
-    #[schemars(example = vec!["acme/*", "!acme/huge-monorepo"])]
-    pub pull: Vec<String>,
-    /// What not to flag: whole repos, or particular issues in some repos.
-    pub ignore: Ignore,
     /// Forge owners (orgs/users/teams) whose repos should all be cloned and
     /// pulled. Their repos are pulled unless `pull` turns them off.
     #[serde(rename = "track")]
@@ -122,9 +121,11 @@ impl Default for Config {
             concurrency: Concurrency::default(),
             describe_limit: DESCRIBE_LIMIT,
             clone_protocol: None,
-            marks: IndexMap::from([("favourite".to_string(), MarkDef::favourite())]),
-            pull: vec![],
-            ignore: Ignore::default(),
+            marks: IndexMap::from([
+                ("favourite".to_string(), MarkDef::favourite()),
+                (PULL.to_string(), MarkDef::pull()),
+                (IGNORE.to_string(), MarkDef::ignore()),
+            ]),
             tracks: vec![],
             fix: FixConfig::default(),
             stash: StashConfig::default(),
@@ -218,6 +219,7 @@ fn example_marks() -> IndexMap<String, MarkDef> {
             color: Some("cyan".into()),
             sort: 0,
             repos: vec!["acme/*".into(), "!acme/legacy".into()],
+            issues: IgnoreIssues::default(),
         },
     )])
 }
@@ -236,17 +238,19 @@ pub struct MarkDef {
     pub key: Option<char>,
     /// Its icon in the flag column: one for every icon set, or by set
     /// (`{ unicode = "◆", nerd = "…", ascii = "*" }`; unicode stands in
-    /// for one left out). None: the name's first letter.
+    /// for one left out). None: the name's first letter (pull and
+    /// ignore: the icon set's, as `[ui] icon_overrides` has them).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<MarkIcon>,
     /// Its colour, as in `[ui] colors`. Coming first: `[ui] colors`
-    /// naming it (`"mark.<name>"`), then the theme's own for it.
+    /// naming it (`"mark.<name>"`), then the theme's own for it. (An
+    /// ignored repo takes `[ui] colors` `hidden`, not this.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
     /// Sort points: repos sort by the sum of their marks' (after needing
     /// attention, before severity). A mark with points gives way to
     /// ignoring a repo, and stops it being ignored; one without (a label)
-    /// doesn't.
+    /// doesn't. (Ignore's own aren't counted: it hides.)
     pub sort: i32,
     /// Repos with the mark. Each entry is a repo or a pattern, matched
     /// against its identity (`github.com/acme/app`), `owner/name` or path
@@ -254,6 +258,21 @@ pub struct MarkDef {
     /// entries win, and `!` turns it off again: `["acme/*",
     /// "!acme/legacy"]`. Marking from the TUI or `argus mark` edits it.
     pub repos: Vec<String>,
+    /// `[marks.ignore]` only: issues not to flag, each in the repos its
+    /// list names (the Ignore menu and `argus ignore-issue` edit them).
+    #[serde(skip_serializing_if = "IgnoreIssues::is_empty")]
+    pub issues: IgnoreIssues,
+}
+
+/// The mark whose repos `argus pull` pulls.
+pub const PULL: &str = "pull";
+/// The mark whose repos are hidden, with the issues not to flag.
+pub const IGNORE: &str = "ignore";
+
+/// Whether `name` is a mark argus acts on (pull, ignore), which shows as
+/// a state, not among the labels.
+pub fn acts(name: &str) -> bool {
+    name == PULL || name == IGNORE
 }
 
 impl MarkDef {
@@ -269,6 +288,25 @@ impl MarkDef {
             color: None,
             sort: 1,
             repos: vec![],
+            issues: IgnoreIssues::default(),
+        }
+    }
+
+    /// The built-in `pull`: its icon and colour are the icon set's and
+    /// the theme's unless given here.
+    pub fn pull() -> Self {
+        Self {
+            key: Some('p'),
+            ..Self::default()
+        }
+    }
+
+    /// The built-in `ignore`, likewise.
+    pub fn ignore() -> Self {
+        Self {
+            key: Some('I'),
+            issues: IgnoreIssues::builtin(),
+            ..Self::default()
         }
     }
 }
@@ -288,19 +326,16 @@ pub enum MarkIcon {
     },
 }
 
-/// `[ignore]`: entries as for `favourite` (a repo or a pattern, matched
-/// against identity, `owner/name` or path; the last match wins, `!` turns
-/// it off).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+/// `[marks.ignore.issues]`: an issue, and the repos not to flag it in.
+/// Entries as for a mark's `repos` (a repo or a pattern, matched against
+/// identity, `owner/name` or path; the last match wins, `!` turns it off).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(
     default,
     deny_unknown_fields,
-    expecting = "a table: [ignore] with repos and issue lists"
+    expecting = "a table: [marks.ignore.issues] with a list of repos per issue"
 )]
-pub struct Ignore {
-    /// Repos hidden, and left out of pulls, clones and bulk operations.
-    #[schemars(example = vec!["~/dev/archive/**"])]
-    pub repos: Vec<String>,
+pub struct IgnoreIssues {
     /// Repos normally on a branch other than the default. `repo@branch`
     /// ignores only that branch (glob allowed), so another is flagged.
     #[schemars(example = vec!["acme/legacy@release-*"])]
@@ -325,18 +360,18 @@ pub struct Ignore {
     pub behind: Vec<String>,
 }
 
-impl Default for Ignore {
-    fn default() -> Self {
+impl IgnoreIssues {
+    /// What's ignored unless config says otherwise: every stash but
+    /// those argus's stash fix made.
+    pub fn builtin() -> Self {
         Self {
-            repos: vec![],
-            non_default_branch: vec![],
-            detached: vec![],
-            no_remote: vec![],
-            no_upstream: vec![],
             stashes: vec!["**".into(), format!("!**@{} *", crate::ops::STASH_PREFIX)],
-            unpushed_branches: vec![],
-            behind: vec![],
+            ..Self::default()
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
     }
 }
 
@@ -715,7 +750,7 @@ pub enum ConfigError {
     },
     #[error("{key}: {reason}")]
     Extend { key: String, reason: &'static str },
-    #[error("[ignore] {list}: {entry:?}: {reason}")]
+    #[error("[marks.ignore.issues] {list}: {entry:?}: {reason}")]
     IgnoreEntry {
         list: &'static str,
         entry: String,
@@ -725,24 +760,30 @@ pub enum ConfigError {
     ExtendFile { path: PathBuf, what: String },
     #[error("[marks.{0}]: a mark's name is letters, digits, - and _")]
     MarkName(String),
-    #[error("[marks.{0}]: {0} isn't a mark of its own: it's the `{0}` setting")]
-    MarkReserved(String),
-    #[error("{key} is now `[marks.favourite] repos`: move its entries there")]
-    Moved { key: String },
+    #[error("[marks.{0}] issues: only [marks.ignore] has issues not to flag")]
+    MarkIssues(String),
+    #[error("{key} is now `{to}`: move its entries there")]
+    Moved { key: String, to: &'static str },
 }
 
 /// Settings that moved, said plainly instead of "unknown field"; `file`
 /// names where, if it's a file.
 fn moved_keys(layer: &toml::Table, file: Option<&Path>) -> Result<(), ConfigError> {
-    match ["favourite", "extend_favourite"]
-        .into_iter()
-        .find(|k| layer.contains_key(*k))
-    {
-        Some(k) => Err(ConfigError::Moved {
+    let ignore = "[marks.ignore] repos`, its issue lists `[marks.ignore.issues]";
+    let moved = [
+        ("favourite", "[marks.favourite] repos"),
+        ("extend_favourite", "[marks.favourite] extend_repos"),
+        ("pull", "[marks.pull] repos"),
+        ("extend_pull", "[marks.pull] extend_repos"),
+        ("ignore", ignore),
+    ];
+    match moved.into_iter().find(|(k, _)| layer.contains_key(*k)) {
+        Some((k, to)) => Err(ConfigError::Moved {
             key: match file {
                 Some(f) => format!("{}: `{k}`", f.display()),
                 None => format!("`{k}`"),
             },
+            to,
         }),
         None => Ok(()),
     }
@@ -807,12 +848,12 @@ impl Config {
         }) {
             return Err(ConfigError::MarkName(bad.clone()));
         }
-        // `argus mark pull …` and `… ignore …` name those
-        if let Some(taken) = ["pull", "ignore"]
-            .into_iter()
-            .find(|n| self.marks.contains_key(*n))
+        if let Some((name, _)) = self
+            .marks
+            .iter()
+            .find(|(n, d)| *n != IGNORE && !d.issues.is_empty())
         {
-            return Err(ConfigError::MarkReserved(taken.into()));
+            return Err(ConfigError::MarkIssues(name.clone()));
         }
         for r in &mut self.roots {
             *r = expand_tilde(r);
@@ -846,6 +887,29 @@ impl Config {
             .unwrap_or_else(first),
             None => first(),
         }
+    }
+
+    /// The issues not to flag, and where (`[marks.ignore.issues]`).
+    pub fn ignore_issues(&self) -> &IgnoreIssues {
+        &self.marks[IGNORE].issues
+    }
+
+    pub fn ignore_issues_mut(&mut self) -> &mut IgnoreIssues {
+        &mut self.marks[IGNORE].issues
+    }
+
+    /// The icons: the configured set with its overrides, then the pull
+    /// and ignore marks' own icons, if they're given one; plus warnings
+    /// for unknown names.
+    pub fn icons(&self) -> (crate::icons::Icons, Vec<String>) {
+        let (mut icons, warnings) = self.ui.icons();
+        if self.marks[PULL].icon.is_some() {
+            icons.pull = self.mark_icon(PULL, &self.ui.icons).into();
+        }
+        if self.marks[IGNORE].icon.is_some() {
+            icons.ignored = self.mark_icon(IGNORE, &self.ui.icons).into();
+        }
+        (icons, warnings)
     }
 
     /// Each mark's name and icon in the configured icon set, in order.
@@ -1174,20 +1238,43 @@ mod tests {
             "sync = ['a/b']",
             "extend_sync = ['a/b']",
             "[[track]]\nowner = 'acme'\nsync = false",
-            "[ignore]\noff_default = ['a/b']",
-            "[ignore]\nextend_off_default = ['a/b']",
+            "[marks.ignore.issues]\noff_default = ['a/b']",
+            "[marks.ignore.issues]\nextend_off_default = ['a/b']",
         ] {
             assert!(Config::parse(old).is_err(), "{old}");
         }
+        // settings that moved say where to
+        for (old, to) in [
+            ("pull = ['a/b']", "`pull` is now `[marks.pull] repos`"),
+            (
+                "extend_pull = ['a/b']",
+                "`extend_pull` is now `[marks.pull] extend_repos`",
+            ),
+            (
+                "[ignore]\nrepos = ['a/b']",
+                "`ignore` is now `[marks.ignore] repos`, its issue lists `[marks.ignore.issues]`",
+            ),
+            (
+                "ignore.stashes = []",
+                "`ignore` is now `[marks.ignore] repos`, its issue lists `[marks.ignore.issues]`",
+            ),
+            (
+                "favourite = ['a/b']",
+                "`favourite` is now `[marks.favourite] repos`",
+            ),
+        ] {
+            let e = Config::parse(old).unwrap_err().to_string();
+            assert!(e.starts_with(to), "{old}: {e}");
+        }
         // inverse: the new names
-        let c = Config::parse("[ignore]\nnon_default_branch = ['a/b']").unwrap();
-        assert_eq!(c.ignore.non_default_branch, ["a/b"]);
+        let c = Config::parse("[marks.ignore.issues]\nnon_default_branch = ['a/b']").unwrap();
+        assert_eq!(c.ignore_issues().non_default_branch, ["a/b"]);
         let c = Config::parse(
-            "exclude_paths = ['x']\nignore.repos = ['a/b']\n[concurrency]\ndisk = 2\nnetwork = 5",
+            "exclude_paths = ['x']\nmarks.ignore.repos = ['a/b']\n[concurrency]\ndisk = 2\nnetwork = 5",
         )
         .unwrap();
         assert_eq!(
-            (c.exclude_paths, c.ignore.repos),
+            (c.exclude_paths, c.marks["ignore"].repos.clone()),
             (vec!["x".into()], vec!["a/b".into()])
         );
         assert_eq!(
@@ -1198,10 +1285,10 @@ mod tests {
             }
         );
         let c = Config::parse(
-            "pull = ['a/b']\nextend_pull = ['c/d']\n[[track]]\nowner = 'acme'\npull = false",
+            "marks.pull.repos = ['a/b']\nmarks.pull.extend_repos = ['c/d']\n[[track]]\nowner = 'acme'\npull = false",
         )
         .unwrap();
-        assert_eq!(c.pull, ["a/b", "c/d"]);
+        assert_eq!(c.marks["pull"].repos, ["a/b", "c/d"]);
         assert!(!c.tracks[0].pull);
     }
 

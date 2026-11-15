@@ -134,7 +134,7 @@ enum Cmd {
     /// End snoozes early: the repos' and all their issues', or with
     /// `--issue` just that one.
     Unsnooze(UnsnoozeArgs),
-    /// Ignore one issue for some repos (`[ignore] <issue>`).
+    /// Ignore one issue for some repos (`[marks.ignore.issues] <issue>`).
     IgnoreIssue(IgnoreIssueArgs),
     /// Stop ignoring an issue for some repos.
     UnignoreIssue(UnignoreIssueArgs),
@@ -725,14 +725,10 @@ fn starting(
         .collect()
 }
 
-/// Mark names: `[marks]`, then pull and ignore.
+/// Mark names: `[marks]`, pull and ignore among them.
 fn mark_names() -> Vec<String> {
     let c = completion_config();
-    c.marks
-        .keys()
-        .cloned()
-        .chain(["pull".into(), "ignore".into()])
-        .collect()
+    c.marks.keys().cloned().collect()
 }
 
 fn mark_completer() -> clap_complete::ArgValueCompleter {
@@ -894,6 +890,10 @@ struct Paint {
     color: bool,
     /// Each mark's colour code, in config order (see [`Paint::marks`]).
     marks: Vec<String>,
+    /// Where the pull mark is among them, and whether it's given a
+    /// colour (else pull keeps its own).
+    pull: usize,
+    pull_coloured: bool,
 }
 
 impl Paint {
@@ -901,6 +901,8 @@ impl Paint {
         Self {
             color: std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none(),
             marks: vec![],
+            pull: 0,
+            pull_coloured: false,
         }
     }
 
@@ -919,6 +921,9 @@ impl Paint {
                 spec.and_then(|s| ansi(s)).unwrap_or_else(|| "33".into())
             })
             .collect();
+        let pull = argus_core::config::PULL;
+        self.pull = c.marks.get_index_of(pull).unwrap_or(0);
+        self.pull_coloured = c.ui.colors.contains_key("mark.pull") || c.marks[pull].color.is_some();
         self
     }
 
@@ -930,7 +935,11 @@ impl Paint {
             Role::Mark(i) => self.marks.get(i).map_or("33", String::as_str),
             Role::New => "1;36",
             Role::Hidden | Role::Dim => "2",
-            Role::Pull => "34",
+            Role::Pull => self
+                .marks
+                .get(self.pull)
+                .filter(|_| self.pull_coloured)
+                .map_or("34", String::as_str),
             Role::Branch => "35",
             Role::DefaultBranch => "2;35",
             Role::Detached => "1;35",
@@ -983,7 +992,7 @@ fn ansi(spec: &str) -> Option<String> {
 }
 
 fn icons(ws: &Workspace) -> Icons {
-    let (icons, warnings) = ws.config.ui.icons();
+    let (icons, warnings) = ws.config.icons();
     for w in warnings {
         eprintln!("argus: config: {w}");
     }
@@ -1418,7 +1427,7 @@ fn glyph_cell(g: &str) -> String {
 
 fn demo_glyphs(ctx: &Ctx, json: bool) -> Result<()> {
     let c = Config::load(&ctx.config_path).unwrap_or_default();
-    let (yours, warnings) = c.ui.icons();
+    let (yours, warnings) = c.icons();
     for w in warnings {
         eprintln!("argus: config: {w}");
     }
@@ -1754,7 +1763,7 @@ fn fix_cmd(
 
 // ---------- mark ----------
 
-/// An `[ignore]` issue list by name (`non-default-branch` or `non_default_branch`).
+/// An `[marks.ignore.issues]` issue list by name (`non-default-branch` or `non_default_branch`).
 fn issue_list(s: &str) -> std::result::Result<IssueList, String> {
     IssueList::from_name(s).ok_or_else(|| {
         let names: Vec<String> = IssueList::ALL
@@ -1790,17 +1799,13 @@ fn matching(ws: &Workspace, patterns: &[String]) -> Result<Vec<usize>> {
 
 /// A mark by name: one of `[marks]`, `pull` or `ignore`.
 fn mark_named(ws: &Workspace, name: &str) -> Result<Mark> {
-    match name {
-        "pull" => Ok(Mark::Pull),
-        "ignore" => Ok(Mark::Ignore),
-        n => Mark::label(&ws.config, n).with_context(|| {
-            let names: Vec<&str> = ws.config.marks.keys().map(String::as_str).collect();
-            format!(
-                "{n:?} isn't a mark; these are: {}, pull, ignore (yours go in [marks.<name>])",
-                names.join(", ")
-            )
-        }),
-    }
+    Mark::label(&ws.config, name).with_context(|| {
+        let names: Vec<&str> = ws.config.marks.keys().map(String::as_str).collect();
+        format!(
+            "{name:?} isn't a mark; these are: {} (yours go in [marks.<name>])",
+            names.join(", ")
+        )
+    })
 }
 
 /// What `mark`, `unmark`, `snooze` and the issue commands print for the
@@ -1994,10 +1999,28 @@ mod tests {
         let p = Paint {
             color: true,
             marks: vec![],
+            pull: 0,
+            pull_coloured: false,
         }
         .marks(&c);
-        assert_eq!(p.marks, ["1;34", "36", "33"]);
-        assert_eq!(p.role(Role::Mark(1), "W"), "\x1b[36mW\x1b[0m");
+        assert_eq!(p.marks, ["1;34", "33", "33", "36", "33"]);
+        assert_eq!(p.role(Role::Mark(3), "W"), "\x1b[36mW\x1b[0m");
+        // pull keeps its own colour unless its mark is given one
+        assert_eq!(p.role(Role::Pull, "p"), "\x1b[34mp\x1b[0m");
+        for cfg in [
+            "[marks.pull]\ncolor = 'bold red'\n",
+            "[ui.colors]\n'mark.pull' = 'bold red'\n",
+        ] {
+            let c = Config::parse(cfg).unwrap();
+            let p = Paint {
+                color: true,
+                marks: vec![],
+                pull: 0,
+                pull_coloured: false,
+            }
+            .marks(&c);
+            assert_eq!(p.role(Role::Pull, "p"), "\x1b[1;31mp\x1b[0m", "{cfg}");
+        }
         assert_eq!(
             p.role(Role::Mark(9), "?"),
             "\x1b[33m?\x1b[0m",

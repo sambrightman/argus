@@ -394,7 +394,15 @@ pub fn mark_key_clashes(c: &argus_core::Config) -> Vec<String> {
         .iter()
         .filter_map(|(name, d)| Some((name, d.key?)))
         .filter_map(|(name, k)| {
-            let clash = if mark.contains(&k) || owner.contains(&k) {
+            // pull's and ignore's own items have their keys already
+            let own = match name.as_str() {
+                argus_core::config::PULL => Some('p'),
+                argus_core::config::IGNORE => Some('I'),
+                _ => None,
+            };
+            let clash = if own == Some(k) {
+                None
+            } else if mark.contains(&k) || owner.contains(&k) {
                 Some(format!(
                     "[marks.{name}] key {k:?} is the Mark menu's own: choose another"
                 ))
@@ -457,6 +465,22 @@ mod tests {
             "{w:?}"
         );
         assert!(mark_key_clashes(&argus_core::Config::default()).is_empty());
+        // pull and ignore may take other keys, but not the menu's own or
+        // another mark's
+        let ok = argus_core::Config::parse("[marks.pull]\nkey = 'P'\n[marks.ignore]\nkey = 'x'\n");
+        assert!(mark_key_clashes(&ok.unwrap()).is_empty());
+        let c = argus_core::Config::parse("[marks.pull]\nkey = 'z'\n[marks.ignore]\nkey = 'f'\n")
+            .unwrap();
+        let w = mark_key_clashes(&c);
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(
+            w[0].contains("[marks.pull]") && w[0].contains("Mark menu"),
+            "{w:?}"
+        );
+        assert!(
+            w[1].contains("[marks.ignore]") && w[1].contains("another mark"),
+            "{w:?}"
+        );
     }
 
     #[test]
