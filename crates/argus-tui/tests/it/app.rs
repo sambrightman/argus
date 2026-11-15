@@ -7,6 +7,7 @@ use argus_core::ops::{Op, ResetMode};
 use argus_core::testkit::{Sandbox, commit, git, write};
 use argus_core::{State, Workspace};
 use argus_tui::app::{Action, App, Effect, Mode, Msg, Prompt, Row, Scope, StashKind};
+use argus_tui::details::Seg;
 use argus_tui::menu::MenuId;
 use argus_tui::theme::Theme;
 use argus_tui::ui;
@@ -4185,7 +4186,7 @@ fn when_the_diff_under_the_cursor_goes_the_cursor_moves_within_its_section() {
         }
         r => panic!("{r:?}"),
     }
-    // a hunk gone but its file still there: the file's own line
+    // a hunk's lines gone from under the cursor: its header
     write(&d, "README", "hello there\nand more\n");
     app.ws.refresh(&d);
     app.rebuild();
@@ -4193,15 +4194,12 @@ fn when_the_diff_under_the_cursor_goes_the_cursor_moves_within_its_section() {
     app.on_key(code(KeyCode::Tab));
     app.cursor += 2;
     assert!(matches!(&app.rows[app.cursor], Row::Detail { line, .. } if line.diff.is_some()));
-    app.folded_hunks.insert((
-        d.clone(),
-        "README".into(),
-        argus_core::diff::Side::Unstaged,
-        0,
-    ));
-    app.rebuild();
+    fold_hunk_under_cursor(&mut app);
     match &app.rows[app.cursor] {
-        Row::Detail { line, .. } => assert_eq!(line.file.as_deref(), Some("README")),
+        Row::Detail { line, .. } => {
+            assert_eq!(line.file.as_deref(), Some("README"));
+            assert!(line.diff.as_ref().is_some_and(|d| d.line.is_none()));
+        }
         r => panic!("{r:?}"),
     }
 }
@@ -4322,7 +4320,7 @@ fn a_nested_repo_unfolds_into_its_own_details_and_acts_there() {
         app.ws.with_parents(&nested),
         [nested.clone(), clean.clone()]
     );
-    // collapsing from its lines collapses the listed repo
+    // Tab on one of its lines folds it, the repo it's in staying open
     app.cursor = app
         .rows
         .iter()
@@ -4333,8 +4331,12 @@ fn a_nested_repo_unfolds_into_its_own_details_and_acts_there() {
         .unwrap();
     app.act(Action::ToggleExpand);
     assert_eq!(current(&app), "acme/clean");
-    assert!(matches!(app.rows[app.cursor], Row::Repo(_)));
+    assert!(matches!(&app.rows[app.cursor], Row::Detail { line, .. }
+        if matches!(line.expand, Some(argus_tui::details::Expand::Repo(_)))));
+    assert_eq!(below(&app, "    nested", 4), Vec::<String>::new());
     assert!(!app.expanded.contains(&nested));
+    app.act(Action::ToggleExpand);
+    assert!(!below(&app, "    nested", 4).is_empty());
     // one inside an untracked directory unfolds from there
     cursor_on_detail(&mut app, "clean", "    tools/");
     app.act(Action::ToggleExpand);
@@ -7326,13 +7328,13 @@ fn the_cursor_moves_on_as_magit_does_when_its_line_goes() {
     dirty_line(&mut app, Section::Unstaged, Some("bin"));
     after(&mut app, &["add", "bin"]);
     assert_eq!(here(&app), at("A new", Section::Unstaged));
-    // nothing of the kind left at all: the repo
+    // no section left at all: the line before them
     after(&mut app, &["add", "new"]);
     dirty_line(&mut app, Section::Staged, None);
     after(&mut app, &["commit", "-q", "-m", "all"]);
-    assert_eq!(here(&app), ("acme/dirty".into(), None));
+    assert_eq!(here(&app), ("branches".into(), None));
     // a hunk folded away under the cursor, another file after its own in
-    // the section: its own file's line
+    // the section: the hunk's own line
     write(&d, "README", "one more\n");
     write(&d, "both", "and this\n");
     app.ws.refresh(&d);
@@ -7341,13 +7343,221 @@ fn the_cursor_moves_on_as_magit_does_when_its_line_goes() {
     app.on_key(code(KeyCode::Tab));
     app.cursor += 2;
     assert!(matches!(&app.rows[app.cursor], Row::Detail { line, .. } if line.diff.is_some()));
-    let side = argus_core::diff::Side::Unstaged;
-    app.folded_hunks
-        .insert((d.clone(), "README".into(), side, 0));
-    app.rebuild();
+    fold_hunk_under_cursor(&mut app);
     assert!(matches!(&app.rows[app.cursor], Row::Detail { line, .. }
-        if line.file.as_deref() == Some("README") && line.diff.is_none()));
+        if line.file.as_deref() == Some("README")
+            && line.diff.as_ref().is_some_and(|d| d.hunk.is_some() && d.line.is_none())));
     assert!(in_dirty(&app));
+}
+
+/// A repo's status read again and handed in, as the runtime does.
+fn status_arrives(app: &mut App, repo: &std::path::Path) {
+    let st = argus_core::status::status(repo, Default::default()).unwrap();
+    app.on_msg(Msg::Status(repo.to_path_buf(), Box::new(Ok(st))));
+}
+
+/// `f` of dirty with three changes far apart: three hunks.
+fn three_hunks(sb: &Sandbox) {
+    let d = sb.path("dev/dirty");
+    let lines: String = (1..=40).map(|i| format!("line {i}\n")).collect();
+    write(&d, "f", &lines);
+    commit(&d, "f");
+    let changed = lines
+        .replace("line 3\n", "line three\n")
+        .replace("line 20\n", "line twenty\n")
+        .replace("line 37\n", "line 37\nadded\n");
+    write(&d, "f", &changed);
+}
+
+#[test]
+fn the_cursor_stays_on_any_line_when_a_status_comes_back() {
+    let (sb, mut app) = setup_with("", three_hunks);
+    let d = sb.path("dev/dirty");
+    let text = |app: &App| trimmed(app)[app.cursor_line()].clone();
+    for start in [
+        "remote",
+        "activity",
+        "issue",
+        "auto-fix",
+        "branches",
+        "unstaged (1)",
+    ] {
+        cursor_on_detail(&mut app, "dirty", start);
+        let before = (app.cursor, text(&app));
+        status_arrives(&mut app, &d);
+        assert_eq!((app.cursor, text(&app)), before, "{start}");
+    }
+    // a line of a commit's message, two levels down
+    cursor_on_detail(&mut app, "dirty", "issue     1 unpushed commit");
+    app.on_key(code(KeyCode::Tab));
+    app.cursor += 1;
+    app.on_key(code(KeyCode::Tab));
+    let msg = trimmed(&app)
+        .iter()
+        .position(|t| t == "f")
+        .unwrap_or_else(|| panic!("{:?}", trimmed(&app)));
+    app.cursor = app.row_of_detail(msg);
+    status_arrives(&mut app, &d);
+    assert_eq!((app.cursor_line(), text(&app).as_str()), (msg, "f"));
+    // inverse: the line gone (the remote taken away), the nearest left
+    cursor_on_detail(&mut app, "dirty", "remote");
+    git(&d, &["remote", "remove", "origin"]);
+    status_arrives(&mut app, &d);
+    assert!(text(&app).starts_with("commit "), "{}", text(&app));
+    assert!(app.current().unwrap().path.ends_with("dirty"));
+}
+
+#[test]
+fn a_folded_hunk_stays_folded_when_one_before_it_is_staged() {
+    let (sb, mut app) = setup_with("", three_hunks);
+    let d = sb.path("dev/dirty");
+    cursor_on_detail(&mut app, "dirty", "path");
+    to_file(&mut app, "f");
+    app.on_key(code(KeyCode::Tab));
+    let hunks = |app: &App| -> Vec<(String, bool)> {
+        // each hunk's header, and whether its lines show
+        let t = trimmed(app);
+        let at = |i: &usize| t[*i].starts_with("@@");
+        let next = |i: usize| {
+            t.get(i + 1)
+                .is_some_and(|l| !l.starts_with("@@") && !l.is_empty())
+        };
+        (0..t.len())
+            .filter(at)
+            .map(|i| (t[i].clone(), next(i)))
+            .collect()
+    };
+    let shows = |app: &App| hunks(app).into_iter().map(|h| h.1).collect::<Vec<_>>();
+    assert_eq!(shows(&app), [true, true, true]);
+    // the second folded
+    let second = trimmed(&app)
+        .iter()
+        .position(|t| t == "+line twenty")
+        .unwrap();
+    app.cursor = app.row_of_detail(second);
+    app.on_key(code(KeyCode::Tab));
+    assert_eq!(shows(&app), [true, false, true]);
+    let folded = hunks(&app)[1].0.clone();
+    assert_eq!(trimmed(&app)[app.cursor_line()], folded, "on its header");
+    // the first staged (its lines, from outside): the folded one is first
+    // now, and still the folded one; the cursor is still on it
+    let patch = "--- a/f\n+++ b/f\n@@ -1,6 +1,6 @@\n line 1\n line 2\n-line 3\n+line three\n line 4\n line 5\n line 6\n";
+    std::fs::write(d.join("p"), patch).unwrap();
+    git(&d, &["apply", "--cached", "p"]);
+    std::fs::remove_file(d.join("p")).unwrap();
+    status_arrives(&mut app, &d);
+    let now = hunks(&app);
+    assert_eq!(shows(&app), [false, true], "{now:?}");
+    assert!(trimmed(&app)[app.cursor_line()].starts_with("@@"));
+    assert_eq!(
+        app.cursor_line(),
+        trimmed(&app).iter().position(|t| *t == now[0].0).unwrap()
+    );
+    // inverse: unfolded again, nothing is left folded
+    app.on_key(code(KeyCode::Tab));
+    assert_eq!(shows(&app), [true, true]);
+}
+
+#[test]
+fn a_hunk_changed_under_the_cursor_keeps_it_and_its_line() {
+    let (sb, mut app) = setup_with("", three_hunks);
+    let d = sb.path("dev/dirty");
+    cursor_on_detail(&mut app, "dirty", "path");
+    to_file(&mut app, "f");
+    app.on_key(code(KeyCode::Tab));
+    let t = trimmed(&app);
+    let second = t.iter().position(|t| t == "+line twenty").unwrap();
+    app.cursor = app.row_of_detail(second);
+    // the hunk becomes another (more changed in it): the line where the
+    // cursor was in it, not the next hunk or the file
+    let text = std::fs::read_to_string(d.join("f")).unwrap();
+    write(&d, "f", &text.replace("line 21\n", "line twenty-one\n"));
+    status_arrives(&mut app, &d);
+    assert_eq!(app.cursor_line(), second, "{:?}", trimmed(&app));
+    assert_eq!(trimmed(&app)[second], "-line 21", "the same place in it");
+    // inverse: the hunk gone, the next one's header
+    let text = std::fs::read_to_string(d.join("f")).unwrap();
+    let back = text
+        .replace("line twenty\n", "line 20\n")
+        .replace("line twenty-one\n", "line 21\n");
+    write(&d, "f", &back);
+    status_arrives(&mut app, &d);
+    let t = trimmed(&app);
+    assert!(
+        t[app.cursor_line()].starts_with("@@"),
+        "{}",
+        t[app.cursor_line()]
+    );
+    assert_eq!(t[app.cursor_line() + 4], "+added", "{t:?}");
+    // the last hunk gone, something after the diff (so a blank line ends
+    // it): the hunk before, not the blank line
+    write(&d, "staged", "x\n");
+    git(&d, &["add", "staged"]);
+    status_arrives(&mut app, &d);
+    let t = trimmed(&app);
+    assert_eq!(t[app.cursor_line() + 4], "+added", "{t:?}");
+    assert!(t.contains(&String::new()), "{t:?}");
+    let text = std::fs::read_to_string(d.join("f")).unwrap();
+    write(&d, "f", &text.replace("added\n", ""));
+    status_arrives(&mut app, &d);
+    let t = trimmed(&app);
+    assert_eq!(t[app.cursor_line()], "@@ -1,6 +1,6 @@", "{t:?}");
+}
+
+#[test]
+fn what_was_unfolded_under_a_line_is_forgotten_when_the_line_goes() {
+    let (sb, mut app) = setup_with("", |_| {});
+    let d = sb.path("dev/dirty");
+    cursor_on_detail(&mut app, "dirty", "path");
+    to_file(&mut app, "README");
+    app.on_key(code(KeyCode::Tab));
+    let open = |app: &App| trimmed(app).iter().any(|t| t.starts_with("@@"));
+    assert!(open(&app));
+    // inverse: a status with the file still changed leaves its diff open
+    write(&d, "other", "x\n");
+    status_arrives(&mut app, &d);
+    assert!(open(&app));
+    // committed, then changed again: folded, as any file starts
+    git(&d, &["commit", "-qam", "it"]);
+    status_arrives(&mut app, &d);
+    write(&d, "README", "changed again\n");
+    status_arrives(&mut app, &d);
+    assert!(trimmed(&app).iter().any(|t| t == "M README"));
+    assert!(!open(&app), "{:?}", trimmed(&app));
+    assert!(app.toggled.is_empty(), "{:?}", app.toggled);
+}
+
+#[test]
+fn tab_on_a_line_with_nothing_under_it_folds_what_it_is_under() {
+    let (sb, mut app) = setup_with("", |_| {});
+    let d = sb.path("dev/dirty");
+    // a branch with nothing to unfold: the branches
+    cursor_on_detail(&mut app, "dirty", "  * main");
+    app.on_key(code(KeyCode::Tab));
+    assert!(app.expanded.contains(&d));
+    let t = trimmed(&app);
+    assert!(!t.iter().any(|t| t.starts_with("* main")), "{t:?}");
+    assert_eq!(t[app.cursor_line()], "branches");
+    app.on_key(code(KeyCode::Tab));
+    assert!(trimmed(&app).iter().any(|t| t.starts_with("* main")));
+    // inverse: a line under nothing folds the repo
+    cursor_on_detail(&mut app, "dirty", "path");
+    app.on_key(code(KeyCode::Tab));
+    assert!(!app.expanded.contains(&d));
+    assert!(matches!(app.rows[app.cursor], Row::Repo(_)));
+}
+
+/// Fold the hunk whose line the cursor is on, as if from elsewhere: the
+/// cursor is left to find its way.
+fn fold_hunk_under_cursor(app: &mut App) {
+    let root = app.current().unwrap().path.clone();
+    let Row::Detail { line, .. } = &app.rows[app.cursor] else {
+        panic!()
+    };
+    let hunk = line.id[..line.id.len() - 1].to_vec();
+    assert!(matches!(hunk.last(), Some(Seg::Hunk(..))), "{hunk:?}");
+    app.toggled.entry(root).or_default().insert(hunk);
+    app.rebuild();
 }
 
 #[test]
@@ -7435,22 +7645,19 @@ fn tab_folds_what_the_line_belongs_to_not_the_whole_repo() {
     app.on_key(code(KeyCode::Tab));
     let t = trimmed(&app);
     assert_eq!(t[c1 + 1..c1 + 5], ["@@ -0,0 +1 @@", "+one", "", "A c2"]);
-    for offset in [2, 3] {
-        // on the diff's line, then on the blank one after it
-        if !has(&app, "+one") {
-            app.cursor = app.row_of_detail(c1);
-            app.on_key(code(KeyCode::Tab));
-        }
-        app.cursor = app.row_of_detail(c1 + offset);
-        app.on_key(code(KeyCode::Tab));
-        assert!(
-            open(&app) && !has(&app, "+one"),
-            "{offset}: {:?}",
-            trimmed(&app)
-        );
-        assert_eq!(trimmed(&app)[app.cursor_line()], "A c1", "{offset}");
-        assert!(has(&app, "A c2"), "its commit stays");
-    }
+    // on a line of the diff: its hunk folds, as a changed file's does
+    app.cursor = app.row_of_detail(c1 + 2);
+    app.on_key(code(KeyCode::Tab));
+    assert_eq!(trimmed(&app)[c1 + 1..c1 + 4], ["@@ -0,0 +1 @@", "", "A c2"]);
+    assert_eq!(app.cursor_line(), c1 + 1, "on the hunk's line");
+    app.on_key(code(KeyCode::Tab));
+    assert_eq!(trimmed(&app)[c1 + 1..c1 + 3], ["@@ -0,0 +1 @@", "+one"]);
+    // on the blank line after it: the diff folds
+    app.cursor = app.row_of_detail(c1 + 3);
+    app.on_key(code(KeyCode::Tab));
+    assert!(open(&app) && !has(&app, "+one"), "{:?}", trimmed(&app));
+    assert_eq!(trimmed(&app)[app.cursor_line()], "A c1");
+    assert!(has(&app, "A c2"), "its commit stays");
     // the last file's diff has nothing after it in the commit to set apart
     let c2 = trimmed(&app).iter().position(|t| t == "A c2").unwrap();
     app.cursor = app.row_of_detail(c2);
@@ -7550,19 +7757,19 @@ fn the_same_commits_under_an_issue_and_under_their_branch_fold_separately() {
 }
 
 #[test]
-fn lines_that_unfold_say_where_they_are() {
-    // each issue's line (counted, ignored or snoozed), each branch's and
-    // each stash's has its own place, which what it unfolds into shares
-    let site_of = |app: &App, start: &str| -> Option<String> {
+fn every_line_says_where_it_is() {
+    // each line has its place among its repo's details, which what it
+    // unfolds into is under
+    let id_of = |app: &App, start: &str| -> Option<Vec<Seg>> {
         app.rows.iter().find_map(|r| match r {
             Row::Detail { line, .. } => {
                 let text: String = line.parts.iter().map(|p| p.1.as_str()).collect();
                 text.trim_start()
                     .starts_with(start)
-                    .then(|| line.site.as_deref().map(String::from))
+                    .then(|| line.id.clone())
             }
             _ => None,
-        })?
+        })
     };
     let prep = |sb: &Sandbox| {
         let f = sb.path("dev/feature");
@@ -7572,19 +7779,20 @@ fn lines_that_unfold_say_where_they_are() {
     };
     let (_sb, mut app) = setup_with("[marks.ignore.issues]\nstashes = []\n", prep);
     cursor_on_detail(&mut app, "feature", "issue     1 unpushed commit");
-    let at = |start: &str| site_of(&app, start);
-    assert_eq!(
-        at("issue     1 unpushed").as_deref(),
-        Some("issue unpushed")
+    let at = |start: &str| id_of(&app, start).unwrap_or_else(|| panic!("{start}"));
+    let issue = |name: &str| vec![Seg::Issue(name.into())];
+    let branch = |name: &str| vec![Seg::Branches, Seg::Branch(name.into())];
+    assert_eq!(at("issue     1 unpushed"), issue("unpushed"));
+    assert_eq!(at("issue     1 stash"), issue("stashes"));
+    assert_eq!(at("* feat"), branch("feat"));
+    assert_eq!(at("main"), branch("main"));
+    assert!(
+        matches!(&at("stash@{0}")[..], [Seg::Stashes, Seg::Stash(id)] if id.len() >= 40),
+        "by its commit"
     );
-    assert_eq!(at("issue     1 stash").as_deref(), Some("issue stashes"));
-    assert_eq!(at("* feat").as_deref(), Some("branch feat"));
-    assert_eq!(at("main").as_deref(), Some("branch main"));
-    assert_eq!(at("stash@{0}").as_deref(), Some("stash 0"));
-    // inverse: a line that's in one place only has none
-    assert_eq!(at("path"), None);
-    assert_eq!(at("branches"), None);
-    // an ignored issue's line, and a snoozed one's
+    assert_eq!(at("path"), [Seg::Info("path")]);
+    assert_eq!(at("branches"), [Seg::Branches]);
+    // an ignored issue's line, and a snoozed one's: their own
     let (_sb, mut app) = setup_with(
         "[marks.ignore.issues]\nstashes = ['**']\nnon_default_branch = ['**']\n",
         prep,
@@ -7592,8 +7800,8 @@ fn lines_that_unfold_say_where_they_are() {
     cursor_on_detail(&mut app, "feature", "issue     1 unpushed commit");
     let line = "issue     not on default branch (main)  (ignored)";
     assert_eq!(
-        site_of(&app, line).as_deref(),
-        Some("issue non_default_branch")
+        id_of(&app, line).unwrap(),
+        issue("non_default_branch ignored")
     );
     let key = app.current().unwrap().key.clone();
     let until = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
@@ -7603,17 +7811,37 @@ fn lines_that_unfold_say_where_they_are() {
     app.ws.resolve_flags();
     app.rebuild();
     assert_eq!(
-        site_of(&app, "issue     1 unpushed commit(s)  (snoozed").as_deref(),
-        Some("issue unpushed")
+        id_of(&app, "issue     1 unpushed commit(s)  (snoozed").unwrap(),
+        issue("unpushed snoozed")
     );
-    // what a line unfolds into is in its place
+    // what a line unfolds into is under it
     cursor_on_detail(&mut app, "feature", "  * feat");
     app.on_key(code(KeyCode::Tab));
     let below = match &app.rows[app.cursor + 1] {
-        Row::Detail { line, .. } => line.site.as_deref().map(String::from),
+        Row::Detail { line, .. } => line.id.clone(),
         r => panic!("{r:?}"),
     };
-    assert_eq!(below.as_deref(), Some("branch feat"));
+    assert!(
+        matches!(&below[..], [Seg::Branches, Seg::Branch(b), Seg::Commit(_)] if b == "feat"),
+        "{below:?}"
+    );
+    // and no two lines of a repo are in the same place
+    for name in ["feature", "dirty", "clean"] {
+        cursor_on_detail(&mut app, name, "path");
+        let ids: Vec<&Vec<Seg>> = app
+            .rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Detail { line, repo } if app.ws.entries[*repo].path.ends_with(name) => {
+                    Some(&line.id)
+                }
+                _ => None,
+            })
+            .collect();
+        let distinct: std::collections::BTreeSet<_> = ids.iter().collect();
+        assert_eq!(distinct.len(), ids.len(), "{name}: {ids:?}");
+        assert!(ids.iter().all(|id| !id.is_empty()));
+    }
 }
 
 #[test]

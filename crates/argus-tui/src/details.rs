@@ -40,46 +40,79 @@ pub struct DetailLine {
     pub links: Vec<(usize, String)>,
     /// The section of changes this line heads (no `file`) or is in.
     pub section: Option<Section>,
-    /// The group this line heads or is in, which Tab on its heading folds
-    /// to that line: branches, stashes, a section of changes, a commit's
-    /// files.
-    pub fold: Option<Box<Fold>>,
-    /// What was unfolded to show this line (a commit, a file's diff):
-    /// Tab on it folds that again.
-    pub parent: Option<Box<Expand>>,
-    /// Where the line is, when what it unfolds into can be shown in more
-    /// places than one (a branch's commits under its own line and under
-    /// an issue's): what's unfolded is remembered by place, so each folds
-    /// by itself. Lines it unfolds into are in the same place.
-    pub site: Site,
+    /// Where the line is in its repo's details: the lines it's under,
+    /// outermost first, then itself (see [`Seg`]). What's folded and
+    /// where the cursor is are remembered by it, so the same commit shown
+    /// in two places folds in each by itself.
+    pub id: Vec<Seg>,
 }
 
-/// A place among a repo's details (see [`DetailLine::site`]): `issue
-/// unpushed`, `branch feat`, `stash 0`.
-pub type Site = Option<Box<str>>;
-
-/// A line's place in a group that folds.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Fold {
-    /// The group, among its repo's.
-    pub id: String,
-    /// Whether this is its heading (the line left when it's folded).
-    pub head: bool,
+/// One step of a line's place among its repo's details (see
+/// [`DetailLine::id`]): `[Section(Unstaged), File("a.rs"), Hunk(..),
+/// Line(3)]` is a line of a hunk of a file's unstaged changes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Seg {
+    /// A labelled line: `path`, `remote`…; a commit's `commit`, `author`.
+    Info(&'static str),
+    /// A line of text, by its place: an error's, a commit message's.
+    Text(usize),
+    /// An issue's line, by its name (and `ignored` or `snoozed`).
+    Issue(String),
+    /// A fix's line, by its label and kind.
+    Fix(String),
+    Branches,
+    Branch(String),
+    Section(Section),
+    /// A changed file; one a commit changed; one in an untracked folder.
+    File(String),
+    /// A repo nested in the work tree, by its path there.
+    Repo(String),
+    /// A hunk, by what it adds and removes (its line numbers change as
+    /// others are staged), and which of the file's hunks doing the same.
+    Hunk(u64, usize),
+    /// A hunk's line, by its place in it.
+    Line(usize),
+    /// Something said in place of content: "binary file", "no commits".
+    Note,
+    /// "… more".
+    More,
+    /// The blank line after a diff.
+    Blank,
+    Stashes,
+    /// A stash, by its commit (its number if that's unknown).
+    Stash(String),
+    Commit(String),
+    /// The heading of a commit's files.
+    Files,
 }
 
-impl Fold {
-    pub fn head(id: impl Into<String>) -> Option<Box<Fold>> {
-        Some(Box::new(Fold {
-            id: id.into(),
-            head: true,
-        }))
+impl Seg {
+    /// Whether what's under a line like this is shown until it's folded
+    /// (the rest unfold when asked).
+    pub fn open_by_default(&self) -> bool {
+        matches!(
+            self,
+            Seg::Branches | Seg::Stashes | Seg::Section(_) | Seg::Files | Seg::Hunk(..)
+        )
     }
 
-    pub fn member(id: impl Into<String>) -> Option<Box<Fold>> {
-        Some(Box::new(Fold {
-            id: id.into(),
-            head: false,
-        }))
+    /// The hunks' steps, in order.
+    pub fn hunks(hunks: &[argus_core::diff::Hunk]) -> Vec<Seg> {
+        use std::hash::{Hash, Hasher};
+        let mut seen: Vec<u64> = vec![];
+        for h in hunks {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            let changed =
+                |l: &&argus_core::diff::Line| l.kind != argus_core::diff::LineKind::Context;
+            for l in h.lines.iter().filter(changed) {
+                (l.kind == argus_core::diff::LineKind::Add, &l.text).hash(&mut hasher);
+            }
+            seen.push(hasher.finish());
+        }
+        let nth = |i: usize| seen[..i].iter().filter(|k| **k == seen[i]).count();
+        (0..seen.len())
+            .map(|i| Seg::Hunk(seen[i], nth(i)))
+            .collect()
     }
 }
 
@@ -137,7 +170,10 @@ impl Section {
 
     /// Whether this is the section's own line, which folds it.
     pub fn heads(line: &DetailLine) -> Option<Section> {
-        line.section.filter(|_| line.file.is_none() && !line.body)
+        match line.id.last() {
+            Some(Seg::Section(s)) => Some(*s),
+            _ => None,
+        }
     }
 }
 
@@ -145,6 +181,33 @@ impl DetailLine {
     /// Body text: see [`Self::body`]; a working tree diff's lines too.
     pub fn is_body(&self) -> bool {
         self.body || self.diff.as_ref().is_some_and(|d| d.line.is_some())
+    }
+
+    /// Whether lines can be under this one: Tab on it, or on any of them,
+    /// folds and unfolds them. A group's heading, a line that unfolds into
+    /// something read when asked for, a changed file (its diff).
+    pub fn folds(&self) -> bool {
+        self.id.last().is_some_and(Seg::open_by_default)
+            || self.expand.is_some()
+            || (self.file.is_some() && self.section.is_some() && self.diff.is_none())
+    }
+
+    /// The line, unfolding into `expand`.
+    pub fn unfolding(mut self, expand: Option<Expand>) -> Self {
+        self.expand = expand;
+        self
+    }
+
+    /// The line at `id`, under whatever this one is under.
+    pub fn at(mut self, seg: Seg) -> Self {
+        self.id.push(seg);
+        self
+    }
+
+    /// The line under the line at `parent`.
+    pub fn under(mut self, parent: &[Seg]) -> Self {
+        self.id.splice(0..0, parent.iter().cloned());
+        self
     }
 }
 
@@ -175,6 +238,14 @@ pub fn untracked_expand(path: &str, kind: PathKind) -> Option<Expand> {
         Some(Expand::Repo(path.to_string()))
     } else {
         None
+    }
+}
+
+/// An untracked path's step: a repo's says so, to be found again as one.
+pub fn file_seg(path: &str, expand: Option<&Expand>) -> Seg {
+    match expand {
+        Some(Expand::Repo(rel)) => Seg::Repo(rel.clone()),
+        _ => Seg::File(path.to_string()),
     }
 }
 
@@ -229,10 +300,13 @@ fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
         body: false,
         links: vec![],
         section: None,
-        fold: None,
-        parent: None,
-        site: None,
+        id: vec![],
     }
+}
+
+/// A plain line with these parts, to fill in.
+pub fn line_of(parts: Vec<(Option<Role>, String)>) -> DetailLine {
+    line(parts)
 }
 
 /// A blank line, nothing to stop at: after a diff, before what follows.
@@ -241,6 +315,7 @@ pub fn blank() -> DetailLine {
         body: true,
         ..line(vec![])
     }
+    .at(Seg::Blank)
 }
 
 /// A diff line as shown: its `+`, `-` or space and text, in its colour,
@@ -290,14 +365,17 @@ pub fn gone_lines(stale: bool) -> Vec<DetailLine> {
     } else {
         ("drop from the list, or rescan", "x g, x G")
     };
-    vec![DetailLine {
-        fix: stale.then_some(FixKind::PruneWorktrees),
-        ..line(vec![
-            styled(Role::Dim, "fix       "),
-            styled(Role::Ahead, op),
-            styled(Role::Dim, format!("  its folder is gone  ({keys})")),
-        ])
-    }]
+    vec![
+        DetailLine {
+            fix: stale.then_some(FixKind::PruneWorktrees),
+            ..line(vec![
+                styled(Role::Dim, "fix       "),
+                styled(Role::Ahead, op),
+                styled(Role::Dim, format!("  its folder is gone  ({keys})")),
+            ])
+        }
+        .at(Seg::Fix("gone".into())),
+    ]
 }
 
 /// How long from `now` until `t`, in [`ago_since`]'s units, to the
@@ -361,44 +439,41 @@ pub fn details(
     hints: Hints,
     forge: Option<ForgeView>,
 ) -> Vec<DetailLine> {
-    let mut v = vec![line(vec![
-        styled(Role::Dim, "path      "),
-        plain(contract_tilde(&e.path)),
-    ])];
+    // a labelled line (the label padded to the column the values start in)
+    let info = |label: &'static str, rest: Vec<(Option<Role>, String)>| {
+        let mut parts = vec![styled(Role::Dim, format!("{label:<10}"))];
+        parts.extend(rest);
+        line(parts).at(Seg::Info(label))
+    };
+    let mut v = vec![info("path", vec![plain(contract_tilde(&e.path))])];
     if let Some(err) = e.error() {
-        for l in err.lines().take(6) {
-            v.push(line(vec![styled(Role::Error, l.to_string())]));
+        for (n, l) in err.lines().take(6).enumerate() {
+            v.push(line(vec![styled(Role::Error, l.to_string())]).at(Seg::Text(n)));
         }
         return v;
     }
     let Some(s) = e.status() else { return v };
     if let Some(u) = &s.remote_url {
-        v.push(line(vec![
-            styled(Role::Dim, "remote    "),
-            plain(format!("{} {u}", s.remote.as_deref().unwrap_or(""))),
-        ]));
+        v.push(info(
+            "remote",
+            vec![plain(format!("{} {u}", s.remote.as_deref().unwrap_or("")))],
+        ));
     }
     if let Some(id) = &s.head_commit {
-        v.push(line(vec![
-            styled(Role::Dim, "commit    "),
-            plain(id.clone()),
-        ]));
+        v.push(info("commit", vec![plain(id.clone())]));
     }
     if !s.tags.is_empty() {
-        v.push(line(vec![
-            styled(Role::Dim, "tags      "),
-            styled(Role::Detached, s.tags.join(", ")),
-        ]));
+        v.push(info(
+            "tags",
+            vec![styled(Role::Detached, s.tags.join(", "))],
+        ));
     }
     if let Some(d) = &s.describe {
-        v.push(line(vec![
-            styled(Role::Dim, "describe  "),
-            styled(Role::Detached, d.clone()),
-        ]));
+        v.push(info("describe", vec![styled(Role::Detached, d.clone())]));
     } else if s.describe_gave_up {
-        v.push(line(vec![
-            styled(Role::Dim, "describe  "),
-            styled(
+        v.push(info(
+            "describe",
+            vec![styled(
                 Role::Dim,
                 match hints {
                     Hints::Keys => "searching further back for a tag…".to_string(),
@@ -407,8 +482,8 @@ pub fn details(
                         format!("no tag in the last {n} commits")
                     }
                 },
-            ),
-        ]));
+            )],
+        ));
     }
     let mut times = vec![];
     if let Some(t) = s.last_commit {
@@ -420,10 +495,7 @@ pub fn details(
         times.push("never fetched".into());
     }
     if !times.is_empty() {
-        v.push(line(vec![
-            styled(Role::Dim, "activity  "),
-            plain(times.join(", ")),
-        ]));
+        v.push(info("activity", vec![plain(times.join(", "))]));
     }
     let flags = [
         (e.flags.pull, "pulled"),
@@ -437,23 +509,19 @@ pub fn details(
         fl.push(format!("tracked by {t}"));
     }
     if !fl.is_empty() {
-        v.push(line(vec![
-            styled(Role::Dim, "flags     "),
-            plain(fl.join(", ")),
-        ]));
+        v.push(info("flags", vec![plain(fl.join(", "))]));
     }
-    let label = styled(Role::Dim, "forge     ");
     match forge {
         None => {}
-        Some(ForgeView::Loading) => v.push(line(vec![
-            label,
-            styled(Role::Dim, "looking up pull requests and issues…"),
-        ])),
-        Some(ForgeView::Failed(why)) => v.push(line(vec![label, styled(Role::Warning, why)])),
+        Some(ForgeView::Loading) => v.push(info(
+            "forge",
+            vec![styled(Role::Dim, "looking up pull requests and issues…")],
+        )),
+        Some(ForgeView::Failed(why)) => v.push(info("forge", vec![styled(Role::Warning, why)])),
         Some(ForgeView::Info(i)) => {
             // the repo's page, its issues and its pull requests: each a
             // link, for the repo it's a fork of and then for itself
-            let mut l = line(vec![label]);
+            let mut l = info("forge", vec![]);
             let host = e.id.as_ref().map(|id| id.host.as_str()).unwrap_or_default();
             let counts = |l: &mut DetailLine, repo: &str, issues: usize, pulls: usize| {
                 let base = format!("https://{host}/{repo}");
@@ -489,25 +557,29 @@ pub fn details(
     }
     for issue in &e.issues {
         let (role, text) = describe(issue, s.default_branch.as_deref());
-        v.push(DetailLine {
-            issue: Some(*issue),
-            site: Some(format!("issue {}", issue.name()).into()),
-            expand: issue_expand(issue, s),
-            ..line(vec![styled(Role::Dim, "issue     "), styled(role, text)])
-        });
+        v.push(
+            DetailLine {
+                issue: Some(*issue),
+                expand: issue_expand(issue, s),
+                ..line(vec![styled(Role::Dim, "issue     "), styled(role, text)])
+            }
+            .at(Seg::Issue(issue.name().into())),
+        );
     }
     for issue in &e.ignored_issues {
         let (_, text) = describe(issue, s.default_branch.as_deref());
-        v.push(DetailLine {
-            issue: Some(*issue),
-            site: Some(format!("issue {}", issue.name()).into()),
-            expand: issue_expand(issue, s),
-            ignored: true,
-            ..line(vec![
-                styled(Role::Dim, "issue     "),
-                styled(Role::Dim, format!("{text}  (ignored)")),
-            ])
-        });
+        v.push(
+            DetailLine {
+                issue: Some(*issue),
+                expand: issue_expand(issue, s),
+                ignored: true,
+                ..line(vec![
+                    styled(Role::Dim, "issue     "),
+                    styled(Role::Dim, format!("{text}  (ignored)")),
+                ])
+            }
+            .at(Seg::Issue(format!("{} ignored", issue.name()))),
+        );
     }
     let now = jiff::Timestamp::now();
     for issue in &e.snoozed_issues {
@@ -518,15 +590,17 @@ pub fn details(
             .and_then(|m| m.get(issue.name()))
             .map(|t| format!(", {}", left_until(*t, now)))
             .unwrap_or_default();
-        v.push(DetailLine {
-            issue: Some(*issue),
-            site: Some(format!("issue {}", issue.name()).into()),
-            expand: issue_expand(issue, s),
-            ..line(vec![
-                styled(Role::Dim, "issue     "),
-                styled(Role::Dim, format!("{text}  (snoozed{left})")),
-            ])
-        });
+        v.push(
+            DetailLine {
+                issue: Some(*issue),
+                expand: issue_expand(issue, s),
+                ..line(vec![
+                    styled(Role::Dim, "issue     "),
+                    styled(Role::Dim, format!("{text}  (snoozed{left})")),
+                ])
+            }
+            .at(Seg::Issue(format!("{} snoozed", issue.name()))),
+        );
     }
     let p = fix::preview(s, &e.fix_kinds(priority), stash);
     let labelled = p
@@ -546,10 +620,13 @@ pub fn details(
         if let Some(how) = hints.fix(f.kind).filter(|_| label == "fix       ") {
             parts.push(styled(Role::Dim, format!("  ({how})")));
         }
-        v.push(DetailLine {
-            fix: Some(f.kind),
-            ..line(parts)
-        });
+        v.push(
+            DetailLine {
+                fix: Some(f.kind),
+                ..line(parts)
+            }
+            .at(Seg::Fix(format!("{}{}", label, f.kind.name()))),
+        );
     }
     // those that ask for something first, with the keys that run them
     let manual: Vec<fix::Fix> = fix::plan(s, stash)
@@ -584,16 +661,16 @@ pub fn details(
                 .fix(kind)
                 .map(|how| styled(Role::Dim, format!("  ({how})"))),
         );
-        v.push(DetailLine {
-            fix: Some(kind),
-            ..line(parts)
-        });
+        v.push(
+            DetailLine {
+                fix: Some(kind),
+                ..line(parts)
+            }
+            .at(Seg::Fix(format!("{}…", kind.name()))),
+        );
     }
     if !s.branches.is_empty() {
-        v.push(DetailLine {
-            fold: Fold::head("branches"),
-            ..line(vec![styled(Role::Dim, "branches")])
-        });
+        v.push(line(vec![styled(Role::Dim, "branches")]).at(Seg::Branches));
         for b in &s.branches {
             let mut parts = vec![
                 plain(if b.is_head { "  * " } else { "    " }),
@@ -654,18 +731,19 @@ pub fn details(
                 parts.push(styled(role, p.summary()));
                 parts.push(styled(Role::Dim, format!("  {}", p.title)));
             }
-            v.push(DetailLine {
-                fold: Fold::member("branches"),
-                site: Some(format!("branch {}", b.name).into()),
-                links: link.into_iter().collect(),
-                branch: Some(b.name.clone()),
-                expand: unpushed.map(|_| {
-                    Expand::Commits(Range::NotOnRemote {
-                        tip: format!("refs/heads/{}", b.name),
-                    })
-                }),
-                ..line(parts)
-            });
+            v.push(
+                DetailLine {
+                    links: link.into_iter().collect(),
+                    branch: Some(b.name.clone()),
+                    expand: unpushed.map(|_| {
+                        Expand::Commits(Range::NotOnRemote {
+                            tip: format!("refs/heads/{}", b.name),
+                        })
+                    }),
+                    ..line(parts)
+                }
+                .under(&[Seg::Branches, Seg::Branch(b.name.clone())]),
+            );
         }
     }
     // changes by section, as magit has them: each headed by its own line
@@ -681,14 +759,16 @@ pub fn details(
         if files.is_empty() {
             continue;
         }
-        v.push(DetailLine {
-            section: Some(section),
-            fold: Fold::head(section.title()),
-            ..line(vec![styled(
-                Role::Dim,
-                format!("{} ({})", section.title(), files.len()),
-            )])
-        });
+        v.push(
+            DetailLine {
+                section: Some(section),
+                ..line(vec![styled(
+                    Role::Dim,
+                    format!("{} ({})", section.title(), files.len()),
+                )])
+            }
+            .at(Seg::Section(section)),
+        );
         for (f, (role, code)) in files.iter().take(MAX_FILES) {
             // (an untracked file's place says what it is)
             let mut parts = vec![plain("    ")];
@@ -699,24 +779,29 @@ pub fn details(
                     parts.push(plain(format!(" {}", f.path)));
                 }
             }
-            v.push(DetailLine {
-                file: Some(f.path.clone()),
-                section: Some(section),
-                fold: Fold::member(section.title()),
-                expand: (section == Section::Untracked)
-                    .then(|| untracked_expand(&f.path, f.kind))
-                    .flatten(),
-                ..line(parts)
-            });
+            let expand = (section == Section::Untracked)
+                .then(|| untracked_expand(&f.path, f.kind))
+                .flatten();
+            v.push(
+                DetailLine {
+                    file: Some(f.path.clone()),
+                    section: Some(section),
+                    ..line(parts)
+                }
+                .under(&[Seg::Section(section), file_seg(&f.path, expand.as_ref())])
+                .unfolding(expand),
+            );
         }
         let more = files.len().saturating_sub(MAX_FILES);
         if more > 0 {
-            v.push(DetailLine {
-                section: Some(section),
-                fold: Fold::member(section.title()),
-                body: true,
-                ..line(vec![styled(Role::Dim, format!("    … {more} more"))])
-            });
+            v.push(
+                DetailLine {
+                    section: Some(section),
+                    body: true,
+                    ..line(vec![styled(Role::Dim, format!("    … {more} more"))])
+                }
+                .under(&[Seg::Section(section), Seg::More]),
+            );
         }
     }
     if !s.stashes.is_empty() {
@@ -728,30 +813,32 @@ pub fn details(
         if ignored > 0 {
             parts.push(styled(Role::Dim, format!(" ({ignored} ignored)")));
         }
-        v.push(DetailLine {
-            fold: Fold::head("stashes"),
-            ..line(parts)
-        });
+        v.push(line(parts).at(Seg::Stashes));
         for (n, message) in s.stashes.iter().enumerate().take(MAX_STASHES) {
             let label = format!("          stash@{{{n}}} {message}");
-            v.push(DetailLine {
-                fold: Fold::member("stashes"),
-                site: Some(format!("stash {n}").into()),
-                stash: Some(n),
-                expand: s.stash_ids.get(n).map(|id| Expand::Commit(id.clone())),
-                ..line(vec![if e.stash_ignored.get(n) == Some(&true) {
-                    styled(Role::Dim, format!("{label}  (ignored)"))
-                } else {
-                    plain(label)
-                }])
-            });
+            let id = s.stash_ids.get(n);
+            v.push(
+                DetailLine {
+                    stash: Some(n),
+                    expand: id.map(|id| Expand::Commit(id.clone())),
+                    ..line(vec![if e.stash_ignored.get(n) == Some(&true) {
+                        styled(Role::Dim, format!("{label}  (ignored)"))
+                    } else {
+                        plain(label)
+                    }])
+                }
+                .under(&[
+                    Seg::Stashes,
+                    Seg::Stash(id.cloned().unwrap_or_else(|| n.to_string())),
+                ]),
+            );
         }
         let more = s.stashes.len().saturating_sub(MAX_STASHES);
         if more > 0 {
-            v.push(DetailLine {
-                fold: Fold::member("stashes"),
-                ..line(vec![styled(Role::Dim, format!("          … {more} more"))])
-            });
+            v.push(
+                line(vec![styled(Role::Dim, format!("          … {more} more"))])
+                    .under(&[Seg::Stashes, Seg::More]),
+            );
         }
     }
     v
