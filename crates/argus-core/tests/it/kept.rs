@@ -270,3 +270,53 @@ fn retain_forgets_the_other_repos() {
     kept(&k, &b);
     assert_eq!(k.opens(), 3, "b reopened");
 }
+
+#[test]
+fn an_included_config_file_that_appears_later_reopens() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    let elsewhere = sb.path("elsewhere.cfg");
+    git(&r, &["config", "include.path", "extra.cfg"]);
+    git(
+        &r,
+        &[
+            "config",
+            "includeIf.gitdir:**.path",
+            elsewhere.to_str().unwrap(),
+        ],
+    );
+    let k = KeptRepos::default();
+    assert_eq!(url(&k, &r), None);
+    assert_eq!(k.opens(), 1);
+    // a path relative to the file naming it
+    std::fs::write(
+        r.join(".git/extra.cfg"),
+        "[remote \"origin\"]\n\turl = git@github.com:acme/w.git\n",
+    )
+    .unwrap();
+    assert_eq!(url(&k, &r).as_deref(), Some("git@github.com:acme/w.git"));
+    assert_eq!(kept(&k, &r), fresh(&r));
+    assert_eq!(k.opens(), 2);
+    // an absolute one, of a conditional include
+    std::fs::write(&elsewhere, "[remote \"origin\"]\n\tpushurl = /nowhere\n").unwrap();
+    assert_eq!(kept(&k, &r), fresh(&r));
+    assert_eq!(k.opens(), 3);
+    // and nothing more to see: kept
+    assert_eq!(kept(&k, &r), fresh(&r));
+    assert_eq!(k.opens(), 3);
+}
+
+#[test]
+fn a_file_nothing_includes_does_not_reopen() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    let k = KeptRepos::default();
+    assert_eq!(url(&k, &r), None);
+    std::fs::write(
+        r.join(".git/extra.cfg"),
+        "[remote \"origin\"]\n\turl = git@github.com:acme/w.git\n",
+    )
+    .unwrap();
+    assert_eq!(url(&k, &r), None);
+    assert_eq!(k.opens(), 1);
+}

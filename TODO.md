@@ -54,10 +54,4 @@ deferred.
 
 ## Known gaps
 
-- A git config include file created after a repo was opened isn't noticed
-  until the including file changes.
-- `git clone` in a test's setup once failed copying `maintenance.lock`
-  (rerun passed): watch for it.
-- For a submodule with both modified and untracked files, whether its
-  entry shows ` m` or ` ?` depends on which gix finds first; the order
-  isn't confirmed in gix's code.
+None known.

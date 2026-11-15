@@ -361,7 +361,7 @@ pub fn status(path: &Path, opts: StatusOptions) -> Result<RepoStatus, StatusErro
 /// Repos kept open between status reads (the TUI's refreshes). Opening is
 /// mostly reading config files, so a repo is reused until one of the files
 /// its config came from changes. Everything else (refs, index, packs) gix
-/// re-reads as needed. Missed: an included file that didn't exist at open.
+/// re-reads as needed.
 #[derive(Default)]
 pub struct KeptRepos {
     kept: std::sync::Mutex<HashMap<PathBuf, Kept>>,
@@ -393,7 +393,8 @@ fn stamp(p: &Path) -> Option<Stamp> {
 }
 
 /// What a kept repo is checked against before reuse: the files its config
-/// was read from, and the places config could appear that didn't exist yet;
+/// was read from, and the places config could appear that didn't exist yet
+/// (the standard ones, and the files its `include` sections name);
 /// HEAD when a section depends on the branch (`includeIf "onbranch:…"`);
 /// the index, which gix re-reads only when its time is newer (a same-time
 /// rewrite on a file system with coarse times would be missed, but git
@@ -407,6 +408,26 @@ fn stamps(repo: &gix::Repository) -> Vec<(PathBuf, Option<Stamp>)> {
         .filter_map(|s| s.meta().path.clone())
         .collect();
     files.extend(config_candidates(&mut |k| std::env::var_os(k)));
+    // files the config asks to include, there or not: one that appears
+    // later is read by the next open
+    for s in config.sections() {
+        let name: &[u8] = s.header().name().as_ref();
+        if name != b"include" && name != b"includeIf" {
+            continue;
+        }
+        let from = s.meta().path.as_deref().and_then(Path::parent);
+        for value in s.values("path") {
+            let Ok(p) = gix::path::from_bstr(value) else {
+                continue;
+            };
+            let p = crate::paths::expand_tilde(&p);
+            files.extend(match (p.is_absolute(), from) {
+                (true, _) => Some(p),
+                (false, Some(dir)) => Some(dir.join(p)),
+                (false, None) => None,
+            });
+        }
+    }
     let on_branch = config.sections().any(|s| {
         s.header().name() == "includeIf"
             && s.header()
@@ -1091,6 +1112,22 @@ fn untracked(path: &Path, dir: Option<&str>) -> Result<Vec<(String, PathKind)>, 
     Ok(v)
 }
 
+/// Whether the submodule at `path` has changes to tracked content. The
+/// status walk stops at a submodule's first change (`check_dirty`), and
+/// that may be an untracked file while tracked ones changed too: asked
+/// only then, and without looking for untracked files again.
+fn tracked_content_changed(repo: &gix::Repository, path: &str) -> bool {
+    let Ok(Some(mut subs)) = repo.submodules() else {
+        return false;
+    };
+    subs.find(|sm| sm.path().is_ok_and(|p| p.as_slice() == path.as_bytes()))
+        .and_then(|sm| {
+            sm.status(gix::submodule::config::Ignore::Untracked, true)
+                .ok()
+        })
+        .is_some_and(|st| st.changes.is_some_and(|c| !c.is_empty()))
+}
+
 /// `head_tree`, when known, saves gix reading HEAD again.
 fn changes(
     repo: &gix::Repository,
@@ -1164,7 +1201,8 @@ fn changes(
                                     i,
                                     gix::status::Item::IndexWorktree(IW::DirectoryContents { .. })
                                 )
-                            }) {
+                            }) || tracked_content_changed(repo, &path)
+                            {
                                 'm'
                             } else {
                                 '?'

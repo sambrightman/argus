@@ -2156,3 +2156,33 @@ fn a_worktree_on_a_squash_merged_branch_is_finished() {
     git(&r, &["fetch", "-q", "--prune"]);
     assert!(finished_issue(&wt));
 }
+
+#[test]
+fn a_submodule_with_modified_and_untracked_content_is_modified() {
+    // as `git status --short` has it: ` m` whenever tracked content
+    // changed, ` ?` only for untracked content alone; whichever change a
+    // walk comes to first
+    for (tracked, untracked) in [("zzz", "aaa"), ("aaa", "zzz"), ("mid", "dir/deep/new")] {
+        let sb = Sandbox::new();
+        let (r, lib) = with_submodule(&sb);
+        write(&lib, tracked, "1");
+        git(&lib, &["add", tracked]);
+        git(&lib, &["commit", "-q", "-m", "tracked"]);
+        git(&r, &["add", "lib"]);
+        git(&r, &["commit", "-q", "-m", "bump"]);
+        for i in 0..40 {
+            write(&lib, &format!("{untracked}{i}"), "x");
+        }
+        assert_eq!(sub_entry(&r), (' ', '?', PathKind::Submodule));
+        write(&lib, tracked, "2");
+        for _ in 0..5 {
+            assert_eq!(
+                sub_entry(&r),
+                (' ', 'm', PathKind::Submodule),
+                "{tracked} modified, {untracked}* untracked"
+            );
+        }
+        let short = git(&r, &["status", "--short"]);
+        assert!(short.contains(" m lib"), "{short}");
+    }
+}

@@ -520,7 +520,10 @@ rendering is snapshot-tested via `TestBackend`.
 * **A submodule's entry in its parent says which change it is**, as `git
   status --short` does: `M` (at another commit than recorded: the parent
   commits it) or ` m` / ` ?` (changes inside: the submodule's own row fixes
-  them). Fixes are planned from that, so the preview and the auto-fix agree;
+  them). gix's walk stops at a submodule's first change, which may be an
+  untracked file while tracked ones changed too, so ` ?` is confirmed by
+  asking again for tracked changes alone (no second look for untracked
+  files). Fixes are planned from that, so the preview and the auto-fix agree;
   git's stash takes neither. A submodule whose folder is gone shows as
   ` D` and is still a submodule (the index entry's mode says so), listed
   in `missing_submodules`: `submodule-update` puts it back, never blocked.

@@ -9,7 +9,10 @@ use tempfile::TempDir;
 
 static GLOBAL: OnceLock<(TempDir, PathBuf)> = OnceLock::new();
 
-/// Private global gitconfig shared by all tests in the process.
+/// Private global gitconfig shared by all tests in the process. No
+/// maintenance in the background: git starts it after a commit or fetch
+/// and it holds `objects/maintenance.lock` for a moment, which a clone of
+/// that repo then finds, starts to copy and loses (a clone failed so, once).
 fn global_config() -> &'static Path {
     let (_, p) = GLOBAL.get_or_init(|| {
         let d = tempfile::tempdir().expect("tempdir");
@@ -20,7 +23,9 @@ fn global_config() -> &'static Path {
              [init]\n\tdefaultBranch = main\n\
              [commit]\n\tgpgsign = false\n\
              [protocol \"file\"]\n\tallow = always\n\
-             [advice]\n\tdetachedHead = false\n",
+             [advice]\n\tdetachedHead = false\n\
+             [gc]\n\tauto = 0\n\
+             [maintenance]\n\tauto = false\n",
         )
         .unwrap();
         crate::isolation::isolate(vec![
