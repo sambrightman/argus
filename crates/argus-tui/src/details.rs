@@ -43,10 +43,10 @@ pub struct DetailLine {
     /// The group this line heads or is in, which Tab on its heading folds
     /// to that line: branches, stashes, a section of changes, a commit's
     /// files.
-    pub fold: Option<Fold>,
+    pub fold: Option<Box<Fold>>,
     /// What was unfolded to show this line (a commit, a file's diff):
     /// Tab on it folds that again.
-    pub parent: Option<Expand>,
+    pub parent: Option<Box<Expand>>,
 }
 
 /// A line's place in a group that folds.
@@ -59,18 +59,18 @@ pub struct Fold {
 }
 
 impl Fold {
-    pub fn head(id: impl Into<String>) -> Option<Fold> {
-        Some(Fold {
+    pub fn head(id: impl Into<String>) -> Option<Box<Fold>> {
+        Some(Box::new(Fold {
             id: id.into(),
             head: true,
-        })
+        }))
     }
 
-    pub fn member(id: impl Into<String>) -> Option<Fold> {
-        Some(Fold {
+    pub fn member(id: impl Into<String>) -> Option<Box<Fold>> {
+        Some(Box::new(Fold {
             id: id.into(),
             head: false,
-        })
+        }))
     }
 }
 

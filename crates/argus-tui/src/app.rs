@@ -209,7 +209,7 @@ fn unfolded_rows(
         .clone();
     // each knows what was unfolded to show it, to fold it again from there
     let child = |mut l: DetailLine| {
-        l.parent = Some(x.clone());
+        l.parent = Some(Box::new(x.clone()));
         l
     };
     rows.into_iter().map(child).collect()
@@ -694,6 +694,9 @@ pub enum Confirmed {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// (a detail line is far bigger than a repo's index, but nearly every row
+// is one: boxing them would cost an allocation each for nothing saved)
+#[allow(clippy::large_enum_variant)]
 pub enum Row {
     Repo(usize),
     Detail { repo: usize, line: DetailLine },
@@ -980,7 +983,7 @@ impl App {
                     let commit_file = matches!(line.expand, Some(Expand::CommitFile(..)));
                     if commit_file && follows && !below.is_empty() {
                         let blank = DetailLine {
-                            parent: line.expand.clone(),
+                            parent: line.expand.clone().map(Box::new),
                             ..crate::details::blank()
                         };
                         stack.push((r, pad, blank));
@@ -3808,7 +3811,7 @@ impl App {
         let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor) else {
             return vec![];
         };
-        let Some(parent) = line.parent.clone() else {
+        let Some(parent) = line.parent.as_deref().cloned() else {
             return vec![];
         };
         let path = self.ws.entries[*repo].path.clone();
