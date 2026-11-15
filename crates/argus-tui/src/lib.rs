@@ -104,7 +104,9 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
             let busy = app.scanning || !app.running.is_empty();
             if dirty || busy {
                 tick = tick.wrapping_add(1);
-                terminal.draw(|f| ui::draw(f, &mut app, &view))?;
+                let mut links = vec![];
+                terminal.draw(|f| links = ui::draw(f, &mut app, &view))?;
+                ui::write_links(terminal.backend_mut(), &links)?;
             }
             dirty = false;
             let mut left = vec![];

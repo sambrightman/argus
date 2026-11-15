@@ -114,7 +114,7 @@ proptest! {
             }
             prop_assert!(app.rows.is_empty() || app.cursor < app.rows.len(), "cursor {} of {}", app.cursor, app.rows.len());
             let view = ui::View { theme: &theme, icons: argus_core::icons::UNICODE, tick: 0 };
-            term.draw(|f| ui::draw(f, &mut app, &view)).unwrap();
+            term.draw(|f| drop(ui::draw(f, &mut app, &view))).unwrap();
             prop_assert!(app.scroll <= app.cursor || app.rows.is_empty());
         }
         // and the app can always get back to normal

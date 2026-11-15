@@ -26,7 +26,41 @@ pub struct View<'a> {
     pub tick: usize,
 }
 
-pub fn draw(f: &mut Frame, app: &mut App, v: &View) {
+/// Text on screen that's a link: where, what it says and in what style,
+/// and where it goes. The terminal draws these over the frame
+/// ([`write_links`]), which itself knows nothing of links.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkAt {
+    pub x: u16,
+    pub y: u16,
+    pub text: String,
+    pub url: String,
+    pub style: ratatui::style::Style,
+}
+
+/// Write `links` over the frame just drawn: the same text in the same
+/// place and style, as terminal hyperlinks (OSC 8). The frame's cells
+/// don't change, so what's drawn next still diffs against the truth.
+pub fn write_links(w: &mut impl std::io::Write, links: &[LinkAt]) -> std::io::Result<()> {
+    use crossterm::{cursor::MoveTo, queue, style::Print};
+    use ratatui::backend::IntoCrossterm;
+    for l in links {
+        let style: crossterm::style::ContentStyle = l.style.into_crossterm();
+        let text = format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", l.url, l.text);
+        queue!(w, MoveTo(l.x, l.y), Print(style.apply(text)))?;
+    }
+    if !links.is_empty() {
+        queue!(w, crossterm::style::ResetColor)?;
+        queue!(
+            w,
+            crossterm::style::SetAttribute(crossterm::style::Attribute::Reset)
+        )?;
+    }
+    w.flush()
+}
+
+/// Draws the frame; returns the links in it.
+pub fn draw(f: &mut Frame, app: &mut App, v: &View) -> Vec<LinkAt> {
     let area = f.area();
     let log_h = if app.show_log {
         (area.height / 3).max(6)
@@ -39,17 +73,19 @@ pub fn draw(f: &mut Frame, app: &mut App, v: &View) {
         Constraint::Length(1),
     ])
     .areas(area);
-    draw_list(f, app, v, main);
+    let links = draw_list(f, app, v, main);
     if app.show_log {
         draw_log(f, app, v, log);
     }
     draw_status(f, app, v, status);
+    // (nothing is linked under something drawn over the list)
     match &app.mode {
         Mode::Menu { .. } => app.menu_shown = draw_menu(f, app, v, main),
         Mode::Help { scroll } => draw_help(f, v, &app.ws.config.mark_icons(), main, *scroll),
         Mode::Pick { .. } => draw_pick(f, app, v, main),
-        _ => {}
+        _ => return links,
     }
+    vec![]
 }
 
 /// A list picked from by typing (its query on the status line), as many of
@@ -112,7 +148,7 @@ fn draw_pick(f: &mut Frame, app: &App, v: &View, area: Rect) {
     );
 }
 
-fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
+fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) -> Vec<LinkAt> {
     let t = v.theme;
     let header_text = {
         let n = app
@@ -199,7 +235,7 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
             "no repositories (check roots in config; R rescans)".to_string()
         };
         f.render_widget(Paragraph::new(Span::styled(msg, t.ui(Ui::Dim))), body);
-        return;
+        return vec![];
     }
 
     // Column widths from visible repo rows.
@@ -239,6 +275,7 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
     let refined = refined_rows(app, app.scroll..app.scroll + height);
     let region: std::collections::BTreeSet<_> = app.region_lines().into_iter().collect();
     let mut lines = vec![];
+    let mut links = vec![];
     for (row_idx, row) in app.rows.iter().enumerate().skip(app.scroll).take(height) {
         let selected = row_idx == app.cursor;
         let mut line = match row {
@@ -283,11 +320,25 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
                         }
                         spans.extend(rest.iter().map(|(r, s)| Span::styled(s.clone(), style(r))));
                     }
-                    _ => spans.extend(
-                        line.parts
-                            .iter()
-                            .map(|(role, s)| Span::styled(s.clone(), style(role))),
-                    ),
+                    _ => {
+                        for (n, (role, s)) in line.parts.iter().enumerate() {
+                            // a link, where all of it fits
+                            let x: usize = spans.iter().map(Span::width).sum();
+                            let fits = x + UnicodeWidthStr::width(s.as_str()) <= body.width.into();
+                            let url = line.links.iter().find(|l| l.0 == n).filter(|_| fits);
+                            links.extend(url.map(|(_, url)| LinkAt {
+                                x: body.x + x as u16,
+                                y: body.y + (row_idx - app.scroll) as u16,
+                                text: s.clone(),
+                                url: url.clone(),
+                                style: match selected {
+                                    true => style(role).patch(t.ui(Ui::Selection)),
+                                    false => style(role),
+                                },
+                            }));
+                            spans.push(Span::styled(s.clone(), style(role)));
+                        }
+                    }
                 }
                 Line::from(spans)
             }
@@ -301,6 +352,7 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
         lines.push(line);
     }
     f.render_widget(Paragraph::new(lines), body);
+    links
 }
 
 /// Changed-word segments for the diff lines to refine among `visible`

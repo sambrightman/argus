@@ -894,6 +894,8 @@ struct Paint {
     /// colour (else pull keeps its own).
     pull: usize,
     pull_coloured: bool,
+    /// Whether text can carry links (OSC 8): a terminal, coloured or not.
+    links: bool,
 }
 
 impl Paint {
@@ -903,6 +905,15 @@ impl Paint {
             marks: vec![],
             pull: 0,
             pull_coloured: false,
+            links: std::io::stdout().is_terminal(),
+        }
+    }
+
+    /// `s` as a link to `url`, where the output can carry one.
+    fn link(&self, s: &str, url: &str) -> String {
+        match self.links {
+            true => format!("\x1b]8;;{url}\x1b\\{s}\x1b]8;;\x1b\\"),
+            false => s.to_string(),
         }
     }
 
@@ -1066,9 +1077,15 @@ fn status(
                     argus_tui::details::details(e, fix, stash, &ic, &ws.state, hints, said)
                         .iter()
                         .map(|l| {
-                            let parts = l.parts.iter().map(|(role, text)| match role {
-                                Some(r) => p.role(*r, text),
-                                None => text.clone(),
+                            let parts = l.parts.iter().enumerate().map(|(n, (role, text))| {
+                                let text = match role {
+                                    Some(r) => p.role(*r, text),
+                                    None => text.clone(),
+                                };
+                                match l.links.iter().find(|(at, _)| *at == n) {
+                                    Some((_, url)) => p.link(&text, url),
+                                    None => text,
+                                }
                             });
                             format!("{indent}    {}", parts.collect::<String>())
                         })
@@ -2061,8 +2078,19 @@ mod tests {
             marks: vec![],
             pull: 0,
             pull_coloured: false,
+            links: true,
         }
         .marks(&c);
+        // a link wraps the text, colours and all; none where output can't
+        assert_eq!(
+            p.link("#12", "https://x/pull/12"),
+            "\x1b]8;;https://x/pull/12\x1b\\#12\x1b]8;;\x1b\\"
+        );
+        let plain = Paint {
+            links: false,
+            ..Paint::detect()
+        };
+        assert_eq!(plain.link("#12", "https://x/pull/12"), "#12");
         assert_eq!(p.marks, ["1;34", "33", "33", "36", "33"]);
         assert_eq!(p.role(Role::Mark(3), "W"), "\x1b[36mW\x1b[0m");
         // pull keeps its own colour unless its mark is given one
@@ -2077,6 +2105,7 @@ mod tests {
                 marks: vec![],
                 pull: 0,
                 pull_coloured: false,
+                links: false,
             }
             .marks(&c);
             assert_eq!(p.role(Role::Pull, "p"), "\x1b[1;31mp\x1b[0m", "{cfg}");

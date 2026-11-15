@@ -36,6 +36,8 @@ pub struct DetailLine {
     /// Body text (a commit message line, a diff line), which `n`/`p` skip
     /// as magit's do, stopping only at section lines.
     pub body: bool,
+    /// Parts that are links (by their place in `parts`), and where to.
+    pub links: Vec<(usize, String)>,
 }
 
 impl DetailLine {
@@ -124,6 +126,7 @@ fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
         expand: None,
         fix: None,
         body: false,
+        links: vec![],
     }
 }
 
@@ -310,12 +313,51 @@ pub fn details(
             plain(fl.join(", ")),
         ]));
     }
-    let forge_line = forge.map(|f| match f {
-        ForgeView::Loading => styled(Role::Dim, "looking up pull requests and issues…"),
-        ForgeView::Failed(why) => styled(Role::Warning, why),
-        ForgeView::Info(i) => plain(i.counts()),
-    });
-    v.extend(forge_line.map(|l| line(vec![styled(Role::Dim, "forge     "), l])));
+    let label = styled(Role::Dim, "forge     ");
+    match forge {
+        None => {}
+        Some(ForgeView::Loading) => v.push(line(vec![
+            label,
+            styled(Role::Dim, "looking up pull requests and issues…"),
+        ])),
+        Some(ForgeView::Failed(why)) => v.push(line(vec![label, styled(Role::Warning, why)])),
+        Some(ForgeView::Info(i)) => {
+            // the repo's page, its issues and its pull requests: each a
+            // link, for the repo it's a fork of and then for itself
+            let mut l = line(vec![label]);
+            let host = e.id.as_ref().map(|id| id.host.as_str()).unwrap_or_default();
+            let counts = |l: &mut DetailLine, repo: &str, issues: usize, pulls: usize| {
+                let base = format!("https://{host}/{repo}");
+                for (n, one, many, page, after) in [
+                    (issues, "issue", "issues", "issues", ", "),
+                    (pulls, "pull request", "pull requests", "pulls", ""),
+                ] {
+                    l.links.push((l.parts.len(), format!("{base}/{page}")));
+                    let noun = argus_core::plural(n, one, many);
+                    l.parts.push(plain(format!("{n} open {noun}")));
+                    if !after.is_empty() {
+                        l.parts.push(plain(after));
+                    }
+                }
+            };
+            let own = e.id.as_ref().map(|id| id.slug()).unwrap_or_default();
+            match &i.parent {
+                None => counts(&mut l, &own, i.open_issues, i.open_pulls),
+                Some(p) => {
+                    l.links
+                        .push((l.parts.len(), format!("https://{host}/{}", p.name)));
+                    l.parts.push(plain(p.name.clone()));
+                    l.parts.push(plain(": "));
+                    counts(&mut l, &p.name, p.open_issues, p.open_pulls);
+                    if i.open_issues + i.open_pulls > 0 {
+                        l.parts.push(plain("; this fork: "));
+                        counts(&mut l, &own, i.open_issues, i.open_pulls);
+                    }
+                }
+            }
+            v.push(l);
+        }
+    }
     for issue in &e.issues {
         let (role, text) = describe(issue, s.default_branch.as_deref());
         v.push(DetailLine {
@@ -462,6 +504,7 @@ pub fn details(
                 Some(ForgeView::Info(i)) => i.pull(&b.name),
                 _ => None,
             };
+            let mut link = None;
             if let Some(p) = pull {
                 use argus_core::forge::{Checks, PullState, Review};
                 let role = match (p.state, p.review, p.checks) {
@@ -470,10 +513,13 @@ pub fn details(
                     (PullState::Open, _, _) => Role::Ahead,
                     _ => Role::Dim,
                 };
-                parts.push(styled(role, format!("  {}", p.summary())));
+                parts.push(plain("  "));
+                link = Some((parts.len(), p.url.clone()));
+                parts.push(styled(role, p.summary()));
                 parts.push(styled(Role::Dim, format!("  {}", p.title)));
             }
             v.push(DetailLine {
+                links: link.into_iter().collect(),
                 branch: Some(b.name.clone()),
                 expand: unpushed.map(|_| {
                     Expand::Commits(Range::NotOnRemote {

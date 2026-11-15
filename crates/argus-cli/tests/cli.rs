@@ -2353,6 +2353,8 @@ fn status_forge_asks_the_forge_and_shows_pull_requests_and_issues() {
         out.contains("      * feat  origin/feat  #7 open, approved  Add feat\n"),
         "{out}"
     );
+    // (links only on a terminal: none in a pipe)
+    assert!(!out.contains("\x1b]8"), "{out}");
     // one question for the one repo listed, with the token, about its branch
     let asked: Vec<String> = requests.try_iter().collect();
     assert_eq!(asked.len(), 1, "{asked:?}");

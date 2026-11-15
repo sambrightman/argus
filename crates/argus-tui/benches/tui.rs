@@ -84,7 +84,7 @@ fn screen(c: &mut Criterion) {
             tick: 0,
         };
         b.iter(|| {
-            term.draw(|f| ui::draw(f, &mut app, &view)).unwrap();
+            term.draw(|f| drop(ui::draw(f, &mut app, &view))).unwrap();
         })
     });
     g.finish();

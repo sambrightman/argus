@@ -729,7 +729,15 @@ rendering is snapshot-tested via `TestBackend`.
   so. The TUI asks again when the branches change or on `g`, keeping the
   old answer on screen meanwhile, and drops an answer to a question it
   has since replaced. `ARGUS_GITHUB_API` points the client elsewhere, for
-  the end-to-end tests (a stand-in server on a local port).
+  the end-to-end tests (a stand-in server on a local port). The forge's
+  names, counts and pull requests are terminal hyperlinks (OSC 8): a
+  detail line says which of its parts link where (`DetailLine::links`).
+  The CLI wraps them when writing to a terminal. ratatui has no notion of
+  links (an escape sequence in a cell breaks its width arithmetic), so
+  the TUI draws the frame as ever and then writes each link over its own
+  text, same place and style (`ui::write_links`): the frame's cells are
+  unchanged, so the next draw still diffs against what's really there.
+  Nothing is linked under a menu, nor a link cut short by the width.
 * **`status --details`** prints the TUI's details lines under each row:
   the same builder (`details::details`), told who reads them (`Hints`).
   For the CLI a fix names its command (`argus fix -k stash`), or the TUI

@@ -31,7 +31,7 @@ fn main() {
         icons: argus_core::icons::UNICODE,
         tick: 0,
     };
-    t.draw(|f| ui::draw(f, &mut app, &view)).unwrap();
+    t.draw(|f| drop(ui::draw(f, &mut app, &view))).unwrap();
     let buf = t.backend().buffer().clone();
     for y in 0..h {
         let line: String = (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect();

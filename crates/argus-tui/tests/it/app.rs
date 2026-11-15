@@ -89,7 +89,7 @@ fn render_with(app: &mut App, w: u16, h: u16, icons: argus_core::icons::Icons) -
         icons,
         tick: 0,
     };
-    t.draw(|f| ui::draw(f, app, &view)).unwrap();
+    t.draw(|f| drop(ui::draw(f, app, &view))).unwrap();
     let buf = t.backend().buffer().clone();
     (0..h)
         .map(|y| {
@@ -1107,7 +1107,7 @@ fn demo_renders_in_every_theme_and_icon_set() {
                 icons: argus_core::icons::by_name(icons),
                 tick: 0,
             };
-            term.draw(|f| ui::draw(f, &mut app, &view)).unwrap();
+            term.draw(|f| drop(ui::draw(f, &mut app, &view))).unwrap();
         }
     }
 }
@@ -1477,7 +1477,7 @@ fn word_reversed(app: &mut App, line_text: &str, word: &str) -> bool {
         icons: argus_core::icons::UNICODE,
         tick: 0,
     };
-    t.draw(|f| ui::draw(f, app, &view)).unwrap();
+    t.draw(|f| drop(ui::draw(f, app, &view))).unwrap();
     let buf = t.backend().buffer().clone();
     for y in 0..40 {
         let row: String = (0..100).map(|x| buf[(x, y)].symbol().to_string()).collect();
@@ -3572,7 +3572,7 @@ fn draw(app: &mut App, w: u16, h: u16) -> Terminal<TestBackend> {
         icons: argus_core::icons::UNICODE,
         tick: 0,
     };
-    t.draw(|f| ui::draw(f, app, &view)).unwrap();
+    t.draw(|f| drop(ui::draw(f, app, &view))).unwrap();
     t
 }
 
@@ -5531,7 +5531,7 @@ fn the_branch_picker_draws_its_matches_and_query() {
         icons: argus_core::icons::UNICODE,
         tick: 0,
     };
-    t.draw(|f| ui::draw(f, &mut app, &view)).unwrap();
+    t.draw(|f| drop(ui::draw(f, &mut app, &view))).unwrap();
     let buf = t.backend().buffer().clone();
     let lines: Vec<String> = (0..h)
         .map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect())
@@ -6645,4 +6645,196 @@ fn a_files_two_status_letters_are_coloured_each_by_its_side() {
             (Some(Role::Untracked), "?".to_string())
         ]
     );
+}
+
+#[test]
+fn forge_names_counts_and_pull_requests_are_links() {
+    let (sb, mut app, fx) = forge_setup("");
+    let f = sb.path("dev/feature");
+    let [Effect::Forge { branches, .. }] = fx.as_slice() else {
+        panic!("{fx:?}")
+    };
+    let answer = |app: &mut App, parent: Option<argus_core::forge::ParentInfo>| {
+        app.on_msg(Msg::Forge {
+            path: f.clone(),
+            branches: branches.clone(),
+            info: Ok(Some(argus_core::forge::RepoInfo {
+                open_issues: 2,
+                open_pulls: 1,
+                pulls: vec![a_pull("feat", 12)],
+                parent,
+            })),
+        });
+    };
+    // each linked part of the line starting with `start`: its text and URL
+    let links = |app: &App, start: &str| -> Vec<(String, String)> {
+        app.rows
+            .iter()
+            .find_map(|r| match r {
+                Row::Detail { line, .. } => {
+                    let text: String = line.parts.iter().map(|p| p.1.as_str()).collect();
+                    text.trim_start().starts_with(start).then(|| {
+                        line.links
+                            .iter()
+                            .map(|(i, url)| (line.parts[*i].1.trim().to_string(), url.clone()))
+                            .collect()
+                    })
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+    answer(&mut app, None);
+    assert_eq!(
+        links(&app, "forge"),
+        [
+            pair("2 open issues", "https://github.com/acme/feature/issues"),
+            pair(
+                "1 open pull request",
+                "https://github.com/acme/feature/pulls"
+            ),
+        ]
+    );
+    assert_eq!(
+        links(&app, "* feat"),
+        [pair(
+            "#12 open, checks failing",
+            "https://github.com/acme/feature/pull/12"
+        )]
+    );
+    // a fork: its parent's name and counts, then its own
+    answer(
+        &mut app,
+        Some(argus_core::forge::ParentInfo {
+            name: "up/feature".into(),
+            open_issues: 9,
+            open_pulls: 0,
+        }),
+    );
+    assert_eq!(
+        forge_line(&app).unwrap(),
+        "forge     up/feature: 9 open issues, 0 open pull requests; this fork: 2 open issues, 1 open pull request"
+    );
+    assert_eq!(
+        links(&app, "forge"),
+        [
+            pair("up/feature", "https://github.com/up/feature"),
+            pair("9 open issues", "https://github.com/up/feature/issues"),
+            pair(
+                "0 open pull requests",
+                "https://github.com/up/feature/pulls"
+            ),
+            pair("2 open issues", "https://github.com/acme/feature/issues"),
+            pair(
+                "1 open pull request",
+                "https://github.com/acme/feature/pulls"
+            ),
+        ]
+    );
+    // inverse: other lines link nothing
+    assert!(links(&app, "path").is_empty());
+    assert!(links(&app, "old").is_empty());
+}
+
+#[test]
+fn links_are_drawn_over_the_text_they_link() {
+    let (sb, mut app, fx) = forge_setup("");
+    let f = sb.path("dev/feature");
+    let [Effect::Forge { branches, .. }] = fx.as_slice() else {
+        panic!("{fx:?}")
+    };
+    app.on_msg(Msg::Forge {
+        path: f.clone(),
+        branches: branches.clone(),
+        info: Ok(Some(argus_core::forge::RepoInfo {
+            open_issues: 2,
+            open_pulls: 1,
+            pulls: vec![a_pull("feat", 12)],
+            parent: None,
+        })),
+    });
+    let (theme, _) = Theme::build("mono", &Default::default());
+    let draw = |app: &mut App, w: u16, h: u16| {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let view = ui::View {
+            theme: &theme,
+            icons: argus_core::icons::UNICODE,
+            tick: 0,
+        };
+        let mut links = vec![];
+        t.draw(|f| links = ui::draw(f, app, &view)).unwrap();
+        let buf = t.backend().buffer().clone();
+        (links, buf)
+    };
+    // what a style comes to on screen (a cell spells out "no colour")
+    let drawn = |s: ratatui::style::Style| {
+        use ratatui::style::Color::Reset;
+        (s.fg.unwrap_or(Reset), s.bg.unwrap_or(Reset), s.add_modifier)
+    };
+    let (links, buf) = draw(&mut app, 120, 40);
+    let got: Vec<(&str, &str)> = links
+        .iter()
+        .map(|l| (l.text.as_str(), l.url.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("2 open issues", "https://github.com/acme/feature/issues"),
+            (
+                "1 open pull request",
+                "https://github.com/acme/feature/pulls"
+            ),
+            (
+                "#12 open, checks failing",
+                "https://github.com/acme/feature/pull/12"
+            ),
+        ]
+    );
+    // each sits exactly on the cells that show its text, in their style
+    for l in &links {
+        let shown: String = (0..l.text.chars().count() as u16)
+            .map(|dx| buf[(l.x + dx, l.y)].symbol().to_string())
+            .collect();
+        assert_eq!(shown, l.text);
+        assert_eq!(drawn(buf[(l.x, l.y)].style()), drawn(l.style), "{}", l.text);
+    }
+    // what's written over them: there, as a link, and closed again
+    let mut out = vec![];
+    ui::write_links(&mut out, &links[2..]).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    let l = &links[2];
+    assert!(
+        out.starts_with(&format!("\x1b[{};{}H", l.y + 1, l.x + 1)),
+        "{out:?}"
+    );
+    assert!(
+        out.contains("\x1b]8;;https://github.com/acme/feature/pull/12\x1b\\#12 open, checks failing\x1b]8;;\x1b\\"),
+        "{out:?}"
+    );
+    assert!(out.ends_with("\x1b[0m"), "{out:?}");
+    let mut none = vec![];
+    ui::write_links(&mut none, &[]).unwrap();
+    assert!(none.is_empty());
+    // under the cursor, the link takes the selection's style with the row
+    cursor_on_detail(&mut app, "feature", "  * feat");
+    let (links, buf) = draw(&mut app, 120, 40);
+    let l = links.iter().find(|l| l.text.starts_with("#12")).unwrap();
+    assert_eq!(drawn(buf[(l.x, l.y)].style()), drawn(l.style));
+    assert!(
+        l.style
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+            || l.style.bg.is_some(),
+        "the selection's: {:?}",
+        l.style
+    );
+    // a link the width cuts short isn't one; nor any under a menu
+    let (links, _) = draw(&mut app, 50, 40);
+    assert!(
+        !links.iter().any(|l| l.text.starts_with("#12")),
+        "{links:?}"
+    );
+    app.on_key(key('m'));
+    assert!(draw(&mut app, 120, 40).0.is_empty());
 }

@@ -213,6 +213,9 @@ fn unfolded_rows(
 fn padded(mut line: DetailLine, pad: usize) -> DetailLine {
     if pad > 0 {
         line.parts.insert(0, (None, " ".repeat(pad)));
+        for l in &mut line.links {
+            l.0 += 1;
+        }
     }
     line
 }
@@ -241,6 +244,7 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
             expand: None,
             fix: None,
             body: false,
+            links: vec![],
         }
     };
     let body = |parts| DetailLine {
@@ -440,6 +444,7 @@ fn diff_rows(
         expand: None,
         fix: None,
         body: false,
+        links: vec![],
     };
     let mut v = vec![];
     for (side, _, title) in sides.into_iter().filter(|s| s.1) {
