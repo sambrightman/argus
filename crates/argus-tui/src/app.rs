@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use argus_core::attention::Issue;
 use argus_core::badges::Role;
 use argus_core::config::StashConfig;
-use argus_core::diff::{self, FileDiff, LineKind, Side};
+use argus_core::diff::{self, FileDiff, Side};
 use argus_core::fix::{self, Applied, FixKind};
 use argus_core::gitignore::IgnoreFile;
 use argus_core::ops::{self, Op, OpOutcome, ResetMode};
@@ -17,7 +17,7 @@ use argus_core::status::RepoStatus;
 use argus_core::{Entry, ViewFilter, Workspace, paths, plural};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::details::{DetailLine, DiffRef, Expand, Section, ago, describe, details};
+use crate::details::{DetailLine, DiffRef, Expand, Fold, Section, ago, describe, details};
 use crate::input::{Edit, LineEditor};
 use crate::menu::{self, Item, Menu, MenuId};
 
@@ -203,10 +203,16 @@ fn unfolded_rows(
     if !unfolded.contains(&(repo.to_path_buf(), x.clone())) {
         return vec![];
     }
-    cache
+    let rows = cache
         .entry((repo.to_path_buf(), x.clone(), indent))
         .or_insert_with(|| unfold(repo, s, x, indent))
-        .clone()
+        .clone();
+    // each knows what was unfolded to show it, to fold it again from there
+    let child = |mut l: DetailLine| {
+        l.parent = Some(x.clone());
+        l
+    };
+    rows.into_iter().map(child).collect()
 }
 
 /// `line` indented `pad` more spaces.
@@ -246,6 +252,8 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
             body: false,
             links: vec![],
             section: None,
+            fold: None,
+            parent: None,
         }
     };
     let body = |parts| DetailLine {
@@ -314,7 +322,13 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
                         .lines()
                         .map(|l| body(vec![(None, format!("  {l}"))])),
                 );
-                rows.push(line(vec![dim(format!("files ({})", d.files.len()))]));
+                // (its files fold to this line, one commit's apart from
+                // another's)
+                let files = format!("files {}", d.id);
+                rows.push(DetailLine {
+                    fold: Fold::head(files.clone()),
+                    ..line(vec![dim(format!("files ({})", d.files.len()))])
+                });
                 rows.extend(d.files.iter().map(|(code, path)| {
                     let role = match code {
                         'A' => Role::Ahead,
@@ -322,6 +336,7 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
                         _ => Role::Unstaged,
                     };
                     DetailLine {
+                        fold: Fold::member(files.clone()),
                         expand: Some(Expand::CommitFile(d.id.clone(), path.clone())),
                         ..line(vec![
                             (Some(role), format!("  {code}")),
@@ -350,16 +365,7 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
                 for h in hunks {
                     rows.push(line(vec![(Some(Role::DiffHunk), h.header())]));
                     for l in &h.lines {
-                        let (role, mark) = match l.kind {
-                            LineKind::Add => (Some(Role::DiffAdd), '+'),
-                            LineKind::Remove => (Some(Role::DiffRemove), '-'),
-                            LineKind::Context => (None, ' '),
-                        };
-                        let mut parts = vec![(role, format!("{mark}{}", l.text))];
-                        if l.no_newline {
-                            parts.push(dim("  (no newline at end of file)".into()));
-                        }
-                        rows.push(body(parts));
+                        rows.push(body(crate::details::diff_line(l)));
                     }
                 }
                 rows
@@ -432,6 +438,8 @@ fn diff_rows(
         body: false,
         links: vec![],
         section: Some(section),
+        fold: None,
+        parent: None,
     };
     let mut v = vec![];
     {
@@ -475,19 +483,11 @@ fn diff_rows(
                         )
                     });
                     for l in &hunk.lines {
-                        let (role, mark) = match l.kind {
-                            LineKind::Add => (Some(Role::DiffAdd), '+'),
-                            LineKind::Remove => (Some(Role::DiffRemove), '-'),
-                            LineKind::Context => (None, ' '),
-                        };
+                        let mut parts = vec![indent()];
+                        parts.extend(crate::details::diff_line(l));
                         v.push(DetailLine {
                             body: true,
-                            ..row(
-                                vec![indent(), (role, format!("{mark}{}", l.text))],
-                                side,
-                                None,
-                                None,
-                            )
+                            ..row(parts, side, None, None)
                         });
                     }
                 }
@@ -500,15 +500,8 @@ fn diff_rows(
                         continue;
                     }
                     for (i, l) in hunk.lines.iter().enumerate() {
-                        let (role, mark) = match l.kind {
-                            LineKind::Add => (Some(Role::DiffAdd), '+'),
-                            LineKind::Remove => (Some(Role::DiffRemove), '-'),
-                            LineKind::Context => (None, ' '),
-                        };
-                        let mut parts = vec![indent(), (role, format!("{mark}{}", l.text))];
-                        if l.no_newline {
-                            parts.push((Some(Role::Dim), "  (no newline at end of file)".into()));
-                        }
+                        let mut parts = vec![indent()];
+                        parts.extend(crate::details::diff_line(l));
                         v.push(row(parts, side, Some(h), Some((i, l))));
                     }
                 }
@@ -744,8 +737,9 @@ pub struct App {
     pub editing: Option<PatchEdit>,
     /// Files whose diff is shown, by repo path and file.
     pub expanded_files: BTreeSet<(PathBuf, String, Side)>,
-    /// Sections of changes folded to their own line (Tab on it), by repo.
-    pub folded_sections: BTreeSet<(PathBuf, Section)>,
+    /// Groups folded to their heading (Tab on it), by repo: branches,
+    /// stashes, a section of changes, a commit's files (see [`Fold`]).
+    pub folded: BTreeSet<(PathBuf, String)>,
     /// Folded hunks: repo, file, side, hunk index.
     pub folded_hunks: BTreeSet<(PathBuf, String, Side, usize)>,
     /// Diffs read so far; a repo's go when its status changes.
@@ -812,7 +806,7 @@ impl App {
             region: None,
             editing: None,
             expanded_files: BTreeSet::new(),
-            folded_sections: BTreeSet::new(),
+            folded: BTreeSet::new(),
             folded_hunks: BTreeSet::new(),
             diffs: HashMap::new(),
             unfolded: BTreeSet::new(),
@@ -921,10 +915,9 @@ impl App {
                     lines.into_iter().rev().map(|l| (i, 0, l)).collect();
                 while let Some((r, pad, line)) = stack.pop() {
                     let e = &self.ws.entries[r];
-                    // a folded section shows only its own line
-                    if line.section.is_some_and(|s| {
-                        Section::heads(&line).is_none()
-                            && self.folded_sections.contains(&(e.path.clone(), s))
+                    // a folded group shows only its heading
+                    if line.fold.as_ref().is_some_and(|f| {
+                        !f.head && self.folded.contains(&(e.path.clone(), f.id.clone()))
                     }) {
                         continue;
                     }
@@ -967,11 +960,32 @@ impl App {
                         _ => None,
                     };
                     let inner_pad = unfold_indent(&line);
-                    rows.push(Row::Detail { repo: r, line });
                     // a blank line after a diff sets what follows apart
-                    // from it
-                    let after_diff =
-                        (!diff.is_empty() && !stack.is_empty()).then(crate::details::blank);
+                    // from it; it's the diff's, so Tab there folds it
+                    let follows = !stack.is_empty();
+                    let after_diff = diff.last().filter(|_| follows).map(|last| DetailLine {
+                        file: last.file.clone(),
+                        section: last.section,
+                        diff: last.diff.as_ref().map(|d| {
+                            Box::new(DiffRef {
+                                side: d.side,
+                                hunk: None,
+                                line: None,
+                                at: None,
+                            })
+                        }),
+                        ..crate::details::blank()
+                    });
+                    // (the same under a commit's file)
+                    let commit_file = matches!(line.expand, Some(Expand::CommitFile(..)));
+                    if commit_file && follows && !below.is_empty() {
+                        let blank = DetailLine {
+                            parent: line.expand.clone(),
+                            ..crate::details::blank()
+                        };
+                        stack.push((r, pad, blank));
+                    }
+                    rows.push(Row::Detail { repo: r, line });
                     rows.extend(diff.into_iter().chain(after_diff).map(|line| Row::Detail {
                         repo: r,
                         line: padded(line, pad),
@@ -1394,11 +1408,11 @@ impl App {
                     self.cursor = i;
                 }
             }
-            ToggleExpand if self.on_section().is_some() => {
-                // its own line folds a section of changes, and unfolds it
-                if let Some(key) = self.on_section() {
-                    if !self.folded_sections.remove(&key) {
-                        self.folded_sections.insert(key);
+            ToggleExpand if self.on_heading().is_some() => {
+                // its heading folds a group, and unfolds it
+                if let Some(key) = self.on_heading() {
+                    if !self.folded.remove(&key) {
+                        self.folded.insert(key);
                     }
                     let at = self.cursor;
                     self.rebuild();
@@ -1407,6 +1421,7 @@ impl App {
             }
             ToggleExpand if self.on_unfoldable() => return self.toggle_unfold(),
             ToggleExpand if self.on_file_or_diff() => return self.toggle_file_or_hunk(),
+            ToggleExpand if self.on_child() => return self.fold_parent(),
             ToggleExpand => {
                 if let Some(p) = self.listed_path() {
                     if !self.expanded.remove(&p) {
@@ -3775,14 +3790,40 @@ impl App {
         vec![]
     }
 
-    /// The section of changes whose own line the cursor is on, by repo.
-    fn on_section(&self) -> Option<(PathBuf, Section)> {
+    /// The group whose heading the cursor is on, by repo.
+    fn on_heading(&self) -> Option<(PathBuf, String)> {
         match self.rows.get(self.cursor)? {
             Row::Detail { repo, line } => {
-                Some((self.ws.entries[*repo].path.clone(), Section::heads(line)?))
+                let fold = line.fold.as_ref().filter(|f| f.head)?;
+                Some((self.ws.entries[*repo].path.clone(), fold.id.clone()))
             }
             Row::Repo(_) => None,
         }
+    }
+
+    /// Tab on a line that something was unfolded to show (a commit's
+    /// message, a diff under a commit's file, the blank line after it):
+    /// folds that again, the cursor going to its line.
+    fn fold_parent(&mut self) -> Vec<Effect> {
+        let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor) else {
+            return vec![];
+        };
+        let Some(parent) = line.parent.clone() else {
+            return vec![];
+        };
+        let path = self.ws.entries[*repo].path.clone();
+        self.unfolded.remove(&(path.clone(), parent.clone()));
+        self.rebuild();
+        let at = self.rows.iter().position(|r| {
+            matches!(r, Row::Detail { repo, line }
+                if self.ws.entries[*repo].path == path && line.expand.as_ref() == Some(&parent))
+        });
+        self.cursor = at.unwrap_or(self.cursor);
+        vec![]
+    }
+
+    fn on_child(&self) -> bool {
+        matches!(self.rows.get(self.cursor), Some(Row::Detail { line, .. }) if line.parent.is_some())
     }
 
     fn on_file_or_diff(&self) -> bool {

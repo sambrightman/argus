@@ -393,8 +393,17 @@ Two findings:
   (`App::folded_sections`). Titles stay short and lowercase, like the
   other labels. `argus status --details` prints the same. A blank line
   follows an open diff when anything comes after it (another file, a
-  section): it sets the rest apart from the diff's noise, so there are
-  none until a diff is open. When the
+  section; under a commit's file too): it sets the rest apart from the
+  diff's noise, so there are none until a diff is open.
+* **Tab folds what the line belongs to**, and the whole repo only where
+  nothing smaller applies. A heading folds its group to itself
+  (`DetailLine::fold`: branches, stashes, each section of changes, each
+  commit's files; all open to begin with, `App::folded`). A line that
+  something was unfolded to show knows what (`DetailLine::parent`: a
+  commit's message, a diff under a commit's file) and folds it again,
+  the cursor going to its line. The blank line after a diff is the
+  diff's: Tab there folds it. Diff lines are drawn by one function
+  (`details::diff_line`) wherever they appear. When the
   line under the cursor goes (its file staged, its section emptied), the
   cursor moves on as magit's point does: to the next file of that
   section, else the one before; with the section gone, to the next

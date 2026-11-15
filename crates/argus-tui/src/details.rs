@@ -40,6 +40,38 @@ pub struct DetailLine {
     pub links: Vec<(usize, String)>,
     /// The section of changes this line heads (no `file`) or is in.
     pub section: Option<Section>,
+    /// The group this line heads or is in, which Tab on its heading folds
+    /// to that line: branches, stashes, a section of changes, a commit's
+    /// files.
+    pub fold: Option<Fold>,
+    /// What was unfolded to show this line (a commit, a file's diff):
+    /// Tab on it folds that again.
+    pub parent: Option<Expand>,
+}
+
+/// A line's place in a group that folds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fold {
+    /// The group, among its repo's.
+    pub id: String,
+    /// Whether this is its heading (the line left when it's folded).
+    pub head: bool,
+}
+
+impl Fold {
+    pub fn head(id: impl Into<String>) -> Option<Fold> {
+        Some(Fold {
+            id: id.into(),
+            head: true,
+        })
+    }
+
+    pub fn member(id: impl Into<String>) -> Option<Fold> {
+        Some(Fold {
+            id: id.into(),
+            head: false,
+        })
+    }
 }
 
 /// The sections of a repo's changes, in the order shown (magit's).
@@ -186,6 +218,8 @@ fn line(parts: Vec<(Option<Role>, String)>) -> DetailLine {
         body: false,
         links: vec![],
         section: None,
+        fold: None,
+        parent: None,
     }
 }
 
@@ -195,6 +229,22 @@ pub fn blank() -> DetailLine {
         body: true,
         ..line(vec![])
     }
+}
+
+/// A diff line as shown: its `+`, `-` or space and text, in its colour,
+/// with a note when the file ends without a newline there.
+pub fn diff_line(l: &argus_core::diff::Line) -> Vec<(Option<Role>, String)> {
+    use argus_core::diff::LineKind;
+    let (role, mark) = match l.kind {
+        LineKind::Add => (Some(Role::DiffAdd), '+'),
+        LineKind::Remove => (Some(Role::DiffRemove), '-'),
+        LineKind::Context => (None, ' '),
+    };
+    let mut parts = vec![(role, format!("{mark}{}", l.text))];
+    if l.no_newline {
+        parts.push(styled(Role::Dim, "  (no newline at end of file)"));
+    }
+    parts
 }
 
 fn plain(s: impl Into<String>) -> (Option<Role>, String) {
@@ -525,7 +575,10 @@ pub fn details(
         });
     }
     if !s.branches.is_empty() {
-        v.push(line(vec![styled(Role::Dim, "branches")]));
+        v.push(DetailLine {
+            fold: Fold::head("branches"),
+            ..line(vec![styled(Role::Dim, "branches")])
+        });
         for b in &s.branches {
             let mut parts = vec![
                 plain(if b.is_head { "  * " } else { "    " }),
@@ -586,6 +639,7 @@ pub fn details(
                 parts.push(styled(Role::Dim, format!("  {}", p.title)));
             }
             v.push(DetailLine {
+                fold: Fold::member("branches"),
                 links: link.into_iter().collect(),
                 branch: Some(b.name.clone()),
                 expand: unpushed.map(|_| {
@@ -612,6 +666,7 @@ pub fn details(
         }
         v.push(DetailLine {
             section: Some(section),
+            fold: Fold::head(section.title()),
             ..line(vec![styled(
                 Role::Dim,
                 format!("{} ({})", section.title(), files.len()),
@@ -630,6 +685,7 @@ pub fn details(
             v.push(DetailLine {
                 file: Some(f.path.clone()),
                 section: Some(section),
+                fold: Fold::member(section.title()),
                 expand: (section == Section::Untracked)
                     .then(|| untracked_expand(&f.path, f.kind))
                     .flatten(),
@@ -640,6 +696,7 @@ pub fn details(
         if more > 0 {
             v.push(DetailLine {
                 section: Some(section),
+                fold: Fold::member(section.title()),
                 body: true,
                 ..line(vec![styled(Role::Dim, format!("    … {more} more"))])
             });
@@ -654,10 +711,14 @@ pub fn details(
         if ignored > 0 {
             parts.push(styled(Role::Dim, format!(" ({ignored} ignored)")));
         }
-        v.push(line(parts));
+        v.push(DetailLine {
+            fold: Fold::head("stashes"),
+            ..line(parts)
+        });
         for (n, message) in s.stashes.iter().enumerate().take(MAX_STASHES) {
             let label = format!("          stash@{{{n}}} {message}");
             v.push(DetailLine {
+                fold: Fold::member("stashes"),
                 stash: Some(n),
                 expand: s.stash_ids.get(n).map(|id| Expand::Commit(id.clone())),
                 ..line(vec![if e.stash_ignored.get(n) == Some(&true) {
@@ -669,10 +730,10 @@ pub fn details(
         }
         let more = s.stashes.len().saturating_sub(MAX_STASHES);
         if more > 0 {
-            v.push(line(vec![styled(
-                Role::Dim,
-                format!("          … {more} more"),
-            )]));
+            v.push(DetailLine {
+                fold: Fold::member("stashes"),
+                ..line(vec![styled(Role::Dim, format!("          … {more} more"))])
+            });
         }
     }
     v

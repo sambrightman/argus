@@ -7089,3 +7089,130 @@ fn the_cursor_moves_on_as_magit_does_when_its_line_goes() {
         if line.file.as_deref() == Some("README") && line.diff.is_none()));
     assert!(in_dirty(&app));
 }
+
+#[test]
+fn tab_folds_what_the_line_belongs_to_not_the_whole_repo() {
+    let (sb, mut app) = setup_with("", |sb| {
+        diff_fixture(sb);
+        let d = sb.path("dev/dirty");
+        git(&d, &["branch", "other"]);
+        git(&d, &["stash", "push", "-q", "-m", "kept", "--", "README"]);
+        write(&d, "README", "hello there\n");
+        // a commit to unfold: two files
+        write(&d, "c1", "one\n");
+        write(&d, "c2", "two\n");
+        git(&d, &["add", "c1", "c2"]);
+        git(&d, &["commit", "-q", "-m", "two files", "--", "c1", "c2"]);
+    });
+    let d = sb.path("dev/dirty");
+    to_file(&mut app, "README");
+    let open = |app: &App| app.expanded.contains(&d);
+    let on = |app: &mut App, start: &str| {
+        cursor_on_detail(app, "dirty", start);
+    };
+    let has = |app: &App, text: &str| trimmed(app).iter().any(|t| t.starts_with(text));
+    // a heading folds its own lines, and unfolds them; the repo stays open
+    for (heading, member) in [
+        ("branches", "other"),
+        ("stashes", "stash@{0}"),
+        ("unstaged", "M README"),
+    ] {
+        on(&mut app, heading);
+        assert!(has(&app, member), "{heading}: open by default");
+        app.on_key(code(KeyCode::Tab));
+        assert!(open(&app), "{heading}");
+        assert!(!has(&app, member), "{heading} folded: {:?}", trimmed(&app));
+        assert!(has(&app, heading), "its heading stays");
+        assert!(trimmed(&app)[app.cursor_line()].starts_with(heading));
+        app.on_key(code(KeyCode::Tab));
+        assert!(has(&app, member), "{heading} unfolded");
+    }
+    // inverse: a line with nothing of its own to fold still folds the repo
+    on(&mut app, "path");
+    app.on_key(code(KeyCode::Tab));
+    assert!(!open(&app));
+    app.on_key(code(KeyCode::Tab));
+    // the blank line after a diff folds that diff, leaving its file's line
+    to_file(&mut app, "README");
+    app.on_key(code(KeyCode::Tab));
+    let blank = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Detail { line, .. } if line.parts.iter().all(|p| p.1.trim().is_empty())))
+        .expect("a blank line after the diff");
+    app.cursor = blank;
+    app.on_key(code(KeyCode::Tab));
+    assert!(open(&app));
+    assert!(!has(&app, "+hello there"), "{:?}", trimmed(&app));
+    assert_eq!(trimmed(&app)[app.cursor_line()], "M README");
+    assert!(!trimmed(&app).contains(&String::new()));
+    // a commit's files: their heading folds them; a file's diff ends with
+    // a blank line when another file follows, and Tab on the diff or the
+    // blank folds it back to the file
+    on(&mut app, "issue     2 unpushed commit");
+    app.on_key(code(KeyCode::Tab));
+    app.on_key(key('n'));
+    app.on_key(code(KeyCode::Tab));
+    on(&mut app, "        files (2)");
+    app.on_key(code(KeyCode::Tab));
+    assert!(open(&app) && !has(&app, "A c1"), "{:?}", trimmed(&app));
+    assert!(has(&app, "commit "), "the commit itself stays unfolded");
+    app.on_key(code(KeyCode::Tab));
+    assert!(has(&app, "A c1") && has(&app, "A c2"));
+    let c1 = trimmed(&app).iter().position(|t| t == "A c1").unwrap();
+    app.cursor = app.row_of_detail(c1);
+    app.on_key(code(KeyCode::Tab));
+    let t = trimmed(&app);
+    assert_eq!(t[c1 + 1..c1 + 5], ["@@ -0,0 +1 @@", "+one", "", "A c2"]);
+    for offset in [2, 3] {
+        // on the diff's line, then on the blank one after it
+        if !has(&app, "+one") {
+            app.cursor = app.row_of_detail(c1);
+            app.on_key(code(KeyCode::Tab));
+        }
+        app.cursor = app.row_of_detail(c1 + offset);
+        app.on_key(code(KeyCode::Tab));
+        assert!(
+            open(&app) && !has(&app, "+one"),
+            "{offset}: {:?}",
+            trimmed(&app)
+        );
+        assert_eq!(trimmed(&app)[app.cursor_line()], "A c1", "{offset}");
+        assert!(has(&app, "A c2"), "its commit stays");
+    }
+    // the last file's diff has nothing after it in the commit to set apart
+    let c2 = trimmed(&app).iter().position(|t| t == "A c2").unwrap();
+    app.cursor = app.row_of_detail(c2);
+    app.on_key(code(KeyCode::Tab));
+    let t = trimmed(&app);
+    assert_eq!(t[c2 + 1..c2 + 3], ["@@ -0,0 +1 @@", "+two"]);
+    // a line of a commit's message folds the commit
+    let msg = trimmed(&app).iter().position(|t| t == "two files").unwrap();
+    app.cursor = app.row_of_detail(msg);
+    app.on_key(code(KeyCode::Tab));
+    assert!(open(&app) && !has(&app, "files (2)"), "{:?}", trimmed(&app));
+}
+
+/// Places among the detail rows, for tests that work from their text.
+trait DetailRows {
+    /// The cursor's place among the detail lines (as `trimmed` lists them).
+    fn cursor_line(&self) -> usize;
+    /// The row of the `n`th detail line.
+    fn row_of_detail(&self, n: usize) -> usize;
+}
+
+impl DetailRows for App {
+    fn cursor_line(&self) -> usize {
+        self.rows[..self.cursor]
+            .iter()
+            .filter(|r| matches!(r, Row::Detail { .. }))
+            .count()
+    }
+
+    fn row_of_detail(&self, n: usize) -> usize {
+        (0..self.rows.len())
+            .filter(|&i| matches!(self.rows[i], Row::Detail { .. }))
+            .nth(n)
+            .unwrap()
+    }
+}
