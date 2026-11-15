@@ -230,45 +230,52 @@ pub fn wait_for_key(working: bool, busy: bool) -> Duration {
     }
 }
 
-/// Lets so many through at once: the rest wait their turn.
-struct Gate {
-    free: std::sync::Mutex<usize>,
-    freed: std::sync::Condvar,
+/// So many threads, each taking work as it's free: the rest waits its
+/// turn, in a queue, not in a thread of its own (a question for every
+/// repo opened at once is a queue of thousands, not thousands of threads).
+struct Pool {
+    work: Sender<Box<dyn FnOnce() + Send>>,
 }
 
-impl Gate {
+impl Pool {
+    /// With `n` threads (one at least), which end when the pool goes.
     fn new(n: usize) -> Self {
-        Gate {
-            free: std::sync::Mutex::new(n.max(1)),
-            freed: std::sync::Condvar::new(),
+        let (work, waiting) = unbounded::<Box<dyn FnOnce() + Send>>();
+        for _ in 0..n.max(1) {
+            let waiting = waiting.clone();
+            std::thread::spawn(move || {
+                for job in waiting {
+                    // (work that panics takes no thread with it)
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                }
+            });
         }
+        Pool { work }
     }
 
-    /// Run `work` once there's room.
-    fn run<R>(&self, work: impl FnOnce() -> R) -> R {
-        {
-            let mut free = self.free.lock().unwrap_or_else(|e| e.into_inner());
-            while *free == 0 {
-                free = self.freed.wait(free).unwrap_or_else(|e| e.into_inner());
-            }
-            *free -= 1;
-        }
-        // (its place given back however the work ends, a panic included)
-        struct Place<'a>(&'a Gate);
-        impl Drop for Place<'_> {
-            fn drop(&mut self) {
-                *self.0.free.lock().unwrap_or_else(|e| e.into_inner()) += 1;
-                self.0.freed.notify_one();
-            }
-        }
-        let _place = Place(self);
-        work()
+    /// Run `job` when a thread is free.
+    fn run(&self, job: impl FnOnce() + Send + 'static) {
+        let _ = self.work.send(Box::new(job));
     }
 }
 
-/// Carries out the app's effects, except suspending the terminal: saving
-/// marks and state, opening URLs, and background work (scans, refreshes,
-/// jobs, fixes, planning pulls and clones) whose results come back as messages.
+/// Background work that's out: counted from when it's made until it's
+/// dropped, however the work ends (a panic included).
+struct Pending(Arc<AtomicUsize>);
+
+impl Pending {
+    fn new(count: &Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Pending(count.clone())
+    }
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 pub struct Runtime {
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -278,7 +285,7 @@ pub struct Runtime {
     pending: Arc<AtomicUsize>,
     /// Forge requests out at once: as many as other network work
     /// (`concurrency.network`), however many repos are opened together.
-    forge_gate: Option<Arc<Gate>>,
+    forge_pool: Option<Pool>,
     /// The forge clients made so far, by kind and host.
     forges: pull::Clients,
 }
@@ -291,7 +298,7 @@ impl Runtime {
             rx,
             cancel: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(AtomicUsize::new(0)),
-            forge_gate: None,
+            forge_pool: None,
             forges: Default::default(),
             opts,
         }
@@ -369,19 +376,11 @@ impl Runtime {
         !self.rx.is_empty()
     }
 
-    /// Run `work` on a thread, counted as pending until it returns.
+    /// Run `work` on a thread of its own, counted as pending until it ends.
     fn spawn(&self, work: impl FnOnce(Sender<Msg>) + Send + 'static) {
-        let (tx, pending) = (self.tx.clone(), self.pending.clone());
-        pending.fetch_add(1, Ordering::SeqCst);
-        // (no longer pending however it ends, a panic included)
-        struct Pending(Arc<AtomicUsize>);
-        impl Drop for Pending {
-            fn drop(&mut self) {
-                self.0.fetch_sub(1, Ordering::SeqCst);
-            }
-        }
+        let (tx, pending) = (self.tx.clone(), Pending::new(&self.pending));
         std::thread::spawn(move || {
-            let _pending = Pending(pending);
+            let _pending = pending;
             work(tx);
         });
     }
@@ -483,14 +482,12 @@ impl Runtime {
                 // one client per forge, so its token is found once
                 let forge = self.forges.get(self.opts.forge_factory, &kind, &id.host);
                 let jobs = app.ws.config.network_jobs();
-                let gate = self
-                    .forge_gate
-                    .get_or_insert_with(|| Arc::new(Gate::new(jobs)))
-                    .clone();
-                self.spawn(move |tx| {
+                let pool = self.forge_pool.get_or_insert_with(|| Pool::new(jobs));
+                let (tx, pending) = (self.tx.clone(), Pending::new(&self.pending));
+                pool.run(move || {
+                    let _pending = pending;
                     let ask = |f: Arc<dyn argus_core::forge::Forge>| {
-                        gate.run(|| f.info(&id, &branches, &owners))
-                            .map_err(|e| e.to_string())
+                        f.info(&id, &branches, &owners).map_err(|e| e.to_string())
                     };
                     let info = forge.and_then(ask);
                     let _ = tx.send(Msg::Forge {
@@ -557,50 +554,40 @@ mod tests {
     }
 
     #[test]
-    fn a_gate_gets_its_place_back_from_work_that_panics() {
-        use std::sync::Arc;
-        let gate = Arc::new(super::Gate::new(1));
-        let g = gate.clone();
-        let panicked = std::thread::spawn(move || g.run(|| panic!("in the work"))).join();
-        assert!(panicked.is_err());
-        // (with the one place lost, this would wait for ever)
-        let g = gate.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || tx.send(g.run(|| 7)));
-        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(10)), Ok(7));
-    }
-
-    #[test]
-    fn a_gate_lets_only_so_many_through_at_once() {
-        use std::sync::Arc;
+    fn a_pool_runs_so_many_at_once_on_its_own_threads_whatever_is_asked() {
+        use std::collections::HashSet;
         use std::sync::atomic::{AtomicUsize, Ordering};
-        for size in [1, 3] {
-            let gate = Arc::new(super::Gate::new(size));
+        use std::sync::{Arc, Mutex};
+        // (none asked for is one)
+        for (size, threads) in [(1, 1), (3, 3), (0, 1)] {
+            let pool = super::Pool::new(size);
             let (inside, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-            let threads: Vec<_> = (0..12)
-                .map(|_| {
-                    let (gate, inside, most) = (gate.clone(), inside.clone(), most.clone());
-                    std::thread::spawn(move || {
-                        gate.run(|| {
-                            let now = inside.fetch_add(1, Ordering::SeqCst) + 1;
-                            most.fetch_max(now, Ordering::SeqCst);
-                            std::thread::sleep(std::time::Duration::from_millis(5));
-                            inside.fetch_sub(1, Ordering::SeqCst);
-                        })
-                    })
-                })
-                .collect();
-            for t in threads {
-                t.join().unwrap();
+            let ran = Arc::new(Mutex::new(HashSet::new()));
+            let (done, results) = std::sync::mpsc::channel();
+            for n in 0..40 {
+                let (inside, most, ran, done) =
+                    (inside.clone(), most.clone(), ran.clone(), done.clone());
+                pool.run(move || {
+                    let now = inside.fetch_add(1, Ordering::SeqCst) + 1;
+                    most.fetch_max(now, Ordering::SeqCst);
+                    ran.lock().unwrap().insert(std::thread::current().id());
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    inside.fetch_sub(1, Ordering::SeqCst);
+                    // one of them panics: the rest still run
+                    assert_ne!(n, 7, "in the work");
+                    done.send(n).unwrap();
+                });
             }
-            // all ran, never more than the size at once, and (with room
-            // for several) more than one
-            assert_eq!(inside.load(Ordering::SeqCst), 0);
+            drop(done);
+            let finished: Vec<i32> = results.iter().collect();
+            assert_eq!(finished.len(), 39, "{size}: all but the one that panicked");
             let most = most.load(Ordering::SeqCst);
-            assert!(most <= size && (size == 1 || most > 1), "{size}: {most}");
+            assert!(
+                most <= threads && (threads == 1 || most > 1),
+                "{size}: {most}"
+            );
+            assert!(ran.lock().unwrap().len() <= threads, "{size}");
         }
-        // none is no gate at all: one
-        assert_eq!(*super::Gate::new(0).free.lock().unwrap(), 1);
     }
 
     #[test]
