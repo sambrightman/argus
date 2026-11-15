@@ -1001,10 +1001,25 @@ fn pull(cwd: &Path, started: Instant) -> OpOutcome {
 /// records. Not `switch --recurse-submodules`: that silently overwrites
 /// untracked files in a submodule, where `submodule update` (as `pull
 /// --recurse-submodules` uses) refuses, leaving the submodule as it was.
+/// Only submodules that were at their recorded commit follow: one put at
+/// another commit on purpose stays there (and is said to have).
 fn switch(cwd: &Path, op: &Op, started: Instant) -> OpOutcome {
+    let before = submodule_states(cwd);
     let mut o = git(cwd, &op.args(), started);
-    if o.success && cwd.join(".gitmodules").exists() {
-        let u = git_in(cwd, &["submodule", "update", "--recursive"]);
+    if !o.success || before.is_empty() {
+        return o;
+    }
+    let now = submodule_states(cwd);
+    let still = |path: &&String| now.iter().any(|(p, _)| p == *path);
+    let at = |state: char| {
+        let of = before.iter().filter(move |(_, s)| *s == state);
+        of.map(|(p, _)| p).filter(still)
+    };
+    let follow: Vec<&String> = at(' ').collect();
+    if !follow.is_empty() {
+        let mut args = vec!["submodule", "update", "--recursive", "--"];
+        args.extend(follow.iter().map(|p| p.as_str()));
+        let u = git_in(cwd, &args);
         if !u.success {
             o.success = false;
             o.output.push_str(&format!(
@@ -1012,9 +1027,37 @@ fn switch(cwd: &Path, op: &Op, started: Instant) -> OpOutcome {
                 u.output
             ));
         }
-        o.duration = started.elapsed();
     }
+    for path in at('+') {
+        o.output.push_str(&format!(
+            "\nargus: {path} left where it was: it wasn't at the commit recorded for it"
+        ));
+    }
+    o.duration = started.elapsed();
     o
+}
+
+/// The repo's own submodules by path, each with its state as `git
+/// submodule status` marks it: ` ` at the recorded commit, `+` at
+/// another, `-` not checked out, `U` conflicted.
+fn submodule_states(cwd: &Path) -> Vec<(String, char)> {
+    if !cwd.join(".gitmodules").exists() {
+        return vec![];
+    }
+    let listed = git_in(cwd, &["submodule", "status"]);
+    // (the mark, the commit, the path; the first line's blank mark may
+    // have been trimmed away with the output's ends)
+    let line = |l: &str| {
+        let state = l.chars().next().filter(|c| "+-U".contains(*c));
+        let (_, rest) = l.trim_start_matches(['+', '-', 'U', ' ']).split_once(' ')?;
+        // (then how the commit is described, in brackets, when it can be)
+        let path = match rest.rsplit_once(" (") {
+            Some((path, _)) if rest.ends_with(')') => path,
+            _ => rest,
+        };
+        Some((path.to_string(), state.unwrap_or(' ')))
+    };
+    listed.output.lines().filter_map(line).collect()
 }
 
 /// `git` with `input` on its stdin.
@@ -1083,6 +1126,8 @@ fn instant_fixup(cwd: &Path, op: &Op, commit: &str, started: Instant) -> OpOutco
         "--interactive",
         "--autosquash",
         "--autostash",
+        // (merges made since the commit stay merges)
+        "--rebase-merges",
     ]
     .map(String::from)
     .to_vec();
@@ -1141,7 +1186,11 @@ fn spin_off(cwd: &Path, name: &str, stay: bool, started: Instant) -> OpOutcome {
         }
         if let Some(base) = &base {
             if stay {
-                step(&["reset", "--hard", base])?;
+                // (`--keep`, not `--hard`: an untracked file where the
+                // older commit has one stops it instead of being lost)
+                step(&["reset", "--keep", base]).inspect_err(|_| {
+                    git_in(cwd, &["branch", "-D", name]);
+                })?;
             } else {
                 let refname = format!("refs/heads/{current}");
                 let msg = format!("spin off {name}: moving to {base}");

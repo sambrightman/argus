@@ -1685,6 +1685,41 @@ fn a_fixup_commits_whats_staged_for_a_later_autosquash() {
     );
 }
 
+/// Folding a fixup into a commit before a merge keeps the merge: the
+/// history after the commit is replayed as it was, not flattened.
+#[test]
+fn an_instant_fixup_keeps_merges_made_since() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "a", "1\n");
+    commit(&r, "add a");
+    let target = git(&r, &["rev-parse", "HEAD"]).trim().to_string();
+    git(&r, &["switch", "-q", "-c", "side"]);
+    write(&r, "s", "1\n");
+    commit(&r, "add s");
+    git(&r, &["switch", "-q", "-"]);
+    write(&r, "b", "1\n");
+    commit(&r, "add b");
+    git(&r, &["merge", "-q", "--no-ff", "-m", "merge side", "side"]);
+    let merges = |r: &std::path::Path| git(r, &["rev-list", "--merges", "--count", "HEAD"]);
+    assert_eq!(merges(&r).trim(), "1");
+    write(&r, "a", "2\n");
+    git(&r, &["add", "a"]);
+    let o = argus_core::ops::run(
+        &r,
+        &Op::Fixup {
+            commit: target,
+            squash: None,
+            instant: true,
+        },
+    );
+    assert!(o.success, "{}", o.output);
+    assert_eq!(merges(&r).trim(), "1", "still a merge");
+    assert_eq!(git(&r, &["log", "-1", "--format=%s"]).trim(), "merge side");
+    assert_eq!(git(&r, &["show", "HEAD~1:a"]), "2\n", "folded in");
+    assert!(!git(&r, &["log", "--format=%s"]).contains("fixup!"));
+}
+
 /// A squash commit (`squash! …`, with a message to add), and the instant
 /// kinds, folded in at once by a non-interactive autosquash rebase.
 #[test]

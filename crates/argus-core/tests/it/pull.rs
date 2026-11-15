@@ -673,6 +673,35 @@ fn switching_never_overwrites_a_submodules_changes() {
     assert_eq!(git(&r, &["branch", "--show-current"]).trim(), "bumped");
 }
 
+/// A submodule the user has put at a commit of their own (not the one the
+/// branch records) stays there through a switch: checking out the new
+/// branch's commit would leave theirs on no branch.
+#[test]
+fn switching_leaves_a_submodule_that_was_moved_on_purpose() {
+    let sb = Sandbox::new();
+    let (r, new) = submodule_bumped(&sb, "app");
+    git(&r, &["fetch", "-q"]);
+    git(&r, &["branch", "-q", "bumped", "origin/main"]);
+    let lib = r.join("lib");
+    commit(&lib, "mine");
+    let mine = git(&lib, &["rev-parse", "HEAD"]);
+    let out = ops::run(
+        &r,
+        &Op::Switch {
+            branch: "bumped".into(),
+        },
+    );
+    assert!(out.success, "{}", out.output);
+    assert_eq!(git(&r, &["branch", "--show-current"]).trim(), "bumped");
+    assert_eq!(git(&lib, &["rev-parse", "HEAD"]), mine);
+    assert_ne!(mine, new);
+    assert!(
+        out.output.contains("lib left where it was"),
+        "{}",
+        out.output
+    );
+}
+
 #[test]
 fn a_pull_never_overwrites_a_submodules_changes() {
     // the bumped commit adds `new` (in the way) and leaves README (carried)
@@ -805,6 +834,25 @@ fn spinning_off_moves_the_unpushed_commits_to_a_new_branch() {
         "uncommitted\n"
     );
     git(&r, &["checkout", "-q", "--", "README"]);
+    // spin-out over an untracked file the older commit has: refused, the
+    // file and the branch as they were, no new branch left behind
+    git(&r, &["switch", "-q", "main"]);
+    git(&r, &["reset", "-q", "--hard", "origin/main"]);
+    git(&r, &["rm", "-q", "README"]);
+    git(&r, &["commit", "-q", "-m", "no README"]);
+    let without = rev(&r, "HEAD");
+    write(&r, "README", "mine, untracked\n");
+    let o = spin(&r, "feat4", true);
+    assert!(!o.success, "{}", o.output);
+    assert_eq!(
+        std::fs::read_to_string(r.join("README")).unwrap(),
+        "mine, untracked\n"
+    );
+    assert_eq!((current(&r), rev(&r, "HEAD")), ("main".into(), without));
+    assert!(!git(&r, &["branch", "--list", "feat4"]).contains("feat4"));
+    std::fs::remove_file(r.join("README")).unwrap();
+    git(&r, &["reset", "-q", "--hard", &head]);
+    git(&r, &["switch", "-q", "feat3"]);
     // an existing name: refused, nothing changed
     let o = spin(&r, "feat", false);
     assert!(
