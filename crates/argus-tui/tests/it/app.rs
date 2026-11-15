@@ -7891,10 +7891,10 @@ fn the_stash_menu_offers_only_what_applies() {
     assert_eq!(
         labels,
         [
-            "include untracked *",
-            "keep index *",
+            "include untracked*",
+            "keep index*",
             "message",
-            "stash all *",
+            "stash all*",
             "stash staged"
         ]
     );
@@ -7913,7 +7913,7 @@ fn the_stash_menu_offers_only_what_applies() {
     to_file(&mut app, "README");
     app.act(Action::ToggleMark);
     let items = offered(&mut app);
-    assert!(items.contains(&('m', "stash marked *".into())), "{items:?}");
+    assert!(items.contains(&('m', "stash marked*".into())), "{items:?}");
     app.marked_files.clear();
     // a stash: pop and drop, asking which unless the cursor is on one
     git(&d, &["stash", "push", "-q", "-m", "mine"]);
