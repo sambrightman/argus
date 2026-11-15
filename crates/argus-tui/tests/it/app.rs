@@ -7834,10 +7834,10 @@ fn every_line_says_where_it_is() {
     let (_sb, mut app) = setup_with("[marks.ignore.issues]\nstashes = []\n", prep);
     cursor_on_detail(&mut app, "feature", "issue     1 unpushed commit");
     let at = |start: &str| id_of(&app, start).unwrap_or_else(|| panic!("{start}"));
-    let issue = |name: &str| vec![Seg::Issue(name.into())];
+    let issue = |name: &'static str, shown: &'static str| vec![Seg::Issue(name, shown)];
     let branch = |name: &str| vec![Seg::Branches, Seg::Branch(name.into())];
-    assert_eq!(at("issue     1 unpushed"), issue("unpushed"));
-    assert_eq!(at("issue     1 stash"), issue("stashes"));
+    assert_eq!(at("issue     1 unpushed"), issue("unpushed", ""));
+    assert_eq!(at("issue     1 stash"), issue("stashes", ""));
     assert_eq!(at("* feat"), branch("feat"));
     assert_eq!(at("main"), branch("main"));
     assert!(
@@ -7855,7 +7855,7 @@ fn every_line_says_where_it_is() {
     let line = "issue     not on default branch (main)  (ignored)";
     assert_eq!(
         id_of(&app, line).unwrap(),
-        issue("non_default_branch ignored")
+        issue("non_default_branch", "ignored")
     );
     let key = app.current().unwrap().key.clone();
     let until = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
@@ -7866,7 +7866,7 @@ fn every_line_says_where_it_is() {
     app.rebuild();
     assert_eq!(
         id_of(&app, "issue     1 unpushed commit(s)  (snoozed").unwrap(),
-        issue("unpushed snoozed")
+        issue("unpushed", "snoozed")
     );
     // what a line unfolds into is under it
     cursor_on_detail(&mut app, "feature", "  * feat");

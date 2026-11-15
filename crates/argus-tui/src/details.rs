@@ -56,10 +56,12 @@ pub enum Seg {
     Info(&'static str),
     /// A line of text, by its place: an error's, a commit message's.
     Text(usize),
-    /// An issue's line, by its name (and `ignored` or `snoozed`).
-    Issue(String),
-    /// A fix's line, by its label and kind.
-    Fix(String),
+    /// An issue's line, by its name and how it's shown: counted (none),
+    /// `ignored` or `snoozed`.
+    Issue(&'static str, &'static str),
+    /// A fix's line, by its label (`auto-fix`, `then`, `fix`; `…` for one
+    /// that asks first) and its kind's name.
+    Fix(&'static str, &'static str),
     Branches,
     Branch(String),
     Section(Section),
@@ -374,7 +376,7 @@ pub fn gone_lines(stale: bool) -> Vec<DetailLine> {
                 styled(Role::Dim, format!("  its folder is gone  ({keys})")),
             ])
         }
-        .at(Seg::Fix("gone".into())),
+        .at(Seg::Fix("fix", "gone")),
     ]
 }
 
@@ -563,7 +565,7 @@ pub fn details(
                 expand: issue_expand(issue, s),
                 ..line(vec![styled(Role::Dim, "issue     "), styled(role, text)])
             }
-            .at(Seg::Issue(issue.name().into())),
+            .at(Seg::Issue(issue.name(), "")),
         );
     }
     for issue in &e.ignored_issues {
@@ -578,7 +580,7 @@ pub fn details(
                     styled(Role::Dim, format!("{text}  (ignored)")),
                 ])
             }
-            .at(Seg::Issue(format!("{} ignored", issue.name()))),
+            .at(Seg::Issue(issue.name(), "ignored")),
         );
     }
     let now = jiff::Timestamp::now();
@@ -599,7 +601,7 @@ pub fn details(
                     styled(Role::Dim, format!("{text}  (snoozed{left})")),
                 ])
             }
-            .at(Seg::Issue(format!("{} snoozed", issue.name()))),
+            .at(Seg::Issue(issue.name(), "snoozed")),
         );
     }
     let p = fix::preview(s, &e.fix_kinds(priority), stash);
@@ -625,7 +627,7 @@ pub fn details(
                 fix: Some(f.kind),
                 ..line(parts)
             }
-            .at(Seg::Fix(format!("{}{}", label, f.kind.name()))),
+            .at(Seg::Fix(label, f.kind.name())),
         );
     }
     // those that ask for something first, with the keys that run them
@@ -666,7 +668,7 @@ pub fn details(
                 fix: Some(kind),
                 ..line(parts)
             }
-            .at(Seg::Fix(format!("{}…", kind.name()))),
+            .at(Seg::Fix("…", kind.name())),
         );
     }
     if !s.branches.is_empty() {
@@ -742,7 +744,8 @@ pub fn details(
                     }),
                     ..line(parts)
                 }
-                .under(&[Seg::Branches, Seg::Branch(b.name.clone())]),
+                .at(Seg::Branches)
+                .at(Seg::Branch(b.name.clone())),
             );
         }
     }
@@ -800,7 +803,8 @@ pub fn details(
                     body: true,
                     ..line(vec![styled(Role::Dim, format!("    … {more} more"))])
                 }
-                .under(&[Seg::Section(section), Seg::More]),
+                .at(Seg::Section(section))
+                .at(Seg::More),
             );
         }
     }
@@ -827,17 +831,16 @@ pub fn details(
                         plain(label)
                     }])
                 }
-                .under(&[
-                    Seg::Stashes,
-                    Seg::Stash(id.cloned().unwrap_or_else(|| n.to_string())),
-                ]),
+                .at(Seg::Stashes)
+                .at(Seg::Stash(id.cloned().unwrap_or_else(|| n.to_string()))),
             );
         }
         let more = s.stashes.len().saturating_sub(MAX_STASHES);
         if more > 0 {
             v.push(
                 line(vec![styled(Role::Dim, format!("          … {more} more"))])
-                    .under(&[Seg::Stashes, Seg::More]),
+                    .at(Seg::Stashes)
+                    .at(Seg::More),
             );
         }
     }

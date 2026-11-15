@@ -302,7 +302,8 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
                             (None, format!(" {path}")),
                         ])
                     }
-                    .under(&[Seg::Files, Seg::File(path.clone())])
+                    .at(Seg::Files)
+                    .at(Seg::File(path.clone()))
                 }));
                 rows
             }
@@ -406,7 +407,7 @@ fn diff_lines(
         v.push(row(header, DiffPart::Header(h), whole).at(at[h].clone()));
         for (i, l) in hunk.lines.iter().enumerate() {
             let line = row(crate::details::diff_line(l), DiffPart::Line(h, i, l), whole);
-            v.push(line.under(&[at[h].clone(), Seg::Line(i)]));
+            v.push(line.at(at[h].clone()).at(Seg::Line(i)));
         }
     }
     v
@@ -791,7 +792,8 @@ impl App {
     // ---------- rows ----------
 
     /// Recompute rows, keeping the cursor on the same row where possible,
-    /// else on what's nearest (see [`Self::find`]).
+    /// else on what's nearest: what took its place, the next beside it,
+    /// the one before, the line they were under.
     pub fn rebuild(&mut self) {
         let place = self.place(self.cursor);
         self.build_rows();
@@ -896,13 +898,6 @@ impl App {
         Some(top)
     }
 
-    /// Whether the line at `id` of the listed repo at `root` shows what's
-    /// under it.
-    fn is_open(&self, root: &std::path::Path, id: &[Seg]) -> bool {
-        let toggled = self.toggled.get(root).is_some_and(|t| t.contains(id));
-        id.last().is_some_and(Seg::open_by_default) != toggled
-    }
-
     fn build_rows(&mut self) {
         self.rebuilds += 1;
         // nested repos unfolded: entries of their own (again, after a scan),
@@ -970,15 +965,22 @@ impl App {
             }
             let mut stack: Vec<(usize, usize, DetailLine)> =
                 lines.into_iter().rev().map(|l| (i, 0, l)).collect();
+            // (nothing of this repo's folded or unfolded: every line is as
+            // its kind starts, and so is all it's under)
+            let toggled = self.toggled.get(&root);
+            let is_open = |id: &[Seg]| {
+                id.last().is_some_and(Seg::open_by_default)
+                    != toggled.is_some_and(|t| t.contains(id))
+            };
             while let Some((r, pad, line)) = stack.pop() {
                 // (a group's lines come with its heading, folded or not)
-                if (1..line.id.len()).any(|d| !self.is_open(&root, &line.id[..d])) {
+                if toggled.is_some() && (1..line.id.len()).any(|d| !is_open(&line.id[..d])) {
                     continue;
                 }
                 let e = &self.ws.entries[r];
                 let mut below: Vec<(usize, usize, DetailLine)> = vec![];
                 let mut diff = false;
-                let open = line.folds() && self.is_open(&root, &line.id);
+                let open = line.folds() && is_open(&line.id);
                 if let Some(s) = e.status().filter(|_| open) {
                     let changed = line.file.as_ref().zip(line.section);
                     match (&line.expand, changed) {
@@ -3911,7 +3913,7 @@ impl App {
             }
             [Seg::Branches, Seg::Branch(b), ..] => s.branches.iter().any(|x| x.name == *b),
             [Seg::Stashes, Seg::Stash(id), ..] => s.stash_ids.contains(id),
-            [Seg::Issue(name), ..] => issues.iter().any(|i| name.split(' ').next() == Some(i)),
+            [Seg::Issue(name, _), ..] => issues.contains(name),
             _ => true,
         });
         self.toggled.retain(|_, set| !set.is_empty());
