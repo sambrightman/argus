@@ -754,7 +754,7 @@ with `Swatinem/rust-cache`, and mold as the Linux linker.
   rustdoc with warnings as errors, and cargo-machete; the tests with
   nextest's `ci` profile (no fail-fast, two retries, JUnit uploaded) plus
   doctests, on Linux and macOS; a check on the MSRV (`rust-version`,
-  1.90); cargo-deny; coverage with cargo-llvm-cov (summary on the run's
+  1.100); cargo-deny; coverage with cargo-llvm-cov (summary on the run's
   page, lcov uploaded as an artifact and to Codecov for history); and `cargo mutants --in-diff` on what the push or
   PR changed, failing on a missed mutant.
 * `mutants.yml`, weekly and on demand: the full cargo-mutants run in 16
