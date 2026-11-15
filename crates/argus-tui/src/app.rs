@@ -1637,10 +1637,39 @@ impl App {
                     self.info(FILE_HINT);
                     return vec![];
                 }
-                let files: Vec<&String> = targets.iter().flat_map(|(_, f)| f).collect();
-                let question = match files.as_slice() {
-                    [one] => format!("Discard changes to {one}?"),
-                    many => format!("Discard changes to {} files?", many.len()),
+                // what it would do, to say exactly that: unstaged changes
+                // dropped, untracked files deleted, staged work left
+                let planned: Vec<Op> = targets
+                    .iter()
+                    .filter_map(|(i, f)| Some(ops::discard_ops(self.ws.entries[*i].status()?, f)))
+                    .flatten()
+                    .collect();
+                let (mut changed, mut untracked) = (vec![], vec![]);
+                for op in &planned {
+                    match op {
+                        Op::Clean { paths } => untracked.extend(paths),
+                        Op::Restore { paths, .. } => changed.extend(paths),
+                        _ => {}
+                    }
+                }
+                let question = match (changed.as_slice(), untracked.as_slice()) {
+                    ([], []) => {
+                        self.info("nothing unstaged to discard (u unstages what's staged)");
+                        return vec![];
+                    }
+                    ([one], []) => format!("Discard unstaged changes to {one}? They're lost."),
+                    ([], [one]) => format!("Delete untracked {one}? It's lost."),
+                    (c, []) => format!(
+                        "Discard unstaged changes to {} files? They're lost.",
+                        c.len()
+                    ),
+                    ([], u) => format!("Delete {} untracked files? They're lost.", u.len()),
+                    (c, u) => format!(
+                        "Discard unstaged changes to {} {} and delete {} untracked? They're lost.",
+                        c.len(),
+                        plural(c.len(), "file", "files"),
+                        u.len()
+                    ),
                 };
                 let then = targets
                     .iter()

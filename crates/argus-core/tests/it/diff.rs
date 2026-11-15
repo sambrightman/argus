@@ -256,23 +256,39 @@ fn discarding_works_before_the_first_commit() {
     git(&r, &["init", "-q"]);
     write(&r, "a", "1\n");
     git(&r, &["add", "a"]);
+    // staged only: nothing unstaged to discard, and it's left alone
+    assert!(ops::discard_ops(&st(&r), &["a".into()]).is_empty());
+    write(&r, "a", "2\n");
     run_all(&r, ops::discard_ops(&st(&r), &["a".into()]));
-    assert!(codes(&r).is_empty(), "{:?}", codes(&r));
-    assert!(!r.join("a").exists());
+    assert_eq!(codes(&r), ["A  a"]);
+    assert_eq!(std::fs::read_to_string(r.join("a")).unwrap(), "1\n");
 }
 
 #[test]
-fn discard_returns_files_to_head() {
+fn discard_drops_unstaged_changes_and_never_what_is_staged() {
     let sb = Sandbox::new();
     let r = messy(&sb);
+    // more work on top of what's staged
+    write(&r, "staged", "s3\n");
+    write(&r, "added", "a2\n");
+    assert_eq!(
+        codes(&r),
+        [" D gone", " M README", "?? new", "AM added", "MM staged"]
+            .map(String::from)
+            .to_vec()
+            .tap_sort()
+    );
     run_all(&r, ops::discard_ops(&st(&r), &all(&r)));
-    assert!(codes(&r).is_empty(), "{:?}", codes(&r));
+    // the work tree is as the index has it: staged work kept, to the byte
+    assert_eq!(codes(&r), ["A  added", "M  staged"]);
+    assert_eq!(std::fs::read_to_string(r.join("staged")).unwrap(), "s2\n");
+    assert_eq!(std::fs::read_to_string(r.join("added")).unwrap(), "a\n");
     assert_eq!(
         std::fs::read_to_string(r.join("README")).unwrap(),
         "hello\n"
     );
     assert_eq!(std::fs::read_to_string(r.join("gone")).unwrap(), "g\n");
-    assert!(!r.join("new").exists() && !r.join("added").exists());
+    assert!(!r.join("new").exists());
     // inverse: other files are untouched
     let sb = Sandbox::new();
     let r = messy(&sb);
@@ -281,6 +297,54 @@ fn discard_returns_files_to_head() {
         ops::discard_ops(&st(&r), &["README".into(), "new".into()]),
     );
     assert_eq!(codes(&r), [" D gone", "A  added", "M  staged"]);
+}
+
+#[test]
+fn a_conflicted_file_is_discarded_to_head() {
+    let sb = Sandbox::new();
+    let r = sb.init("c");
+    git(&r, &["switch", "-q", "-c", "other"]);
+    write(&r, "README", "theirs\n");
+    commit(&r, "theirs");
+    git(&r, &["switch", "-q", "main"]);
+    write(&r, "README", "ours\n");
+    commit(&r, "ours");
+    assert!(!argus_core::testkit::git_may_fail(
+        &r,
+        &["merge", "-q", "other"]
+    ));
+    assert_eq!(codes(&r), ["UU README"]);
+    run_all(&r, ops::discard_ops(&st(&r), &["README".into()]));
+    assert_eq!(std::fs::read_to_string(r.join("README")).unwrap(), "ours\n");
+}
+
+#[test]
+fn paths_are_taken_literally_not_as_patterns() {
+    let sb = Sandbox::new();
+    let r = sb.init("p");
+    for f in ["notes1.txt", "notes[1].txt"] {
+        write(&r, f, "v1\n");
+    }
+    git(&r, &["add", "."]);
+    commit(&r, "notes");
+    for f in ["notes1.txt", "notes[1].txt", "a.bak", "*.bak"] {
+        write(&r, f, "v2\n");
+    }
+    let only = |f: &str| vec![f.to_string()];
+    // staging the oddly named one stages only it
+    run_all(&r, ops::stage_ops(&st(&r), &only("notes[1].txt")));
+    run_all(&r, ops::stage_ops(&st(&r), &only("*.bak")));
+    assert_eq!(
+        codes(&r),
+        [" M notes1.txt", "?? a.bak", "A  *.bak", "M  notes[1].txt"]
+    );
+    run_all(&r, ops::unstage_ops(&st(&r), &only("notes[1].txt")));
+    run_all(&r, ops::unstage_ops(&st(&r), &only("*.bak")));
+    // and discarding it leaves the ones a pattern would have matched
+    run_all(&r, ops::discard_ops(&st(&r), &only("notes[1].txt")));
+    run_all(&r, ops::discard_ops(&st(&r), &only("*.bak")));
+    assert_eq!(codes(&r), [" M notes1.txt", "?? a.bak"]);
+    assert!(r.join("a.bak").exists() && !r.join("*.bak").exists());
 }
 
 #[test]
@@ -305,7 +369,7 @@ fn file_op_args_keep_paths_after_double_dash() {
     ] {
         let a = op.args();
         let dd = a.iter().position(|s| s == "--").expect("--");
-        assert_eq!(a.last().unwrap(), "-f");
+        assert_eq!(a.last().unwrap(), ":(literal)-f");
         assert!(dd < a.len() - 1, "{a:?}");
     }
 }

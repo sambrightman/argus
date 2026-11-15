@@ -415,6 +415,19 @@ Two findings:
   section's line, else the one before; the repo only when no changes are
   left. It doesn't follow the file to its new section, so `s s s` works
   down a list.
+* **Discard is the unstaged side only.** `K` puts the work tree back as
+  the index has it and deletes untracked files; what's staged is never
+  touched (unstage it first), whether the file is discarded by its line,
+  by its section's or as a marked file. It used to return a file to HEAD,
+  which under the `unstaged` section silently took a file's staged
+  changes too. The question says what will go (unstaged changes, how
+  many untracked files deleted). A conflicted file still goes back to
+  HEAD. Paths are given to git as `:(literal)` pathspecs, so a file
+  named `*.bak` or `notes[1].txt` is that file and no other.
+* **The gitignore fix never replaces a file it couldn't read** (only a
+  missing one starts empty), doesn't write through a `.gitignore` in the
+  work tree that is a symbolic link, and refuses a name with a line
+  break, which no rule can express.
 * **Every issue has an icon in the row.** A repo is never listed as
   needing attention without its row saying why. `badges::issue_icon`
   names the icon of each kind of issue with no wildcard, so adding an

@@ -383,7 +383,10 @@ impl Op {
             }
             Op::Clean { paths } => with_paths(v(&["clean", "-f", "-q"]), paths),
             Op::SubmoduleUpdate { paths } => {
-                with_paths(v(&["submodule", "update", "--recursive"]), paths)
+                // (submodule paths, as its listing gives them)
+                let mut a = v(&["submodule", "update", "--recursive", "--"]);
+                a.extend(paths.iter().cloned());
+                a
             }
             // not a git command (see `run`)
             Op::Ignore { .. } => vec![],
@@ -532,7 +535,9 @@ mod duration_ms {
 /// `args` then `--` and the paths, so none can be taken as an option.
 fn with_paths(mut args: Vec<String>, paths: &[String]) -> Vec<String> {
     args.push("--".into());
-    args.extend(paths.iter().cloned());
+    // each exactly the path it names: git would otherwise read `*`, `?`
+    // and `[…]` in a file's name as a pattern, and act on every match
+    args.extend(paths.iter().map(|p| format!(":(literal){p}")));
     args
 }
 
@@ -550,9 +555,17 @@ fn codes<'a>(
     s: &'a crate::status::RepoStatus,
     files: &'a [String],
 ) -> impl Iterator<Item = (&'a String, char)> {
+    both_codes(s, files).map(|(f, index, _)| (f, index))
+}
+
+/// Each of `files` that has changes, with its index and work tree codes.
+fn both_codes<'a>(
+    s: &'a crate::status::RepoStatus,
+    files: &'a [String],
+) -> impl Iterator<Item = (&'a String, char, char)> {
     files
         .iter()
-        .filter_map(|f| s.changes.entry(f).map(|c| (f, c.index)))
+        .filter_map(|f| s.changes.entry(f).map(|c| (f, c.index, c.worktree)))
 }
 
 /// Stage `files` (changes, new files and deletions): tracked ones, then
@@ -620,31 +633,38 @@ pub fn unstage_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
     ops
 }
 
-/// Discard every change to `files`, back to HEAD: restore files in HEAD
-/// (index and work tree), remove newly added ones, delete untracked ones.
+/// Discard the unstaged changes to `files`: the work tree put back as the
+/// index has it, untracked files deleted. What's staged is never touched
+/// (it's unstaged first, by its own key), so a file with nothing unstaged
+/// gets nothing. A conflicted file goes back to HEAD, index and work tree.
 /// Permanently destructive: callers confirm first.
 pub fn discard_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
-    let (mut restore, mut added, mut untracked) = (vec![], vec![], vec![]);
-    for (f, index) in codes(s, files) {
-        match index {
-            '?' => untracked.push(f.clone()),
-            'A' => added.push(f.clone()),
+    let (mut restore, mut conflicted, mut untracked) = (vec![], vec![], vec![]);
+    for (f, index, worktree) in both_codes(s, files) {
+        match (index, worktree) {
+            ('?', _) => untracked.push(f.clone()),
+            ('U', _) => conflicted.push(f.clone()),
+            // nothing unstaged: what's staged is never discarded
+            (_, ' ') => {}
             _ => restore.push(f.clone()),
         }
     }
     let mut ops = vec![];
     if !restore.is_empty() {
+        // the work tree as the index has it: staged changes stay
+        ops.push(Op::Restore {
+            staged: false,
+            worktree: true,
+            from_head: false,
+            paths: restore,
+        });
+    }
+    if !conflicted.is_empty() {
         ops.push(Op::Restore {
             staged: true,
             worktree: true,
             from_head: true,
-            paths: restore,
-        });
-    }
-    if !added.is_empty() {
-        ops.push(Op::Remove {
-            cached: false,
-            paths: added,
+            paths: conflicted,
         });
     }
     if !untracked.is_empty() {

@@ -88,6 +88,12 @@ pub fn plan(
     let shared = |dir: &str| repo.join(dir).join(".gitignore");
     let mut v = vec![];
     for p in paths {
+        // a rule is one line
+        if p.contains(['\n', '\r']) {
+            return Err(format!(
+                "{p:?} has a line break in its name: no rule can name it"
+            ));
+        }
         v.push(match file {
             IgnoreFile::TopLevel => (shared(""), rule(p, "", anchored)),
             IgnoreFile::Directory => (shared(dir_of(p)), rule(p, dir_of(p), anchored)),
@@ -142,7 +148,22 @@ pub fn add(
 ) -> Result<Vec<(PathBuf, String)>, String> {
     let mut added = vec![];
     for (target, rule) in plan(repo, file, paths, anchored)? {
-        let text = std::fs::read_to_string(&target).unwrap_or_default();
+        // a shared file is the repo's content, which may not be the
+        // user's own: one that's a link could lead anywhere
+        let shared = matches!(file, IgnoreFile::TopLevel | IgnoreFile::Directory);
+        if shared && target.is_symlink() {
+            return Err(format!(
+                "{} is a symbolic link: not written through",
+                target.display()
+            ));
+        }
+        // only a file that isn't there starts empty: one that can't be
+        // read (not text, no permission) is never replaced
+        let text = match std::fs::read_to_string(&target) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(format!("{}: {e}", target.display())),
+        };
         if text.lines().any(|l| l == rule) {
             continue;
         }
@@ -207,5 +228,51 @@ mod tests {
         assert_eq!(rule("f*[1]?.txt", "", true), "/f\\*\\[1]\\?.txt");
         assert_eq!(rule("back\\slash", "", false), "back\\\\slash");
         assert_eq!(rule("trailing  ", "", false), "trailing\\ \\ ");
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_never_overwritten() {
+        use crate::testkit::{Sandbox, write};
+        let sb = Sandbox::new();
+        let r = sb.init("r");
+        write(&r, "junk", "x");
+        // not text argus can read: an error, the file as it was
+        let private = r.join(".git/info/exclude");
+        let bytes = b"# caf\xe9 notes\nbuild/\n".to_vec();
+        std::fs::write(&private, &bytes).unwrap();
+        let e = add(&r, IgnoreFile::Private, &["junk".into()], true).unwrap_err();
+        assert!(e.contains("exclude"), "{e}");
+        assert_eq!(std::fs::read(&private).unwrap(), bytes);
+        // inverse: one that isn't there yet is started
+        std::fs::remove_file(&private).unwrap();
+        add(&r, IgnoreFile::Private, &["junk".into()], true).unwrap();
+        assert_eq!(std::fs::read_to_string(&private).unwrap(), "/junk\n");
+        // and one that's there is added to
+        add(&r, IgnoreFile::TopLevel, &["junk".into()], true).unwrap();
+        write(&r, "more", "x");
+        add(&r, IgnoreFile::TopLevel, &["more".into()], true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(r.join(".gitignore")).unwrap(),
+            "/junk\n/more\n"
+        );
+    }
+
+    #[test]
+    fn nothing_is_written_through_a_link_in_the_work_tree_or_for_a_name_with_a_line_break() {
+        use crate::testkit::{Sandbox, write};
+        let sb = Sandbox::new();
+        let r = sb.init("r");
+        let outside = sb.path("outside");
+        std::fs::write(&outside, "mine\n").unwrap();
+        std::os::unix::fs::symlink(&outside, r.join(".gitignore")).unwrap();
+        write(&r, "junk", "x");
+        let e = add(&r, IgnoreFile::TopLevel, &["junk".into()], true).unwrap_err();
+        assert!(e.contains("symbolic link"), "{e}");
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "mine\n");
+        // a rule is one line: a name with a line break can't be one
+        std::fs::remove_file(r.join(".gitignore")).unwrap();
+        let e = add(&r, IgnoreFile::TopLevel, &["a\nb".into()], true).unwrap_err();
+        assert!(e.contains("line break"), "{e}");
+        assert!(!r.join(".gitignore").exists());
     }
 }

@@ -1694,7 +1694,7 @@ fn a_sections_own_line_acts_on_all_its_files_and_folds_it() {
     to_section(&mut app, Section::Unstaged);
     assert!(app.on_key(key('K')).is_empty());
     assert!(
-        matches!(&app.mode, Mode::Confirm { question, .. } if question == "Discard changes to 2 files?")
+        matches!(&app.mode, Mode::Confirm { question, .. } if question == "Discard unstaged changes to 2 files? They're lost.")
     );
     app.on_key(key('n'));
     // Tab folds the section to its own line, and back; the others stay
@@ -1750,7 +1750,10 @@ fn discarding_always_asks() {
     let fx = app.on_key(key('K'));
     assert!(fx.is_empty());
     assert!(matches!(app.mode, Mode::Confirm { .. }));
-    assert!(render(&mut app, 100, 30).contains("Discard changes to README? (y/n)"));
+    assert!(
+        render(&mut app, 100, 30)
+            .contains("Discard unstaged changes to README? They're lost. (y/n)")
+    );
     let fx = app.on_key(key('n'));
     assert!(fx.is_empty() && matches!(app.mode, Mode::Normal));
     // several files: counted; y runs the discard
@@ -1759,21 +1762,75 @@ fn discarding_always_asks() {
     to_file(&mut app, "new");
     app.on_key(key(' '));
     app.on_key(key('K'));
-    assert!(render(&mut app, 100, 30).contains("Discard changes to 2 files? (y/n)"));
+    // (saying what goes: the untracked one is deleted)
+    assert!(render(&mut app, 120, 30).contains(
+        "Discard unstaged changes to 1 file and delete 1 untracked? They're lost. (y/n)"
+    ));
     let fx = app.on_key(key('y'));
     assert_eq!(
         job_ops(&fx),
         [
             Op::Restore {
-                staged: true,
+                staged: false,
                 worktree: true,
-                from_head: true,
+                from_head: false,
                 paths: paths(&["README"])
             },
             Op::Clean {
                 paths: paths(&["new"])
             },
         ]
+    );
+    app.running.clear();
+    app.marked_files.clear();
+    // an untracked file alone: deleted, said so
+    to_file(&mut app, "new");
+    app.on_key(key('K'));
+    assert!(render(&mut app, 100, 30).contains("Delete untracked new? It's lost. (y/n)"));
+    app.on_key(key('n'));
+    // a file with staged changes too: only the unstaged ones go, from
+    // its line or from the section's
+    to_file(&mut app, "both");
+    app.on_key(key('K'));
+    let fx = app.on_key(key('y'));
+    assert_eq!(
+        job_ops(&fx),
+        [Op::Restore {
+            staged: false,
+            worktree: true,
+            from_head: false,
+            paths: paths(&["both"])
+        }]
+    );
+    app.running.clear();
+    to_section(&mut app, argus_tui::details::Section::Unstaged);
+    app.on_key(key('K'));
+    let fx = app.on_key(key('y'));
+    assert_eq!(
+        job_ops(&fx),
+        [Op::Restore {
+            staged: false,
+            worktree: true,
+            from_head: false,
+            paths: paths(&["README", "both"])
+        }]
+    );
+    app.running.clear();
+    // marked, with nothing unstaged: nothing to discard, and nothing asked
+    let d = app.current().unwrap().path.clone();
+    git(&d, &["add", "README", "both"]);
+    app.ws.refresh(&d);
+    app.rebuild();
+    to_file(&mut app, "README");
+    app.on_key(key(' '));
+    assert!(app.on_key(key('K')).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
+    assert!(
+        app.message
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("nothing unstaged to discard")
     );
 }
 
