@@ -1166,7 +1166,6 @@ type Said = std::result::Result<Option<argus_core::forge::RepoInfo>, String>;
 /// What the forges say of the repos at `order`, each asked once, several
 /// at a time; none for a repo with no forge to ask.
 fn ask_forges(ws: &Workspace, order: &[usize]) -> HashMap<PathBuf, Said> {
-    type Client = std::result::Result<Box<dyn argus_core::forge::Forge>, String>;
     let questions: Vec<_> = order
         .iter()
         .filter_map(|&i| {
@@ -1175,17 +1174,18 @@ fn ask_forges(ws: &Workspace, order: &[usize]) -> HashMap<PathBuf, Said> {
             let kind = ws.config.forge_kind(&id.host)?;
             let branches = argus_core::forge::branches_to_ask(s);
             let owners = argus_core::forge::head_owners(id, s);
-            let key = (kind.to_string(), id.host.clone());
-            Some((&e.path, key, id, branches, owners))
+            Some((&e.path, kind, id, branches, owners))
         })
         .collect();
     // one client per forge, so its token is found once
-    let mut clients: HashMap<(String, String), Client> = HashMap::new();
-    for (_, key, ..) in &questions {
-        clients
-            .entry(key.clone())
-            .or_insert_with(|| forge_factory()(&key.0, &key.1).map_err(|e| e.to_string()));
-    }
+    let mut clients = argus_core::pull::Clients::default();
+    let questions: Vec<_> = questions
+        .into_iter()
+        .map(|(path, kind, id, branches, owners)| {
+            let client = clients.get(forge_factory(), kind, &id.host);
+            (path, client, id, branches, owners)
+        })
+        .collect();
     // a few at a time: workers taking the next question until none is left
     let next = std::sync::atomic::AtomicUsize::new(0);
     let said = std::sync::Mutex::new(HashMap::new());
@@ -1194,13 +1194,13 @@ fn ask_forges(ws: &Workspace, order: &[usize]) -> HashMap<PathBuf, Said> {
             scope.spawn(|| {
                 loop {
                     let n = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    let Some((path, key, id, branches, owners)) = questions.get(n) else {
+                    let Some((path, client, id, branches, owners)) = questions.get(n) else {
                         break;
                     };
-                    let answer = match &clients[key] {
-                        Ok(f) => f.info(id, branches, owners).map_err(|e| e.to_string()),
-                        Err(e) => Err(e.clone()),
+                    let ask = |f: &std::sync::Arc<dyn argus_core::forge::Forge>| {
+                        f.info(id, branches, owners).map_err(|e| e.to_string())
                     };
+                    let answer = client.as_ref().map_err(String::clone).and_then(ask);
                     if let Ok(mut said) = said.lock() {
                         said.insert((*path).clone(), answer);
                     }

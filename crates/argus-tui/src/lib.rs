@@ -267,10 +267,7 @@ pub struct Runtime {
     /// (`concurrency.network`), however many repos are opened together.
     forge_gate: Option<Arc<Gate>>,
     /// The forge clients made so far, by kind and host.
-    forges: std::collections::HashMap<
-        (String, String),
-        Result<Arc<dyn argus_core::forge::Forge>, String>,
-    >,
+    forges: pull::Clients,
     /// The state file as last read or written here: what has changed since
     /// is what a save adds to the file (see [`State::save_merged`]).
     ///
@@ -469,17 +466,7 @@ impl Runtime {
                 owners,
             } => {
                 // one client per forge, so its token is found once
-                let key = (kind.clone(), id.host.clone());
-                let forge = match self.forges.get(&key) {
-                    Some(f) => f.clone(),
-                    None => {
-                        let f = (self.opts.forge_factory)(&kind, &id.host)
-                            .map(Arc::<dyn argus_core::forge::Forge>::from)
-                            .map_err(|e| e.to_string());
-                        self.forges.insert(key, f.clone());
-                        f
-                    }
-                };
+                let forge = self.forges.get(self.opts.forge_factory, &kind, &id.host);
                 let jobs = app.ws.config.network_jobs();
                 let gate = self
                     .forge_gate

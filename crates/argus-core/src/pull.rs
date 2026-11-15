@@ -1,7 +1,8 @@
 //! Pull planning: which repos to pull/fetch and which forge repos to clone.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -80,19 +81,12 @@ impl Orphan {
 /// per forge).
 pub fn locate_orphans(plan: &mut PullPlan, factory: ForgeFactory) {
     use rayon::prelude::*;
-    let mut clients = BTreeMap::new();
-    for o in &plan.orphans {
-        clients
-            .entry((o.forge.clone(), o.id.host.clone()))
-            .or_insert_with(|| factory(&o.forge, &o.id.host).map_err(|e| e.to_string()));
-    }
-    let clients = &clients;
-    plan.orphans.par_iter_mut().for_each(|o| {
+    let mut clients = Clients::default();
+    let of = |o: &Orphan| clients.get(factory, &o.forge, &o.id.host);
+    let asked: Vec<_> = plan.orphans.iter().map(of).collect();
+    plan.orphans.par_iter_mut().zip(asked).for_each(|(o, f)| {
         use crate::forge::Whereabouts;
-        let said = match &clients[&(o.forge.clone(), o.id.host.clone())] {
-            Ok(f) => f.whereabouts(&o.id).map_err(|e| e.to_string()),
-            Err(e) => Err(e.clone()),
-        };
+        let said = f.and_then(|f| f.whereabouts(&o.id).map_err(|e| e.to_string()));
         o.state = match said {
             Ok(Whereabouts::Here) => OrphanState::Unlisted,
             Ok(Whereabouts::Moved(to)) => OrphanState::Renamed(to),
@@ -280,6 +274,27 @@ pub fn plan_tracks(
 
 fn wanted(track: &Track, r: &RemoteRepo) -> bool {
     (track.include_archived || !r.archived) && (track.include_forks || !r.fork)
+}
+
+/// A forge client, or why there is none.
+pub type Client = Result<Arc<dyn crate::forge::Forge>, String>;
+
+/// The forge clients made so far, by kind and host: one for each forge,
+/// so its token is looked for once (and a failure said once).
+#[derive(Default)]
+pub struct Clients(HashMap<(String, String), Client>);
+
+impl Clients {
+    /// The client for the forge of `kind` at `host`, made with `factory`
+    /// the first time.
+    pub fn get(&mut self, factory: ForgeFactory, kind: &str, host: &str) -> Client {
+        let made = || {
+            let f = factory(kind, host).map_err(|e| e.to_string())?;
+            Ok(Arc::from(f))
+        };
+        let key = (kind.to_string(), host.to_string());
+        self.0.entry(key).or_insert_with(made).clone()
+    }
 }
 
 /// Creates a forge client for a track's `(forge kind, host)`.
