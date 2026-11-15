@@ -7154,6 +7154,20 @@ fn links_are_drawn_over_the_text_they_link() {
     let mut none = vec![];
     ui::write_links(&mut none, &[]).unwrap();
     assert!(none.is_empty());
+    // a link whose address or text could end the sequence early isn't
+    // written at all
+    for (url, text) in [
+        ("https://x/\x1b\\\x1b]0;t\x07", "#12"),
+        ("file:///etc/passwd", "#12"),
+        ("https://x/1", "#12\x1b[2J"),
+    ] {
+        let mut bad = links[2].clone();
+        (bad.url, bad.text) = (url.into(), text.into());
+        let mut out = vec![];
+        ui::write_links(&mut out, &[bad]).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(!out.contains("]8;;") && !out.contains("]0;"), "{out:?}");
+    }
     // under the cursor, the link takes the selection's style with the row
     cursor_on_detail(&mut app, "feature", "  * feat");
     let (links, buf) = draw(&mut app, 120, 40);

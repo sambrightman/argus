@@ -647,7 +647,8 @@ pub fn details(
                     _ => Role::Dim,
                 };
                 parts.push(plain("  "));
-                link = Some((parts.len(), p.url.clone()));
+                // (a pull request without a usable address isn't a link)
+                link = (!p.url.is_empty()).then(|| (parts.len(), p.url.clone()));
                 parts.push(styled(role, p.summary()));
                 parts.push(styled(Role::Dim, format!("  {}", p.title)));
             }

@@ -485,6 +485,14 @@ impl Runtime {
                     });
                 });
             }
+            // (only a web address: nothing else from a forge is handed
+            // to the opener, which takes files and options too)
+            Effect::Open(url) if argus_core::text::web_url(&url).is_none() => {
+                app.report_error(format!(
+                    "not opened: {:?} isn't a web address",
+                    argus_core::text::printable(&url)
+                ));
+            }
             Effect::Open(url) => {
                 let opener = &self.opts.opener;
                 let r = std::process::Command::new(opener)

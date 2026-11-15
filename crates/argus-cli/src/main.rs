@@ -1,5 +1,22 @@
 //! `argus`: the command-line front-end. With no subcommand it starts the TUI.
 
+/// `println!` for output that may carry text from outside (names, commit
+/// subjects, git's own words): only the colours and links argus writes
+/// reach the terminal, never an escape sequence that came with the text.
+macro_rules! println {
+    () => { std::println!() };
+    ($($t:tt)*) => {
+        std::println!("{}", argus_core::text::terminal_safe(&format!($($t)*)))
+    };
+}
+
+/// `eprintln!`, likewise.
+macro_rules! eprintln {
+    ($($t:tt)*) => {
+        std::eprintln!("{}", argus_core::text::terminal_safe(&format!($($t)*)))
+    };
+}
+
 use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -920,7 +937,7 @@ impl Paint {
         let part = |(n, (role, text)): (usize, &(Option<Role>, String))| {
             let text = match role {
                 Some(r) => self.role(*r, text),
-                None => text.clone(),
+                None => argus_core::text::printable(text).into_owned(),
             };
             match l.links.iter().find(|(at, _)| *at == n) {
                 Some((_, url)) => self.link(&text, url),
@@ -932,9 +949,9 @@ impl Paint {
 
     /// `s` as a link to `url`, where the output can carry one.
     fn link(&self, s: &str, url: &str) -> String {
-        match self.links {
-            true => format!("\x1b]8;;{url}\x1b\\{s}\x1b]8;;\x1b\\"),
-            false => s.to_string(),
+        match argus_core::text::web_url(url).filter(|_| self.links) {
+            Some(url) => format!("\x1b]8;;{url}\x1b\\{s}\x1b]8;;\x1b\\"),
+            None => s.to_string(),
         }
     }
 
@@ -960,6 +977,8 @@ impl Paint {
     }
 
     fn role(&self, role: Role, s: &str) -> String {
+        // (text from outside is shown as text, whatever it has in it)
+        let s = &*argus_core::text::printable(s);
         if !self.color {
             return s.to_string();
         }
@@ -1133,13 +1152,10 @@ fn status(
         );
         let (br_col, br_plain) = br.split_once('\0').unwrap();
         let br_pad = " ".repeat(br_w.saturating_sub(UnicodeWidthStr::width(br_plain)));
-        writeln!(
-            out,
-            "{flags} {}  {br_col}{br_pad}  {state}",
-            pad(&name, name_w)
-        )?;
+        let row = format!("{flags} {}  {br_col}{br_pad}  {state}", pad(&name, name_w));
+        writeln!(out, "{}", argus_core::text::terminal_safe(&row))?;
         for l in lines {
-            writeln!(out, "{l}")?;
+            writeln!(out, "{}", argus_core::text::terminal_safe(&l))?;
         }
     }
     let mut summary = status_summary(ws, filter);
@@ -1150,7 +1166,8 @@ fn status(
             plural(order.len(), "matches", "match")
         );
     }
-    writeln!(out, "{}", p.role(Role::Dim, &summary))?;
+    let summary = p.role(Role::Dim, &summary);
+    writeln!(out, "{}", argus_core::text::terminal_safe(&summary))?;
     Ok(())
 }
 
@@ -2101,6 +2118,15 @@ mod tests {
             ..Paint::detect()
         };
         assert_eq!(plain.link("#12", "https://x/pull/12"), "#12");
+        // an address that isn't a plain web one is no link; text that came
+        // with escapes is shown without them
+        assert_eq!(p.link("#12", "https://x/\x1b\\\x1b]0;t\x07"), "#12");
+        assert_eq!(p.link("#12", "file:///etc/passwd"), "#12");
+        assert_eq!(
+            p.role(Role::Ahead, "a\x1b[2Jb"),
+            "\x1b[32ma\u{fffd}[2Jb\x1b[0m"
+        );
+        assert_eq!(plain.role(Role::Ahead, "a\x07b"), "a\u{fffd}b");
         // in a line, the part that's linked and no other
         let mut l = argus_tui::details::blank();
         l.parts = vec![

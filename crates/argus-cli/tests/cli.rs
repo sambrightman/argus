@@ -2536,3 +2536,44 @@ fn status_names_line_up_whatever_flags_the_rows_have() {
     );
     assert_eq!(c, [4, 4, 4]);
 }
+
+#[test]
+fn text_from_a_repo_never_reaches_the_terminal_as_escape_sequences() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "dev/w");
+    // a file name, a branch-like stash message and a commit subject, each
+    // with a sequence that would retitle the window or clear the screen
+    write(&r, "evil\x1b]0;pwned\x07.txt", "x\n");
+    write(&r, "README", "stash me\n");
+    git(&r, &["stash", "push", "-q", "-m", "stash\x1b[2J"]);
+    git(
+        &r,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "subject\x1b[31m red\x1b]52;c;AAAA\x07",
+        ],
+    );
+    for args in [
+        &["status", "--all", "--details"][..],
+        &["fix", "-n"][..],
+        &["pull", "-n"][..],
+    ] {
+        let o = argus(&sb).args(args).output().unwrap();
+        for (what, bytes) in [("stdout", &o.stdout), ("stderr", &o.stderr)] {
+            let text = String::from_utf8_lossy(bytes);
+            assert!(
+                !text.contains('\x1b') && !text.contains('\x07'),
+                "{args:?} {what}: {text:?}"
+            );
+        }
+    }
+    // the name is still shown, with the odd characters marked
+    let o = argus(&sb).args(["status", "--details"]).output().unwrap();
+    let out = String::from_utf8(o.stdout).unwrap();
+    assert!(out.contains("evil\u{fffd}]0;pwned\u{fffd}.txt"), "{out}");
+    assert!(out.contains("stash\u{fffd}[2J"), "{out}");
+}

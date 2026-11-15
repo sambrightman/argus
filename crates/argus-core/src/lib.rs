@@ -23,6 +23,7 @@ pub mod rules;
 pub mod runner;
 pub mod state;
 pub mod status;
+pub mod text;
 pub mod workspace;
 
 #[cfg(any(test, feature = "testkit"))]

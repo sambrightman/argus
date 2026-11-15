@@ -371,7 +371,7 @@ impl Forge for GitHub {
             open_issues: repo.issues.total_count,
             open_pulls: repo.pull_requests.total_count,
             parent: repo.parent.as_ref().map(|p| ParentInfo {
-                name: p.name_with_owner.clone(),
+                name: argus_core::text::printable(&p.name_with_owner).into_owned(),
                 open_issues: p.issues.as_ref().map_or(0, |c| c.total_count),
                 open_pulls: p.pull_requests.as_ref().map_or(0, |c| c.total_count),
             }),
@@ -530,14 +530,18 @@ impl ApiPull {
         PullRequest {
             branch: branch.to_string(),
             number: self.number,
-            title: self.title.clone(),
+            // (a forge's words are shown as text; its address is used only
+            // if it's a plain web one)
+            title: argus_core::text::printable(&self.title).into_owned(),
             state: match self.state.as_str() {
                 "MERGED" => PullState::Merged,
                 "CLOSED" => PullState::Closed,
                 _ => PullState::Open,
             },
             draft: self.is_draft,
-            url: self.url.clone(),
+            url: argus_core::text::web_url(&self.url)
+                .map(String::from)
+                .unwrap_or_default(),
             review: self.review_decision.as_deref().and_then(|r| match r {
                 "APPROVED" => Some(Review::Approved),
                 "CHANGES_REQUESTED" => Some(Review::ChangesRequested),
@@ -829,6 +833,25 @@ mod tests {
         );
         assert_eq!(one(r#","reviewDecision":"NEW""#).0, None);
         assert_eq!(one(""), (None, None));
+        // its words are shown as text, and its address kept only when
+        // it's a plain web one
+        let odd = |title: &str, url: &str| {
+            let body = format!(
+                r#"{{"data":{{"repository":{{"issues":{{"totalCount":0}},"pullRequests":{{"totalCount":0}},
+                    "b0":{{"nodes":[{{"number":1,"title":{title},"state":"OPEN","url":{url},
+                    "headRepositoryOwner":{{"login":"me"}}}}]}},"parent":null}}}}}}"#
+            );
+            let (g, _) = graphql(GQL, 200, &body);
+            let id = RepoId::new("github.com", "me", "w");
+            let p = g.info(&id, &["f".to_string()], &[]).unwrap().unwrap().pulls[0].clone();
+            (p.title, p.url)
+        };
+        assert_eq!(
+            odd(r#""a\u001b[2Jb""#, r#""https://github.com/x/pull/1""#),
+            ("a\u{fffd}[2Jb".into(), "https://github.com/x/pull/1".into())
+        );
+        assert_eq!(odd(r#""t""#, r#""file:///etc/passwd""#).1, "");
+        assert_eq!(odd(r#""t""#, r#""https://x/\u001b\\""#).1, "");
         // and how it ended
         let state = |state: &str| {
             let body = format!(

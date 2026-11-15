@@ -45,8 +45,16 @@ pub fn write_links(w: &mut impl std::io::Write, links: &[LinkAt]) -> std::io::Re
     use crossterm::{cursor::MoveTo, queue, style::Print};
     use ratatui::backend::IntoCrossterm;
     for l in links {
+        // only a plain web address, around text as the frame shows it:
+        // neither can end the sequence early
+        let Some(url) = argus_core::text::web_url(&l.url) else {
+            continue;
+        };
+        if l.text.contains(|c: char| c.is_control()) {
+            continue;
+        }
         let style: crossterm::style::ContentStyle = l.style.into_crossterm();
-        let text = format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", l.url, l.text);
+        let text = format!("\x1b]8;;{url}\x1b\\{}\x1b]8;;\x1b\\", l.text);
         queue!(w, MoveTo(l.x, l.y), Print(style.apply(text)))?;
     }
     if !links.is_empty() {

@@ -2289,7 +2289,9 @@ impl App {
         };
         let look = self.forge.get(&self.current()?.path)?;
         match &look.answer {
-            Some(Ok(Some(info))) => info.pull(line.branch.as_deref()?),
+            Some(Ok(Some(info))) => info
+                .pull(line.branch.as_deref()?)
+                .filter(|p| !p.url.is_empty()),
             _ => None,
         }
     }

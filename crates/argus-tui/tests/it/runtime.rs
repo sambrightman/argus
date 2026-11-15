@@ -397,6 +397,30 @@ fn urls_are_handed_to_the_opener() {
     run(&mut app, &mut rt, fx);
     let (msg, is_error) = app.message.clone().unwrap();
     assert!(is_error && msg.contains("/no/such/opener"), "{msg}");
+    // only a web address is ever handed over: not a file, nor an option
+    std::fs::remove_file(&got).unwrap();
+    let mut rt = runtime(
+        &sb,
+        &sb.path("config.toml"),
+        script.to_str().unwrap(),
+        &no_forge,
+    );
+    for bad in [
+        "file:///Applications/Calculator.app",
+        "--help",
+        "https://x/\x1b]0;t\x07",
+    ] {
+        app.message = None;
+        run(&mut app, &mut rt, vec![Effect::Open(bad.into())]);
+        let (msg, is_error) = app.message.clone().unwrap();
+        assert!(
+            is_error && msg.contains("isn't a web address"),
+            "{bad}: {msg}"
+        );
+        assert!(!msg.contains('\x1b'), "shown as text: {msg:?}");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(!got.exists(), "the opener wasn't run");
 }
 
 #[test]
