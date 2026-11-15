@@ -206,9 +206,6 @@ fn merge(
     theirs: Option<&toml::Value>,
 ) -> Option<toml::Value> {
     use toml::Value;
-    if ours == theirs || theirs == base {
-        return ours.cloned();
-    }
     if ours == base {
         return theirs.cloned();
     }

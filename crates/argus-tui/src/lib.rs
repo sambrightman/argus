@@ -310,10 +310,8 @@ impl Runtime {
                 other => other,
             };
             // (in the order they came: those before another message first)
-            if !statuses.is_empty() {
-                for e in app.on_statuses(std::mem::take(&mut statuses)) {
-                    left.extend(self.exec(app, e));
-                }
+            for e in app.on_statuses(std::mem::take(&mut statuses)) {
+                left.extend(self.exec(app, e));
             }
             for e in app.on_msg(m) {
                 left.extend(self.exec(app, e));

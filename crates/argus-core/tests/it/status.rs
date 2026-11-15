@@ -419,6 +419,18 @@ fn worktrees_and_submodules_listed() {
     assert_eq!(s.submodules, vec![r.join("vendor/lib")]);
     assert!(s.changes.is_clean());
 
+    // an untracked file inside a submodule is the submodule's too: not a
+    // file staged or untracked here
+    write(&r.join("vendor/lib"), "new-file", "x");
+    let c = st(&r).changes;
+    assert_eq!(
+        (c.staged, c.untracked, c.submodule_content, c.total()),
+        (0, 0, 1, 1),
+        "{:?}",
+        c.files
+    );
+    std::fs::remove_file(r.join("vendor/lib/new-file")).unwrap();
+
     // changes inside a submodule are listed in the parent, but are the
     // submodule's to fix
     write(&r.join("vendor/lib"), "README", "changed");

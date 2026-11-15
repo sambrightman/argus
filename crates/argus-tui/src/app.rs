@@ -2896,11 +2896,10 @@ impl App {
         // the fix just applied, wanted again: most likely a status read
         // before it finished and delivered after. Read once more before
         // taking it as "no progress".
-        let same = |a: &fix::Fix, b: &fix::Fix| a.kind == b.kind && a.op.label() == b.op.label();
         let stale = next
             .as_ref()
             .zip(chain.done.last())
-            .is_some_and(|(n, last)| same(n, last));
+            .is_some_and(|(n, last)| n.op == last.op);
         if stale && !chain.read_again {
             self.chains
                 .entry(path.to_path_buf())
@@ -4237,6 +4236,9 @@ impl App {
         &mut self,
         batch: Vec<(PathBuf, Result<RepoStatus, String>)>,
     ) -> Vec<Effect> {
+        if batch.is_empty() {
+            return vec![];
+        }
         let mut fx = self.statuses(batch);
         fx.extend(self.start_queued());
         self.show_waiting();

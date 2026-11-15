@@ -917,6 +917,22 @@ mod tests {
     use crate::menu::MenuId;
 
     #[test]
+    fn a_file_staged_for_deletion_and_still_there_is_staged_and_untracked() {
+        use argus_core::status::FileChange;
+        let f = |index, worktree| FileChange {
+            path: "f".into(),
+            index,
+            worktree,
+            kind: PathKind::File,
+        };
+        let codes = |f: &FileChange| Section::ALL.map(|s| s.code(f).map(|c| c.1));
+        assert_eq!(codes(&f('D', '?')), [Some('?'), None, Some('D')]);
+        // inverse: changed in both, it's unstaged and staged
+        assert_eq!(codes(&f('M', 'M')), [None, Some('M'), Some('M')]);
+        assert_eq!(codes(&f('?', '?')), [Some('?'), None, None]);
+    }
+
+    #[test]
     fn ago_switches_unit_at_one_and_a_half_of_each() {
         let now = jiff::Timestamp::from_second(1_000_000_000).unwrap();
         let ago = |secs: i64| ago_since(now - jiff::SignedDuration::from_secs(secs), now);

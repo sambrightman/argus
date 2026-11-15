@@ -2277,6 +2277,7 @@ fn the_squash_merge_check_is_done_once_for_the_same_two_commits() {
     );
     assert_eq!(trial_merges(), before + 1, "not merged again");
     // the branch moves: a different pair, checked afresh (and no longer so)
+    let was = git(&r, &["rev-parse", "feat"]);
     git(&r, &["switch", "-q", "feat"]);
     write(&r, "h", "not in main\n");
     git(&r, &["add", "h"]);
@@ -2285,5 +2286,9 @@ fn the_squash_merge_check_is_done_once_for_the_same_two_commits() {
     assert!(!absorbed(&r));
     assert_eq!(trial_merges(), before + 2);
     assert!(!absorbed(&r));
+    assert_eq!(trial_merges(), before + 2);
+    // and back: the first pair is still remembered beside the second
+    git(&r, &["branch", "-q", "-f", "feat", was.trim()]);
+    assert!(absorbed(&r));
     assert_eq!(trial_merges(), before + 2);
 }

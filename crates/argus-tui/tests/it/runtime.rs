@@ -663,4 +663,6 @@ fn statuses_arriving_together_are_one_rebuild() {
     let (_, received) = rt.drain(&mut app);
     assert!(!received);
     assert_eq!(app.rebuilds, before + 1);
+    assert!(app.on_statuses(vec![]).is_empty());
+    assert_eq!(app.rebuilds, before + 1, "no statuses, nothing to do");
 }
