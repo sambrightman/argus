@@ -5755,6 +5755,33 @@ fn editing_marked_lines_of_both_sides_is_refused() {
 }
 
 /// On an unchanged line (or the header), `e` takes the whole hunk.
+/// A patch file's name already taken (left by an argus that had this
+/// process's number) isn't written over, nor does it stop the edit.
+#[test]
+fn the_patch_file_passes_over_names_already_taken() {
+    let (_sb, mut app) = setup_with("", edit_fixture);
+    let name =
+        |n: usize| std::env::temp_dir().join(format!("argus-{}-{n}.diff", std::process::id()));
+    for n in 0..3 {
+        std::fs::write(name(n), "somebody's").unwrap();
+    }
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    app.cursor = diff_row(&app, "line 2");
+    let file = editing_file(&app.on_key(key('e')));
+    assert_eq!(file, name(3));
+    assert!(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("+line three")
+    );
+    for n in 0..3 {
+        assert_eq!(std::fs::read_to_string(name(n)).unwrap(), "somebody's");
+        std::fs::remove_file(name(n)).unwrap();
+    }
+    std::fs::remove_file(file).unwrap();
+}
+
 #[test]
 fn editing_on_an_unchanged_line_takes_the_hunk() {
     let (_sb, mut app) = setup_with("", edit_fixture);

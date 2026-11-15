@@ -513,7 +513,7 @@ fn run() -> Result<()> {
         Cmd::Unmark(m) if m.all => {
             scan(&mut ws);
             unmark_all(&mut ws, &ctx, &m.args, json, cli.yes)?;
-            save_state(&ws, &ctx)?;
+            save_state(&mut ws, &ctx)?;
         }
         Cmd::Unmark(m) => {
             scan(&mut ws);
@@ -526,12 +526,12 @@ fn run() -> Result<()> {
         Cmd::Snooze(a) => {
             scan(&mut ws);
             snooze(&mut ws, &a.patterns, Some(&a.duration), &a.issue, json)?;
-            save_state(&ws, &ctx)?;
+            save_state(&mut ws, &ctx)?;
         }
         Cmd::Unsnooze(a) => {
             scan(&mut ws);
             snooze(&mut ws, &a.patterns, None, &a.issue, json)?;
-            save_state(&ws, &ctx)?;
+            save_state(&mut ws, &ctx)?;
         }
         Cmd::IgnoreIssue(a) => {
             scan(&mut ws);
@@ -564,7 +564,7 @@ fn run() -> Result<()> {
             } else {
                 println!("acknowledged {}", acked.len());
             }
-            save_state(&ws, &ctx)?;
+            save_state(&mut ws, &ctx)?;
         }
         Cmd::Root { .. }
         | Cmd::Paths
@@ -619,8 +619,8 @@ fn scan(ws: &mut Workspace) {
     }
 }
 
-fn save_state(ws: &Workspace, ctx: &Ctx) -> Result<()> {
-    ws.state.save(&ctx.state_path).context("saving state")
+fn save_state(ws: &mut Workspace, ctx: &Ctx) -> Result<()> {
+    ws.save_state(&ctx.state_path).context("saving state")
 }
 
 /// Whether someone at the terminal says yes to `what`: never asked of a

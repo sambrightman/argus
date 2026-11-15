@@ -702,6 +702,58 @@ fn switching_leaves_a_submodule_that_was_moved_on_purpose() {
     );
 }
 
+/// From a branch without the submodule to one with it: checked out, as
+/// any submodule that wasn't put somewhere on purpose.
+#[test]
+fn switching_checks_out_a_submodule_the_branch_left_did_not_have() {
+    let sb = Sandbox::new();
+    let (r, _) = submodule_bumped(&sb, "app");
+    let lib = r.join("lib");
+    let at = git(&lib, &["rev-parse", "HEAD"]);
+    git(&r, &["switch", "-q", "-c", "without"]);
+    git(&r, &["rm", "-q", "lib"]);
+    git(&r, &["commit", "-q", "-m", "no lib"]);
+    assert!(!lib.join("README").exists());
+    let out = ops::run(
+        &r,
+        &Op::Switch {
+            branch: "main".into(),
+        },
+    );
+    assert!(out.success, "{}", out.output);
+    assert!(lib.join("README").exists(), "{}", out.output);
+    assert_eq!(git(&lib, &["rev-parse", "HEAD"]), at);
+    assert!(st(&r).changes.is_clean());
+}
+
+/// A repo whose submodules git can't list (an entry with no mapping)
+/// still switches, and says nothing went wrong.
+#[test]
+fn switching_does_not_fail_for_submodules_that_cannot_be_listed() {
+    let sb = Sandbox::new();
+    let (r, _) = submodule_bumped(&sb, "app");
+    let head = git(&r, &["rev-parse", "HEAD"]);
+    git(
+        &r,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{},ghost", head.trim()),
+        ],
+    );
+    git(&r, &["commit", "-q", "-m", "an entry with no mapping"]);
+    git(&r, &["branch", "-q", "other"]);
+    let out = ops::run(
+        &r,
+        &Op::Switch {
+            branch: "other".into(),
+        },
+    );
+    assert!(out.success, "{}", out.output);
+    assert_eq!(git(&r, &["branch", "--show-current"]).trim(), "other");
+}
+
 #[test]
 fn a_pull_never_overwrites_a_submodules_changes() {
     // the bumped commit adds `new` (in the way) and leaves README (carried)

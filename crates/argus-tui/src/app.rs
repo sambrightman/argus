@@ -3734,23 +3734,24 @@ impl App {
             files.push(file.clone());
         }
         self.marked_lines.clear();
-        let file = std::env::temp_dir().join(format!(
-            "argus-{}-{}.diff",
-            std::process::id(),
-            EDITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
         // a new file, the user's alone: never one somebody else put there
-        // (a shared temp directory), nor through a link
-        let written = {
+        // (a shared temp directory), nor through a link. A name taken (one
+        // left by an argus that had this process's number) is passed over.
+        let text = patch + edit_instructions(reverse);
+        let create = |n: usize| {
             use std::io::Write;
             use std::os::unix::fs::OpenOptionsExt;
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&file)
-                .and_then(|mut f| f.write_all((patch + edit_instructions(reverse)).as_bytes()))
+            let file = std::env::temp_dir().join(format!("argus-{}-{n}.diff", std::process::id()));
+            let mut opts = std::fs::OpenOptions::new();
+            let made = opts.write(true).create_new(true).mode(0o600).open(&file);
+            (made.and_then(|mut f| f.write_all(text.as_bytes())), file)
         };
+        let next = || EDITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let taken = |r: &std::io::Result<()>| matches!(r, Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists);
+        let (written, file) = (0..1000)
+            .map(|_| create(next()))
+            .find(|(r, _)| !taken(r))
+            .unwrap_or_else(|| create(next()));
         if let Err(e) = written {
             self.error(format!("{}: {e}", file.display()));
             return vec![];

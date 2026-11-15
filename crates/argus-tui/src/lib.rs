@@ -268,11 +268,6 @@ pub struct Runtime {
     forge_gate: Option<Arc<Gate>>,
     /// The forge clients made so far, by kind and host.
     forges: pull::Clients,
-    /// The state file as last read or written here: what has changed since
-    /// is what a save adds to the file (see [`State::save_merged`]).
-    ///
-    /// [`State::save_merged`]: argus_core::State::save_merged
-    state_base: argus_core::State,
 }
 
 impl Runtime {
@@ -285,7 +280,6 @@ impl Runtime {
             pending: Arc::new(AtomicUsize::new(0)),
             forge_gate: None,
             forges: Default::default(),
-            state_base: argus_core::State::load(&opts.state_path).unwrap_or_default(),
             opts,
         }
     }
@@ -378,10 +372,7 @@ impl Runtime {
                 }
             }
             Effect::SaveState => {
-                let saved = app
-                    .ws
-                    .state
-                    .save_merged(&self.opts.state_path, &mut self.state_base);
+                let saved = app.ws.save_state(&self.opts.state_path);
                 if let Err(err) = saved {
                     app.report_error(err.to_string());
                 }

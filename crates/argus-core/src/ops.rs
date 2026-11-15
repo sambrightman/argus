@@ -310,11 +310,10 @@ impl Op {
                     a.push("--staged".into());
                 }
                 a.extend(v(&["--message", message]));
-                if !paths.is_empty() {
-                    a.push("--".into());
-                    a.extend(paths.iter().cloned());
+                match paths.is_empty() {
+                    true => a,
+                    false => with_paths(a, paths),
                 }
-                a
             }
             Op::Reset { mode, commit } => {
                 v(&["reset", "-q", mode.flag(), "--end-of-options", commit])
@@ -1022,21 +1021,23 @@ fn pull(cwd: &Path, started: Instant) -> OpOutcome {
 /// records. Not `switch --recurse-submodules`: that silently overwrites
 /// untracked files in a submodule, where `submodule update` (as `pull
 /// --recurse-submodules` uses) refuses, leaving the submodule as it was.
-/// Only submodules that were at their recorded commit follow: one put at
-/// another commit on purpose stays there (and is said to have).
+/// A submodule put at another commit than was recorded stays there (and
+/// is said to have); the rest follow.
 fn switch(cwd: &Path, op: &Op, started: Instant) -> OpOutcome {
     let before = submodule_states(cwd);
     let mut o = git(cwd, &op.args(), started);
-    if !o.success || before.is_empty() {
+    if !o.success {
         return o;
     }
+    // the branch's submodules now, each following unless it had been
+    // put somewhere else before (one the branch left didn't have, too)
     let now = submodule_states(cwd);
-    let still = |path: &&String| now.iter().any(|(p, _)| p == *path);
-    let at = |state: char| {
-        let of = before.iter().filter(move |(_, s)| *s == state);
-        of.map(|(p, _)| p).filter(still)
-    };
-    let follow: Vec<&String> = at(' ').collect();
+    let moved = |path: &String| before.iter().any(|(p, s)| p == path && *s == '+');
+    let (stay, follow): (Vec<&String>, Vec<&String>) =
+        now.iter().map(|(p, _)| p).partition(|p| moved(p));
+    if now.is_empty() {
+        return o;
+    }
     if !follow.is_empty() {
         let mut args = vec!["submodule", "update", "--recursive", "--"];
         args.extend(follow.iter().map(|p| p.as_str()));
@@ -1049,7 +1050,7 @@ fn switch(cwd: &Path, op: &Op, started: Instant) -> OpOutcome {
             ));
         }
     }
-    for path in at('+') {
+    for path in stay {
         o.output.push_str(&format!(
             "\nargus: {path} left where it was: it wasn't at the commit recorded for it"
         ));
@@ -1066,6 +1067,10 @@ fn submodule_states(cwd: &Path) -> Vec<(String, char)> {
         return vec![];
     }
     let listed = git_in(cwd, &["submodule", "status"]);
+    // (not listed, an entry with no mapping say: none to follow)
+    if !listed.success {
+        return vec![];
+    }
     // (the mark, the commit, the path; the first line's blank mark may
     // have been trimmed away with the output's ends)
     let line = |l: &str| {
@@ -1127,6 +1132,15 @@ fn instant_fixup(cwd: &Path, op: &Op, commit: &str, started: Instant) -> OpOutco
             started,
         );
     }
+    if let Some(merge) = merge_made_by_hand(cwd, commit) {
+        return refused(
+            format!(
+                "a merge since {} has changes of its own, which folding a fixup in                  (a rebase) can't make again: {merge} (a plain fixup commit works)",
+                &commit[..commit.len().min(7)]
+            ),
+            started,
+        );
+    }
     let c = git(cwd, &op.args(), started);
     if !c.success {
         return c;
@@ -1153,6 +1167,30 @@ fn instant_fixup(cwd: &Path, op: &Op, commit: &str, started: Instant) -> OpOutco
     let mut r = git(cwd, &rebase, started);
     r.output = format!("{}\n{}", c.output, r.output).trim().to_string();
     r
+}
+
+/// A merge after `commit` that a rebase can't make again as it is, by its
+/// summary: one whose tree isn't what merging its two parents gives (a
+/// conflict resolved by hand, something added), or of more than two.
+fn merge_made_by_hand(cwd: &Path, commit: &str) -> Option<String> {
+    let range = format!("{commit}..HEAD");
+    let merges = git_in(cwd, &["rev-list", "--merges", "--parents", &range]);
+    for line in merges.output.lines() {
+        let ids: Vec<&str> = line.split(' ').collect();
+        let summary = || {
+            let s = git_in(cwd, &["log", "-1", "--format=%h %s", ids[0]]);
+            s.output.trim().to_string()
+        };
+        let [id, first, second] = ids[..] else {
+            return Some(summary());
+        };
+        let tree = git_in(cwd, &["rev-parse", &format!("{id}^{{tree}}")]);
+        let again = git_in(cwd, &["merge-tree", "--write-tree", first, second]);
+        if !again.success || again.output.trim() != tree.output.trim() {
+            return Some(summary());
+        }
+    }
+    None
 }
 
 /// [`Op::SpinOff`], in steps, as magit's `magit--branch-spinoff`.

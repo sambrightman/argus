@@ -1720,6 +1720,48 @@ fn an_instant_fixup_keeps_merges_made_since() {
     assert!(!git(&r, &["log", "--format=%s"]).contains("fixup!"));
 }
 
+/// A merge made by hand (more in it than merging its parents gives) can't
+/// be made again by a rebase: an instant fixup past one is refused
+/// rather than lose what was added.
+#[test]
+fn an_instant_fixup_is_refused_past_a_merge_with_changes_of_its_own() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "a", "1\n");
+    commit(&r, "add a");
+    let target = git(&r, &["rev-parse", "HEAD"]).trim().to_string();
+    git(&r, &["switch", "-q", "-c", "side"]);
+    write(&r, "s", "1\n");
+    commit(&r, "add s");
+    git(&r, &["switch", "-q", "-"]);
+    write(&r, "b", "1\n");
+    commit(&r, "add b");
+    git(&r, &["merge", "-q", "--no-ff", "--no-commit", "side"]);
+    write(&r, "extra", "only in the merge\n");
+    git(&r, &["add", "extra"]);
+    git(&r, &["commit", "-q", "-m", "merge side, and more"]);
+    let head = git(&r, &["rev-parse", "HEAD"]);
+    write(&r, "a", "2\n");
+    git(&r, &["add", "a"]);
+    let o = argus_core::ops::run(
+        &r,
+        &Op::Fixup {
+            commit: target,
+            squash: None,
+            instant: true,
+        },
+    );
+    assert!(!o.success, "{}", o.output);
+    assert!(o.output.contains("merge side, and more"), "{}", o.output);
+    assert_eq!(git(&r, &["rev-parse", "HEAD"]), head, "nothing committed");
+    assert_eq!(
+        git(&r, &["status", "--porcelain"]).trim(),
+        "M  a",
+        "still staged"
+    );
+    assert!(r.join("extra").exists());
+}
+
 /// A squash commit (`squash! …`, with a message to add), and the instant
 /// kinds, folded in at once by a non-interactive autosquash rebase.
 #[test]

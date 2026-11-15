@@ -156,6 +156,9 @@ pub struct ViewFilter {
 pub struct Workspace {
     pub config: Config,
     pub state: State,
+    /// The state as it was read, or last saved: what has changed since
+    /// is what a save adds to the file (see [`Self::save_state`]).
+    state_base: State,
     rules: RuleSet,
     pub entries: Vec<Entry>,
     /// Directories the last scan didn't enter because of `max_depth`.
@@ -189,12 +192,20 @@ impl Workspace {
             .map_err(|(pattern, source)| ConfigError::Pattern { pattern, source })?;
         Ok(Self {
             config,
+            state_base: state.clone(),
             state,
             rules,
             entries: vec![],
             truncated: vec![],
             kept: None,
         })
+    }
+
+    /// Save the state to `path`, on top of what the file holds by now:
+    /// what another argus wrote since this one read it is kept (see
+    /// [`State::save_merged`]).
+    pub fn save_state(&mut self, path: &Path) -> Result<(), crate::state::StateError> {
+        self.state.save_merged(path, &mut self.state_base)
     }
 
     /// Keep repos open between status reads (see [`status::KeptRepos`]),

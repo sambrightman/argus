@@ -183,6 +183,22 @@ fn a_chosen_stash_is_popped_if_it_is_still_that_one() {
     );
 }
 
+/// A marked file is stashed by its name, not as a pattern: `[x].txt`
+/// isn't also `x.txt`.
+#[test]
+fn a_path_to_stash_is_that_path_whatever_is_in_its_name() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "x.txt", "1\n");
+    write(&r, "[x].txt", "1\n");
+    git(&r, &["add", "."]);
+    git(&r, &["commit", "-q", "-m", "files"]);
+    write(&r, "x.txt", "2\n");
+    write(&r, "[x].txt", "2\n");
+    stash(&r, true, false, false, &["[x].txt"]);
+    assert_eq!(changes(&r), [" M x.txt"]);
+}
+
 #[test]
 fn stash_args_and_labels() {
     let op = |untracked, keep_index, staged, paths: &[&str]| Op::Stash {
@@ -213,7 +229,7 @@ fn stash_args_and_labels() {
     // paths come after `--`, so none can be taken as an option
     assert_eq!(
         args(&op(false, false, false, &["-x", "b"])),
-        "stash push --message -rf -- -x b"
+        "stash push --message -rf -- :(literal)-x :(literal)b"
     );
     assert_eq!(op(true, false, false, &[]).label(), "stash");
     assert_eq!(

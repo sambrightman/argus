@@ -209,6 +209,9 @@ fn merge(
     if ours == base {
         return theirs.cloned();
     }
+    if theirs == base {
+        return ours.cloned();
+    }
     match (ours, theirs) {
         (Some(Value::Table(o)), Some(Value::Table(t))) => {
             let b = base.and_then(Value::as_table);
@@ -231,6 +234,9 @@ fn merge(
                 o.iter().chain(extra).filter(stays).cloned().collect(),
             ))
         }
+        // gone here, changed there: the change (a snooze that ran out
+        // here and was set again elsewhere)
+        (None, Some(_)) => theirs.cloned(),
         _ => ours.cloned(),
     }
 }
@@ -377,6 +383,15 @@ mod tests {
         assert_eq!(base, want, "the next save starts from here");
         assert_eq!(State::load(&p).unwrap(), want);
 
+        // gone here (run out), set again elsewhere: theirs
+        let mut theirs = State::load(&p).unwrap();
+        theirs
+            .snoozed
+            .insert("b".into(), at("2040-01-01T00:00:00Z"));
+        theirs.save(&p).unwrap();
+        ours.snoozed.remove("b");
+        ours.save_merged(&p, &mut base).unwrap();
+        assert_eq!(ours.snoozed.get("b"), Some(&at("2040-01-01T00:00:00Z")));
         // inverse: nothing written meanwhile, ours goes in as it is
         ours.snoozed.clear();
         ours.new.clear();

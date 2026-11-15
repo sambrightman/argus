@@ -2053,3 +2053,34 @@ fn a_forge_cannot_place_a_clone_outside_its_folder() {
     assert_eq!(dests, [sb.path("dev/acme/ok")]);
     assert!(plan.missing.is_empty(), "nor reported as clonable");
 }
+
+/// Every save of the workspace's state goes on top of what the file has
+/// by then: the CLI's as the TUI's.
+#[test]
+fn saving_the_state_keeps_what_another_argus_wrote_since_it_was_read() {
+    let sb = Sandbox::new();
+    let path = sb.path("state.toml");
+    let until: jiff::Timestamp = "2040-01-01T00:00:00Z".parse().unwrap();
+    let mut first = State::default();
+    first.snoozed.insert("here-before".into(), until);
+    first.save(&path).unwrap();
+    let mut ws = Workspace::new(Config::default(), State::load(&path).unwrap()).unwrap();
+    // meanwhile, elsewhere
+    let mut other = State::load(&path).unwrap();
+    other.snoozed.insert("elsewhere".into(), until);
+    other.save(&path).unwrap();
+    ws.state.new.insert("here".into());
+    ws.save_state(&path).unwrap();
+    let saved = State::load(&path).unwrap();
+    assert!(saved.snoozed.contains_key("elsewhere") && saved.new.contains("here"));
+    assert_eq!(ws.state, saved);
+    // and again, from there: taken out here, it's out
+    ws.state.snoozed.remove("elsewhere");
+    ws.save_state(&path).unwrap();
+    assert!(
+        !State::load(&path)
+            .unwrap()
+            .snoozed
+            .contains_key("elsewhere")
+    );
+}
