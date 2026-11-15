@@ -915,6 +915,21 @@ impl Paint {
         }
     }
 
+    /// A details line: each part in its colour, the linked ones as links.
+    fn line(&self, l: &argus_tui::details::DetailLine) -> String {
+        let part = |(n, (role, text)): (usize, &(Option<Role>, String))| {
+            let text = match role {
+                Some(r) => self.role(*r, text),
+                None => text.clone(),
+            };
+            match l.links.iter().find(|(at, _)| *at == n) {
+                Some((_, url)) => self.link(&text, url),
+                None => text,
+            }
+        };
+        l.parts.iter().enumerate().map(part).collect()
+    }
+
     /// `s` as a link to `url`, where the output can carry one.
     fn link(&self, s: &str, url: &str) -> String {
         match self.links {
@@ -1083,18 +1098,8 @@ fn status(
                     argus_tui::details::details(e, fix, stash, &ic, &ws.state, hints, said)
                         .iter()
                         .map(|l| {
-                            let parts = l.parts.iter().enumerate().map(|(n, (role, text))| {
-                                let text = match role {
-                                    Some(r) => p.role(*r, text),
-                                    None => text.clone(),
-                                };
-                                match l.links.iter().find(|(at, _)| *at == n) {
-                                    Some((_, url)) => p.link(&text, url),
-                                    None => text,
-                                }
-                            });
                             // (a blank line stays blank)
-                            let text = format!("{indent}    {}", parts.collect::<String>());
+                            let text = format!("{indent}    {}", p.line(l));
                             text.trim_end().to_string()
                         })
                         .collect()
@@ -2096,6 +2101,19 @@ mod tests {
             ..Paint::detect()
         };
         assert_eq!(plain.link("#12", "https://x/pull/12"), "#12");
+        // in a line, the part that's linked and no other
+        let mut l = argus_tui::details::blank();
+        l.parts = vec![
+            (None, "a ".into()),
+            (Some(Role::Ahead), "b".into()),
+            (None, " c".into()),
+        ];
+        l.links = vec![(1, "https://x".into())];
+        assert_eq!(
+            p.line(&l),
+            "a \x1b]8;;https://x\x1b\\\x1b[32mb\x1b[0m\x1b]8;;\x1b\\ c"
+        );
+        assert_eq!(plain.line(&l), "a b c");
         assert_eq!(p.marks, ["1;34", "33", "33", "36", "33"]);
         assert_eq!(p.role(Role::Mark(3), "W"), "\x1b[36mW\x1b[0m");
         // pull keeps its own colour unless its mark is given one

@@ -3618,6 +3618,9 @@ fn change_lines_are_coloured_by_state_and_the_rest_counted() {
     use argus_tui::details::Section;
     let part = |role, text: &str| (Some(role), text.to_string());
     assert_eq!(role("README"), (Section::Unstaged, part(Conflict, "U")));
+    // (a conflicted file is under unstaged only)
+    assert!(detail_texts(&app).contains(&"staged (1)".to_string()));
+    assert!(detail_texts(&app).contains(&"unstaged (2)".to_string()));
     assert_eq!(role("s.txt"), (Section::Staged, part(Staged, "A")));
     assert_eq!(role("t.txt"), (Section::Unstaged, part(Unstaged, "M")));
     assert_eq!(
@@ -3644,6 +3647,27 @@ fn change_lines_are_coloured_by_state_and_the_rest_counted() {
     // (its own count: the modified README is in another section)
     assert!(detail_texts(&app).contains(&"untracked (26)".to_string()));
     assert!(detail_texts(&app).contains(&"unstaged (1)".to_string()));
+    // the line saying so is its section's: nothing to stop at, and gone
+    // when the section is folded
+    let more_line = app.rows.iter().find_map(|r| match r {
+        Row::Detail { line, .. }
+            if line.parts.iter().any(|p| p.1.trim_start().starts_with('…')) =>
+        {
+            Some((line.section, line.is_body()))
+        }
+        _ => None,
+    });
+    assert_eq!(more_line, Some((Some(Section::Untracked), true)));
+    app.cursor = (0..app.rows.len())
+        .find(|&n| {
+            matches!(&app.rows[n], Row::Detail { repo, line }
+            if app.ws.entries[*repo].path == d
+                && Section::heads(line) == Some(Section::Untracked))
+        })
+        .unwrap();
+    app.on_key(code(KeyCode::Tab));
+    assert_eq!(more(&mut app), None, "folded with its section");
+    assert!(detail_texts(&app).contains(&"untracked (26)".to_string()));
 }
 
 /// The terminal after drawing `app` (mono theme, Unicode icons), for
@@ -6791,6 +6815,19 @@ fn changes_are_listed_by_section_each_file_with_that_sides_letter() {
     let t = trimmed(&app);
     let at = t.iter().rposition(|l| l == "+three").unwrap();
     assert_eq!(t[at + 1..at + 3], ["", "staged (1)"]);
+    // it's the diff's own: no file line (marked or acted on as one)
+    let after: Vec<_> = app
+        .rows
+        .iter()
+        .filter_map(|r| match r {
+            Row::Detail { line, .. } if line.parts.iter().all(|p| p.1.trim().is_empty()) => {
+                Some(line.diff.as_ref().map(|d| (d.side, d.hunk, d.at)))
+            }
+            _ => None,
+        })
+        .collect();
+    let side = argus_core::diff::Side::Unstaged;
+    assert_eq!(after, [Some((side, None, None)), Some((side, None, None))]);
     // a blank line is nothing to stop at
     let blank =
         |line: &argus_tui::details::DetailLine| line.parts.iter().all(|p| p.1.trim().is_empty());
@@ -6896,6 +6933,70 @@ fn forge_names_counts_and_pull_requests_are_links() {
 }
 
 #[test]
+fn a_forks_own_counts_show_only_when_it_has_any() {
+    let (sb, mut app, fx) = forge_setup("");
+    let f = sb.path("dev/feature");
+    let [Effect::Forge { branches, .. }] = fx.as_slice() else {
+        panic!("{fx:?}")
+    };
+    let mut line = |issues: usize, pulls: usize| {
+        app.on_msg(Msg::Forge {
+            path: f.clone(),
+            branches: branches.clone(),
+            info: Ok(Some(argus_core::forge::RepoInfo {
+                open_issues: issues,
+                open_pulls: pulls,
+                pulls: vec![],
+                parent: Some(argus_core::forge::ParentInfo {
+                    name: "up/feature".into(),
+                    open_issues: 9,
+                    open_pulls: 4,
+                }),
+            })),
+        });
+        forge_line(&app).unwrap()
+    };
+    let theirs = "forge     up/feature: 9 open issues, 4 open pull requests";
+    assert_eq!(line(0, 0), theirs);
+    // either kind is enough, and both
+    assert_eq!(
+        line(2, 0),
+        format!("{theirs}; this fork: 2 open issues, 0 open pull requests")
+    );
+    assert_eq!(
+        line(0, 1),
+        format!("{theirs}; this fork: 0 open issues, 1 open pull request")
+    );
+    assert_eq!(
+        line(1, 1),
+        format!("{theirs}; this fork: 1 open issue, 1 open pull request")
+    );
+}
+
+#[test]
+fn stashes_past_the_tenth_are_counted_and_fold_with_the_rest() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let d = sb.path("dev/dirty");
+        for n in 0..11 {
+            write(&d, "README", &format!("stash {n}\n"));
+            git(&d, &["stash", "push", "-q", "-m", &format!("s{n}")]);
+        }
+    });
+    cursor_on_detail(&mut app, "dirty", "stashes");
+    let t = trimmed(&app);
+    assert_eq!(t.iter().filter(|l| l.starts_with("stash@{")).count(), 10);
+    assert!(t.contains(&"… 1 more".to_string()), "{t:?}");
+    app.on_key(code(KeyCode::Tab));
+    let t = trimmed(&app);
+    assert!(t.iter().any(|l| l.starts_with("stashes   11")));
+    assert!(
+        !t.iter()
+            .any(|l| l.starts_with("stash@{") || l.contains('…')),
+        "{t:?}"
+    );
+}
+
+#[test]
 fn links_are_drawn_over_the_text_they_link() {
     let (sb, mut app, fx) = forge_setup("");
     let f = sb.path("dev/feature");
@@ -6987,6 +7088,17 @@ fn links_are_drawn_over_the_text_they_link() {
         "the selection's: {:?}",
         l.style
     );
+    // scrolled, a link is where its row now is on screen
+    let (links, buf) = draw(&mut app, 120, 8);
+    assert!(
+        app.scroll > 0,
+        "the list is scrolled to keep the cursor in view"
+    );
+    let l = links.iter().find(|l| l.text.starts_with("#12")).unwrap();
+    let shown: String = (0..l.text.chars().count() as u16)
+        .map(|dx| buf[(l.x + dx, l.y)].symbol().to_string())
+        .collect();
+    assert_eq!(shown, l.text);
     // a link the width cuts short isn't one; nor any under a menu
     let (links, _) = draw(&mut app, 50, 40);
     assert!(
@@ -7156,9 +7268,20 @@ fn tab_folds_what_the_line_belongs_to_not_the_whole_repo() {
     on(&mut app, "        files (2)");
     app.on_key(code(KeyCode::Tab));
     assert!(open(&app) && !has(&app, "A c1"), "{:?}", trimmed(&app));
-    assert!(has(&app, "commit "), "the commit itself stays unfolded");
+    assert!(has(&app, "author "), "the commit itself stays unfolded");
+    assert!(has(&app, "files (2)"), "its heading stays");
+    // (nothing unfolded so far is a diff: no blank line has been added)
+    assert!(
+        !trimmed(&app).contains(&String::new()),
+        "{:?}",
+        trimmed(&app)
+    );
     app.on_key(code(KeyCode::Tab));
     assert!(has(&app, "A c1") && has(&app, "A c2"));
+    assert!(
+        !trimmed(&app).contains(&String::new()),
+        "files, no diff yet"
+    );
     let c1 = trimmed(&app).iter().position(|t| t == "A c1").unwrap();
     app.cursor = app.row_of_detail(c1);
     app.on_key(code(KeyCode::Tab));

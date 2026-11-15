@@ -4628,3 +4628,21 @@ fn next<'a>(names: &[&'a str], current: &str) -> &'a str {
     let i = names.iter().position(|n| *n == current);
     names[i.map_or(0, |i| (i + 1) % names.len())]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indenting_a_line_keeps_its_links_on_their_parts() {
+        let mut l = crate::details::blank();
+        l.parts = vec![(None, "see ".into()), (None, "#12".into())];
+        l.links = vec![(1, "https://x/12".into())];
+        let p = padded(l.clone(), 4);
+        assert_eq!(p.parts[0].1, "    ");
+        assert_eq!(p.links, [(2, "https://x/12".to_string())]);
+        assert_eq!(p.parts[p.links[0].0].1, "#12");
+        // inverse: not indented, as it was
+        assert_eq!(padded(l.clone(), 0), l);
+    }
+}
