@@ -415,7 +415,7 @@ pub fn mark_key_clashes(c: &argus_core::Config) -> Vec<String> {
 pub fn fix_key(kind: argus_core::fix::FixKind) -> char {
     use argus_core::fix::FixKind::*;
     match kind {
-        Abort => 'A',
+        Abort => 'k',
         Stash => 's',
         Commit => 'c',
         Gitignore => 'i',

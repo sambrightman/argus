@@ -1928,6 +1928,18 @@ fn destructive_fixes_ask_first_and_do_nothing_unless_told_yes() {
         _ => panic!("no question"),
     }
     app.on_key(key('n'));
+    // the Fix menu's key for it is k (A fixes everything shown)
+    app.on_key(key('x'));
+    assert!(
+        menu_items(&app).iter().any(|i| i.starts_with("k abort…")),
+        "{:?}",
+        menu_items(&app)
+    );
+    app.on_key(key('k'));
+    assert!(
+        matches!(&app.mode, Mode::Confirm { question, .. } if question.starts_with("Abort merge in acme/clean?"))
+    );
+    app.on_key(key('n'));
     app.marked.clear();
     assert_eq!(confirm(&mut app, Action::DropStash, 'n'), Some(vec![]));
     assert_eq!(
@@ -1975,7 +1987,7 @@ fn fix_actions_say_what_they_left_out() {
     assert!(!app.act(Action::AutoFix(Scope::Selected)).is_empty());
     assert_eq!(
         msg(&app),
-        "auto-fix acme/feature: push… · 2 with nothing to apply"
+        "fix once acme/feature: push… · 2 with nothing to apply"
     );
     assert!(app.act(Action::AutoFix(Scope::Selected)).is_empty());
     assert_eq!(msg(&app), "nothing started · 1 busy");
@@ -1984,7 +1996,7 @@ fn fix_actions_say_what_they_left_out() {
         path: f.clone(),
         applied: Ok(None),
     });
-    assert_eq!(msg(&app), "auto-fix acme/feature: push: done");
+    assert_eq!(msg(&app), "fix once acme/feature: push: done");
 }
 
 #[test]
@@ -2000,7 +2012,7 @@ fn auto_fixing_several_repos_says_how_many_of_each() {
     app.marked = app.ws.entries.iter().map(|e| e.path.clone()).collect();
     assert!(!app.act(Action::AutoFix(Scope::Selected)).is_empty());
     let msg = |app: &App| app.message.as_ref().unwrap().0.clone();
-    assert_eq!(msg(&app), "auto-fixing 3 repo(s): switch-default (3)…");
+    assert_eq!(msg(&app), "fix once 3 repo(s): switch-default (3)…");
     // "done" once all three are
     for (i, n) in ["clean", "dirty", "feature"].iter().enumerate() {
         app.on_msg(Msg::FixDone {
@@ -2071,10 +2083,12 @@ fn the_fix_menus_auto_fix_items_say_what_they_do() {
     }
     app.on_key(key('x'));
     assert_eq!(
-        menu_items(&app)[..2],
+        menu_items(&app)[..4],
         [
-            "x auto-fix acme/feature: switch main",
-            "a auto-fix all · acme/feature: switch main"
+            "x fix once acme/feature: switch main",
+            "a fix all once · acme/feature: switch main",
+            "X fix auto acme/feature: switch main",
+            "A fix all auto · acme/feature: switch main"
         ]
     );
     // no header saying it again
@@ -2085,10 +2099,17 @@ fn the_fix_menus_auto_fix_items_say_what_they_do() {
     app.act(Action::Bottom);
     app.on_key(key('x'));
     assert_eq!(
-        menu_items(&app)[0],
-        "a auto-fix all · acme/feature: switch main"
+        menu_items(&app)[..2],
+        [
+            "a fix all once · acme/feature: switch main",
+            "A fix all auto · acme/feature: switch main"
+        ]
     );
-    assert!(!menu_items(&app).iter().any(|i| i.starts_with("x ")));
+    assert!(
+        !menu_items(&app)
+            .iter()
+            .any(|i| i.starts_with("x ") || i.starts_with("X "))
+    );
 }
 
 #[test]
@@ -3135,14 +3156,16 @@ fn the_fix_menu_offers_each_fix_that_applies() {
     app.on_key(key('x'));
     let items = menu_items(&app);
     assert_eq!(
-        items[..2],
+        items[..4],
         [
-            "x auto-fix acme/dirty: push",
-            "a auto-fix all · 2 repo(s): push (1), switch-default (1)"
+            "x fix once acme/dirty: push",
+            "a fix all once · 2 repo(s): push (1), switch-default (1)",
+            "X fix auto acme/dirty: push",
+            "A fix all auto · 2 repo(s): push (1), switch-default (1)"
         ]
     );
     assert_eq!(
-        items[2..],
+        items[4..],
         [
             "s stash: 5 uncommitted path(s)",
             "c commit…: 5 uncommitted path(s)",
@@ -3151,7 +3174,7 @@ fn the_fix_menu_offers_each_fix_that_applies() {
         ]
     );
     // nothing in progress: no abort
-    assert!(!items.iter().any(|i| i.starts_with("A ")), "{items:?}");
+    assert!(!items.iter().any(|i| i.starts_with("k ")), "{items:?}");
     // one that asks first opens what it asks with
     app.on_key(key('i'));
     match &app.mode {
@@ -5943,4 +5966,132 @@ fn a_commits_textconv_diff_says_it_is_converted() {
         below(&app, "          A plain", 10),
         ["@@ -0,0 +1 @@", "+x"]
     );
+}
+
+/// `feature` on `feat` with a commit to push: push, then switch to main.
+fn two_step(sb: &Sandbox) {
+    commit(&sb.path("dev/feature"), "unpushed");
+}
+
+/// Run the fix an `Effect::Fix` asks for, for real, and hand back its
+/// messages: done, then the repo's status as refreshed.
+fn run_fix(app: &mut App, fx: Vec<Effect>) -> Vec<Effect> {
+    let [Effect::Fix { paths, kinds }] = fx.as_slice() else {
+        panic!("not one fix: {fx:?}")
+    };
+    let path = paths[0].clone();
+    let applied = argus_core::fix::apply_fix(&path, kinds, &app.ws.config.stash).unwrap();
+    let fx = app.on_msg(Msg::FixDone {
+        path: path.clone(),
+        applied: Ok(applied),
+    });
+    assert!(matches!(fx.as_slice(), [Effect::Refresh(_)]), "{fx:?}");
+    let st = argus_core::status::status(&path, Default::default());
+    app.on_msg(Msg::Status(path, Box::new(st.map_err(|e| e.to_string()))))
+}
+
+#[test]
+fn fix_auto_goes_on_to_the_next_fix_until_none_applies() {
+    let (sb, mut app) = setup_with("", two_step);
+    let f = sb.path("dev/feature");
+    let msg = |app: &App| app.message.as_ref().unwrap().0.clone();
+    while current(&app) != "acme/feature" {
+        app.act(Action::Down);
+    }
+    app.on_key(key('x'));
+    let items = menu_items(&app);
+    assert_eq!(items[0], "x fix once acme/feature: push");
+    assert_eq!(items[2], "X fix auto acme/feature: push, then switch main");
+    let fx = app.on_key(key('X'));
+    assert_eq!(msg(&app), "fix auto acme/feature: push, then switch main…");
+    // pushed: not done yet, and the refreshed status starts the next fix
+    let fx = run_fix(&mut app, fx);
+    assert!(!msg(&app).ends_with("done"), "{}", msg(&app));
+    assert!(app.running.contains_key(&f));
+    assert_eq!(git(&f, &["branch", "--show-current"]).trim(), "feat");
+    // switched: nothing more applies, so now it's done
+    let fx = run_fix(&mut app, fx);
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::Fix { .. })),
+        "{fx:?}"
+    );
+    assert_eq!(git(&f, &["branch", "--show-current"]).trim(), "main");
+    assert_eq!(
+        msg(&app),
+        "fix auto acme/feature: push, then switch main: done"
+    );
+    assert!(!app.running.contains_key(&f));
+    // and a later refresh starts nothing
+    let st = argus_core::status::status(&f, Default::default()).unwrap();
+    assert!(
+        app.on_msg(Msg::Status(f.clone(), Box::new(Ok(st))))
+            .is_empty()
+    );
+}
+
+#[test]
+fn fix_once_stops_after_its_one_fix() {
+    let (sb, mut app) = setup_with("", two_step);
+    let f = sb.path("dev/feature");
+    while current(&app) != "acme/feature" {
+        app.act(Action::Down);
+    }
+    let fx = app.act(Action::AutoFix(Scope::Selected));
+    let fx = run_fix(&mut app, fx);
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::Fix { .. })),
+        "{fx:?}"
+    );
+    assert_eq!(git(&f, &["branch", "--show-current"]).trim(), "feat");
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "fix once acme/feature: push: done"
+    );
+}
+
+#[test]
+fn fix_auto_stops_at_a_failure_and_waits_for_a_running_fix() {
+    let (sb, mut app) = setup_with("", two_step);
+    let f = sb.path("dev/feature");
+    while current(&app) != "acme/feature" {
+        app.act(Action::Down);
+    }
+    let status =
+        || Box::new(argus_core::status::status(&f, Default::default()).map_err(|e| e.to_string()));
+    let fx = app.act(Action::FixAuto(Scope::Selected));
+    let [Effect::Fix { kinds, .. }] = fx.as_slice() else {
+        panic!("{fx:?}")
+    };
+    // a refresh arriving while the fix runs doesn't start another
+    assert!(
+        !app.on_msg(Msg::Status(f.clone(), status()))
+            .iter()
+            .any(|e| matches!(e, Effect::Fix { .. }))
+    );
+    // the push fails: no switch after it
+    let fix = argus_core::fix::choose(
+        app.ws.get(&f).unwrap().status().unwrap(),
+        kinds,
+        &app.ws.config.stash,
+    )
+    .unwrap();
+    app.on_msg(Msg::FixDone {
+        path: f.clone(),
+        applied: Ok(Some(argus_core::fix::Applied {
+            fix,
+            outcome: argus_core::ops::OpOutcome {
+                success: false,
+                code: Some(1),
+                output: "rejected".into(),
+                duration: Default::default(),
+            },
+        })),
+    });
+    assert!(app.message.as_ref().unwrap().0.contains("push failed"));
+    assert!(
+        !app.on_msg(Msg::Status(f.clone(), status()))
+            .iter()
+            .any(|e| matches!(e, Effect::Fix { .. }))
+    );
+    assert!(!app.running.contains_key(&f));
 }

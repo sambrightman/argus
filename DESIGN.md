@@ -677,6 +677,11 @@ rendering is snapshot-tested via `TestBackend`.
   the guard the prediction uses too). Kinds that ask first are never part
   of it. One fix per run stays the default: seeing the first result
   before the second step was the point of it.
+  In the TUI the Fix menu has both: `x`/`a` "fix once" (selected / all
+  shown) and `X`/`A` "fix auto"; abort moved from `A` to `k` (as `b k`
+  kills a branch). There the next fix starts when the repo's refreshed
+  status arrives after a fix that worked (`App::chains`), never while one
+  is still running.
 * **`status --details`** prints the TUI's details lines under each row:
   the same builder (`details::details`), told who reads them (`Hints`).
   For the CLI a fix names its command (`argus fix -k stash`), or the TUI

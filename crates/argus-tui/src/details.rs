@@ -570,7 +570,7 @@ pub fn describe(i: &Issue, default: Option<&str>) -> (Role, String) {
 /// The keys that run a fix of `kind`, which asks for something first.
 fn manual_keys(kind: FixKind) -> &'static str {
     match kind {
-        FixKind::Abort => "x A",
+        FixKind::Abort => "x k",
         FixKind::Commit => "c A",
         FixKind::Gitignore => "i",
         FixKind::Branch => "b c",

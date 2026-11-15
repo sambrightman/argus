@@ -192,7 +192,7 @@ again runs it.
 | `c` | **Commit** (prompts for the message): `c` what's staged (offered only when something is), `A` all changes, untracked files included, `a` amend the last commit with what's staged, starting from its summary line (unchanged keeps the message; the body is always kept; says so when the commit is on a remote, as pushing will then need force), `f` fixup: what's staged as a `fixup!` commit of one picked from HEAD's history (starting at HEAD, or the commit under the cursor), for `git rebase --autosquash`; `F` instant fixup: the same, folded in at once (a non-interactive autosquash rebase, uncommitted changes kept; refused for a commit already on a remote, as it rewrites history; a conflict leaves the rebase to finish or abort); `s` squash: a `squash!` commit, asking for the message to add, and `S` instant squash (the messages combined); all offered when something is staged |
 | `X` | **Reset** the current branch (one repo at a time): `s` soft (changes stay staged), `m` mixed (unstaged), `k` keep (drops the commits' changes, refusing if uncommitted ones are in the way), `h` hard (drops uncommitted changes too; asks first). Then pick the commit from HEAD's recent history, those on a remote marked; the cursor starts on the commit before HEAD, or, pressed on a commit in the details, on the one before it |
 | `b` | **Branch**: `b` checkout a branch: type to narrow the list fuzzily, as `/` does (local branches, then remote ones without a local copy, which creates a local branch tracking it), `C-n`/`C-p` to move, Enter to check it out, `-` checkout the previous branch, `s` spin off (as magit's: the commits the branch's upstream doesn't have go to a new branch, checked out, and the branch goes back to what it shares with its upstream; nothing unpushed, the new branch is made anyway), `S` spin out (the same, staying on the branch; if uncommitted changes would be lost, it spins off instead), `d` switch to default, `r` reattach detached HEAD, `c` create a branch at HEAD and check it out… (on a detached HEAD, that names its commits), `x` delete merged branches…, `k` delete the branch under the cursor in the details… (as magit's `b k`), `f` fast-forward stale branches |
-| `x` | **Fix**: `x` auto-fix selected, `a` all shown except hidden, each saying what it would do (and left out when it would do nothing); then every fix that applies to the selection, with its reason (or how many repos it applies to): `s` stash, `c` commit…, `i` gitignore…, `b` branch…, `p` push, `u` publish, `R` add-remote…, `P` push-branches, `d` switch-default, `r` reattach, `F` pull, `f` fast-forward, `D` delete-branches…, `S` submodule-update, `w` prune-worktrees, `W` remove-worktree…, `z` stash-pop, `A` abort…; on a repo whose folder is gone, `g` drops it from the list and `G` rescans. Those marked … ask first. Opened on a fix line in the details, it starts on that fix |
+| `x` | **Fix**: `x` fix once (one fix for each selected repo), `a` the same for all shown except hidden; `X` fix auto (fix after fix until nothing more applies) and `A` the same for all shown; each saying what it would do (and left out when it would do nothing); then every fix that applies to the selection, with its reason (or how many repos it applies to): `s` stash, `c` commit…, `i` gitignore…, `b` branch…, `p` push, `u` publish, `R` add-remote…, `P` push-branches, `d` switch-default, `r` reattach, `F` pull, `f` fast-forward, `D` delete-branches…, `S` submodule-update, `w` prune-worktrees, `W` remove-worktree…, `z` stash-pop, `k` abort…; on a repo whose folder is gone, `g` drops it from the list and `G` rescans. Those marked … ask first. Opened on a fix line in the details, it starts on that fix |
 | `m` | **Mark**: each mark by its `key` (`f` favourite, then yours: "mark work" / "unmark work"), `p` pull, `i` ignore issues (a menu of the repo's issues and their state), `I` ignore or unignore the repo, `z` snooze (on an issue line in the details, just that issue), `u` unsnooze (on an issue line, just that issue; else the repo and its issues), `a` ack new, `c` clear |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page |
 | `v` | **View**: toggles, expand/collapse all, log |
@@ -380,7 +380,7 @@ Nothing is offered during a conflict.
   conflicts (`z p`; automatic only if listed, and not while any stash is
   ignored). `z d` drops the stash under the cursor in the details, after
   asking, and only if it's still the stash you looked at.
-* **Asked first, never automatic:** `x A` aborts the merge, rebase,
+* **Asked first, never automatic:** `x k` aborts the merge, rebase,
   cherry-pick, revert or am in progress (or ends a bisect), losing what it
   did so far; `b x` deletes branches merged into the default branch whose
   upstream is gone or that have none (`git branch -d`, so git double-checks;
@@ -398,13 +398,14 @@ A fix chosen from a menu runs in the selected repos it applies to; the
 status line says what it left out (`running 3 job(s)… · 2 not applicable
 · 1 blocked (…)`, `busy` for repos already running something). Kinds that
 are never automatic are left out of `[fix] auto`, with a warning.
-Each auto-fix action applies **one** fix: the first kind in `[fix] auto`
-(or `-k`, in the order given) that the repo needs. An unpushed feature
-branch is pushed by one `x x` (or `argus fix`) and switched back to the
-default branch by the next. Or snooze it in between (`m z`).
-`argus fix --auto` runs the whole sequence in one go: after each fix the
-repo's status is read again and the next one chosen from it, until
-nothing more applies or a fix fails (never the kinds that ask first).
+Fixing once (`x x`, `argus fix`) applies **one** fix: the first kind in
+`[fix] auto` (or `-k`, in the order given) that the repo needs. An
+unpushed feature branch is pushed by one and switched back to the default
+branch by the next. Or snooze it in between (`m z`).
+Fix auto (`x X`, `argus fix --auto`) runs the whole sequence in one go:
+after each fix the repo's status is read again and the next one chosen
+from it, until nothing more applies or a fix fails (never the kinds that
+ask first).
 Kinds you don't list rank after the ones you do, in the default order:
 abort, stash, commit, submodule-update, gitignore, branch, push, publish,
 add-remote, push-branches, switch-default, reattach, pull, fast-forward,

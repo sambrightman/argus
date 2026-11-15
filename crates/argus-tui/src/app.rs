@@ -119,7 +119,10 @@ pub enum Action {
     /// Drop the stash under the cursor in the details, once confirmed.
     DropStash,
     FastForward,
+    /// Fix once: the one fix `[fix] auto` chooses for each repo.
     AutoFix(Scope),
+    /// Fix auto: that, then the next, until nothing more applies.
+    FixAuto(Scope),
     PullAndClone,
     /// Toggle the mark at this place in `[marks]` (its key in the Mark menu).
     ToggleLabel(usize),
@@ -744,6 +747,10 @@ pub struct App {
     /// Auto-fixes still running from the last auto-fix action, and what
     /// the first did, to say what's done.
     auto_fixes: (usize, String),
+    /// Repos a fix-auto action is working through, with the fixes it has
+    /// applied to each so far: when one's status is next read, its next
+    /// fix starts.
+    chains: HashMap<PathBuf, Vec<fix::Fix>>,
     /// The repo the open ignore menu is for.
     ignore_menu: Option<PathBuf>,
     /// The untracked files the open gitignore menu is for, by repo, and
@@ -796,6 +803,7 @@ impl App {
             stash,
             running: HashMap::new(),
             auto_fixes: (0, String::new()),
+            chains: HashMap::new(),
             ignore_menu: None,
             gitignore: None,
             pick: None,
@@ -1803,7 +1811,8 @@ impl App {
                     }
                 }
             }
-            AutoFix(scope) => {
+            a @ (AutoFix(scope) | FixAuto(scope)) => {
+                let auto = matches!(a, FixAuto(_));
                 let idx = if scope == Scope::All {
                     self.bulk_repos()
                 } else {
@@ -1833,9 +1842,13 @@ impl App {
                     }
                     return vec![];
                 }
-                let what = self.auto_fix_summary(&paths).unwrap_or_default();
+                let what = self.auto_fix_summary(&paths, auto).unwrap_or_default();
                 for p in &paths {
                     self.running.insert(p.clone(), "fix".into());
+                    match auto {
+                        true => self.chains.insert(p.clone(), vec![]),
+                        false => self.chains.remove(p),
+                    };
                 }
                 self.auto_fixes = (paths.len(), what.clone());
                 self.info(format!("{what}…{none}{busy}"));
@@ -2524,35 +2537,41 @@ impl App {
         vec![Effect::SaveMarks(Box::new(before))]
     }
 
-    /// What auto-fixing the repos at `paths` would do: `auto-fix acme/w:
-    /// push`, or how many of each kind for several. `None` for nothing.
-    fn auto_fix_summary(&self, paths: &[PathBuf]) -> Option<String> {
-        Some(match self.auto_fix_tally(paths)? {
-            (1, t) => format!("auto-fix {t}"),
-            (_, t) => format!("auto-fixing {t}"),
-        })
+    /// What fixing the repos at `paths` would do, once or (`auto`) until
+    /// nothing more applies: `fix once acme/w: push`. `None` for nothing.
+    fn auto_fix_summary(&self, paths: &[PathBuf], auto: bool) -> Option<String> {
+        let (_, t) = self.auto_fix_tally(paths, auto)?;
+        Some(format!("fix {} {t}", if auto { "auto" } else { "once" }))
     }
 
     /// How many of the repos at `paths` auto-fix would fix, and how:
-    /// `acme/w: push`, or how many of each kind for several (`3 repo(s):
-    /// push (2), stash (1)`). `None` for none.
-    fn auto_fix_tally(&self, paths: &[PathBuf]) -> Option<(usize, String)> {
+    /// `acme/w: push` (with `auto`, every fix it's expected to get
+    /// through: `acme/w: push, then switch main`), or how many of each
+    /// kind for several (`3 repo(s): push (2), stash (1)`). `None` for none.
+    fn auto_fix_tally(&self, paths: &[PathBuf], auto: bool) -> Option<(usize, String)> {
         let kinds = &self.ws.config.fix.auto;
-        let fixes: Vec<(String, fix::Fix)> = paths
+        let fixes: Vec<(String, Vec<fix::Fix>)> = paths
             .iter()
             .filter_map(|p| {
                 let e = self.ws.get(p)?;
-                let f = fix::choose(e.status()?, &e.fix_kinds(kinds), &self.ws.config.stash)?;
-                Some((e.display_name(), f))
+                let (s, kinds, stash) = (e.status()?, e.fix_kinds(kinds), &self.ws.config.stash);
+                let v = match auto {
+                    true => fix::chain(s, &kinds, stash),
+                    false => fix::choose(s, &kinds, stash).into_iter().collect(),
+                };
+                (!v.is_empty()).then(|| (e.display_name(), v))
             })
             .collect();
         match fixes.as_slice() {
             [] => None,
-            [(name, f)] => Some((1, format!("{name}: {}", f.op.label()))),
+            [(name, v)] => {
+                let labels: Vec<String> = v.iter().map(|f| f.op.label()).collect();
+                Some((1, format!("{name}: {}", labels.join(", then "))))
+            }
             _ => {
                 // how many of each kind, in priority order
                 let mut counts: Vec<(FixKind, usize)> = vec![];
-                for (_, f) in &fixes {
+                for f in fixes.iter().flat_map(|(_, v)| v) {
                     match counts.iter_mut().find(|c| c.0 == f.kind) {
                         Some(c) => c.1 += 1,
                         None => counts.push((f.kind, 1)),
@@ -2570,6 +2589,44 @@ impl App {
         }
     }
 
+    /// One of the last fix action's repos has nothing more to run: say so
+    /// once they all have.
+    fn fix_finished(&mut self) {
+        self.auto_fixes.0 = self.auto_fixes.0.saturating_sub(1);
+        if self.auto_fixes.0 == 0 && self.message.as_ref().is_none_or(|m| !m.1) {
+            let what = std::mem::take(&mut self.auto_fixes.1);
+            self.info(format!("{what}: done"));
+        }
+    }
+
+    /// The next fix for the repo at `path`, if a fix-auto action is
+    /// working through it and its last fix has finished: chosen from its
+    /// status as just read. With none (or one it has applied already),
+    /// the repo is finished.
+    fn continue_chain(&mut self, path: &std::path::Path) -> Vec<Effect> {
+        let Some(done) = self.chains.get(path) else {
+            return vec![];
+        };
+        if self.running.contains_key(path) {
+            return vec![];
+        }
+        let kinds = self.ws.config.fix.auto.clone();
+        let next = self
+            .ws
+            .get(path)
+            .and_then(|e| fix::choose(e.status()?, &e.fix_kinds(&kinds), &self.ws.config.stash));
+        if next.is_none_or(|f| fix::repeats(done, &f)) {
+            self.chains.remove(path);
+            self.fix_finished();
+            return vec![];
+        }
+        self.running.insert(path.to_path_buf(), "fix".into());
+        vec![Effect::Fix {
+            paths: vec![path.to_path_buf()],
+            kinds,
+        }]
+    }
+
     /// The Fix menu's items: auto-fix for the selection and for all shown,
     /// saying what each would do (when it would do something); then each
     /// fix that applies to the selection, with its reason for one repo or
@@ -2580,19 +2637,26 @@ impl App {
                 .map(|i| self.ws.entries[i].path.clone())
                 .collect()
         };
-        if let Some((_, t)) = self.auto_fix_tally(&paths(self.selected())) {
-            menu.items.push(menu::item(
-                'x',
-                format!("auto-fix {t}"),
-                Action::AutoFix(Scope::Selected),
-            ));
-        }
-        if let Some((_, t)) = self.auto_fix_tally(&paths(self.bulk_repos())) {
-            menu.items.push(menu::item(
-                'a',
-                format!("auto-fix all · {t}"),
-                Action::AutoFix(Scope::All),
-            ));
+        let (selected, all) = (paths(self.selected()), paths(self.bulk_repos()));
+        for (auto, how, keys) in [(false, "once", ['x', 'a']), (true, "auto", ['X', 'A'])] {
+            let (one, every) = match auto {
+                true => (
+                    Action::FixAuto(Scope::Selected),
+                    Action::FixAuto(Scope::All),
+                ),
+                false => (
+                    Action::AutoFix(Scope::Selected),
+                    Action::AutoFix(Scope::All),
+                ),
+            };
+            if let Some((_, t)) = self.auto_fix_tally(&selected, auto) {
+                menu.items
+                    .push(menu::item(keys[0], format!("fix {how} {t}"), one));
+            }
+            if let Some((_, t)) = self.auto_fix_tally(&all, auto) {
+                menu.items
+                    .push(menu::item(keys[1], format!("fix all {how} · {t}"), every));
+            }
         }
         let selected = self.selected();
         let plans: Vec<Vec<fix::Fix>> = selected
@@ -3841,7 +3905,9 @@ impl App {
                 self.marked_lines.retain(|k| k.0 != path);
                 self.unfold_cache.retain(|k, _| k.0 != path);
                 self.rebuild();
-                return self.describe_opened();
+                let mut fx = self.describe_opened();
+                fx.extend(self.continue_chain(&path));
+                return fx;
             }
             Msg::Described(path) => {
                 self.describing.remove(&path);
@@ -3914,11 +3980,18 @@ impl App {
                     .get(&path)
                     .map(|e| e.display_name())
                     .unwrap_or_default();
+                // a fix-auto action goes on from a fix that worked, once
+                // the repo's status has been read again
+                let mut more = false;
                 match applied {
                     Ok(list) => {
                         if let Some(a) = list {
                             let ok = a.outcome.success;
                             self.push_log(&path, a.fix.op.label(), ok, a.outcome.output);
+                            if let Some(done) = self.chains.get_mut(&path).filter(|_| ok) {
+                                done.push(a.fix.clone());
+                                more = true;
+                            }
                             if !ok {
                                 self.error(format!(
                                     "{name}: {} failed ($ for log)",
@@ -3932,10 +4005,9 @@ impl App {
                         self.error(format!("{name}: {e}"));
                     }
                 }
-                self.auto_fixes.0 = self.auto_fixes.0.saturating_sub(1);
-                if self.auto_fixes.0 == 0 && self.message.as_ref().is_none_or(|m| !m.1) {
-                    let what = std::mem::take(&mut self.auto_fixes.1);
-                    self.info(format!("{what}: done"));
+                if !more {
+                    self.chains.remove(&path);
+                    self.fix_finished();
                 }
                 return vec![Effect::Refresh(self.ws.with_parents(&path))];
             }
