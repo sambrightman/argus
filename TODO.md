@@ -42,16 +42,4 @@ deferred.
 
 ## Known gaps
 
-From the review, not fixed yet:
-
-- **Tidying:** pull and ignore are marks in config but still carried
-  apart inside (`Paint.pull`/`pull_coloured`, `config::acts`, key
-  remapping) where plain mark indices would do; `Issue::ignore_list()`
-  in place of the matches that map an issue to its list; the Owner
-  menu's `state_labels` found by action, not by place; working-tree and
-  commit diffs built by two functions that could be one.
-- **Lower-severity data loss:** an instant fixup or squash rebases
-  without `--rebase-merges` (merges after the target are flattened);
-  switching branches runs `git submodule update --recursive` whatever
-  the submodules hold; spin-off's `reset --hard` of the branch left
-  behind; soft and mixed resets aren't asked about.
+None known.

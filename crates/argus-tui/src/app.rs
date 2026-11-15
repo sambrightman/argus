@@ -307,31 +307,14 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
                 rows
             }
         },
-        Expand::CommitFile(id, path) => match diff::commit_file_diff(repo, id, path) {
-            Err(e) => failed(e.to_string()),
-            Ok(FileDiff::Binary) => note(dim("binary file".into())),
-            Ok(FileDiff::External) => note(dim("external diff configured".into())),
-            Ok(FileDiff::Text(hunks) | FileDiff::Converted(hunks)) if hunks.is_empty() => {
-                note(dim("no change in content".into()))
-            }
-            Ok(d @ (FileDiff::Text(_) | FileDiff::Converted(_))) => {
-                let mut rows = vec![];
-                if matches!(d, FileDiff::Converted(_)) {
-                    rows.extend(note(dim("converted to text (textconv)".into())));
-                }
-                let (FileDiff::Text(hunks) | FileDiff::Converted(hunks)) = d else {
-                    unreachable!()
-                };
-                for (h, at) in hunks.iter().zip(Seg::hunks(&hunks)) {
-                    rows.push(line(vec![(Some(Role::DiffHunk), h.header())]).at(at.clone()));
-                    for (n, l) in h.lines.iter().enumerate() {
-                        let row = body(crate::details::diff_line(l));
-                        rows.push(row.under(&[at.clone(), Seg::Line(n)]));
-                    }
-                }
-                rows
-            }
-        },
+        Expand::CommitFile(id, path) => {
+            let d = diff::commit_file_diff(repo, id, path).map_err(|e| e.to_string());
+            let row = |parts, part: DiffPart, _| DetailLine {
+                body: matches!(part, DiffPart::Line(..)),
+                ..line(parts)
+            };
+            diff_lines(&d, "converted to text (textconv)", &row)
+        }
         // its entry's details, which `rebuild_at` puts there
         Expand::Repo(_) => vec![],
         Expand::Dir(dir) => match argus_core::status::untracked_in(repo, dir, MAX_DIR_FILES) {
@@ -377,8 +360,60 @@ struct Place {
     beside: Vec<(Vec<Seg>, usize)>,
 }
 
-/// The diff rows under an expanded file's line: that side's hunks (unless
-/// folded) and their lines.
+/// A detail line's styled parts.
+type Parts = Vec<(Option<Role>, String)>;
+
+/// What a row of a diff is, for whoever makes the row.
+enum DiffPart<'a> {
+    /// Something said in place of content, or about it.
+    Note,
+    /// A hunk's header, by the hunk's place among the diff's.
+    Header(usize),
+    /// A line: its hunk, its place in it, itself.
+    Line(usize, usize, &'a argus_core::diff::Line),
+}
+
+/// A diff as rows, each in its place under the line the diff is of: a
+/// note where there's nothing to show, else each hunk's header and its
+/// lines. `row` makes a row of its parts, told what it is and whether the
+/// diff stands for the whole file only (converted to text: `converted`
+/// says so first). The same for a changed file and for one in a commit.
+fn diff_lines(
+    d: &Result<FileDiff, String>,
+    converted: &str,
+    row: &dyn Fn(Parts, DiffPart, bool) -> DetailLine,
+) -> Vec<DetailLine> {
+    let note = |role, text: &str| {
+        row(vec![(Some(role), text.to_string())], DiffPart::Note, false).at(Seg::Note)
+    };
+    let (hunks, whole) = match d {
+        Err(e) => return vec![note(Role::Error, e)],
+        Ok(FileDiff::Binary) => return vec![note(Role::Dim, "binary file")],
+        Ok(FileDiff::External) => return vec![note(Role::Dim, "external diff configured")],
+        Ok(FileDiff::Text(hunks)) => (hunks, false),
+        Ok(FileDiff::Converted(hunks)) => (hunks, true),
+    };
+    if hunks.is_empty() {
+        return vec![note(Role::Dim, "no change in content")];
+    }
+    let mut v = vec![];
+    if whole {
+        v.push(note(Role::Dim, converted));
+    }
+    let at = Seg::hunks(hunks);
+    for (h, hunk) in hunks.iter().enumerate() {
+        let header = vec![(Some(Role::DiffHunk), hunk.header())];
+        v.push(row(header, DiffPart::Header(h), whole).at(at[h].clone()));
+        for (i, l) in hunk.lines.iter().enumerate() {
+            let line = row(crate::details::diff_line(l), DiffPart::Line(h, i, l), whole);
+            v.push(line.under(&[at[h].clone(), Seg::Line(i)]));
+        }
+    }
+    v
+}
+
+/// The diff rows under a changed file's line, for that section's side:
+/// each knows its file, hunk and line, to stage or discard by.
 fn diff_rows(
     cache: &mut HashMap<(PathBuf, String, Side), Result<FileDiff, String>>,
     repo: &std::path::Path,
@@ -386,107 +421,33 @@ fn diff_rows(
     section: Section,
 ) -> Vec<DetailLine> {
     let side = section.side();
-    let indent = || (None, "      ".to_string());
-    let row = |parts: Vec<(Option<Role>, String)>,
-               side,
-               hunk,
-               line: Option<(usize, &argus_core::diff::Line)>| DetailLine {
-        parts,
-        file: Some(file.to_string()),
-        diff: Some(Box::new(DiffRef {
-            side,
-            hunk,
-            line: line.map(|(_, l)| l.clone()),
-            at: line.map(|(i, _)| i),
-        })),
-        issue: None,
-        ignored: false,
-        stash: None,
-        branch: None,
-        expand: None,
-        fix: None,
-        body: false,
-        links: vec![],
-        section: Some(section),
-        id: vec![],
-    };
-    let mut v = vec![];
-    {
-        let d = cache
-            .entry((repo.to_path_buf(), file.to_string(), side))
-            .or_insert_with(|| diff::file_diff(repo, file, side).map_err(|e| e.to_string()));
-        let note = |text: &str| {
-            row(
-                vec![indent(), (Some(Role::Dim), text.into())],
-                side,
-                None,
-                None,
-            )
-            .at(Seg::Note)
+    let d = cache
+        .entry((repo.to_path_buf(), file.to_string(), side))
+        .or_insert_with(|| diff::file_diff(repo, file, side).map_err(|e| e.to_string()));
+    let row = |mut parts: Parts, part: DiffPart, whole: bool| {
+        parts.insert(0, (None, "      ".to_string()));
+        // no patch of converted content to apply: every row stands for
+        // the file
+        let (hunk, line) = match part {
+            DiffPart::Header(h) if !whole => (Some(h), None),
+            DiffPart::Line(h, i, l) if !whole => (Some(h), Some((i, l))),
+            _ => (None, None),
         };
-        match d {
-            Err(e) => v.push(
-                row(
-                    vec![indent(), (Some(Role::Error), e.clone())],
-                    side,
-                    None,
-                    None,
-                )
-                .at(Seg::Note),
-            ),
-            Ok(FileDiff::Binary) => v.push(note("binary file")),
-            Ok(FileDiff::External) => v.push(note("external diff configured")),
-            Ok(FileDiff::Text(hunks) | FileDiff::Converted(hunks)) if hunks.is_empty() => {
-                v.push(note("no change in content"))
-            }
-            // no patch of the real content to apply: every line stands
-            // for the file
-            Ok(FileDiff::Converted(hunks)) => {
-                v.push(note(
-                    "converted to text (textconv): staged or discarded as a whole file",
-                ));
-                for (hunk, at) in hunks.iter().zip(Seg::hunks(hunks)) {
-                    v.push(
-                        DetailLine {
-                            body: true,
-                            ..row(
-                                vec![indent(), (Some(Role::DiffHunk), hunk.header())],
-                                side,
-                                None,
-                                None,
-                            )
-                        }
-                        .at(at.clone()),
-                    );
-                    for (i, l) in hunk.lines.iter().enumerate() {
-                        let mut parts = vec![indent()];
-                        parts.extend(crate::details::diff_line(l));
-                        v.push(
-                            DetailLine {
-                                body: true,
-                                ..row(parts, side, None, None)
-                            }
-                            .under(&[at.clone(), Seg::Line(i)]),
-                        );
-                    }
-                }
-            }
-            Ok(FileDiff::Text(hunks)) => {
-                let at = Seg::hunks(hunks);
-                for (h, hunk) in hunks.iter().enumerate() {
-                    let header = vec![indent(), (Some(Role::DiffHunk), hunk.header())];
-                    v.push(row(header, side, Some(h), None).at(at[h].clone()));
-                    for (i, l) in hunk.lines.iter().enumerate() {
-                        let mut parts = vec![indent()];
-                        parts.extend(crate::details::diff_line(l));
-                        let row = row(parts, side, Some(h), Some((i, l)));
-                        v.push(row.under(&[at[h].clone(), Seg::Line(i)]));
-                    }
-                }
-            }
+        DetailLine {
+            file: Some(file.to_string()),
+            diff: Some(Box::new(DiffRef {
+                side,
+                hunk,
+                line: line.map(|(_, l)| l.clone()),
+                at: line.map(|(i, _)| i),
+            })),
+            body: whole && !matches!(part, DiffPart::Note),
+            section: Some(section),
+            ..crate::details::line_of(parts)
         }
-    }
-    v
+    };
+    let converted = "converted to text (textconv): staged or discarded as a whole file";
+    diff_lines(d, converted, &row)
 }
 
 /// Where file operations apply, for when there's no file to act on.
@@ -3138,24 +3099,25 @@ impl App {
     /// unmark (by the first selected repo, as toggling goes), show or hide.
     fn state_labels(&self, menu: &mut Menu) {
         let first = self.selected().first().map(|&i| &self.ws.entries[i].flags);
-        let key_of = |a: Action| menu.items.iter().find(|it| it.action == a).map(|it| it.key);
-        let (pull, ignore) = (key_of(Action::TogglePull), key_of(Action::ToggleIgnore));
-        let label = |key: char| -> Option<&'static str> {
-            Some(match (menu.id, key) {
-                (MenuId::Mark, k) if Some(k) == pull && first?.pull => "stop pulling",
-                (MenuId::Mark, k) if Some(k) == pull => "pull (with F a and argus pull)",
-                (MenuId::Mark, k) if Some(k) == ignore && first?.ignored => "unignore repo",
-                (MenuId::Mark, k) if Some(k) == ignore => "ignore repo",
-                (MenuId::View, 'a') if self.view.attention_only => "show all repos",
-                (MenuId::View, 'a') => "show only repos needing attention",
-                (MenuId::View, 'h') if self.view.show_hidden => "hide ignored and snoozed repos",
-                (MenuId::View, 'h') => "show ignored and snoozed repos",
-                (MenuId::View, 'l') if self.show_log => "hide process log",
-                (MenuId::View, 'l') => "show process log",
+        let label = |action: &Action| -> Option<&'static str> {
+            use Action::*;
+            Some(match (menu.id, action) {
+                (MenuId::Mark, TogglePull) if first?.pull => "stop pulling",
+                (MenuId::Mark, TogglePull) => "pull (with F a and argus pull)",
+                (MenuId::Mark, ToggleIgnore) if first?.ignored => "unignore repo",
+                (MenuId::Mark, ToggleIgnore) => "ignore repo",
+                (MenuId::View, ToggleAttention) if self.view.attention_only => "show all repos",
+                (MenuId::View, ToggleAttention) => "show only repos needing attention",
+                (MenuId::View, ToggleHidden) if self.view.show_hidden => {
+                    "hide ignored and snoozed repos"
+                }
+                (MenuId::View, ToggleHidden) => "show ignored and snoozed repos",
+                (MenuId::View, ToggleLog) if self.show_log => "hide process log",
+                (MenuId::View, ToggleLog) => "show process log",
                 _ => return None,
             })
         };
-        let labels: Vec<Option<&str>> = menu.items.iter().map(|it| label(it.key)).collect();
+        let labels: Vec<Option<&str>> = menu.items.iter().map(|it| label(&it.action)).collect();
         for (it, l) in menu.items.iter_mut().zip(labels) {
             if let Some(l) = l {
                 it.label = l.to_string();
