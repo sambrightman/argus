@@ -233,6 +233,9 @@ pub enum Expand {
     /// A file a commit changed (`old -> new` for a rename): its diff
     /// against the commit's first parent.
     CommitFile(String, String),
+    /// The sections of the repo's changes, as its details have them
+    /// further down.
+    Changes,
     /// The files of an untracked directory shown collapsed.
     Dir(String),
     /// A repo nested in the work tree: its own details, acting on it.
@@ -270,6 +273,7 @@ fn issue_expand(issue: &Issue, s: &argus_core::status::RepoStatus) -> Option<Exp
             on_no_remote(s.head.branch()?)
         }
         Issue::UnpushedBranches(_) => Expand::UnpushedBranches,
+        Issue::Dirty(_) => Expand::Changes,
         Issue::DetachedCommits(_) => Expand::Commits(Range::Orphans),
         Issue::Behind(_) => Expand::Commits(Range::Missing {
             tip: format!("refs/remotes/{}", s.upstream.as_ref()?.name),
@@ -756,9 +760,51 @@ pub fn details(
             );
         }
     }
-    // changes by section, as magit has them: each headed by its own line
-    // (which folds it), its files below, a file in every section it has
-    // changes in
+    v.extend(sections(s));
+    if !s.stashes.is_empty() {
+        let ignored = e.stash_ignored.iter().filter(|&&i| i).count();
+        let mut parts = vec![
+            styled(Role::Dim, "stashes   "),
+            styled(Role::Stash, s.stashes.len().to_string()),
+        ];
+        if ignored > 0 {
+            parts.push(styled(Role::Dim, format!(" ({ignored} ignored)")));
+        }
+        v.push(line(parts).at(Seg::Stashes));
+        for (n, message) in s.stashes.iter().enumerate().take(MAX_STASHES) {
+            let label = format!("          stash@{{{n}}} {message}");
+            let id = s.stash_ids.get(n);
+            v.push(
+                DetailLine {
+                    stash: Some(n),
+                    expand: id.map(|id| Expand::Commit(id.clone())),
+                    ..line(vec![if e.stash_ignored.get(n) == Some(&true) {
+                        styled(Role::Dim, format!("{label}  (ignored)"))
+                    } else {
+                        plain(label)
+                    }])
+                }
+                .at(Seg::Stashes)
+                .at(Seg::Stash(id.cloned().unwrap_or_else(|| n.to_string()))),
+            );
+        }
+        let more = s.stashes.len().saturating_sub(MAX_STASHES);
+        if more > 0 {
+            v.push(
+                line(vec![styled(Role::Dim, format!("          … {more} more"))])
+                    .at(Seg::Stashes)
+                    .at(Seg::More),
+            );
+        }
+    }
+    v
+}
+
+/// The repo's changes by section, as magit has them: each headed by its
+/// own line (which folds it), its files below, a file in every section it
+/// has changes in.
+pub fn sections(s: &argus_core::status::RepoStatus) -> Vec<DetailLine> {
+    let mut v = vec![];
     for section in Section::ALL {
         let files: Vec<_> = s
             .changes
@@ -812,42 +858,6 @@ pub fn details(
                 }
                 .at(Seg::Section(section))
                 .at(Seg::More),
-            );
-        }
-    }
-    if !s.stashes.is_empty() {
-        let ignored = e.stash_ignored.iter().filter(|&&i| i).count();
-        let mut parts = vec![
-            styled(Role::Dim, "stashes   "),
-            styled(Role::Stash, s.stashes.len().to_string()),
-        ];
-        if ignored > 0 {
-            parts.push(styled(Role::Dim, format!(" ({ignored} ignored)")));
-        }
-        v.push(line(parts).at(Seg::Stashes));
-        for (n, message) in s.stashes.iter().enumerate().take(MAX_STASHES) {
-            let label = format!("          stash@{{{n}}} {message}");
-            let id = s.stash_ids.get(n);
-            v.push(
-                DetailLine {
-                    stash: Some(n),
-                    expand: id.map(|id| Expand::Commit(id.clone())),
-                    ..line(vec![if e.stash_ignored.get(n) == Some(&true) {
-                        styled(Role::Dim, format!("{label}  (ignored)"))
-                    } else {
-                        plain(label)
-                    }])
-                }
-                .at(Seg::Stashes)
-                .at(Seg::Stash(id.cloned().unwrap_or_else(|| n.to_string()))),
-            );
-        }
-        let more = s.stashes.len().saturating_sub(MAX_STASHES);
-        if more > 0 {
-            v.push(
-                line(vec![styled(Role::Dim, format!("          … {more} more"))])
-                    .at(Seg::Stashes)
-                    .at(Seg::More),
             );
         }
     }

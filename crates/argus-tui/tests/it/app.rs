@@ -7634,6 +7634,62 @@ fn staging_a_sections_last_file_moves_on_to_the_next_line_not_after_the_file() {
     assert_eq!(text(&app), "unstaged (1)");
 }
 
+/// The "uncommitted paths" issue unfolds into the sections of changes,
+/// as they are further down: the same files, acting the same, folding
+/// by themselves.
+#[test]
+fn the_uncommitted_issue_unfolds_into_the_sections() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    cursor_on_detail(&mut app, "dirty", "issue     5 uncommitted path(s)");
+    let count = |app: &App, text: &str| trimmed(app).iter().filter(|t| *t == text).count();
+    for line in ["untracked (2)", "unstaged (2)", "staged (1)", "M README"] {
+        assert_eq!(count(&app, line), 1, "{line}: {:?}", trimmed(&app));
+    }
+    app.on_key(code(KeyCode::Tab));
+    for line in ["untracked (2)", "unstaged (2)", "staged (1)", "M README"] {
+        assert_eq!(count(&app, line), 2, "{line}: {:?}", trimmed(&app));
+    }
+    // under the issue, further in than it, files further in than sections
+    let under = below(&app, "issue     5 uncommitted path(s)", 4);
+    assert_eq!(under[..3], ["untracked (2)", "bin", "new"], "{under:?}");
+    let texts = detail_texts(&app);
+    let col = |text: &str| {
+        let l = texts.iter().find(|t| t.trim() == text).unwrap();
+        l.len() - l.trim_start().len()
+    };
+    assert!(col("untracked (2)") > col("issue     5 uncommitted path(s)"));
+    // a file there unfolds to its diff, further in than the file; the one
+    // further down stays folded
+    let first = trimmed(&app).iter().position(|t| t == "M README").unwrap();
+    app.cursor = app.row_of_detail(first);
+    app.on_key(code(KeyCode::Tab));
+    let t = detail_texts(&app);
+    assert_eq!(t.iter().filter(|t| t.trim().starts_with("@@")).count(), 1);
+    assert!(t[first + 1].trim().starts_with("@@"), "{t:?}");
+    let indent = |l: &String| l.len() - l.trim_start().len();
+    assert!(indent(&t[first + 1]) > indent(&t[first]), "{t:?}");
+    // drawn as any diff line is, its changed words picked out or not
+    let screen = render(&mut app, 120, 60);
+    for l in ["-hello world", "+hello there"] {
+        assert_eq!(
+            screen.lines().filter(|s| s.trim() == l).count(),
+            1,
+            "{screen}"
+        );
+    }
+    // and stages like the other
+    app.cursor = app.row_of_detail(first);
+    match app.act(Action::StageFiles).as_slice() {
+        [Effect::Jobs(j)] => assert_eq!(j[0].op.label(), "stage README"),
+        other => panic!("{other:?}"),
+    }
+    // Tab on the issue folds them again; the sections below are untouched
+    cursor_on_detail(&mut app, "dirty", "issue     5 uncommitted path(s)");
+    app.on_key(code(KeyCode::Tab));
+    assert_eq!(count(&app, "unstaged (2)"), 1);
+    assert!(app.current().unwrap().path.ends_with("dirty"));
+}
+
 /// The stash menu offers what there is something to do with.
 #[test]
 fn the_stash_menu_offers_only_what_applies() {

@@ -189,10 +189,18 @@ const MAX_DIR_FILES: usize = 200;
 
 /// `line` indented `pad` more spaces.
 fn padded(mut line: DetailLine, pad: usize) -> DetailLine {
-    if pad > 0 {
-        line.parts.insert(0, (None, " ".repeat(pad)));
-        for l in &mut line.links {
-            l.0 += 1;
+    match line.parts.first_mut() {
+        _ if pad == 0 => {}
+        // more of the indent it starts with: its parts stay the same in
+        // number and order (a diff line's are its indent, then its text)
+        Some((None, text)) if text.chars().all(|c| c == ' ') => {
+            text.push_str(&" ".repeat(pad));
+        }
+        _ => {
+            line.parts.insert(0, (None, " ".repeat(pad)));
+            for l in &mut line.links {
+                l.0 += 1;
+            }
         }
     }
     line
@@ -316,6 +324,10 @@ fn unfold(repo: &std::path::Path, s: &RepoStatus, x: &Expand, indent: usize) -> 
             };
             diff_lines(&d, "converted to text (textconv)", &row)
         }
+        Expand::Changes => crate::details::sections(s)
+            .into_iter()
+            .map(|l| padded(l, indent))
+            .collect(),
         // its entry's details, which `rebuild_at` puts there
         Expand::Repo(_) => vec![],
         Expand::Dir(dir) => match argus_core::status::untracked_in(repo, dir, MAX_DIR_FILES) {
@@ -1017,6 +1029,12 @@ impl App {
                                 .unfold_cache
                                 .entry((e.path.clone(), x.clone(), indent))
                                 .or_insert_with(|| unfold(&e.path, s, x, indent));
+                            // (the sections' files have diffs of their
+                            // own to unfold, as far in as they are)
+                            let pad = match x {
+                                Expand::Changes => pad + indent,
+                                _ => pad,
+                            };
                             below.extend(rows.iter().map(|l| (r, pad, l.clone())));
                             diff = matches!(x, Expand::CommitFile(..));
                         }
@@ -4736,6 +4754,14 @@ mod tests {
         assert_eq!(p.links, [(2, "https://x/12".to_string())]);
         assert_eq!(p.parts[p.links[0].0].1, "#12");
         // inverse: not indented, as it was
+        assert_eq!(padded(l.clone(), 0), l);
+        // a line starting with an indent gets more of it, in the same part
+        l.parts.insert(0, (None, "  ".into()));
+        l.links = vec![(2, "https://x/12".into())];
+        let p = padded(l.clone(), 4);
+        assert_eq!(p.parts.len(), 3);
+        assert_eq!(p.parts[0].1, "      ");
+        assert_eq!(p.links, l.links);
         assert_eq!(padded(l.clone(), 0), l);
     }
 }
