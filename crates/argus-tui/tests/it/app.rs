@@ -6245,6 +6245,12 @@ fn a_textconv_diff_is_shown_converted_and_acts_as_its_file() {
             "+THREE"
         ]
     );
+    // none of it is a hunk or a line to act on by itself
+    let of_hunk = |r: &Row| {
+        matches!(r, Row::Detail { line, .. }
+        if line.diff.as_ref().is_some_and(|d| d.hunk.is_some() || d.line.is_some()))
+    };
+    assert!(!app.rows.iter().any(of_hunk));
     // on a line of it: the whole file is staged, there being no patch of
     // the real content to apply
     app.cursor = app

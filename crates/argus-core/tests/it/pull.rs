@@ -735,6 +735,8 @@ fn a_failed_switch_leaves_submodules_where_they_are() {
     );
     assert!(!out.success, "{}", out.output);
     assert!(!out.output.contains("switched"), "{}", out.output);
+    // (nothing said of submodules: there was no switch for them to follow)
+    assert!(!out.output.contains("lib"), "{}", out.output);
     assert_eq!(git(&lib, &["rev-parse", "HEAD"]), new);
 }
 

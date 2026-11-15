@@ -1051,10 +1051,7 @@ fn submodule_states(cwd: &Path) -> Vec<(String, char)> {
         let state = l.chars().next().filter(|c| "+-U".contains(*c));
         let (_, rest) = l.trim_start_matches(['+', '-', 'U', ' ']).split_once(' ')?;
         // (then how the commit is described, in brackets, when it can be)
-        let path = match rest.rsplit_once(" (") {
-            Some((path, _)) if rest.ends_with(')') => path,
-            _ => rest,
-        };
+        let path = rest.rsplit_once(" (").map_or(rest, |(path, _)| path);
         Some((path.to_string(), state.unwrap_or(' ')))
     };
     listed.output.lines().filter_map(line).collect()

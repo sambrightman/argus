@@ -1,6 +1,6 @@
 //! Badge text built from icons and repo state.
 
-use argus_core::badges;
+use argus_core::badges::{self, Role};
 use argus_core::icons::UNICODE;
 use argus_core::testkit::{Sandbox, commit, git};
 use argus_core::{Config, State, Workspace};
@@ -98,6 +98,22 @@ fn flag_badges_show_favourite_new_ignored_or_snoozed_and_pull() {
         )),
         ["◆".to_string(), UNICODE.pull.to_string()]
     );
+    // each in its mark's colour, pull's too (the marks: favourite, pull,
+    // ignore, in that order)
+    let mut ws = Workspace::new(
+        Config::parse(&cfg(&format!(
+            "marks.pull.repos = ['{path}']\nmarks.favourite.repos = ['{path}']"
+        )))
+        .unwrap(),
+        State::default(),
+    )
+    .unwrap();
+    ws.scan();
+    let roles: Vec<Role> = badges::flags(&ws.entries[0], &UNICODE, &ws.config.mark_icons())
+        .into_iter()
+        .map(|b| b.role)
+        .collect();
+    assert_eq!(roles, [Role::Mark(0), Role::Mark(1)]);
     // the marks' own icons, when they're given one; else the icon set's
     assert_eq!(
         texts(&format!(
