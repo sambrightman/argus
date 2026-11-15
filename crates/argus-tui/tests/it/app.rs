@@ -1455,6 +1455,46 @@ fn pop_and_drop_take_the_cursors_stash_or_ask_which() {
             .0
             .contains("one repo at a time")
     );
+    // so the menu doesn't offer them then; it does on a stash's line,
+    // whatever is marked
+    let offers = |app: &mut App| {
+        app.on_key(key('z'));
+        let has = matches!(&app.mode, Mode::Menu { menu, .. }
+            if menu.items.iter().any(|i| i.key == 'p') && menu.items.iter().any(|i| i.key == 'd'));
+        app.on_key(code(KeyCode::Esc));
+        has
+    };
+    assert!(!offers(&mut app));
+    app.marked = [sb.path("dev/clean")].into();
+    cursor_on_detail(&mut app, "dirty", "          stash@{0}");
+    assert!(offers(&mut app));
+}
+
+/// A file's diff is two columns in from the file, wherever the file is:
+/// in a section, or in an untracked folder unfolded.
+#[test]
+fn a_diff_is_two_in_from_its_file_wherever_that_is() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let d = sb.path("dev/dirty");
+        write(&d, "dir/x", "1\n");
+        write(&d, "dir/y", "2\n");
+    });
+    cursor_on_detail(&mut app, "dirty", "    dir/");
+    app.on_key(code(KeyCode::Tab));
+    let col = |app: &App, n: usize| {
+        let t = &detail_texts(app)[n];
+        t.len() - t.trim_start().len()
+    };
+    for file in ["dir/x", "README"] {
+        let at = trimmed(&app)
+            .iter()
+            .position(|t| t.ends_with(file))
+            .unwrap();
+        app.cursor = app.row_of_detail(at);
+        app.on_key(code(KeyCode::Tab));
+        assert!(trimmed(&app)[at + 1].starts_with("@@"), "{file}");
+        assert_eq!(col(&app, at + 1), col(&app, at) + 2, "{file}");
+    }
 }
 
 #[test]
@@ -3347,6 +3387,13 @@ fn a_mixed_reset_asks_only_when_something_staged_would_be_lost() {
         )),
         other => panic!("{other:?}"),
     }
+    // staged for deletion and still there: nothing to lose either
+    let (sb, mut app) = setup_with("", two_local_commits);
+    let c = sb.path("dev/clean");
+    git(&c, &["rm", "-q", "--cached", "README"]);
+    app.ws.refresh(&c);
+    app.rebuild();
+    assert!(matches!(reset(&mut app).as_slice(), [Effect::Jobs(_)]));
     // inverse: staged, and the same in the work tree: nothing to lose
     let (sb, mut app) = setup_with("", two_local_commits);
     let c = sb.path("dev/clean");
@@ -7755,7 +7802,44 @@ fn what_was_unfolded_under_a_line_is_forgotten_when_the_line_goes() {
     status_arrives(&mut app, &d);
     assert!(trimmed(&app).iter().any(|t| t == "M README"));
     assert!(!open(&app), "{:?}", trimmed(&app));
-    assert!(app.toggled.is_empty(), "{:?}", app.toggled);
+    assert!(app.toggled.is_empty(), "{:?}", app.toggled); // the same under the uncommitted issue, and in a nested repo
+    let n = d.join("nested");
+    std::fs::create_dir_all(&n).unwrap();
+    git(&n, &["init", "-q"]);
+    write(&n, "a", "1\n");
+    commit(&n, "a");
+    write(&n, "a", "2\n");
+    status_arrives(&mut app, &d);
+    cursor_on_detail(&mut app, "dirty", "issue     3 uncommitted path(s)");
+    app.on_key(code(KeyCode::Tab));
+    app.cursor = (0..app.rows.len())
+        .find(|&r| matches!(&app.rows[r], Row::Detail { line, .. } if line.file.as_deref() == Some("README")))
+        .unwrap();
+    assert_eq!(trimmed(&app)[app.cursor_line()], "M README");
+    app.on_key(code(KeyCode::Tab));
+    assert!(open(&app));
+    cursor_on_detail(&mut app, "dirty", "    nested");
+    app.on_key(code(KeyCode::Tab));
+    let inner = (0..app.rows.len())
+        .find(|&r| matches!(&app.rows[r], Row::Detail { line, .. } if line.file.as_deref() == Some("a")))
+        .unwrap();
+    app.cursor = inner;
+    app.on_key(code(KeyCode::Tab));
+    assert_eq!(
+        trimmed(&app).iter().filter(|t| t.starts_with("@@")).count(),
+        2
+    );
+    // both files committed, then changed again: neither diff comes back
+    git(&d, &["commit", "-qam", "it"]);
+    git(&n, &["commit", "-qam", "it"]);
+    let nested = n.canonicalize().unwrap();
+    status_arrives(&mut app, &nested);
+    status_arrives(&mut app, &d);
+    write(&d, "README", "and again\n");
+    write(&n, "a", "3\n");
+    status_arrives(&mut app, &nested);
+    status_arrives(&mut app, &d);
+    assert!(!open(&app), "{:?}", trimmed(&app));
 }
 
 #[test]
@@ -7929,6 +8013,93 @@ fn the_stash_menu_offers_only_what_applies() {
     assert_eq!(keys(&mut app), "ukMzpd");
     assert!(items.contains(&('p', "pop".into())), "{items:?}");
     assert!(items.contains(&('d', "drop…".into())), "{items:?}");
+}
+
+/// A file's diff open in two places (under the uncommitted issue and in
+/// its section): a region is of the copy the cursor is in.
+#[test]
+fn a_region_stays_in_the_copy_of_the_diff_it_was_started_in() {
+    let (_sb, mut app) = setup_with("", three_hunks);
+    cursor_on_detail(&mut app, "dirty", "issue     1 uncommitted path(s)");
+    app.on_key(code(KeyCode::Tab));
+    let files: Vec<usize> = (0..app.rows.len())
+        .filter(|&n| {
+            matches!(&app.rows[n], Row::Detail { line, .. }
+            if line.file.as_deref() == Some("f") && line.diff.is_none())
+        })
+        .collect();
+    assert_eq!(files.len(), 2, "under the issue, and in its section");
+    // (the lower first, so the rows above it don't move)
+    for n in files.iter().rev() {
+        app.cursor = *n;
+        app.on_key(code(KeyCode::Tab));
+    }
+    let copies: Vec<usize> = (0..app.rows.len())
+        .filter(|&n| {
+            matches!(&app.rows[n], Row::Detail { line, .. }
+            if line.diff.as_ref().and_then(|d| d.line.as_ref()).is_some_and(|l| l.text == "line 3"))
+        })
+        .collect();
+    assert_eq!(copies.len(), 2);
+    for start in copies {
+        // from "-line 3" to "+line three", the next line
+        app.cursor = start;
+        app.on_key(ctrl(' '));
+        app.on_key(code(KeyCode::Down));
+        let lines = app.region_lines();
+        assert_eq!(lines.len(), 2, "{start}: {lines:?}");
+        app.on_key(ctrl(' '));
+        app.marked_lines.clear();
+    }
+}
+
+/// Two repos nested in one work tree, one's path ending as the other's
+/// does: each unfolds into itself.
+#[test]
+fn nested_repos_with_like_names_unfold_into_themselves() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let c = sb.path("dev/clean");
+        for (rel, file) in [("b/sub", "inner"), ("sub", "outer")] {
+            let n = c.join(rel);
+            std::fs::create_dir_all(&n).unwrap();
+            git(&n, &["init", "-q"]);
+            write(&n, file, "1\n");
+            commit(&n, file);
+            write(&n, file, "2\n");
+        }
+    });
+    cursor_on_detail(&mut app, "clean", "    b/");
+    app.on_key(code(KeyCode::Tab));
+    cursor_on_detail(&mut app, "clean", "      b/sub");
+    app.on_key(code(KeyCode::Tab));
+    assert!(below(&app, "      b/sub", 6).iter().any(|l| l == "M inner"));
+    cursor_on_detail(&mut app, "clean", "    sub");
+    app.on_key(code(KeyCode::Tab));
+    let under = below(&app, "    sub", 4);
+    assert!(under.iter().any(|l| l == "M outer"), "{under:?}");
+    let own = sb.path("dev/clean/sub").canonicalize().unwrap();
+    let at = app.cursor + 1;
+    assert!(matches!(&app.rows[at], Row::Detail { repo, .. } if app.ws.entries[*repo].path == own));
+}
+
+/// A rescan reads everything again: what was unfolded shows what's there
+/// now, not what was read before.
+#[test]
+fn a_rescan_reads_what_is_unfolded_again() {
+    let (sb, mut app) = setup_with("", |_| {});
+    let d = sb.path("dev/dirty");
+    cursor_on_detail(&mut app, "dirty", "issue     1 uncommitted path(s)");
+    app.on_key(code(KeyCode::Tab));
+    let count = |app: &App, text: &str| trimmed(app).iter().filter(|t| *t == text).count();
+    assert_eq!(count(&app, "M README"), 2);
+    write(&d, "zz", "new\n");
+    app.ws.refresh(&d);
+    let entries = app.ws.entries.clone();
+    app.on_msg(Msg::Scanned {
+        entries,
+        truncated: vec![],
+    });
+    assert_eq!(count(&app, "zz"), 2, "{:?}", trimmed(&app));
 }
 
 /// Fold the hunk whose line the cursor is on, as if from elsewhere: the

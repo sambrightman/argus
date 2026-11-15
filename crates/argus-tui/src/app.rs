@@ -1006,11 +1006,7 @@ impl App {
                     let changed = line.file.as_ref().zip(line.section);
                     match (&line.expand, changed) {
                         (Some(Expand::Repo(rel)), _) => {
-                            let inner = self.ws.entries.iter().position(|n| {
-                                n.nested
-                                    && n.parent.as_ref() == Some(&e.path)
-                                    && n.path.ends_with(rel)
-                            });
+                            let inner = self.ws.nested_index(&e.path, rel);
                             let inner_pad = unfold_indent(&line);
                             if let Some(n) = inner {
                                 let lines = details(
@@ -1034,8 +1030,11 @@ impl App {
                                 .or_insert_with(|| unfold(&e.path, s, x, indent));
                             // (the sections' files have diffs of their
                             // own to unfold, as far in as they are)
+                            // (a diff is two in from its file, as under
+                            // a section: six, with the file at four)
                             let pad = match x {
-                                Expand::Changes => pad + indent,
+                                Expand::Changes => indent,
+                                Expand::Dir(_) => indent.saturating_sub(4),
                                 _ => pad,
                             };
                             below.extend(rows.iter().map(|l| (r, pad, l.clone())));
@@ -2561,8 +2560,9 @@ impl App {
         // staged of a file changed again since (mixed: the index goes)
         let restaged: Vec<String> = match self.ws.get(&path).and_then(|e| e.status()) {
             Some(s) if mode == ResetMode::Mixed => {
+                // (staged for deletion and still there: nothing is lost)
                 let both = |f: &&argus_core::status::FileChange| {
-                    !matches!(f.index, ' ' | '?') && f.worktree != ' '
+                    !matches!(f.index, ' ' | '?') && f.worktree != ' ' && !f.untracked()
                 };
                 let files = s.changes.files.iter().filter(both);
                 files.map(|f| f.path.clone()).collect()
@@ -3052,14 +3052,15 @@ impl App {
             });
         }
         // stashing: what there's something to stash of, or a stash for
-        let stashes = self.selected().iter().any(|&i| {
-            let s = self.ws.entries[i].status();
-            s.is_some_and(|s| !s.stashes.is_empty())
-        });
+        // (pop and drop: the stash under the cursor, else one of the one
+        // repo selected, as `stash_pick` takes them)
         let on_stash = matches!(
             self.rows.get(self.cursor),
             Some(Row::Detail { line, .. }) if line.stash.is_some()
         );
+        let stashes = on_stash
+            || matches!(self.selected()[..], [i]
+                if self.ws.entries[i].status().is_some_and(|s| !s.stashes.is_empty()));
         menu.items.retain(|it| match it.action {
             Action::Stash(StashKind::Staged) => staged,
             Action::Stash(StashKind::MarkedFiles) => !self.marked_files.is_empty(),
@@ -3627,7 +3628,7 @@ impl App {
                 .is_some_and(|l| l.kind != argus_core::diff::LineKind::Context);
             Some((d.hunk?, d.at?, same && changed))
         };
-        let Some(start) = self.rows.iter().position(|r| match r {
+        let starts = |r: &Row| match r {
             Row::Detail { repo: i, line } => line.diff.as_deref().is_some_and(|d| {
                 &self.ws.entries[*i].path == repo
                     && line.file.as_ref() == Some(file)
@@ -3636,7 +3637,17 @@ impl App {
                     && d.at == *at
             }),
             _ => false,
-        }) else {
+        };
+        // a diff can be open in more places than one (under its section,
+        // and under the uncommitted issue): the start is in the one the
+        // cursor is in, the place it shares most of
+        let here = self.id(self.cursor);
+        let shared = |n: &usize| {
+            let there = self.id(*n);
+            here.iter().zip(there).take_while(|(a, b)| a == b).count()
+        };
+        let candidates = (0..self.rows.len()).filter(|n| starts(&self.rows[*n]));
+        let Some(start) = candidates.rev().max_by_key(shared) else {
             return vec![];
         };
         let (lo, hi) = (start.min(self.cursor), start.max(self.cursor));
@@ -3924,29 +3935,58 @@ impl App {
 
     /// What was folded or unfolded under lines the repo no longer has is
     /// forgotten: a file committed and changed again starts folded, as
-    /// any other.
+    /// any other. `path` is the repo whose status is new: its listed
+    /// repo's lines are looked over, a nested repo's among them.
     fn forget_gone(&mut self, path: &std::path::Path) {
-        let Some(e) = self.ws.get(path) else {
+        let mut root = self.ws.get(path);
+        while let Some(e) = root.filter(|e| e.nested) {
+            root = e.parent.as_ref().and_then(|p| self.ws.get(p));
+        }
+        let Some((root, i)) = root.and_then(|e| Some((e.path.clone(), self.ws.index_of(&e.path)?)))
+        else {
             self.toggled.remove(path);
             return;
         };
-        let (Some(s), Some(set)) = (e.status(), self.toggled.get_mut(path)) else {
+        let Some(mut set) = self.toggled.remove(&root) else {
             return;
         };
-        let shown = e.issues.iter().chain(&e.ignored_issues);
-        let issues: Vec<&str> = shown.chain(&e.snoozed_issues).map(|i| i.name()).collect();
-        set.retain(|id| match id.as_slice() {
-            [Seg::Section(section), Seg::File(f) | Seg::Repo(f), ..] => {
-                let there = |c: &&argus_core::status::FileChange| c.path == *f;
-                let file = s.changes.files.iter().find(there);
-                file.is_some_and(|c| section.code(c).is_some())
+        set.retain(|id| self.still_there(i, id));
+        if !set.is_empty() {
+            self.toggled.insert(root, set);
+        }
+    }
+
+    /// Whether the line at `id` of entry `i`'s details can still be there,
+    /// as far as its status says: its file still changed in that section,
+    /// its branch, stash or issue still had. Lines read on demand (a
+    /// commit's) are taken to be.
+    fn still_there(&self, i: usize, id: &[Seg]) -> bool {
+        let e = &self.ws.entries[i];
+        let Some(s) = e.status() else { return true };
+        let changed = |section: &Section, f: &str| {
+            let file = s.changes.files.iter().find(|c| c.path == f);
+            file.is_some_and(|c| section.code(c).is_some())
+        };
+        match id {
+            [Seg::Section(section), Seg::File(f), ..] => changed(section, f),
+            // a nested repo: there, and its own lines by its own status
+            [Seg::Section(section), Seg::Repo(rel), rest @ ..] => {
+                changed(section, rel)
+                    && self
+                        .ws
+                        .nested_index(&e.path, rel)
+                        .is_none_or(|n| self.still_there(n, rest))
             }
             [Seg::Branches, Seg::Branch(b), ..] => s.branches.iter().any(|x| x.name == *b),
             [Seg::Stashes, Seg::Stash(id), ..] => s.stash_ids.contains(id),
-            [Seg::Issue(name, _), ..] => issues.contains(name),
+            // an issue, and under it whatever it unfolds into
+            [Seg::Issue(name, _), rest @ ..] => {
+                let shown = e.issues.iter().chain(&e.ignored_issues);
+                shown.chain(&e.snoozed_issues).any(|i| i.name() == *name)
+                    && self.still_there(i, rest)
+            }
             _ => true,
-        });
-        self.toggled.retain(|_, set| !set.is_empty());
+        }
     }
 
     /// What Tab at the cursor folds or unfolds: the line there if lines
@@ -4345,6 +4385,7 @@ impl App {
             Msg::Scanned { entries, truncated } => {
                 self.scanning = false;
                 self.diffs.clear();
+                self.unfold_cache.clear();
                 self.marked_lines.clear();
                 self.region = None;
                 self.ws.entries = entries;

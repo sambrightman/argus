@@ -576,6 +576,15 @@ impl Workspace {
         self.index_of(&path)
     }
 
+    /// The nested entry for the repo at `rel` in `parent`'s work tree, if
+    /// [`Self::nested`] has added it.
+    pub fn nested_index(&self, parent: &Path, rel: &str) -> Option<usize> {
+        let path = std::fs::canonicalize(parent.join(rel)).ok()?;
+        let i = self.index_of(&path)?;
+        let e = &self.entries[i];
+        (e.nested && e.parent.as_deref() == Some(parent)).then_some(i)
+    }
+
     /// `path`, then its parent, grandparent…: what a change in a submodule
     /// or worktree may change the status of.
     pub fn with_parents(&self, path: &Path) -> Vec<PathBuf> {
