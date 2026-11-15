@@ -7277,3 +7277,70 @@ fn the_same_commits_under_an_issue_and_under_their_branch_fold_separately() {
     app.on_msg(Msg::Status(f.clone(), Box::new(Ok(st))));
     assert_eq!(app.cursor_line(), under_branch(&app));
 }
+
+#[test]
+fn lines_that_unfold_say_where_they_are() {
+    // each issue's line (counted, ignored or snoozed), each branch's and
+    // each stash's has its own place, which what it unfolds into shares
+    let site_of = |app: &App, start: &str| -> Option<String> {
+        app.rows.iter().find_map(|r| match r {
+            Row::Detail { line, .. } => {
+                let text: String = line.parts.iter().map(|p| p.1.as_str()).collect();
+                text.trim_start()
+                    .starts_with(start)
+                    .then(|| line.site.as_deref().map(String::from))
+            }
+            _ => None,
+        })?
+    };
+    let prep = |sb: &Sandbox| {
+        let f = sb.path("dev/feature");
+        commit(&f, "unpushed work");
+        write(&f, "README", "stashed\n");
+        git(&f, &["stash", "push", "-q", "-m", "mine"]);
+    };
+    let (_sb, mut app) = setup_with("[marks.ignore.issues]\nstashes = []\n", prep);
+    cursor_on_detail(&mut app, "feature", "issue     1 unpushed commit");
+    let at = |start: &str| site_of(&app, start);
+    assert_eq!(
+        at("issue     1 unpushed").as_deref(),
+        Some("issue unpushed")
+    );
+    assert_eq!(at("issue     1 stash").as_deref(), Some("issue stashes"));
+    assert_eq!(at("* feat").as_deref(), Some("branch feat"));
+    assert_eq!(at("main").as_deref(), Some("branch main"));
+    assert_eq!(at("stash@{0}").as_deref(), Some("stash 0"));
+    // inverse: a line that's in one place only has none
+    assert_eq!(at("path"), None);
+    assert_eq!(at("branches"), None);
+    // an ignored issue's line, and a snoozed one's
+    let (_sb, mut app) = setup_with(
+        "[marks.ignore.issues]\nstashes = ['**']\nnon_default_branch = ['**']\n",
+        prep,
+    );
+    cursor_on_detail(&mut app, "feature", "issue     1 unpushed commit");
+    let line = "issue     not on default branch (main)  (ignored)";
+    assert_eq!(
+        site_of(&app, line).as_deref(),
+        Some("issue non_default_branch")
+    );
+    let key = app.current().unwrap().key.clone();
+    let until = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
+    app.ws
+        .state
+        .snooze_issue(&key, argus_core::attention::Issue::Unpushed(0), until);
+    app.ws.resolve_flags();
+    app.rebuild();
+    assert_eq!(
+        site_of(&app, "issue     1 unpushed commit(s)  (snoozed").as_deref(),
+        Some("issue unpushed")
+    );
+    // what a line unfolds into is in its place
+    cursor_on_detail(&mut app, "feature", "  * feat");
+    app.on_key(code(KeyCode::Tab));
+    let below = match &app.rows[app.cursor + 1] {
+        Row::Detail { line, .. } => line.site.as_deref().map(String::from),
+        r => panic!("{r:?}"),
+    };
+    assert_eq!(below.as_deref(), Some("branch feat"));
+}
