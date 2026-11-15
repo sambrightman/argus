@@ -1053,30 +1053,58 @@ fn status(
         true => ask_forges(ws, &order),
         false => Default::default(),
     };
-    let rows: Vec<(String, String, String, String, Vec<String>)> = order
+    /// Text as printed (with its colours), and how wide it shows.
+    struct Cell {
+        text: String,
+        width: usize,
+    }
+    impl Cell {
+        /// Padded to `width` columns.
+        fn padded(&self, width: usize) -> String {
+            format!(
+                "{}{}",
+                self.text,
+                " ".repeat(width.saturating_sub(self.width))
+            )
+        }
+    }
+    struct StatusRow {
+        flags: Cell,
+        name: Cell,
+        branch: Cell,
+        state: String,
+        details: Vec<String>,
+    }
+    let rows: Vec<StatusRow> = order
         .iter()
         .map(|&i| {
             let e = &ws.entries[i];
             // flags side by side as the TUI has them, padded below to the
             // row with the most
             let flags = badges::flags(e, &ic, &marks);
-            let flag_w: usize = flags
-                .iter()
-                .map(|b| UnicodeWidthStr::width(b.text.as_str()))
-                .sum();
-            let flags: String = flags.iter().map(|b| p.role(b.role, &b.text)).collect();
+            let width = |t: &str| UnicodeWidthStr::width(t);
+            let flags = Cell {
+                text: flags.iter().map(|b| p.role(b.role, &b.text)).collect(),
+                width: flags.iter().map(|b| width(&b.text)).sum(),
+            };
             let indent = "  ".repeat(ws.depth(i));
             let name = format!("{indent}{}", e.display_name());
-            let br = badges::branch(e, &ic)
-                .map(|b| p.role(b.role, &b.text))
-                .unwrap_or_default();
-            let br_plain = badges::branch(e, &ic).map(|b| b.text).unwrap_or_default();
-            (
-                format!("{flags}\u{0}{flag_w}"),
-                name,
-                format!("{br}\u{0}{br_plain}"),
-                p.badges(&badges::state(e, &ic)),
-                if details {
+            let branch = badges::branch(e, &ic);
+            StatusRow {
+                flags,
+                name: Cell {
+                    width: width(&name),
+                    text: name,
+                },
+                branch: Cell {
+                    text: branch
+                        .as_ref()
+                        .map(|b| p.role(b.role, &b.text))
+                        .unwrap_or_default(),
+                    width: branch.as_ref().map_or(0, |b| width(&b.text)),
+                },
+                state: p.badges(&badges::state(e, &ic)),
+                details: if details {
                     let (fix, stash) = (&ws.config.fix.auto, &ws.config.stash);
                     let said = asked.get(&e.path).and_then(|r| match r {
                         Ok(Some(info)) => Some(argus_tui::details::ForgeView::Info(info)),
@@ -1094,36 +1122,28 @@ fn status(
                 } else {
                     vec![]
                 },
-            )
+            }
         })
         .collect();
-    let name_w = rows
-        .iter()
-        .map(|r| UnicodeWidthStr::width(r.1.as_str()))
-        .max()
-        .unwrap_or(0);
-    let br_w = rows
-        .iter()
-        .map(|r| UnicodeWidthStr::width(r.2.split('\0').nth(1).unwrap_or("")))
-        .max()
-        .unwrap_or(0);
+    // each column as wide as its widest
+    let widest =
+        |cell: fn(&StatusRow) -> &Cell| rows.iter().map(|r| cell(r).width).max().unwrap_or(0);
+    let (flags_w, name_w, br_w) = (
+        widest(|r| &r.flags),
+        widest(|r| &r.name),
+        widest(|r| &r.branch),
+    );
     let mut out = std::io::stdout().lock();
-    let flags_w = rows
-        .iter()
-        .filter_map(|r| r.0.split('\0').nth(1)?.parse::<usize>().ok())
-        .max()
-        .unwrap_or(0);
-    for (flags, name, br, state, lines) in rows {
-        let (flags, w) = flags.split_once('\0').unwrap();
-        let flags = format!(
-            "{flags}{}",
-            " ".repeat(flags_w - w.parse::<usize>().unwrap_or(flags_w))
+    for r in rows {
+        let row = format!(
+            "{} {}  {}  {}",
+            r.flags.padded(flags_w),
+            r.name.padded(name_w),
+            r.branch.padded(br_w),
+            r.state
         );
-        let (br_col, br_plain) = br.split_once('\0').unwrap();
-        let br_pad = " ".repeat(br_w.saturating_sub(UnicodeWidthStr::width(br_plain)));
-        let row = format!("{flags} {}  {br_col}{br_pad}  {state}", pad(&name, name_w));
         writeln!(out, "{}", argus_core::text::terminal_safe(&row))?;
-        for l in lines {
+        for l in r.details {
             writeln!(out, "{}", argus_core::text::terminal_safe(&l))?;
         }
     }
