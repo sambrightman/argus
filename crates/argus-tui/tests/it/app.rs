@@ -6371,3 +6371,64 @@ fn browse_on_a_branch_with_a_pull_request_opens_it() {
         );
     }
 }
+
+#[test]
+fn a_pull_request_is_coloured_by_how_it_stands() {
+    use argus_core::badges::Role;
+    use argus_core::forge::{Checks, PullState, Review};
+    let (sb, mut app, fx) = forge_setup("");
+    let f = sb.path("dev/feature");
+    let [Effect::Forge { branches, .. }] = fx.as_slice() else {
+        panic!("{fx:?}")
+    };
+    let mut role = |change: &dyn Fn(&mut argus_core::forge::PullRequest)| {
+        let mut p = a_pull("feat", 12);
+        p.checks = None;
+        change(&mut p);
+        app.on_msg(Msg::Forge {
+            path: f.clone(),
+            branches: branches.clone(),
+            info: Ok(Some(argus_core::forge::RepoInfo {
+                pulls: vec![p],
+                ..Default::default()
+            })),
+        });
+        app.rows
+            .iter()
+            .find_map(|r| match r {
+                Row::Detail { line, .. } => {
+                    line.parts.iter().find(|p| p.1.contains("#12")).map(|p| p.0)
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    // open and nothing wrong: as things ahead are
+    assert_eq!(role(&|_| {}), Some(Role::Ahead));
+    assert_eq!(
+        role(&|p| p.review = Some(Review::Approved)),
+        Some(Role::Ahead)
+    );
+    assert_eq!(
+        role(&|p| p.checks = Some(Checks::Pending)),
+        Some(Role::Ahead)
+    );
+    // open with something to do: a warning
+    assert_eq!(
+        role(&|p| p.review = Some(Review::ChangesRequested)),
+        Some(Role::Warning)
+    );
+    assert_eq!(
+        role(&|p| p.checks = Some(Checks::Failing)),
+        Some(Role::Warning)
+    );
+    // over: dim, whatever its checks said
+    for state in [PullState::Merged, PullState::Closed] {
+        let r = role(&|p| {
+            p.state = state;
+            p.checks = Some(Checks::Failing);
+            p.review = Some(Review::ChangesRequested);
+        });
+        assert_eq!(r, Some(Role::Dim), "{state:?}");
+    }
+}

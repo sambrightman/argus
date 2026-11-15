@@ -733,6 +733,20 @@ mod tests {
         );
         assert_eq!(one(r#","reviewDecision":"NEW""#).0, None);
         assert_eq!(one(""), (None, None));
+        // and how it ended
+        let state = |state: &str| {
+            let body = format!(
+                r#"{{"data":{{"repository":{{"issues":{{"totalCount":0}},"pullRequests":{{"totalCount":0}},
+                    "b0":{{"nodes":[{}]}},"parent":null}}}}}}"#,
+                node(1, state, "me", "")
+            );
+            let (g, _) = graphql(GQL, 200, &body);
+            let id = RepoId::new("github.com", "me", "w");
+            g.info(&id, &["f".to_string()]).unwrap().unwrap().pulls[0].state
+        };
+        assert_eq!(state("OPEN"), PullState::Open);
+        assert_eq!(state("CLOSED"), PullState::Closed);
+        assert_eq!(state("MERGED"), PullState::Merged);
     }
 
     #[test]
