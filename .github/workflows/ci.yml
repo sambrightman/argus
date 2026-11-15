@@ -9,9 +9,13 @@ on:
 permissions:
   contents: read
 
+# A pull request's newer push replaces its older run. A push to main never
+# cancels another: each has its own group, so every push's jobs finish, the
+# mutants job on that push's own diff among them (cancelled, those changes
+# would never be mutation-tested: the next push's diff starts after them).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || 'pr' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always

@@ -824,7 +824,10 @@ with `Swatinem/rust-cache`, and mold as the Linux linker.
   doctests, on Linux and macOS; a check on the MSRV (`rust-version`,
   1.100); cargo-deny; coverage with cargo-llvm-cov (summary on the run's
   page, lcov uploaded as an artifact and to Codecov for history); and `cargo mutants --in-diff` on what the push or
-  PR changed, failing on a missed mutant.
+  PR changed, failing on a missed mutant. A push to main never cancels an
+  earlier push's run (each has its own concurrency group): that job tests
+  only its own push's diff, so a cancelled one leaves those changes
+  untested for good. A PR's newer push still replaces its older run.
 * `mutants.yml`, weekly and on demand: the full cargo-mutants run in 16
   shards on each of Linux and macOS, `--in-place` on the cached build and
   skipping the baseline (CI has just run the tests). cargo-mutants doesn't
