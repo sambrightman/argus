@@ -6095,3 +6095,53 @@ fn fix_auto_stops_at_a_failure_and_waits_for_a_running_fix() {
     );
     assert!(!app.running.contains_key(&f));
 }
+
+#[test]
+fn details_for_the_command_line_name_commands_not_keys() {
+    use argus_tui::details::{Hints, details};
+    let (_sb, app) = setup_with("", |sb| {
+        write(&sb.path("dev/feature"), "notes.txt", "untracked\n");
+    });
+    let lines = |hints: Hints| -> Vec<String> {
+        let e = app
+            .ws
+            .entries
+            .iter()
+            .find(|e| e.display_name() == "acme/feature")
+            .unwrap();
+        let c = &app.ws.config;
+        details(
+            e,
+            &c.fix.auto,
+            &c.stash,
+            &argus_core::icons::UNICODE,
+            &app.ws.state,
+            hints,
+        )
+        .iter()
+        .map(|l| l.parts.iter().map(|p| p.1.as_str()).collect::<String>())
+        .filter(|l| l.contains("fix  "))
+        .collect()
+    };
+    assert_eq!(
+        lines(Hints::Commands { describe_limit: 9 }),
+        [
+            // what plain `argus fix` runs: no command to name
+            "auto-fix  switch main  feat has nothing unpushed",
+            "fix       stash  1 uncommitted path(s)  (argus fix -k stash)",
+            // needing input the command line can't take: where it can be given
+            "fix       commit…  1 uncommitted path(s)  (in the TUI: c A)",
+            "fix       gitignore…  1 untracked path(s)  (in the TUI: i)",
+        ]
+    );
+    // inverse: the TUI names keys, and only for those that ask first
+    assert_eq!(
+        lines(Hints::Keys),
+        [
+            "auto-fix  switch main  feat has nothing unpushed",
+            "fix       stash  1 uncommitted path(s)",
+            "fix       commit…  1 uncommitted path(s)  (c A)",
+            "fix       gitignore…  1 untracked path(s)  (i)",
+        ]
+    );
+}

@@ -1501,8 +1501,10 @@ impl App {
                 return self.file_op(ops::unstage_ops, "unstage");
             }
             EditPatch => return self.edit_patch(),
-            DiscardFiles if let Some(fx) = self.hunk_op(HunkVerb::Discard) => return fx,
             DiscardFiles => {
+                if let Some(fx) = self.hunk_op(HunkVerb::Discard) {
+                    return fx;
+                }
                 let targets = self.file_targets();
                 if targets.is_empty() {
                     self.info(FILE_HINT);
@@ -1875,32 +1877,32 @@ impl App {
                 }
                 return self.confirmed(Confirmed::ClearMarks(keys));
             }
-            Snooze if let Some((key, issue, ignored)) = self.issue_under_cursor() => {
-                if ignored {
-                    self.info("that issue is ignored: m i stops ignoring it");
-                } else {
+            Snooze => match self.issue_under_cursor() {
+                Some((_, _, true)) => self.info("that issue is ignored: m i stops ignoring it"),
+                Some((key, issue, false)) => {
                     self.mode = Mode::Input {
                         prompt: Prompt::SnoozeIssue(key, issue),
                         editor: LineEditor::new("3d"),
                     };
                 }
-            }
-            Unsnooze if let Some((key, issue, _)) = self.issue_under_cursor() => {
-                self.ws.state.unsnooze_issue(&key, issue);
-                return self.flags_changed();
-            }
-            Snooze => {
-                let keys = self.selected_keys();
-                if !keys.is_empty() {
-                    self.mode = Mode::Input {
-                        prompt: Prompt::SnoozeDuration(keys),
-                        editor: LineEditor::new("3d"),
-                    };
+                None => {
+                    let keys = self.selected_keys();
+                    if !keys.is_empty() {
+                        self.mode = Mode::Input {
+                            prompt: Prompt::SnoozeDuration(keys),
+                            editor: LineEditor::new("3d"),
+                        };
+                    }
                 }
-            }
+            },
             Unsnooze => {
-                for k in self.selected_keys() {
-                    self.ws.state.unsnooze_all(&k);
+                match self.issue_under_cursor() {
+                    Some((key, issue, _)) => self.ws.state.unsnooze_issue(&key, issue),
+                    None => {
+                        for k in self.selected_keys() {
+                            self.ws.state.unsnooze_all(&k);
+                        }
+                    }
                 }
                 return self.flags_changed();
             }
