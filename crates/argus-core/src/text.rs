@@ -23,8 +23,15 @@ pub fn printable(s: &str) -> Cow<'_, str> {
 /// `s` if it's a web address fit to hand to a terminal or a browser:
 /// `http://` or `https://`, with no control character or space in it.
 pub fn web_url(s: &str) -> Option<&str> {
-    let web = s.starts_with("https://") || s.starts_with("http://");
-    (web && !s.contains(|c: char| c.is_control() || c.is_whitespace())).then_some(s)
+    // (the `url` crate reads as a browser does, past tabs and line breaks
+    // and with the slashes left out: here an address is written in full)
+    let written = s.starts_with("https://") || s.starts_with("http://");
+    if !written || s.contains(|c: char| c.is_control() || c.is_whitespace()) {
+        return None;
+    }
+    let url = url::Url::parse(s).ok()?;
+    (matches!(url.scheme(), "http" | "https") && url.host_str().is_some_and(|h| !h.is_empty()))
+        .then_some(s)
 }
 
 /// A line of output for a terminal: the colours and links argus itself
@@ -32,30 +39,19 @@ pub fn web_url(s: &str) -> Option<&str> {
 /// other escape sequence and control character is replaced, whatever text
 /// it came in with. Line breaks and tabs stay.
 pub fn terminal_safe(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
+    let mut kept = Kept {
+        out: String::with_capacity(s.len()),
+        linked: false,
+    };
+    // read as a terminal reads it (`vte`, the parser of terminals written
+    // in Rust), so what's kept or not is what a terminal would act on
+    vte::Parser::new().advance(&mut kept, s.as_bytes());
     // (a link left open would take in all that's written after it)
-    let mut linked = false;
-    while let Some(c) = rest.chars().next() {
-        if let Some(n) = own_sequence(rest) {
-            if let Some(address) = rest[..n].strip_prefix(LINK) {
-                linked = address != LINK_END;
-            }
-            out.push_str(&rest[..n]);
-            rest = &rest[n..];
-            continue;
-        }
-        out.push(match c.is_control() && c != '\n' && c != '\t' {
-            true => REPLACED,
-            false => c,
-        });
-        rest = &rest[c.len_utf8()..];
+    if kept.linked {
+        kept.out.push_str(LINK);
+        kept.out.push_str(LINK_END);
     }
-    if linked {
-        out.push_str(LINK);
-        out.push_str(LINK_END);
-    }
-    out
+    kept.out
 }
 
 /// How a link sequence starts, before its address, and ends after it.
@@ -65,30 +61,68 @@ const LINK_END: &str = "\x1b\\";
 /// The colour and style codes argus writes (and a theme may ask for):
 /// reset, bold, dim, italic, underline, reverse and their ends, and the
 /// sixteen foreground colours. Not concealed text, nor backgrounds.
-fn own_style(code: &str) -> bool {
-    match code.parse::<u8>() {
-        Ok(n) => matches!(n, 0..=4 | 7 | 22..=24 | 27 | 30..=37 | 39 | 90..=97),
-        Err(_) => code.is_empty(),
-    }
+fn own_style(code: u16) -> bool {
+    matches!(code, 0..=4 | 7 | 22..=24 | 27 | 30..=37 | 39 | 90..=97)
 }
 
-/// The length of the colour or link sequence `s` starts with, if it does.
-fn own_sequence(s: &str) -> Option<usize> {
-    if let Some(sgr) = s.strip_prefix("\x1b[") {
-        let digits = sgr
-            .find(|c: char| !c.is_ascii_digit() && c != ';')
-            .unwrap_or(sgr.len());
-        let after = sgr[digits..].strip_prefix('m')?;
-        return sgr[..digits]
-            .split(';')
-            .all(own_style)
-            .then_some(s.len() - after.len());
+/// What [`terminal_safe`] keeps of what a terminal would be told.
+struct Kept {
+    out: String,
+    /// A link has been started and not ended.
+    linked: bool,
+}
+
+impl vte::Perform for Kept {
+    fn print(&mut self, c: char) {
+        // (the controls above ASCII come as characters)
+        self.out.push(if c.is_control() { REPLACED } else { c });
     }
-    let link = s.strip_prefix(LINK)?;
-    let end = link.find(|c: char| c.is_control())?;
-    let after = link[end..].strip_prefix(LINK_END)?;
-    // (to a web address, or to nothing: the end of a link)
-    (end == 0 || web_url(&link[..end]).is_some()).then_some(s.len() - after.len())
+
+    fn execute(&mut self, byte: u8) {
+        self.out.push(match byte {
+            b'\n' => '\n',
+            b'\t' => '\t',
+            _ => REPLACED,
+        });
+    }
+
+    fn csi_dispatch(&mut self, params: &vte::Params, between: &[u8], ignore: bool, action: char) {
+        let plain = |p: &[u16]| matches!(p, [code] if own_style(*code));
+        if action != 'm' || ignore || !between.is_empty() || !params.iter().all(plain) {
+            return self.out.push(REPLACED);
+        }
+        let codes: Vec<String> = params.iter().flatten().map(u16::to_string).collect();
+        self.out.push_str(&format!("\x1b[{}m", codes.join(";")));
+    }
+
+    fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
+        // `8 ; ; address`, ended as argus ends it: a link to a web address,
+        // or (no address) a link's end. An address's own `;` split it.
+        let address = match params {
+            [b"8", b"", address @ ..] if !bell_terminated => {
+                String::from_utf8(address.join(&b';')).ok()
+            }
+            _ => None,
+        };
+        match address.filter(|a| a.is_empty() || web_url(a).is_some()) {
+            Some(a) => {
+                self.linked = !a.is_empty();
+                self.out.push_str(&format!("{LINK}{a}{LINK_END}"));
+            }
+            None => self.out.push(REPLACED),
+        }
+    }
+
+    fn esc_dispatch(&mut self, between: &[u8], _ignore: bool, byte: u8) {
+        // (the `ESC \` that ends a link or another string is nothing itself)
+        if byte != b'\\' || !between.is_empty() {
+            self.out.push(REPLACED);
+        }
+    }
+
+    fn hook(&mut self, _: &vte::Params, _: &[u8], _: bool, _: char) {
+        self.out.push(REPLACED);
+    }
 }
 
 #[cfg(test)]
@@ -124,6 +158,10 @@ mod tests {
             "https://x/a b",
             "https://x/a\nb",
             "",
+            "https://",
+            "http://[::1",
+            "https://exa mple.com/",
+            "HTTPS:nothing",
         ] {
             assert_eq!(web_url(bad), None, "{bad:?}");
         }
@@ -137,47 +175,51 @@ mod tests {
         for (bad, want) in [
             // what follows a kept sequence is still looked at, however long
             // the sequence
-            ("\x1b[m\x07", format!("\x1b[m{r}")),
+            ("\x1b[m\x07", format!("\x1b[0m{r}")),
             ("\x1b[1;4;31m\x07", format!("\x1b[1;4;31m{r}")),
             ("\x1b]8;;\x1b\\\x07", format!("\x1b]8;;\x1b\\{r}")),
             (
                 "\x1b]8;;https://x/123\x1b\\\x07",
                 format!("\x1b]8;;https://x/123\x1b\\{r}\x1b]8;;\x1b\\"),
             ),
-            // clear screen, cursor moves, the title, the clipboard, a bell
-            ("x\x1b[2Jy", format!("x{r}[2Jy")),
-            ("x\x1b[10;10Hy", format!("x{r}[10;10Hy")),
-            ("\x1b]0;title\x07", format!("{r}]0;title{r}")),
-            ("\x1b]52;c;AAAA\x1b\\", format!("{r}]52;c;AAAA{r}\\")),
+            // an address with `;` in it is one address
+            (
+                "\x1b]8;;https://x/a;b?c=d;e\x1b\\t\x1b]8;;\x1b\\",
+                "\x1b]8;;https://x/a;b?c=d;e\x1b\\t\x1b]8;;\x1b\\".to_string(),
+            ),
+            // clear screen, cursor moves, the title, the clipboard, a bell:
+            // each gone, with a mark where it was
+            ("x\x1b[2Jy", format!("x{r}y")),
+            ("x\x1b[10;10Hy", format!("x{r}y")),
+            ("\x1b]0;title\x07", format!("{r}")),
+            ("\x1b]52;c;AAAA\x1b\\z", format!("{r}z")),
             ("a\rb\x07", format!("a{r}b{r}")),
-            // a link sequence that doesn't end properly isn't one
-            (
-                "\x1b]8;;https://x/\x07oops",
-                format!("{r}]8;;https://x/{r}oops"),
-            ),
-            ("\x1b]8;;https://x", format!("{r}]8;;https://x")),
-            // a link to anything but a web address isn't kept as one
-            (
-                "\x1b]8;;file:///etc/passwd\x1b\\x",
-                format!("{r}]8;;file:///etc/passwd{r}\\x"),
-            ),
-            (
-                "\x1b]8;;javascript:alert(1)\x1b\\x",
-                format!("{r}]8;;javascript:alert(1){r}\\x"),
-            ),
+            ("a\u{9b}2Jb\u{85}", format!("a{r}2Jb{r}")),
+            ("\x1bcx", format!("{r}x")),
+            ("\x1bP1$r\x1b\\x", format!("{r}x")),
+            // a link ended with a bell isn't argus's, nor one with more
+            // said of it, nor one to anything but a web address
+            ("\x1b]8;;https://x/\x07oops", format!("{r}oops")),
+            ("\x1b]8;id=1;https://x/\x1b\\x", format!("{r}x")),
+            ("\x1b]8;;file:///etc/passwd\x1b\\x", format!("{r}x")),
+            ("\x1b]8;;javascript:alert(1)\x1b\\x", format!("{r}x")),
             // one never ended is ended, so it takes in nothing after it
             (
                 "\x1b]8;;https://x/\x1b\\rest",
                 "\x1b]8;;https://x/\x1b\\rest\x1b]8;;\x1b\\".to_string(),
             ),
             // styles that hide text, or aren't ones argus writes
-            ("\x1b[8mhidden", format!("{r}[8mhidden")),
-            ("\x1b[30;40mx", format!("{r}[30;40mx")),
-            ("\x1b[38;2;0;0;0mx", format!("{r}[38;2;0;0;0mx")),
-            // nor a colour sequence that isn't one
-            ("\x1b[31", format!("{r}[31")),
-            ("\x1b[?25l", format!("{r}[?25l")),
-            ("\x1b", format!("{r}")),
+            ("\x1b[8mhidden", format!("{r}hidden")),
+            ("\x1b[30;40mx", format!("{r}x")),
+            ("\x1b[38;2;0;0;0mx", format!("{r}x")),
+            ("\x1b[4:3mx", format!("{r}x")),
+            ("\x1b[?25l", format!("{r}")),
+            ("\x1b[1 qx", format!("{r}x")),
+            // a sequence the text ends in the middle of is nothing at all,
+            // as a terminal would have it
+            ("a\x1b]8;;https://x", "a".to_string()),
+            ("a\x1b[31", "a".to_string()),
+            ("a\x1b", "a".to_string()),
         ] {
             assert_eq!(terminal_safe(bad), want, "{bad:?}");
         }
