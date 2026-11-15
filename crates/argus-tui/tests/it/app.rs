@@ -7883,6 +7883,23 @@ fn the_stash_menu_offers_only_what_applies() {
         items
     };
     let keys = |app: &mut App| -> String { offered(app).iter().map(|i| i.0).collect() };
+    // a star on the first two switches and on what goes by them
+    cursor_on_detail(&mut app, "dirty", "path");
+    git(&d, &["add", "README"]);
+    status_arrives(&mut app, &d);
+    let labels: Vec<String> = offered(&mut app).into_iter().map(|i| i.1).collect();
+    assert_eq!(
+        labels,
+        [
+            "include untracked *",
+            "keep index *",
+            "message",
+            "stash all *",
+            "stash staged"
+        ]
+    );
+    git(&d, &["reset", "-q"]);
+    status_arrives(&mut app, &d);
     // unstaged changes only: no staged, marked, pop or drop
     cursor_on_detail(&mut app, "dirty", "path");
     assert_eq!(keys(&mut app), "ukMz");
@@ -7896,7 +7913,7 @@ fn the_stash_menu_offers_only_what_applies() {
     to_file(&mut app, "README");
     app.act(Action::ToggleMark);
     let items = offered(&mut app);
-    assert!(items.contains(&('m', "stash marked".into())), "{items:?}");
+    assert!(items.contains(&('m', "stash marked *".into())), "{items:?}");
     app.marked_files.clear();
     // a stash: pop and drop, asking which unless the cursor is on one
     git(&d, &["stash", "push", "-q", "-m", "mine"]);

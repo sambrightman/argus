@@ -160,11 +160,12 @@ impl MenuId {
             MenuId::Stash => (
                 "Stash",
                 vec![
-                    switch('u', "include untracked", Switch::Untracked),
-                    switch('k', "keep index", Switch::KeepIndex),
+                    // (starred: these two switches, and what goes by them)
+                    switch('u', "include untracked *", Switch::Untracked),
+                    switch('k', "keep index *", Switch::KeepIndex),
                     switch('M', "message", Switch::Message),
-                    item('z', "stash all", Action::Stash(StashKind::All)),
-                    item('m', "stash marked", Action::Stash(StashKind::MarkedFiles)),
+                    item('z', "stash all *", Action::Stash(StashKind::All)),
+                    item('m', "stash marked *", Action::Stash(StashKind::MarkedFiles)),
                     item('g', "stash staged", Action::Stash(StashKind::Staged)),
                     item('p', "pop…", Action::PopStash),
                     item('d', "drop…", Action::DropStash),
