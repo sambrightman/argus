@@ -4848,6 +4848,28 @@ fn hunks_and_lines_are_staged_unstaged_and_discarded() {
         "from the work tree, backwards"
     );
     app.running.clear();
+    // on one of its lines, nothing marked: still the whole hunk that's
+    // discarded, as for staging
+    app.cursor = at(&app, &|d| {
+        d.line.as_ref().is_some_and(|l| l.kind == LineKind::Add)
+    });
+    assert!(app.act(Action::DiscardFiles).is_empty());
+    assert!(
+        matches!(&app.mode, Mode::Confirm { question, .. } if question == "Discard this hunk of README? It's lost.")
+    );
+    let (patch, index, reverse, what) = apply(app.on_key(key('y')));
+    assert_eq!((index, reverse), (false, true));
+    assert_eq!(what, "discard a hunk of README");
+    assert!(patch.contains("-hello world\n+hello there\n"), "{patch}");
+    app.running.clear();
+    // marked, only that line goes: the removed one is put back as it was
+    app.on_key(key(' '));
+    assert!(app.act(Action::DiscardFiles).is_empty());
+    let (patch, _, reverse, _) = apply(app.on_key(key('y')));
+    assert!(reverse && !patch.contains("-hello world"), "{patch}");
+    assert!(patch.contains("+hello there"), "{patch}");
+    app.running.clear();
+    app.marked_lines.clear();
     // unstaging an unstaged hunk says what to do instead
     assert!(app.act(Action::UnstageFiles).is_empty());
     assert!(app.message.as_ref().unwrap().0.contains("not staged"));

@@ -26,8 +26,6 @@ deferred.
 - **Terminals drawing ambiguous-width symbols two cells wide** (CJK
   setting): detect it and swap those icons. Today `demo --glyphs` marks
   them with `*`.
-- **Editing a patch to discard** (`K` after `e`): reversed in the work
-  tree, so it can't be undone; it would confirm after the editor closes.
 
 ## Next steps
 
