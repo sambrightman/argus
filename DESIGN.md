@@ -766,7 +766,10 @@ rendering is snapshot-tested via `TestBackend`.
   repo's status is read again and the next fix chosen from that, so a
   surprise ends the run instead of compounding. It stops when nothing
   applies, when a fix fails, or when a fix would repeat (`fix::repeats`,
-  the guard the prediction uses too). Kinds that ask first are never part
+  the guard the prediction uses too). In the TUI a status that still
+  wants the fix just applied is most likely one read before the fix
+  finished and delivered after: it's read once more before being taken as
+  no progress. Kinds that ask first are never part
   of it. One fix per run stays the default: seeing the first result
   before the second step was the point of it.
   In the TUI the Fix menu has both: `x`/`a` "fix once" (selected / all

@@ -1198,3 +1198,64 @@ fn other_remotes_are_listed_by_url_and_their_owners_may_head_pull_requests() {
     t.other_remotes = vec!["git@github.com:ME/other.git".into()];
     assert!(argus_core::forge::head_owners(&me, &t).is_empty());
 }
+
+#[test]
+fn a_file_taken_out_of_the_index_but_kept_is_a_staged_deletion_and_an_untracked_file() {
+    use argus_core::ops;
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "keep", "k\n");
+    write(&r, "other", "o\n");
+    git(&r, &["add", "."]);
+    commit(&r, "files");
+    // as git has it: `D  keep` and `?? keep`
+    git(&r, &["rm", "-q", "--cached", "keep"]);
+    let short = git(&r, &["status", "--short"]);
+    assert_eq!(short, "D  keep\n?? keep\n");
+    for _ in 0..5 {
+        // (whichever of the two the walk reports first)
+        let s = st(&r);
+        let f = s.changes.entry("keep").unwrap();
+        assert_eq!((f.index, f.worktree), ('D', '?'));
+        assert!(f.untracked());
+        let c = &s.changes;
+        assert_eq!((c.staged, c.unstaged, c.untracked), (1, 0, 1));
+    }
+    let s = st(&r);
+    let keep = vec!["keep".to_string()];
+    // staging the file that's there adds it; discarding deletes it, as
+    // any untracked file; unstaging undoes the deletion
+    assert_eq!(
+        ops::stage_ops(&s, &keep),
+        [ops::Op::Add {
+            paths: keep.clone()
+        }]
+    );
+    assert_eq!(
+        ops::discard_ops(&s, &keep),
+        [ops::Op::Clean {
+            paths: keep.clone()
+        }]
+    );
+    for op in ops::unstage_ops(&s, &keep) {
+        assert!(ops::run(&r, &op).success);
+    }
+    assert_eq!(git(&r, &["status", "--short"]), "");
+    // inverse: an ordinary untracked file, and a staged deletion alone
+    write(&r, "new", "n\n");
+    git(&r, &["rm", "-q", "other"]);
+    let s = st(&r);
+    let (new, other) = (
+        s.changes.entry("new").unwrap(),
+        s.changes.entry("other").unwrap(),
+    );
+    assert_eq!((new.index, new.worktree, new.untracked()), ('?', '?', true));
+    assert_eq!(
+        (other.index, other.worktree, other.untracked()),
+        ('D', ' ', false)
+    );
+    assert_eq!(
+        (s.changes.staged, s.changes.unstaged, s.changes.untracked),
+        (1, 0, 1)
+    );
+}

@@ -7650,3 +7650,102 @@ fn a_question_from_the_background_waits_for_the_user_and_its_answer_for_a_busy_r
     app.on_key(key('n'));
     assert!(matches!(app.mode, Mode::Normal));
 }
+
+#[test]
+fn fix_auto_reads_again_when_a_status_still_wants_the_fix_just_applied() {
+    let (sb, mut app) = setup_with("", two_step);
+    let f = sb.path("dev/feature");
+    while current(&app) != "acme/feature" {
+        app.act(Action::Down);
+    }
+    // read before the push finishes, delivered after it
+    let stale = argus_core::status::status(&f, Default::default()).unwrap();
+    let fx = app.act(Action::FixAuto(Scope::Selected));
+    let [Effect::Fix { paths, kinds }] = fx.as_slice() else {
+        panic!("{fx:?}")
+    };
+    let applied = argus_core::fix::apply_fix(&paths[0], kinds, &app.ws.config.stash).unwrap();
+    app.on_msg(Msg::FixDone {
+        path: f.clone(),
+        applied: Ok(applied),
+    });
+    let fx = app.on_msg(Msg::Status(f.clone(), Box::new(Ok(stale.clone()))));
+    // not taken as the end: read again, the chain still going
+    assert!(
+        matches!(fx.as_slice(), [Effect::Refresh(p)] if p == &vec![f.clone()]),
+        "{fx:?}"
+    );
+    assert!(!app.message.as_ref().unwrap().0.ends_with("done"));
+    // the true status goes on to the next fix
+    let fresh = argus_core::status::status(&f, Default::default()).unwrap();
+    let fx = app.on_msg(Msg::Status(f.clone(), Box::new(Ok(fresh))));
+    assert!(fx.iter().any(|e| matches!(e, Effect::Fix { .. })), "{fx:?}");
+    // inverse: wanted again a second time, it isn't making progress: done
+    let (sb, mut app) = setup_with("", two_step);
+    let f = sb.path("dev/feature");
+    while current(&app) != "acme/feature" {
+        app.act(Action::Down);
+    }
+    let before = argus_core::status::status(&f, Default::default()).unwrap();
+    let fx = app.act(Action::FixAuto(Scope::Selected));
+    let [Effect::Fix { kinds, .. }] = fx.as_slice() else {
+        panic!("{fx:?}")
+    };
+    let fix = argus_core::fix::choose(&before, kinds, &app.ws.config.stash).unwrap();
+    app.on_msg(Msg::FixDone {
+        path: f.clone(),
+        applied: Ok(Some(argus_core::fix::Applied {
+            fix,
+            outcome: argus_core::ops::OpOutcome {
+                success: true,
+                code: Some(0),
+                output: String::new(),
+                duration: Default::default(),
+            },
+        })),
+    });
+    let again = || Msg::Status(f.clone(), Box::new(Ok(before.clone())));
+    assert!(matches!(
+        app.on_msg(again()).as_slice(),
+        [Effect::Refresh(_)]
+    ));
+    assert!(app.on_msg(again()).is_empty());
+    assert!(app.message.as_ref().unwrap().0.ends_with(": done"));
+    assert!(!app.running.contains_key(&f));
+}
+
+#[test]
+fn two_fix_actions_running_together_finish_as_one() {
+    let (sb, mut app) = setup_with("", |sb| {
+        two_step(sb);
+        // clean and dirty on a pushed branch each: switch-default applies
+        for n in ["clean", "dirty"] {
+            let r = sb.path(&format!("dev/{n}"));
+            git(&r, &["checkout", "-q", "--", "."]);
+            git(&r, &["switch", "-q", "-c", "topic"]);
+            git(&r, &["push", "-q", "-u", "origin", "topic"]);
+        }
+    });
+    let msg = |app: &App| app.message.as_ref().unwrap().0.clone();
+    let on = |app: &mut App, name: &str| {
+        app.act(Action::Top);
+        while current(app) != name {
+            app.act(Action::Down);
+        }
+    };
+    on(&mut app, "acme/feature");
+    assert!(!app.act(Action::FixAuto(Scope::Selected)).is_empty());
+    on(&mut app, "acme/clean");
+    assert!(!app.act(Action::AutoFix(Scope::Selected)).is_empty());
+    let done = |app: &mut App, n: &str| {
+        app.on_msg(Msg::FixDone {
+            path: sb.path(&format!("dev/{n}")),
+            applied: Ok(None),
+        });
+    };
+    // the first to finish isn't the end, whichever action it was
+    done(&mut app, "feature");
+    assert!(!msg(&app).ends_with("done"), "{}", msg(&app));
+    done(&mut app, "clean");
+    assert_eq!(msg(&app), "fixes: done");
+}

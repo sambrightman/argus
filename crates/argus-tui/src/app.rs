@@ -588,6 +588,16 @@ pub enum Effect {
     Quit,
 }
 
+/// A repo a fix-auto action is working through.
+#[derive(Debug, Default)]
+struct Chain {
+    /// The fixes applied so far.
+    done: Vec<fix::Fix>,
+    /// Its status was read a second time after the last fix, the first
+    /// reading having still wanted that fix.
+    read_again: bool,
+}
+
 /// A repo's forge, as far as it has been asked.
 #[derive(Debug, Default)]
 struct ForgeLook {
@@ -766,7 +776,7 @@ pub struct App {
     /// Repos a fix-auto action is working through, with the fixes it has
     /// applied to each so far: when one's status is next read, its next
     /// fix starts.
-    chains: HashMap<PathBuf, Vec<fix::Fix>>,
+    chains: HashMap<PathBuf, Chain>,
     /// Questions from the background, waiting until nothing else is being
     /// asked ([`Self::ask_when_free`]).
     waiting: std::collections::VecDeque<(String, Confirmed)>,
@@ -2055,11 +2065,15 @@ impl App {
                 for p in &paths {
                     self.running.insert(p.clone(), "fix".into());
                     match auto {
-                        true => self.chains.insert(p.clone(), vec![]),
+                        true => self.chains.insert(p.clone(), Chain::default()),
                         false => self.chains.remove(p),
                     };
                 }
-                self.auto_fixes = (paths.len(), what.clone());
+                // (with another fix action still going, they finish as one)
+                self.auto_fixes = match self.auto_fixes.0 {
+                    0 => (paths.len(), what.clone()),
+                    n => (n + paths.len(), "fixes".into()),
+                };
                 self.info(format!("{what}…{none}{busy}"));
                 return vec![Effect::Fix { paths, kinds }];
             }
@@ -2886,7 +2900,7 @@ impl App {
     /// status as just read. With none (or one it has applied already),
     /// the repo is finished.
     fn continue_chain(&mut self, path: &std::path::Path) -> Vec<Effect> {
-        let Some(done) = self.chains.get(path) else {
+        let Some(chain) = self.chains.get(path) else {
             return vec![];
         };
         if self.running.contains_key(path) {
@@ -2897,7 +2911,22 @@ impl App {
             .ws
             .get(path)
             .and_then(|e| fix::choose(e.status()?, &e.fix_kinds(&kinds), &self.ws.config.stash));
-        if next.is_none_or(|f| fix::repeats(done, &f)) {
+        // the fix just applied, wanted again: most likely a status read
+        // before it finished and delivered after. Read once more before
+        // taking it as "no progress".
+        let same = |a: &fix::Fix, b: &fix::Fix| a.kind == b.kind && a.op.label() == b.op.label();
+        let stale = next
+            .as_ref()
+            .zip(chain.done.last())
+            .is_some_and(|(n, last)| same(n, last));
+        if stale && !chain.read_again {
+            self.chains
+                .entry(path.to_path_buf())
+                .or_default()
+                .read_again = true;
+            return vec![Effect::Refresh(vec![path.to_path_buf()])];
+        }
+        if next.is_none_or(|f| fix::repeats(&chain.done, &f)) {
             self.chains.remove(path);
             self.fix_finished();
             return vec![];
@@ -4407,8 +4436,9 @@ impl App {
                         if let Some(a) = list {
                             let ok = a.outcome.success;
                             self.push_log(&path, a.fix.op.label(), ok, a.outcome.output);
-                            if let Some(done) = self.chains.get_mut(&path).filter(|_| ok) {
-                                done.push(a.fix.clone());
+                            if let Some(chain) = self.chains.get_mut(&path).filter(|_| ok) {
+                                chain.done.push(a.fix.clone());
+                                chain.read_again = false;
                                 more = true;
                             }
                             if !ok {

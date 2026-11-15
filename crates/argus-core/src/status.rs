@@ -100,6 +100,15 @@ pub struct FileChange {
     pub kind: PathKind,
 }
 
+impl FileChange {
+    /// Whether there's an untracked file at the path: one git has never
+    /// had, or one staged for deletion and still there (`D` with `?`).
+    /// A submodule's `?` is untracked content inside it, not this.
+    pub fn untracked(&self) -> bool {
+        self.index == '?' || (self.worktree == '?' && self.kind != PathKind::Submodule)
+    }
+}
+
 /// What a changed path is.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -1253,7 +1262,11 @@ fn changes(
                     IW::Rewrite { .. } => 'R',
                 };
                 let e = files.entry(path).or_insert((' ', ' '));
-                if code == '?' {
+                if code == '?' && e.0 != ' ' {
+                    // there, and staged for deletion (`git rm --cached`):
+                    // both, whichever is reported first
+                    e.1 = '?';
+                } else if code == '?' {
                     *e = ('?', '?');
                 } else if code == 'U' {
                     *e = ('U', 'U');
@@ -1279,6 +1292,11 @@ fn changes(
                 c.untracked_repos += usize::from(kind == PathKind::Repo);
             }
             ('U', _) => c.conflicted += 1,
+            // a staged deletion whose file is still there, untracked
+            (_, '?') if !sub => {
+                c.staged += 1;
+                c.untracked += 1;
+            }
             _ => {
                 // changes inside a submodule aren't the parent's
                 let inside = sub && matches!(y, 'm' | '?');

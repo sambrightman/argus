@@ -32,8 +32,10 @@ impl RepoId {
     /// (renamed or moved to another owner on the same host): the same
     /// protocol, user and `.git` ending. `None` if `url` doesn't name it.
     pub fn renamed_url(&self, url: &str, new: &RepoId) -> Option<String> {
-        let old = self.slug().to_lowercase();
-        let at = url.to_lowercase().rfind(&old)?;
+        // (ASCII case only: every byte keeps its place, so where it's
+        // found in the copy is where it is in the address)
+        let old = self.slug().to_ascii_lowercase();
+        let at = url.to_ascii_lowercase().rfind(&old)?;
         // the whole of `owner/name`: not the end of a longer owner, nor
         // the start of a longer name
         let rest = &url[at + old.len()..];
@@ -174,6 +176,19 @@ mod tests {
         ] {
             assert_eq!(old.renamed_url(url, &new).as_deref(), Some(want), "{url}");
         }
+        // letters whose lower case is longer or shorter change nothing
+        // about where the name is
+        let odd = RepoId::new("github.com", "İacme", "old");
+        assert_eq!(
+            odd.renamed_url("https://İK@github.com/İacme/old.git", &new)
+                .as_deref(),
+            Some("https://İK@github.com/other/new-name.git")
+        );
+        assert_eq!(
+            old.renamed_url("https://İİİ@github.com/acme/old", &new)
+                .as_deref(),
+            Some("https://İİİ@github.com/other/new-name")
+        );
         // inverse: a URL of another repo is left alone
         for url in [
             "git@github.com:acme/older.git",

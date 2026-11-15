@@ -116,8 +116,10 @@ impl Section {
     /// conflicted file is unstaged.
     pub fn code(self, f: &argus_core::status::FileChange) -> Option<(Role, char)> {
         match (self, f.index, f.worktree) {
-            (Section::Untracked, '?', _) => Some((Role::Untracked, '?')),
+            (Section::Untracked, ..) if f.untracked() => Some((Role::Untracked, '?')),
             (_, '?', _) => None,
+            // (staged for deletion and still there: untracked, not changed)
+            (Section::Unstaged, ..) if f.untracked() => None,
             (Section::Unstaged, 'U', _) => Some((Role::Conflict, 'U')),
             (_, 'U', _) => None,
             (Section::Unstaged, _, w) if w != ' ' => Some((Role::Unstaged, w)),

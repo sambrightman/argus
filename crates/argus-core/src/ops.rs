@@ -555,27 +555,21 @@ fn codes<'a>(
     s: &'a crate::status::RepoStatus,
     files: &'a [String],
 ) -> impl Iterator<Item = (&'a String, char)> {
-    both_codes(s, files).map(|(f, index, _)| (f, index))
-}
-
-/// Each of `files` that has changes, with its index and work tree codes.
-fn both_codes<'a>(
-    s: &'a crate::status::RepoStatus,
-    files: &'a [String],
-) -> impl Iterator<Item = (&'a String, char, char)> {
     files
         .iter()
-        .filter_map(|f| s.changes.entry(f).map(|c| (f, c.index, c.worktree)))
+        .filter_map(|f| s.changes.entry(f).map(|c| (f, c.index)))
 }
 
 /// Stage `files` (changes, new files and deletions): tracked ones, then
 /// untracked ones. Never a nested repo: git would add it as an embedded
 /// repo (see [`nested_repos_in`]).
 pub fn stage_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
-    let (untracked, tracked): (Vec<_>, Vec<_>) = codes(s, files)
+    let (untracked, tracked): (Vec<_>, Vec<_>) = files
+        .iter()
+        .filter_map(|f| Some((f, s.changes.entry(f)?.untracked())))
         .filter(|(f, _)| nested_repos_in(s, std::slice::from_ref(f)).is_empty())
-        .partition(|(_, c)| *c == '?');
-    let paths = |v: Vec<(&String, char)>| v.into_iter().map(|(f, _)| f.clone()).collect();
+        .partition(|(_, untracked)| *untracked);
+    let paths = |v: Vec<(&String, bool)>| v.into_iter().map(|(f, _)| f.clone()).collect();
     let mut ops = vec![];
     if !tracked.is_empty() {
         ops.push(Op::AddTracked {
@@ -640,9 +634,12 @@ pub fn unstage_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
 /// Permanently destructive: callers confirm first.
 pub fn discard_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
     let (mut restore, mut conflicted, mut untracked) = (vec![], vec![], vec![]);
-    for (f, index, worktree) in both_codes(s, files) {
-        match (index, worktree) {
-            ('?', _) => untracked.push(f.clone()),
+    for f in files {
+        let Some(c) = s.changes.entry(f) else {
+            continue;
+        };
+        match (c.index, c.worktree) {
+            _ if c.untracked() => untracked.push(f.clone()),
             ('U', _) => conflicted.push(f.clone()),
             // nothing unstaged: what's staged is never discarded
             (_, ' ') => {}
