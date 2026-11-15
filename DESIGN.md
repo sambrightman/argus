@@ -220,7 +220,8 @@ Two findings:
   because a higher `roots` replaces that file's. Every file is checked
   as writable before any changes, so a failure leaves them all as they
   were. Old setting names aren't kept
-  (nothing released yet): they fail as unknown keys.
+  (argus is 0.x): they fail as unknown keys, those that moved saying
+  where to.
 * **Describing a detached HEAD.** With no tag on HEAD, the branch slot
   shows `git describe --tags` (gix's, same algorithm). gix's describe
   can't be bounded, and with no tag in history it walks all of it:
