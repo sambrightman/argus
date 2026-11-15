@@ -14,10 +14,12 @@ deferred.
   `git status --porcelain=v2`).
 - **Embedded terminal pane** (alacritty_terminal / tui-term) instead of
   suspending the TUI for a shell or git UI.
-- **Glyph font gaps:** `◆` is missing from SF Mono, `✓` from Hack, `✗` from
-  Fira Code, Hack and Source Code Pro; Monaco and kitty's default font
-  aren't checked. Rerun the counts once the other fonts are installed, and
-  decide whether to change those icons.
+- **A review of the glyphs,** font gaps included: `◆` is missing from SF
+  Mono, `✓` from Hack, `✗` from Fira Code, Hack and Source Code Pro;
+  Monaco and kitty's default font aren't checked. Rerun the counts once
+  the other fonts are installed, and look over the whole set (the nerd
+  icons for off the default branch and the two worktree issues were
+  picked without a font to check them in; acceptable as they are).
 
 ## Offered, not decided
 
