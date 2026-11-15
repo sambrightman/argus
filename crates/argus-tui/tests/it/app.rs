@@ -3509,24 +3509,30 @@ fn change_lines_are_coloured_by_state_and_the_rest_counted() {
     });
     use argus_core::badges::Role::*;
     cursor_on_detail(&mut app, "clean", "changes");
+    // each letter by its side: the index's, then the work tree's
     let role = |code: &str, path: &str| {
-        app.rows
+        let parts = app
+            .rows
             .iter()
             .find_map(|r| match r {
                 Row::Detail { line, .. } if line.file.as_deref() == Some(path) => {
-                    Some(line.parts[1].clone())
+                    Some(line.parts[1..3].to_vec())
                 }
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("no {path}"))
-            == (Some(code_role(code)), code.to_string())
+            .unwrap_or_else(|| panic!("no {path}"));
+        let (index, worktree) = code_roles(code);
+        parts
+            == [
+                (Some(index), code[..1].to_string()),
+                (Some(worktree), code[1..].to_string()),
+            ]
     };
-    fn code_role(code: &str) -> argus_core::badges::Role {
+    fn code_roles(code: &str) -> (argus_core::badges::Role, argus_core::badges::Role) {
         match code {
-            "UU" => Conflict,
-            "??" => Untracked,
-            "A " => Staged,
-            _ => Unstaged,
+            "UU" => (Conflict, Conflict),
+            "??" => (Untracked, Untracked),
+            _ => (Staged, Unstaged),
         }
     }
     for (code, path) in [
@@ -4688,14 +4694,20 @@ fn hunks_and_lines_are_staged_unstaged_and_discarded() {
     assert!(patch.contains("-hello world\n+hello there\n"), "{patch}");
     assert_eq!(what, "stage a hunk of README");
     app.running.clear();
-    // the added line alone: the removed one stays as context
+    // on one of its lines, nothing marked: still the whole hunk
     app.cursor = at(&app, &|d| {
         d.line.as_ref().is_some_and(|l| l.kind == LineKind::Add)
     });
     let (patch, _, _, what) = apply(app.act(Action::StageFiles));
-    assert!(patch.contains(" hello world\n+hello there\n"), "{patch}");
-    assert_eq!(what, "stage a line of README");
+    assert!(patch.contains("-hello world\n+hello there\n"), "{patch}");
+    assert_eq!(what, "stage a hunk of README");
     app.running.clear();
+    // marked, the added line alone: the removed one stays as context
+    app.on_key(key(' '));
+    let (patch, _, _, _) = apply(app.act(Action::StageFiles));
+    assert!(patch.contains(" hello world\n+hello there\n"), "{patch}");
+    app.running.clear();
+    app.marked_lines.clear();
     // discarding asks first
     app.cursor = at(&app, &|d| d.hunk.is_some() && d.line.is_none());
     assert!(app.act(Action::DiscardFiles).is_empty());
@@ -6589,4 +6601,48 @@ fn a_pull_says_what_became_of_orphans_and_asks_before_following_a_rename() {
     app.on_key(key('n'));
     app.on_msg(plan(vec![orphan("feature", OrphanState::Gone)]));
     assert!(matches!(app.mode, Mode::Normal));
+}
+
+#[test]
+fn a_files_two_status_letters_are_coloured_each_by_its_side() {
+    use argus_core::badges::Role;
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "both");
+    let codes = |app: &App, file: &str| -> Vec<(Option<Role>, String)> {
+        app.rows
+            .iter()
+            .find_map(|r| match r {
+                Row::Detail { line, .. }
+                    if line.file.as_deref() == Some(file) && line.diff.is_none() =>
+                {
+                    Some(line.parts[1..line.parts.len() - 1].to_vec())
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    // staged and changed again: the index's letter as staged, the work
+    // tree's as unstaged, as `git status --short` colours them
+    assert_eq!(
+        codes(&app, "both"),
+        [
+            (Some(Role::Staged), "M".to_string()),
+            (Some(Role::Unstaged), "M".to_string())
+        ]
+    );
+    assert_eq!(
+        codes(&app, "README"),
+        [
+            (Some(Role::Staged), " ".to_string()),
+            (Some(Role::Unstaged), "M".to_string())
+        ]
+    );
+    // untracked: both marks as untracked
+    assert_eq!(
+        codes(&app, "new"),
+        [
+            (Some(Role::Untracked), "?".to_string()),
+            (Some(Role::Untracked), "?".to_string())
+        ]
+    );
 }

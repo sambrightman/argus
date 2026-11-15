@@ -490,11 +490,11 @@ pub fn details(
             format!("changes ({})", s.changes.total()),
         )]));
         for f in s.changes.files.iter().take(MAX_FILES) {
-            let role = match (f.index, f.worktree) {
-                ('U', _) => Role::Conflict,
-                ('?', _) => Role::Untracked,
-                (x, _) if x != ' ' => Role::Staged,
-                _ => Role::Unstaged,
+            // each letter by its side, as `git status --short` has them
+            let (index, worktree) = match f.index {
+                'U' => (Role::Conflict, Role::Conflict),
+                '?' => (Role::Untracked, Role::Untracked),
+                _ => (Role::Staged, Role::Unstaged),
             };
             v.push(DetailLine {
                 file: Some(f.path.clone()),
@@ -503,7 +503,8 @@ pub fn details(
                     .flatten(),
                 ..line(vec![
                     plain("    "),
-                    styled(role, format!("{}{}", f.index, f.worktree)),
+                    styled(index, f.index.to_string()),
+                    styled(worktree, f.worktree.to_string()),
                     plain(format!(" {}", f.path)),
                 ])
             });

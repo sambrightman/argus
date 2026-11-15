@@ -2491,3 +2491,41 @@ fn pull_says_what_became_of_orphans() {
     // the gone one is still there, untouched
     assert!(sb.path("dev/feature/.git").exists());
 }
+
+#[test]
+fn status_names_line_up_whatever_flags_the_rows_have() {
+    use unicode_width::UnicodeWidthStr;
+    let sb = Sandbox::new();
+    three(&sb);
+    let cfg = sb.path("cfg.toml");
+    let columns = |config: &str| -> Vec<usize> {
+        std::fs::write(&cfg, config).unwrap();
+        let o = argus(&sb)
+            .arg("--config")
+            .arg(&cfg)
+            .args(["status", "--all"])
+            .output()
+            .unwrap();
+        let out = String::from_utf8(o.stdout).unwrap();
+        out.lines()
+            .filter_map(|l| l.find("acme/").map(|at| l[..at].width()))
+            .collect()
+    };
+    // a nerd icon carries its own space; one row has two flags, one none
+    let c = columns(
+        "[ui]\nicons = 'nerd'\n[marks.favourite]\nrepos = ['acme/clean', 'acme/dirty']\n\
+         [marks.work]\nicon = 'W'\nrepos = ['acme/dirty']\n",
+    );
+    assert_eq!(c.len(), 3);
+    assert!(c.iter().all(|w| *w == c[0]), "{c:?}");
+    // as wide as the most flags and a space: two cells of star, one of W
+    assert_eq!(c[0], 4);
+    // inverse: with no flags anywhere, just the space
+    assert_eq!(columns(""), [1, 1, 1]);
+    // and three marks on one row still line up
+    let c = columns(
+        "[marks.a]\nrepos = ['acme/clean']\n[marks.b]\nrepos = ['acme/clean']\n\
+         [marks.c]\nrepos = ['acme/clean', 'acme/feature']\n",
+    );
+    assert_eq!(c, [4, 4, 4]);
+}

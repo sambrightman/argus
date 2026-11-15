@@ -3284,12 +3284,11 @@ impl App {
         jobs
     }
 
-    /// `s`/`u`/`K` in a diff, nothing marked: the hunk under the cursor (its
-    /// header or a context line), or the one added or removed line under
-    /// it. `None` elsewhere, for the file operation (and for an untracked
+    /// `s`/`u`/`K` in a diff, nothing marked: the hunk under the cursor,
+    /// whichever of its lines that's on. `None` elsewhere, for the file operation (and for an untracked
     /// file, which is staged or discarded whole).
     fn hunk_op(&mut self, verb: HunkVerb) -> Option<Vec<Effect>> {
-        use argus_core::diff::{self, FileDiff, LineKind, Side};
+        use argus_core::diff::{self, FileDiff, Side};
         if self.region.is_some() {
             let lines = self.region_lines();
             self.marked_lines.extend(lines);
@@ -3317,17 +3316,11 @@ impl App {
         let Some(Ok(FileDiff::Text(hunks))) = self.diffs.get(&key) else {
             return None;
         };
+        // the whole hunk wherever in it the cursor is, as magit has it:
+        // single lines are for marking
         let hunk = hunks.get(d.hunk?)?;
-        let at = d.at.filter(|&i| {
-            hunk.lines
-                .get(i)
-                .is_some_and(|l| l.kind != LineKind::Context)
-        });
         let path = e.path.clone();
-        let what = |verb: &str| {
-            let part = if at.is_some() { "line" } else { "hunk" };
-            format!("{verb} a {part} of {file}")
-        };
+        let what = |verb: &str| format!("{verb} a hunk of {file}");
         let wrong = match (verb, d.side) {
             (HunkVerb::Stage, Side::Staged) => Some("that's staged already: u unstages it"),
             (HunkVerb::Unstage, Side::Unstaged) => Some("that's not staged: s stages it"),
@@ -3345,9 +3338,8 @@ impl App {
             HunkVerb::Unstage => (true, true, what("unstage")),
             HunkVerb::Discard => (false, true, what("discard")),
         };
-        let only = at.map(|i| vec![i]);
         let op = Op::Apply {
-            patch: diff::patch(&file, hunk, only.as_deref(), reverse),
+            patch: diff::patch(&file, hunk, None, reverse),
             index,
             reverse,
             what: label.clone(),
@@ -3435,17 +3427,11 @@ impl App {
             && let (Some(d), Some(file)) = (line.diff.as_deref(), line.file.clone())
             && let Some(h) = d.hunk
         {
-            let changed = |i: &usize| {
-                d.line
-                    .as_ref()
-                    .is_some_and(|l| l.kind != LineKind::Context)
-                    .then_some(*i)
-            };
             let path = self.ws.entries[*repo].path.clone();
             chosen
                 .entry((path, file, d.side))
                 .or_default()
-                .insert(h, d.at.as_ref().and_then(changed).map(|i| vec![i]));
+                .insert(h, None);
         }
         let Some((repo, _, side)) = chosen.keys().next().cloned() else {
             self.info("e edits a hunk or lines of a file's diff (Tab on a file shows it)");

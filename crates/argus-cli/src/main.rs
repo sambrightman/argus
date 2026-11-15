@@ -1037,11 +1037,14 @@ fn status(
         .iter()
         .map(|&i| {
             let e = &ws.entries[i];
+            // flags side by side as the TUI has them, padded below to the
+            // row with the most
             let flags = badges::flags(e, &ic, &marks);
             let flag_w: usize = flags
                 .iter()
                 .map(|b| UnicodeWidthStr::width(b.text.as_str()))
                 .sum();
+            let flags: String = flags.iter().map(|b| p.role(b.role, &b.text)).collect();
             let indent = "  ".repeat(ws.depth(i));
             let name = format!("{indent}{}", e.display_name());
             let br = badges::branch(e, &ic)
@@ -1049,11 +1052,7 @@ fn status(
                 .unwrap_or_default();
             let br_plain = badges::branch(e, &ic).map(|b| b.text).unwrap_or_default();
             (
-                format!(
-                    "{}{}",
-                    " ".repeat(2usize.saturating_sub(flag_w)),
-                    p.badges(&flags).replace(' ', "")
-                ),
+                format!("{flags}\u{0}{flag_w}"),
                 name,
                 format!("{br}\u{0}{br_plain}"),
                 p.badges(&badges::state(e, &ic)),
@@ -1091,7 +1090,17 @@ fn status(
         .max()
         .unwrap_or(0);
     let mut out = std::io::stdout().lock();
+    let flags_w = rows
+        .iter()
+        .filter_map(|r| r.0.split('\0').nth(1)?.parse::<usize>().ok())
+        .max()
+        .unwrap_or(0);
     for (flags, name, br, state, lines) in rows {
+        let (flags, w) = flags.split_once('\0').unwrap();
+        let flags = format!(
+            "{flags}{}",
+            " ".repeat(flags_w - w.parse::<usize>().unwrap_or(flags_w))
+        );
         let (br_col, br_plain) = br.split_once('\0').unwrap();
         let br_pad = " ".repeat(br_w.saturating_sub(UnicodeWidthStr::width(br_plain)));
         writeln!(
