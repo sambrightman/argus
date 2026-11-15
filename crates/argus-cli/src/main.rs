@@ -72,6 +72,10 @@ enum Cmd {
         /// Only repos with this mark; repeatable (all of them).
         #[arg(long, value_name = "MARK", add = mark_completer())]
         mark: Vec<String>,
+        /// Under each repo, what the TUI's details show: where it is, its
+        /// issues, the fixes on offer, its branches, changes and stashes.
+        #[arg(long)]
+        details: bool,
     },
     /// Pull the repos marked for pull; list tracked owners and clone their
     /// new repos.
@@ -456,7 +460,12 @@ fn run() -> Result<()> {
             };
             argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))?;
         }
-        Cmd::Status { view, filter, mark } => {
+        Cmd::Status {
+            view,
+            filter,
+            mark,
+            details,
+        } => {
             scan(&mut ws);
             for m in &mark {
                 mark_named(&ws, m)?;
@@ -467,7 +476,7 @@ fn run() -> Result<()> {
                 .chain(filter)
                 .collect::<Vec<_>>()
                 .join(" ");
-            status(&ws, view.into(), &query, json)?;
+            status(&ws, view.into(), &query, json, details)?;
         }
         Cmd::Pull {
             dry_run,
@@ -965,8 +974,14 @@ fn icons(ws: &Workspace) -> Icons {
 }
 
 /// The repos to list, in order, less those `query` (as `/` takes it)
-/// leaves out.
-fn status(ws: &Workspace, filter: ViewFilter, query: &str, json: bool) -> Result<()> {
+/// leaves out; with `details`, each one's details under its row.
+fn status(
+    ws: &Workspace,
+    filter: ViewFilter,
+    query: &str,
+    json: bool,
+    details: bool,
+) -> Result<()> {
     let (marks, text) = argus_core::rules::MarkFilter::parse(query);
     let mut fuzzy = (!text.is_empty()).then(|| argus_tui::fuzzy::Fuzzy::new(&text));
     let mut order = ws.ordered(filter);
@@ -984,7 +999,10 @@ fn status(ws: &Workspace, filter: ViewFilter, query: &str, json: bool) -> Result
     let p = Paint::detect().marks(&ws.config);
     let ic = icons(ws);
     let marks = ws.config.mark_icons();
-    let rows: Vec<(String, String, String, String)> = order
+    let hints = argus_tui::details::Hints::Commands {
+        describe_limit: ws.config.describe_limit,
+    };
+    let rows: Vec<(String, String, String, String, Vec<String>)> = order
         .iter()
         .map(|&i| {
             let e = &ws.entries[i];
@@ -1008,6 +1026,21 @@ fn status(ws: &Workspace, filter: ViewFilter, query: &str, json: bool) -> Result
                 name,
                 format!("{br}\u{0}{br_plain}"),
                 p.badges(&badges::state(e, &ic)),
+                if details {
+                    let (fix, stash) = (&ws.config.fix.auto, &ws.config.stash);
+                    argus_tui::details::details(e, fix, stash, &ic, &ws.state, hints)
+                        .iter()
+                        .map(|l| {
+                            let parts = l.parts.iter().map(|(role, text)| match role {
+                                Some(r) => p.role(*r, text),
+                                None => text.clone(),
+                            });
+                            format!("{indent}    {}", parts.collect::<String>())
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                },
             )
         })
         .collect();
@@ -1022,7 +1055,7 @@ fn status(ws: &Workspace, filter: ViewFilter, query: &str, json: bool) -> Result
         .max()
         .unwrap_or(0);
     let mut out = std::io::stdout().lock();
-    for (flags, name, br, state) in rows {
+    for (flags, name, br, state, lines) in rows {
         let (br_col, br_plain) = br.split_once('\0').unwrap();
         let br_pad = " ".repeat(br_w.saturating_sub(UnicodeWidthStr::width(br_plain)));
         writeln!(
@@ -1030,6 +1063,9 @@ fn status(ws: &Workspace, filter: ViewFilter, query: &str, json: bool) -> Result
             "{flags} {}  {br_col}{br_pad}  {state}",
             pad(&name, name_w)
         )?;
+        for l in lines {
+            writeln!(out, "{l}")?;
+        }
     }
     let mut summary = status_summary(ws, filter);
     if !query.trim().is_empty() {

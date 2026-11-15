@@ -14,7 +14,12 @@ deferred.
   `git status --porcelain=v2`).
 - **Embedded terminal pane** (alacritty_terminal / tui-term) instead of
   suspending the TUI for a shell or git UI.
-- **Auto-fix all, chaining** fixes until nothing more applies.
+- **Fix auto: chaining** fixes until nothing more applies, as its own
+  action beside today's one-fix-per-repo one, which is renamed "fix once"
+  (`argus fix --auto` on the CLI). Status is re-read between steps; it
+  stops at a failure or a fix that asks first.
+- **textconv in diffs,** through gix's blob pipeline if it runs the
+  configured program; such diffs are for viewing only (no staging).
 - **Glyph font gaps:** `◆` is missing from SF Mono, `✓` from Hack, `✗` from
   Fira Code, Hack and Source Code Pro; Monaco and kitty's default font
   aren't checked. Rerun the counts once the other fonts are installed, and
@@ -30,8 +35,6 @@ deferred.
   debug info (a `.dSYM`) kept aside to symbolicate crash reports.
 - **Editing a patch to discard** (`K` after `e`): reversed in the work
   tree, so it can't be undone; it would confirm after the editor closes.
-- **`argus status --details`:** the TUI's details lines under each repo
-  (today: one line per repo; `--json` and `argus fix -n` have the rest).
 - **A row icon for worktree issues:** a warning mark on the main repo for
   stale records, and on a finished worktree's own row.
 - **Caching the pruning checks** for trees with many symlinks, if they

@@ -181,6 +181,33 @@ fn left_until(t: jiff::Timestamp, now: jiff::Timestamp) -> String {
     }
 }
 
+/// Who the lines are for, which decides how they say what to do next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hints {
+    /// The TUI: the keys that run a fix.
+    Keys,
+    /// `argus status --details`: the command that runs a fix, and, as
+    /// nothing looks further back for a tag afterwards, where the search
+    /// for one stopped (the config's `describe_limit`).
+    Commands { describe_limit: usize },
+}
+
+impl Hints {
+    /// How to run a fix of `kind` that isn't the auto-fix; `None` when
+    /// nothing need be said (the TUI's Fix menu lists them).
+    fn fix(self, kind: FixKind) -> Option<String> {
+        let Hints::Commands { .. } = self else {
+            return kind.manual().then(|| manual_keys(kind).to_string());
+        };
+        Some(match kind {
+            FixKind::Commit | FixKind::Gitignore | FixKind::Branch | FixKind::AddRemote => {
+                format!("in the TUI: {}", manual_keys(kind))
+            }
+            _ => format!("argus fix -k {}", kind.name()),
+        })
+    }
+}
+
 /// Detail lines for `e`, with `icons` for ahead/behind. Fixes: the auto-fix (by `priority`, i.e. `[fix]
 /// auto`), what later auto-fixes would apply, then the other fixes.
 /// `state` has when its issue snoozes end.
@@ -190,6 +217,7 @@ pub fn details(
     stash: &StashConfig,
     icons: &Icons,
     state: &argus_core::State,
+    hints: Hints,
 ) -> Vec<DetailLine> {
     let mut v = vec![line(vec![
         styled(Role::Dim, "path      "),
@@ -228,7 +256,16 @@ pub fn details(
     } else if s.describe_gave_up {
         v.push(line(vec![
             styled(Role::Dim, "describe  "),
-            styled(Role::Dim, "searching further back for a tag…"),
+            styled(
+                Role::Dim,
+                match hints {
+                    Hints::Keys => "searching further back for a tag…".to_string(),
+                    Hints::Commands { describe_limit: 1 } => "no tag in the last commit".into(),
+                    Hints::Commands { describe_limit: n } => {
+                        format!("no tag in the last {n} commits")
+                    }
+                },
+            ),
         ]));
     }
     let mut times = vec![];
@@ -316,6 +353,9 @@ pub fn details(
         if let Some(why) = &f.blocked {
             parts.push(styled(Role::Warning, format!("  not automatic: {why}")));
         }
+        if let Some(how) = hints.fix(f.kind).filter(|_| label == "fix       ") {
+            parts.push(styled(Role::Dim, format!("  ({how})")));
+        }
         v.push(DetailLine {
             fix: Some(f.kind),
             ..line(parts)
@@ -349,7 +389,11 @@ pub fn details(
         if let Some(why) = &f.blocked {
             parts.push(styled(Role::Warning, format!("  {why}")));
         }
-        parts.push(styled(Role::Dim, format!("  ({})", manual_keys(kind))));
+        parts.extend(
+            hints
+                .fix(kind)
+                .map(|how| styled(Role::Dim, format!("  ({how})"))),
+        );
         v.push(DetailLine {
             fix: Some(kind),
             ..line(parts)

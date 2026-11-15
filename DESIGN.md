@@ -669,6 +669,15 @@ rendering is snapshot-tested via `TestBackend`.
 * **`fix --fetch`** fetches only the selected repos (once per family, as
   worktrees share refs), then refreshes their status before planning.
   Fetch failures are reported and planning continues with what is known.
+* **`status --details`** prints the TUI's details lines under each row:
+  the same builder (`details::details`), told who reads them (`Hints`).
+  For the CLI a fix names its command (`argus fix -k stash`), or the TUI
+  keys when it needs input the CLI can't take (commit, gitignore, branch,
+  add-remote); the auto-fix names none, being what plain `argus fix`
+  runs. Nothing searches further back for a tag after the CLI prints, so
+  where the TUI says it's searching, the CLI says where the bounded walk
+  stopped (`no tag in the last 1000 commits`). Text only: `--json`
+  already has the fields.
 
 ## 8a. Build and test setup
 

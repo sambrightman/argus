@@ -2102,3 +2102,89 @@ fn completion_follows_root_and_config_on_the_line() {
     );
     assert!(complete(&sb, &cfg, &["mark", "w"]).is_empty());
 }
+
+#[test]
+fn status_details_prints_what_the_tui_details_show() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let out = argus(&sb)
+        .args(["status", "--details"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8(out).unwrap();
+    for want in [
+        "    path      ",
+        "    remote    origin ",
+        "    issue     1 uncommitted path(s)",
+        "    branches",
+        "      * feat  origin/feat",
+        "    changes (1)",
+        "         M README",
+        // a fix the CLI can't run says where it can be
+        "commit…  1 uncommitted path(s)  (in the TUI: c A)",
+        // one it can names the command
+        "(argus fix -k stash)",
+    ] {
+        assert!(out.contains(want), "{want:?} not in:\n{out}");
+    }
+    // the auto-fix is what plain `argus fix` runs: no command to name
+    let auto = out.lines().find(|l| l.contains("auto-fix  ")).unwrap();
+    assert!(
+        auto.contains("switch") && !auto.contains("argus fix"),
+        "{auto}"
+    );
+    // each repo's details follow its own row
+    let row = |name: &str| out.find(name).unwrap();
+    let readme = out.find(" M README").unwrap();
+    assert!(
+        row("acme/dirty") < readme && readme < row("acme/feature"),
+        "{out}"
+    );
+    // inverse: no details without the flag, and never in JSON
+    let plain = argus(&sb).arg("status").assert().success();
+    plain.stdout(predicate::str::contains("issue     ").not());
+    let with = argus(&sb)
+        .args(["--json", "status", "--details"])
+        .output()
+        .unwrap();
+    let without = argus(&sb).args(["--json", "status"]).output().unwrap();
+    assert_eq!(with.stdout, without.stdout);
+}
+
+#[test]
+fn status_details_says_where_describe_stopped() {
+    let sb = Sandbox::new();
+    let r = sb.init("dev/r");
+    git(&r, &["tag", "v1"]);
+    for m in ["a", "b", "c"] {
+        commit(&r, m);
+    }
+    git(&r, &["switch", "-q", "--detach"]);
+    let cfg = sb.path("argus.toml");
+    let details = |limit: usize| {
+        std::fs::write(&cfg, format!("describe_limit = {limit}\n")).unwrap();
+        let o = argus(&sb)
+            .arg("--config")
+            .arg(&cfg)
+            .args(["status", "--all", "--details"])
+            .output()
+            .unwrap();
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let out = details(2);
+    assert!(
+        out.contains("describe  no tag in the last 2 commits"),
+        "{out}"
+    );
+    assert!(!out.contains("searching"), "{out}");
+    assert!(details(1).contains("no tag in the last commit\n"));
+    // inverse: found within the limit, it's shown and nothing else is said
+    let out = details(100);
+    assert!(
+        out.contains("describe  v1-3-g") && !out.contains("no tag in"),
+        "{out}"
+    );
+}

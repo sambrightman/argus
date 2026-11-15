@@ -840,6 +840,7 @@ impl App {
                     &self.ws.config.stash,
                     &icons,
                     &self.ws.state,
+                    crate::details::Hints::Keys,
                 );
                 if self.stale_main(i).is_some() {
                     lines.extend(crate::details::gone_lines(true));
@@ -898,6 +899,7 @@ impl App {
                             &self.ws.config.stash,
                             &icons,
                             &self.ws.state,
+                            crate::details::Hints::Keys,
                         );
                         stack.extend(
                             lines

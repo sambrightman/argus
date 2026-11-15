@@ -201,6 +201,7 @@ again runs it.
 
 ```sh
 argus status [-a|--all] [--hidden] [--filter QUERY] [--mark MARK]…   # repos needing attention; -a: the rest too; QUERY as `/` takes it
+argus status --details   # under each repo, what the TUI's details show: issues, fixes (with the command for each), branches, changes, stashes
 argus pull [-n] [--no-clone] [PATTERNS…]
 argus fix [-n] [-F] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine; -F fetches first
 argus mark MARK PATTERNS… [--owner]   # MARK: favourite, one of yours, pull or ignore
