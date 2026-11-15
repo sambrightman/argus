@@ -114,7 +114,7 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
             }
             dirty = false;
             let mut left = vec![];
-            if event::poll(wait_for_key(rt.working(), busy))? {
+            if event::poll(wait_for_key(rt.working() || rt.has_results(), busy))? {
                 // a resize too
                 dirty = true;
                 if let Event::Key(k) = event::read()?
@@ -253,10 +253,16 @@ impl Gate {
             }
             *free -= 1;
         }
-        let r = work();
-        *self.free.lock().unwrap_or_else(|e| e.into_inner()) += 1;
-        self.freed.notify_one();
-        r
+        // (its place given back however the work ends, a panic included)
+        struct Place<'a>(&'a Gate);
+        impl Drop for Place<'_> {
+            fn drop(&mut self) {
+                *self.0.free.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+                self.0.freed.notify_one();
+            }
+        }
+        let _place = Place(self);
+        work()
     }
 }
 
@@ -357,13 +363,26 @@ impl Runtime {
         self.pending.load(Ordering::SeqCst) > 0
     }
 
+    /// Whether results have come and not been handled yet: the last one
+    /// may arrive just after background work stops counting as out.
+    pub fn has_results(&self) -> bool {
+        !self.rx.is_empty()
+    }
+
     /// Run `work` on a thread, counted as pending until it returns.
     fn spawn(&self, work: impl FnOnce(Sender<Msg>) + Send + 'static) {
         let (tx, pending) = (self.tx.clone(), self.pending.clone());
         pending.fetch_add(1, Ordering::SeqCst);
+        // (no longer pending however it ends, a panic included)
+        struct Pending(Arc<AtomicUsize>);
+        impl Drop for Pending {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
         std::thread::spawn(move || {
+            let _pending = Pending(pending);
             work(tx);
-            pending.fetch_sub(1, Ordering::SeqCst);
         });
     }
 
@@ -535,6 +554,20 @@ mod tests {
         assert_eq!(ms(true, false), 10, "a refresh, with nothing spinning");
         assert_eq!(ms(false, true), 80);
         assert_eq!(ms(false, false), 250);
+    }
+
+    #[test]
+    fn a_gate_gets_its_place_back_from_work_that_panics() {
+        use std::sync::Arc;
+        let gate = Arc::new(super::Gate::new(1));
+        let g = gate.clone();
+        let panicked = std::thread::spawn(move || g.run(|| panic!("in the work"))).join();
+        assert!(panicked.is_err());
+        // (with the one place lost, this would wait for ever)
+        let g = gate.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(g.run(|| 7)));
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(10)), Ok(7));
     }
 
     #[test]

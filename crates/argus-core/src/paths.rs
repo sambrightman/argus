@@ -89,8 +89,18 @@ pub fn write_atomically(path: &Path, text: &str) -> std::io::Result<()> {
         std::fs::create_dir_all(d)?;
     }
     let tmp = target.with_extension(format!("tmp.{}", std::process::id()));
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, &target)
+    let written = std::fs::write(&tmp, text).and_then(|()| {
+        // (as the file it replaces could be read and written: one kept
+        // to its owner stays so)
+        if let Ok(was) = std::fs::metadata(&target) {
+            std::fs::set_permissions(&tmp, was.permissions())?;
+        }
+        std::fs::rename(&tmp, &target)
+    });
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }
 
 #[cfg(test)]
@@ -168,6 +178,34 @@ mod tests {
         assert_eq!(expand_tilde(Path::new("/a/~/b")), PathBuf::from("/a/~/b"));
         assert_eq!(expand_tilde(Path::new("~user/x")), PathBuf::from("~user/x"));
         assert_eq!(contract_tilde(Path::new("/elsewhere")), "/elsewhere");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_replaced_file_keeps_its_permissions_and_a_failed_write_leaves_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let private = d.path().join("state.toml");
+        std::fs::write(&private, "old").unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write_atomically(&private, "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&private).unwrap(), "new");
+        assert_eq!(mode(&private), 0o600);
+        // inverse: one others could read stays readable
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_atomically(&private, "newer").unwrap();
+        assert_eq!(mode(&private), 0o644);
+        // a folder where the file should be: refused, no temporary file left
+        let taken = d.path().join("dir.toml");
+        std::fs::create_dir_all(taken.join("inside")).unwrap();
+        assert!(write_atomically(&taken, "x").is_err());
+        let left: Vec<_> = std::fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|n| n.contains("tmp"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
     }
 
     #[cfg(unix)]

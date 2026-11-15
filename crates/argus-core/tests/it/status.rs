@@ -1211,6 +1211,46 @@ fn other_remotes_are_listed_by_url_and_their_owners_may_head_pull_requests() {
     assert!(argus_core::forge::head_owners(&me, &t).is_empty());
 }
 
+/// The same in a folder with nothing else tracked: git shows the folder
+/// as untracked. Counted once as that, once as the deletion; and a
+/// commit of everything is expected to leave nothing.
+#[test]
+fn a_folders_last_tracked_file_taken_out_of_the_index_counts_once_each_way() {
+    use argus_core::fix::{Fix, FixKind, simulate};
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "dir/f", "f\n");
+    write(&r, "other", "o\n");
+    git(&r, &["add", "."]);
+    commit(&r, "files");
+    git(&r, &["rm", "-q", "--cached", "dir/f"]);
+    assert_eq!(git(&r, &["status", "--short"]), "D  dir/f\n?? dir/\n");
+    let s = st(&r);
+    let c = &s.changes;
+    assert_eq!(
+        (c.staged, c.unstaged, c.untracked),
+        (1, 0, 1),
+        "{:?}",
+        c.files
+    );
+    // a plain file likewise, for what a commit of everything leaves
+    for path in ["dir/f", "other"] {
+        git(&r, &["add", "."]);
+        git(&r, &["rm", "-q", "--cached", path]);
+        let s = st(&r);
+        let commit_all = Fix {
+            kind: FixKind::Commit,
+            op: argus_core::ops::Op::CommitAll {
+                message: "m".into(),
+            },
+            reason: String::new(),
+            blocked: None,
+        };
+        let after = simulate(&s, &commit_all);
+        assert!(after.changes.is_clean(), "{path}: {:?}", after.changes);
+    }
+}
+
 #[test]
 fn a_file_taken_out_of_the_index_but_kept_is_a_staged_deletion_and_an_untracked_file() {
     use argus_core::ops;

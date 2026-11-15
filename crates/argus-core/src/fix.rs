@@ -726,11 +726,13 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
             });
         }
         Op::CommitAll { .. } => {
-            // what's inside submodules stays theirs (only they have tracked
-            // paths with `m` or `?` in the work tree), and nested repos stay
+            // what's inside submodules stays theirs (`m` or `?` in the work
+            // tree; a file with `?` there was taken out of the index and
+            // is added back), and nested repos stay
             let c = &mut s.changes;
             c.files.retain(|f| {
-                f.kind == PathKind::Repo || (f.index != '?' && matches!(f.worktree, 'm' | '?'))
+                let inside = f.kind == PathKind::Submodule && matches!(f.worktree, 'm' | '?');
+                f.kind == PathKind::Repo || (f.index != '?' && inside)
             });
             let mut content = 0;
             for f in c.files.iter_mut().filter(|f| f.kind != PathKind::Repo) {

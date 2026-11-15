@@ -647,8 +647,14 @@ fn the_runtime_is_working_while_results_are_still_to_come() {
     let all: Vec<PathBuf> = app.ws.entries.iter().map(|e| e.path.clone()).collect();
     rt.exec(&mut app, Effect::Refresh(all));
     assert!(rt.working(), "asked, not yet handled");
+    // the work done, its results still to be handled
+    let deadline = std::time::Instant::now() + WAIT;
+    while rt.working() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!rt.working() && rt.has_results());
     assert!(rt.settle(&mut app, WAIT));
-    assert!(!rt.working(), "all in");
+    assert!(!rt.working() && !rt.has_results(), "all in");
 }
 
 #[test]
