@@ -56,8 +56,13 @@ jobs:
           docker push "$image"
       - uses: bencherdev/bencher@7de3c69a85380826613050826b4bce062be2f07d # v0.6.16
         if: env.BENCHER_API_KEY != ''
-      # A t-test on main's last 10-64 runs: with fewer, run-to-run noise
-      # can't be told from a slowdown (two runs flagged 1.6%), so no alerts.
+      # A t-test on main's last 10-20 runs: with fewer, run-to-run noise
+      # can't be told from a slowdown (two runs flagged 1.6%), so no alerts;
+      # with more, a slowdown that was accepted (a feature's cost) goes on
+      # alerting for as long as the older runs outnumber the new (about 9
+      # pushes at 64, 3 at 20). An alert is shown on Bencher but doesn't
+      # fail the job: at 99% over some 30 benchmarks, one in four runs
+      # raises one by chance.
       - name: Run on bare metal and track
         if: env.BENCHER_API_KEY != ''
         run: |
@@ -73,8 +78,7 @@ jobs:
             --threshold-measure latency \
             --threshold-test t_test \
             --threshold-min-sample-size 10 \
-            --threshold-max-sample-size 64 \
+            --threshold-max-sample-size 20 \
             --threshold-upper-boundary 0.99 \
             --thresholds-reset \
-            --error-on-alert \
             --github-actions "${{ secrets.GITHUB_TOKEN }}"

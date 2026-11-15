@@ -753,8 +753,11 @@ with `Swatinem/rust-cache`, and mold as the Linux linker.
 * `bench.yml`, on every push to main: the criterion benchmarks, prebuilt
   into an image (`.github/bench`, with git for the fixtures), run on
   Bencher's bare-metal `intel-v1` runners, which are dedicated, so runs
-  are comparable, and tracked per commit with a t-test threshold that
-  fails the job on a regression. The free plan stops a job at 5 minutes,
+  are comparable, and tracked per commit with a t-test threshold on
+  main's last 10-20 runs. An alert shows on Bencher and doesn't fail the
+  job: the test can't know a slowdown was accepted (custom marks' cost
+  kept main red for ten pushes), and at 99% over some 30 benchmarks one
+  run in four raises an alert by chance. The free plan stops a job at 5 minutes,
   so the run uses 1 s of warm-up and 3 s of measurement per benchmark
   (the whole suite takes about 4 minutes locally at criterion's defaults).
   Skipped until the `BENCHER_API_KEY` secret exists.
