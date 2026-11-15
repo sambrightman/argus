@@ -608,6 +608,16 @@ pub fn chain(s: &RepoStatus, allowed: &[FixKind], stash: &StashConfig) -> Vec<Fi
     chain_by(s, allowed, stash, simulate)
 }
 
+/// Whether applying `next` after `done` would be going round in circles:
+/// it's one of them again (the same kind doing the same thing, by label,
+/// as a stash's message carries its time), or there have been more than
+/// any repo could need. For whoever applies fixes one after another.
+pub fn repeats(done: &[Fix], next: &Fix) -> bool {
+    done.iter()
+        .any(|g| g.kind == next.kind && g.op.label() == next.op.label())
+        || done.len() > 2 * FixKind::ALL.len()
+}
+
 /// [`chain`], predicting with `sim`: guarded against one that makes no
 /// progress (a repeat) or never settles (a cap).
 fn chain_by(
@@ -619,9 +629,7 @@ fn chain_by(
     let mut out: Vec<Fix> = vec![];
     let mut cur = s.clone();
     while let Some(f) = choose(&cur, allowed, stash) {
-        if out.iter().any(|g| g.kind == f.kind && g.op == f.op)
-            || out.len() > 2 * FixKind::ALL.len()
-        {
+        if repeats(&out, &f) {
             break;
         }
         cur = sim(&cur, &f);

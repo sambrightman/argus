@@ -14,10 +14,10 @@ deferred.
   `git status --porcelain=v2`).
 - **Embedded terminal pane** (alacritty_terminal / tui-term) instead of
   suspending the TUI for a shell or git UI.
-- **Fix auto: chaining** fixes until nothing more applies, as its own
-  action beside today's one-fix-per-repo one, which is renamed "fix once"
-  (`argus fix --auto` on the CLI). Status is re-read between steps; it
-  stops at a failure or a fix that asks first.
+- **Fix auto in the TUI:** `argus fix --auto` chains fixes on the CLI;
+  the Fix menu needs the same as its own entries beside today's
+  one-fix-per-repo ones (to be labelled "fix once"). Keys undecided: `A`
+  is abort.
 - **Glyph font gaps:** `◆` is missing from SF Mono, `✓` from Hack, `✗` from
   Fira Code, Hack and Source Code Pro; Monaco and kitty's default font
   aren't checked. Rerun the counts once the other fonts are installed, and

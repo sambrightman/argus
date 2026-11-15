@@ -669,6 +669,14 @@ rendering is snapshot-tested via `TestBackend`.
 * **`fix --fetch`** fetches only the selected repos (once per family, as
   worktrees share refs), then refreshes their status before planning.
   Fetch failures are reported and planning continues with what is known.
+* **`fix --auto`** applies fixes to a repo one after another instead of
+  one per run. It doesn't follow the predicted chain: after each fix the
+  repo's status is read again and the next fix chosen from that, so a
+  surprise ends the run instead of compounding. It stops when nothing
+  applies, when a fix fails, or when a fix would repeat (`fix::repeats`,
+  the guard the prediction uses too). Kinds that ask first are never part
+  of it. One fix per run stays the default: seeing the first result
+  before the second step was the point of it.
 * **`status --details`** prints the TUI's details lines under each row:
   the same builder (`details::details`), told who reads them (`Hints`).
   For the CLI a fix names its command (`argus fix -k stash`), or the TUI

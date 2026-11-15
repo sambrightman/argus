@@ -2188,3 +2188,55 @@ fn status_details_says_where_describe_stopped() {
         "{out}"
     );
 }
+
+#[test]
+fn fix_auto_keeps_fixing_until_nothing_more_applies() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let f = sb.path("dev/feature");
+    commit(&f, "unpushed");
+    let o = argus(&sb)
+        .args(["fix", "--auto", "acme/feature"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(o.stdout).unwrap(),
+        "acme/feature: ✓ push\nacme/feature: ✓ switch main\n"
+    );
+    assert_eq!(git(&f, &["branch", "--show-current"]).trim(), "main");
+    // nothing left: said once, not looped on
+    argus(&sb)
+        .args(["fix", "--auto", "acme/feature"])
+        .assert()
+        .success()
+        .stdout("nothing to fix\n");
+}
+
+#[test]
+fn fix_auto_stops_at_a_fix_that_fails() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let f = sb.path("dev/feature");
+    commit(&f, "unpushed");
+    let gone = sb.path("nowhere.git");
+    git(
+        &f,
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            gone.to_str().unwrap(),
+        ],
+    );
+    let o = argus(&sb)
+        .args(["fix", "--auto", "acme/feature"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8(o.stdout).unwrap();
+    // tried once, and nothing after it
+    assert_eq!(out.matches("push").count(), 1, "{out}");
+    assert!(out.starts_with("acme/feature: ✗ push\n"), "{out}");
+    assert!(!out.contains("switch"), "{out}");
+    assert_eq!(git(&f, &["branch", "--show-current"]).trim(), "feat");
+}

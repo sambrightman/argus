@@ -203,7 +203,7 @@ again runs it.
 argus status [-a|--all] [--hidden] [--filter QUERY] [--mark MARK]…   # repos needing attention; -a: the rest too; QUERY as `/` takes it
 argus status --details   # under each repo, what the TUI's details show: issues, fixes (with the command for each), branches, changes, stashes
 argus pull [-n] [--no-clone] [PATTERNS…]
-argus fix [-n] [-F] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine; -F fetches first
+argus fix [-n] [-F] [--auto] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine; -F fetches first; --auto: keep fixing each repo until nothing more applies
 argus mark MARK PATTERNS… [--owner]   # MARK: favourite, one of yours, pull or ignore
 argus unmark MARK PATTERNS… [--owner] | unmark --all PATTERNS…   # --all: every mark, and snoozes
 argus snooze PATTERNS… --for 3d [--issue ISSUE]…
@@ -402,6 +402,9 @@ Each auto-fix action applies **one** fix: the first kind in `[fix] auto`
 (or `-k`, in the order given) that the repo needs. An unpushed feature
 branch is pushed by one `x x` (or `argus fix`) and switched back to the
 default branch by the next. Or snooze it in between (`m z`).
+`argus fix --auto` runs the whole sequence in one go: after each fix the
+repo's status is read again and the next one chosen from it, until
+nothing more applies or a fix fails (never the kinds that ask first).
 Kinds you don't list rank after the ones you do, in the default order:
 abort, stash, commit, submodule-update, gitignore, branch, push, publish,
 add-remote, push-branches, switch-default, reattach, pull, fast-forward,

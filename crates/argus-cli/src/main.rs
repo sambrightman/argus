@@ -101,6 +101,11 @@ enum Cmd {
         /// Show what would be fixed.
         #[arg(long, short = 'n')]
         dry_run: bool,
+        /// Keep fixing each repo until nothing more applies, instead of
+        /// one fix each: its status is read again after every fix, and a
+        /// fix that fails ends it there.
+        #[arg(long)]
+        auto: bool,
         /// Fetch the selected repos first, so "behind" and conflict
         /// predictions are current (with --dry-run too).
         #[arg(long, short = 'F')]
@@ -489,6 +494,7 @@ fn run() -> Result<()> {
         Cmd::Fix {
             kinds,
             dry_run,
+            auto,
             fetch,
             patterns,
         } => {
@@ -501,7 +507,7 @@ fn run() -> Result<()> {
             if fetch {
                 fetch_selected(&mut ws, &patterns);
             }
-            fix_cmd(&mut ws, &kinds, dry_run, &patterns, json, cli.yes)?;
+            fix_cmd(&mut ws, &kinds, dry_run, auto, &patterns, json, cli.yes)?;
         }
         Cmd::Mark(m) => {
             scan(&mut ws);
@@ -1558,6 +1564,7 @@ fn fix_cmd(
     ws: &mut Workspace,
     kinds: &[FixKind],
     dry_run: bool,
+    auto: bool,
     patterns: &[String],
     json: bool,
     yes: bool,
@@ -1623,30 +1630,46 @@ fn fix_cmd(
             }
             continue;
         }
-        if let Some(a) = fix::apply_fix(&path, &e.fix_kinds(kinds), &stash)? {
+        // one fix, or with `auto` one after another, each chosen from the
+        // repo's status as the last one left it
+        let mut done: Vec<fix::Fix> = vec![];
+        while let Some(e) = ws.get(&path) {
+            let Some(s) = e.status() else { break };
+            let Some(f) = fix::choose(s, &e.fix_kinds(kinds), &stash) else {
+                break;
+            };
+            if fix::repeats(&done, &f) {
+                break;
+            }
+            let outcome = argus_core::ops::run(&path, &f.op);
             any = true;
             if json {
                 records.push(serde_json::json!({
                     "repo": name,
                     "path": path,
-                    "applied": fix_json(&a.fix),
-                    "ok": a.outcome.success,
-                    "output": a.outcome.output,
+                    "applied": fix_json(&f),
+                    "ok": outcome.success,
+                    "output": outcome.output,
                 }));
-            } else if a.outcome.success {
+            } else if outcome.success {
                 println!(
                     "{name}: {} {}",
                     p.role(Role::Ahead, ic.ok.trim_end()),
-                    a.fix.op.label()
+                    f.op.label()
                 );
             } else {
                 println!(
                     "{name}: {} {}\n{}",
                     p.role(Role::Error, ic.failed.trim_end()),
-                    a.fix.op.label(),
-                    indent(&a.outcome.output)
+                    f.op.label(),
+                    indent(&outcome.output)
                 );
             }
+            if !auto || !outcome.success {
+                break;
+            }
+            done.push(f);
+            ws.refresh(&path);
         }
     }
     if json {
