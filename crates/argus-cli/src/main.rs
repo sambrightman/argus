@@ -598,8 +598,7 @@ fn load(
         );
         config.roots = vec![cwd];
     }
-    let mut state = State::load(&ctx.state_path)?;
-    state.expire_snoozes(jiff::Timestamp::now());
+    let state = State::load(&ctx.state_path)?;
     if let Some(lines) = state.old_marks_as_config() {
         notices.push(format!(
             "{} has marks from an older argus, no longer used: they're set in config now. \
@@ -608,7 +607,11 @@ fn load(
             paths::contract_tilde(&ctx.config_path),
         ));
     }
-    Ok((Workspace::new(config, state)?, notices))
+    // (run out since they were saved: gone from here, and so from the
+    // file at the next save, the workspace having read them)
+    let mut ws = Workspace::new(config, state)?;
+    ws.state.expire_snoozes(jiff::Timestamp::now());
+    Ok((ws, notices))
 }
 
 /// Scan, warning about directories skipped because of `max_depth`.

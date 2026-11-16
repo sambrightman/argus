@@ -8078,6 +8078,91 @@ fn a_region_stays_in_the_copy_of_the_diff_it_was_started_in() {
         app.on_key(ctrl(' '));
         app.marked_lines.clear();
     }
+    // A region is of the diff, from where it starts to where the cursor
+    // is in it, wherever the cursor goes: past the end of its copy (into
+    // the other copy, onto another repo) is the diff's end, before it the
+    // diff's start. From "+line twenty" (the fourth changed line of five):
+    let twenty: Vec<usize> = (0..app.rows.len())
+        .filter(|&n| matches!(&app.rows[n], Row::Detail { line, .. }
+            if line.diff.as_ref().and_then(|d| d.line.as_ref()).is_some_and(|l| l.text == "line twenty")))
+        .collect();
+    assert_eq!(twenty.len(), 2);
+    let last = app.rows.len() - 1;
+    let ats = |app: &App| -> Vec<(usize, usize)> {
+        app.region_lines().iter().map(|l| (l.3, l.4)).collect()
+    };
+    for (n, start) in twenty.iter().enumerate() {
+        app.cursor = *start;
+        app.on_key(ctrl(' '));
+        let own = ats(&app);
+        assert_eq!(own.len(), 1, "{own:?}");
+        // every row below the copy: the two lines to the diff's end
+        let after: Vec<usize> = match n {
+            0 => vec![twenty[1] - 2, twenty[1], twenty[1] + 3, last],
+            _ => vec![last],
+        };
+        for row in after {
+            app.cursor = row;
+            let lines = ats(&app);
+            assert_eq!(lines.len(), 2, "copy {n}, row {row}: {lines:?}");
+            assert_eq!(lines[0], own[0]);
+        }
+        // every row above it: the four lines from the diff's start
+        let before: Vec<usize> = match n {
+            0 => vec![0, 1],
+            _ => vec![0, twenty[0] - 3, twenty[0], twenty[0] + 2],
+        };
+        for row in before {
+            app.cursor = row;
+            let lines = ats(&app);
+            assert_eq!(lines.len(), 4, "copy {n}, row {row}: {lines:?}");
+            assert_eq!(lines[3], own[0]);
+        }
+        // on the hunk's header in its own copy: nothing of the hunk
+        // before the start but what's between
+        app.cursor = start - 5;
+        assert!(matches!(&app.rows[app.cursor], Row::Detail { line, .. }
+            if line.diff.as_ref().is_some_and(|d| d.hunk == Some(1) && d.line.is_none())));
+        assert_eq!(
+            ats(&app).len(),
+            2,
+            "the hunk's two changed lines up to the start"
+        );
+        // its diff folded: the same, the lines being the diff's, shown or not
+        let file = (0..*start)
+            .rev()
+            .find(|&r| {
+                matches!(&app.rows[r], Row::Detail { line, .. }
+                if line.file.as_deref() == Some("f") && line.diff.is_none())
+            })
+            .unwrap();
+        app.cursor = file;
+        app.on_key(code(KeyCode::Tab));
+        app.cursor = app.rows.len() - 1;
+        assert_eq!(ats(&app).len(), 2);
+        app.cursor = file;
+        app.on_key(code(KeyCode::Tab));
+        // what its file is under folded, the file's line gone with it:
+        // no further than where it started, wherever the cursor is
+        let under = match &app.rows[file] {
+            Row::Detail { line, .. } => line.id[..line.id.len() - 1].to_vec(),
+            r => panic!("{r:?}"),
+        };
+        let parent = (0..file)
+            .rev()
+            .find(|&r| matches!(&app.rows[r], Row::Detail { line, .. } if line.id == under))
+            .unwrap();
+        app.cursor = parent;
+        app.on_key(code(KeyCode::Tab));
+        for row in [0, parent, app.rows.len() - 1] {
+            app.cursor = row;
+            assert_eq!(ats(&app), own, "{row}");
+        }
+        app.cursor = parent;
+        app.on_key(code(KeyCode::Tab));
+        app.on_key(ctrl(' '));
+        app.marked_lines.clear();
+    }
 }
 
 /// Two repos nested in one work tree, one's path ending as the other's

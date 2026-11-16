@@ -1553,9 +1553,18 @@ impl App {
                     self.region = None;
                 } else if let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor)
                     && let (Some(f), Some(d)) = (&line.file, line.diff.as_deref())
+                    && let Some(root) = self.listed_path()
                 {
-                    let path = self.ws.entries[*repo].path.clone();
-                    self.region = Some((path, f.clone(), d.side, d.hunk, d.at));
+                    // (the file's own line: the last file in its place)
+                    let file_line = line.id.iter().rposition(|s| matches!(s, Seg::File(_)));
+                    self.region = Some(RegionStart {
+                        repo: self.ws.entries[*repo].path.clone(),
+                        file: f.clone(),
+                        side: d.side,
+                        at: Self::diff_pos(line),
+                        root,
+                        home: line.id[..file_line.map_or(0, |n| n + 1)].to_vec(),
+                    });
                 } else {
                     self.info("C-space starts a region in a file's diff");
                 }
@@ -3611,52 +3620,59 @@ impl App {
     /// The added and removed lines of a region: those of its file and side
     /// between where it starts and the cursor (unchanged lines ignored).
     pub fn region_lines(&self) -> Vec<MarkedLine> {
-        let Some((repo, file, side, hunk, at)) = &self.region else {
+        let Some(r) = &self.region else {
             return vec![];
         };
-        let in_file = |r: &Row| -> Option<(usize, usize, bool)> {
-            let Row::Detail { repo: i, line } = r else {
-                return None;
-            };
-            let d = line.diff.as_deref()?;
-            let same = &self.ws.entries[*i].path == repo
-                && line.file.as_ref() == Some(file)
-                && d.side == *side;
-            let changed = d
-                .line
-                .as_ref()
-                .is_some_and(|l| l.kind != argus_core::diff::LineKind::Context);
-            Some((d.hunk?, d.at?, same && changed))
-        };
-        let starts = |r: &Row| match r {
-            Row::Detail { repo: i, line } => line.diff.as_deref().is_some_and(|d| {
-                &self.ws.entries[*i].path == repo
-                    && line.file.as_ref() == Some(file)
-                    && d.side == *side
-                    && d.hunk == *hunk
-                    && d.at == *at
-            }),
-            _ => false,
-        };
-        // a diff can be open in more places than one (under its section,
-        // and under the uncommitted issue): the start is in the one the
-        // cursor is in, the place it shares most of
-        let here = self.id(self.cursor);
-        let shared = |n: &usize| {
-            let there = self.id(*n);
-            here.iter().zip(there).take_while(|(a, b)| a == b).count()
-        };
-        let candidates = (0..self.rows.len()).filter(|n| starts(&self.rows[*n]));
-        let Some(start) = candidates.rev().max_by_key(shared) else {
+        // (a diff converted to text has no lines to take by themselves)
+        let diff = self.diffs.get(&(r.repo.clone(), r.file.clone(), r.side));
+        let Some(Ok(FileDiff::Text(hunks))) = diff else {
             return vec![];
         };
-        let (lo, hi) = (start.min(self.cursor), start.max(self.cursor));
-        self.rows[lo..=hi.min(self.rows.len().saturating_sub(1))]
+        // where the cursor is in the diff: in the copy the region is of,
+        // its own place; else that copy's side of it
+        let top = self
+            .rows
             .iter()
-            .filter_map(in_file)
-            .filter(|&(_, _, take)| take)
-            .map(|(h, a, _)| (repo.clone(), file.clone(), *side, h, a))
-            .collect()
+            .position(|row| matches!(row, Row::Repo(i) if self.ws.entries[*i].path == r.root));
+        let copy: Vec<usize> = top
+            .and_then(|top| self.rows_of(top))
+            .map(|(_, rows)| rows.filter(|n| self.id(*n).starts_with(&r.home)).collect())
+            .unwrap_or_default();
+        let end = match (copy.first(), copy.last(), self.rows.get(self.cursor)) {
+            (Some(first), Some(last), Some(Row::Detail { line, .. }))
+                if (*first..=*last).contains(&self.cursor) =>
+            {
+                Self::diff_pos(line)
+            }
+            (Some(first), ..) if self.cursor < *first => DIFF_START,
+            (Some(_), ..) => DIFF_END,
+            // (the copy folded away: no further than where it starts)
+            (None, ..) => r.at,
+        };
+        let (from, to) = (r.at.min(end), r.at.max(end));
+        let mut lines = vec![];
+        for (h, hunk) in hunks.iter().enumerate() {
+            for (at, l) in hunk.lines.iter().enumerate() {
+                let changed = l.kind != argus_core::diff::LineKind::Context;
+                if changed && (from..=to).contains(&(h, 2 * at + 1)) {
+                    lines.push((r.repo.clone(), r.file.clone(), r.side, h, at));
+                }
+            }
+        }
+        lines
+    }
+
+    /// Where a row of a file's diff (or its file's own line) is in the
+    /// diff: see [`DiffPos`]. The file's line and a note under it are
+    /// before all of it, the blank line that ends it after.
+    fn diff_pos(line: &DetailLine) -> DiffPos {
+        match line.diff.as_deref() {
+            Some(DiffRef {
+                hunk: Some(h), at, ..
+            }) => (*h, at.map_or(0, |at| 2 * at + 1)),
+            _ if line.id.last() == Some(&Seg::Blank) => DIFF_END,
+            _ => DIFF_START,
+        }
     }
 
     /// `e` in a diff: the marked lines (else the hunk or line under the
@@ -4366,7 +4382,11 @@ impl App {
         self.ws.update_statuses(batch);
         self.diffs.retain(|k, _| !paths.contains(&k.0));
         self.marked_lines.retain(|k| !paths.contains(&k.0));
-        if self.region.as_ref().is_some_and(|r| paths.contains(&r.0)) {
+        if self
+            .region
+            .as_ref()
+            .is_some_and(|r| paths.contains(&r.repo))
+        {
             self.region = None;
         }
         self.unfold_cache.retain(|k, _| !paths.contains(&k.0));
@@ -4711,15 +4731,30 @@ fn check_patch(patch: &str, files: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Where a region starts: a diff row's repo, file, side, hunk and line
-/// (none on a side's heading or a hunk's header).
-pub type RegionStart = (
-    PathBuf,
-    String,
-    argus_core::diff::Side,
-    Option<usize>,
-    Option<usize>,
-);
+/// A place in a file's diff, in the diff's own order: its hunk, then
+/// within it the header (0) or a line (twice its place, plus one).
+/// [`DIFF_START`] is before all of it, [`DIFF_END`] after.
+type DiffPos = (usize, usize);
+const DIFF_START: DiffPos = (0, 0);
+const DIFF_END: DiffPos = (usize::MAX, usize::MAX);
+
+/// A region (`C-space`): where it starts in a file's diff. It runs from
+/// there to the cursor, in the diff's own order: its lines are the diff's,
+/// not the rows between two rows, so it's the same whatever is folded or
+/// shown twice. The cursor is somewhere in the diff only while it's in
+/// the copy the region was started in (`home`, under `root`); before that
+/// copy it's the diff's start, after it the diff's end.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionStart {
+    /// The repo the diff is of (a nested repo's own path).
+    pub repo: PathBuf,
+    pub file: String,
+    pub side: argus_core::diff::Side,
+    at: DiffPos,
+    /// The listed repo the rows are under, and the file's line there.
+    root: PathBuf,
+    home: Vec<Seg>,
+}
 
 /// What `s`/`u`/`K` do to a hunk or line.
 #[derive(Clone, Copy, PartialEq, Eq)]
