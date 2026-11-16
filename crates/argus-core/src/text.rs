@@ -38,9 +38,8 @@ pub fn web_url(s: &str) -> Option<&str> {
     if !written || s.contains(|c: char| unshown(c) || c.is_whitespace()) {
         return None;
     }
-    let url = url::Url::parse(s).ok()?;
-    (matches!(url.scheme(), "http" | "https") && url.host_str().is_some_and(|h| !h.is_empty()))
-        .then_some(s)
+    // (http or https, as written; and one the crate takes for an address)
+    url::Url::parse(s).ok().map(|_| s)
 }
 
 /// A line of output for a terminal: the colours and links argus itself
@@ -251,6 +250,13 @@ mod tests {
             ("\x1b[4:3mx", format!("{r}x")),
             ("\x1b[?25l", format!("{r}")),
             ("\x1b[1 qx", format!("{r}x")),
+            // a colour sequence with something between its codes and its
+            // end, or with more codes than are kept, isn't argus's either
+            ("\x1b[1 mx", format!("{r}x")),
+            (
+                "\x1b[1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1mx",
+                format!("{r}x"),
+            ),
             // a sequence the text ends in the middle of is nothing at all,
             // as a terminal would have it
             ("a\x1b]8;;https://x", "a".to_string()),
