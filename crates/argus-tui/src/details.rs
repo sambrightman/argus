@@ -763,16 +763,14 @@ pub fn details(
     v.extend(sections(s));
     if !s.stashes.is_empty() {
         let ignored = e.stash_ignored.iter().filter(|&&i| i).count();
-        let mut parts = vec![
-            styled(Role::Dim, "stashes   "),
-            styled(Role::Stash, s.stashes.len().to_string()),
-        ];
-        if ignored > 0 {
-            parts.push(styled(Role::Dim, format!(" ({ignored} ignored)")));
-        }
-        v.push(line(parts).at(Seg::Stashes));
+        // headed as the sections of changes are
+        let count = match ignored {
+            0 => s.stashes.len().to_string(),
+            _ => format!("{}, {ignored} ignored", s.stashes.len()),
+        };
+        v.push(line(vec![styled(Role::Dim, format!("stashes ({count})"))]).at(Seg::Stashes));
         for (n, message) in s.stashes.iter().enumerate().take(MAX_STASHES) {
-            let label = format!("          stash@{{{n}}} {message}");
+            let label = format!("    stash@{{{n}}} {message}");
             let id = s.stash_ids.get(n);
             v.push(
                 DetailLine {
@@ -791,7 +789,7 @@ pub fn details(
         let more = s.stashes.len().saturating_sub(MAX_STASHES);
         if more > 0 {
             v.push(
-                line(vec![styled(Role::Dim, format!("          … {more} more"))])
+                line(vec![styled(Role::Dim, format!("    … {more} more"))])
                     .at(Seg::Stashes)
                     .at(Seg::More),
             );

@@ -1432,7 +1432,7 @@ fn pop_and_drop_take_the_cursors_stash_or_ask_which() {
     assert_eq!(op(&app.on_key(key('y'))), Op::StashDrop { index, id });
     app.running.clear();
     // on a stash's line: that one, pop without asking anything
-    cursor_on_detail(&mut app, "dirty", "          stash@{1}");
+    cursor_on_detail(&mut app, "dirty", "    stash@{1}");
     app.on_key(key('z'));
     let (index, id) = at(1);
     assert_eq!(op(&app.on_key(key('p'))), Op::StashPopAt { index, id });
@@ -1466,7 +1466,7 @@ fn pop_and_drop_take_the_cursors_stash_or_ask_which() {
     };
     assert!(!offers(&mut app));
     app.marked = [sb.path("dev/clean")].into();
-    cursor_on_detail(&mut app, "dirty", "          stash@{0}");
+    cursor_on_detail(&mut app, "dirty", "    stash@{0}");
     assert!(offers(&mut app));
 }
 
@@ -2048,10 +2048,10 @@ fn the_stash_list_says_how_many_are_ignored_and_stops_after_ten() {
         (
             10,
             "[tags.ignore.issues]\nstashes = []",
-            "stashes   10",
+            "stashes (10)",
             None,
         ),
-        (11, "", "stashes   11 (11 ignored)", Some("… 1 more")),
+        (11, "", "stashes (11, 11 ignored)", Some("… 1 more")),
     ] {
         let (_sb, mut app) = setup_with(extra, |sb| {
             let r = sb.path("dev/clean");
@@ -3073,9 +3073,9 @@ fn a_stash_unfolds_into_what_it_holds() {
         write(&c, "README", "stashed\n");
         git(&c, &["stash", "push", "-q", "-m", "keep this"]);
     });
-    cursor_on_detail(&mut app, "clean", "          stash@{0} keep this");
+    cursor_on_detail(&mut app, "clean", "    stash@{0} keep this");
     app.act(Action::ToggleExpand);
-    let held = below(&app, "          stash@{0} keep this", 10);
+    let held = below(&app, "    stash@{0} keep this", 4);
     assert!(held.iter().any(|l| l == "On main: keep this"), "{held:?}");
     assert!(held.iter().any(|l| l == "M README"), "{held:?}");
 }
@@ -7901,7 +7901,7 @@ fn stashes_past_the_tenth_are_counted_and_fold_with_the_rest() {
     assert!(t.contains(&"… 1 more".to_string()), "{t:?}");
     app.on_key(code(KeyCode::Tab));
     let t = trimmed(&app);
-    assert!(t.iter().any(|l| l.starts_with("stashes   11")));
+    assert!(t.iter().any(|l| l.starts_with("stashes (11")));
     assert!(
         !t.iter()
             .any(|l| l.starts_with("stash@{") || l.contains('…')),
@@ -8507,7 +8507,7 @@ fn the_stash_menu_offers_only_what_applies() {
     assert_eq!(keys(&mut app), "ukMzpd", "{:?}", trimmed(&app));
     // (one stash: nothing to ask before popping it)
     assert!(items.contains(&('p', "pop".into())), "{items:?}");
-    cursor_on_detail(&mut app, "dirty", "          stash@{0}");
+    cursor_on_detail(&mut app, "dirty", "    stash@{0}");
     let items = offered(&mut app);
     assert_eq!(keys(&mut app), "ukMzpd");
     assert!(items.contains(&('p', "pop".into())), "{items:?}");
@@ -8713,7 +8713,7 @@ fn what_was_unfolded_under_a_stash_or_an_issue_goes_with_it() {
     git(&d, &["stash", "push", "-q", "-m", "one"]);
     write(&d, "README", "again\n");
     status_arrives(&mut app, &d);
-    cursor_on_detail(&mut app, "dirty", "          stash@{0}");
+    cursor_on_detail(&mut app, "dirty", "    stash@{0}");
     app.on_key(code(KeyCode::Tab));
     cursor_on_detail(&mut app, "dirty", "issue     1 uncommitted path(s)");
     app.on_key(code(KeyCode::Tab));
