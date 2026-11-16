@@ -2048,14 +2048,25 @@ fn a_forge_cannot_place_a_clone_outside_its_folder() {
                 // terminal with
                 (".git", false, false),
                 (".GIT", false, false),
+                // as HFS+ and NTFS read these: `.git` too
+                (".g\u{200c}it", false, false),
+                ("git~1", false, false),
+                (".git.", false, false),
+                // inverse: names with `git` in them that aren't it
+                (".github", false, false),
+                ("my.git", false, false),
                 ("x\u{1b}[2J", false, false),
             ],
         ),
     );
     let plan = plan_tracks(&w, &l, Protocol::Https);
-    // only the plainly named one: every clone lands in the folder
-    let dests: Vec<_> = plan.clones().map(|j| j.path.clone()).collect();
-    assert_eq!(dests, [sb.path("dev/acme/ok")]);
+    // only the plainly named ones: every clone lands in the folder
+    let mut dests: Vec<_> = plan.clones().map(|j| j.path.clone()).collect();
+    dests.sort();
+    assert_eq!(
+        dests,
+        [".github", "my.git", "ok"].map(|n| sb.path("dev/acme").join(n))
+    );
     assert!(plan.missing.is_empty(), "nor reported as clonable");
 }
 

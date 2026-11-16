@@ -640,6 +640,54 @@ fn forge_requests_go_out_a_few_at_a_time() {
     assert_eq!(MOST.load(Ordering::SeqCst), 1, "one at a time");
 }
 
+/// Asking a forge that panics is answered as a failure: the repo isn't
+/// left "looking up", nor the work counted as still out.
+#[test]
+fn a_forge_question_that_panics_is_answered_as_failed() {
+    struct Broken;
+    impl Forge for Broken {
+        fn kind(&self) -> &str {
+            "broken"
+        }
+        fn host(&self) -> &str {
+            "github.com"
+        }
+        fn list(&self, _: &str, _: Option<&str>) -> Result<Vec<RemoteRepo>, ForgeError> {
+            Ok(vec![])
+        }
+        fn info(
+            &self,
+            _: &argus_core::identity::RepoId,
+            _: &[String],
+            _: &[String],
+        ) -> Result<Option<argus_core::forge::RepoInfo>, ForgeError> {
+            panic!("in the forge")
+        }
+    }
+    fn broken(_: &str, _: &str) -> Result<Box<dyn Forge>, ForgeError> {
+        Ok(Box::new(Broken))
+    }
+    let (sb, mut app, _) = setup("");
+    app.ws.config.ui.forge_info = true;
+    let mut rt = runtime(&sb, &sb.path("config.toml"), "true", &broken);
+    let fx = app.act(Action::ExpandAll);
+    run(&mut app, &mut rt, fx);
+    assert!(!rt.working());
+    let texts: Vec<String> = app
+        .rows
+        .iter()
+        .filter_map(|r| match r {
+            argus_tui::app::Row::Detail { line, .. } => {
+                Some(line.parts.iter().map(|p| p.1.as_str()).collect())
+            }
+            _ => None,
+        })
+        .collect();
+    let failed = |t: &&String| t.starts_with("forge") && t.contains("failed unexpectedly");
+    assert_eq!(texts.iter().filter(failed).count(), 3, "{texts:?}");
+    assert!(!texts.iter().any(|t| t.contains("looking up")), "{texts:?}");
+}
+
 #[test]
 fn the_runtime_is_working_while_results_are_still_to_come() {
     let (_sb, mut app, mut rt) = setup("");

@@ -223,12 +223,20 @@ pub fn plan_tracks(
             };
             // one folder inside it, whatever the forge calls the repo
             let name = Path::new(&r.id.name);
-            // (nor `.git`, which would make the folder a repository of the
-            // forge's writing, nor a name with control characters in it)
+            // (nor `.git` in any of the spellings a file system takes for
+            // it, as git itself checks a path: it would make the folder a
+            // repository of the forge's writing; nor a name with control
+            // characters in it)
+            let guarded = gix::validate::path::component::Options {
+                protect_windows: false,
+                protect_hfs: true,
+                protect_ntfs: true,
+            };
+            let name_ok = gix::validate::path::component(r.id.name.as_str().into(), None, guarded);
             let plain = matches!(
                 name.components().collect::<Vec<_>>().as_slice(),
                 [std::path::Component::Normal(_)]
-            ) && !r.id.name.eq_ignore_ascii_case(".git")
+            ) && name_ok.is_ok()
                 && !r.id.name.chars().any(char::is_control);
             if !plain {
                 continue;

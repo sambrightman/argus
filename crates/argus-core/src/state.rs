@@ -100,7 +100,9 @@ impl State {
     /// Where both changed the same thing, ours stays.
     pub fn save_merged(&mut self, path: &Path, base: &mut State) -> Result<(), StateError> {
         let theirs = Self::load(path)?;
-        if theirs != *base {
+        // (a file that's gone has nothing written to it since: all of
+        // ours is saved, not all the file "took out" dropped)
+        if theirs != *base && path.exists() {
             let merged = merge(
                 Some(&toml::Value::try_from(&*base)?),
                 Some(&toml::Value::try_from(&*self)?),
@@ -401,13 +403,15 @@ mod tests {
         assert_eq!(ours, alone);
         assert_eq!(State::load(&p).unwrap(), alone);
 
-        // the file removed meanwhile: what it held is gone, ours stays
+        // the file removed meanwhile: all of ours is written again
+        ours.new.insert("n9".into());
+        ours.save_merged(&p, &mut base).unwrap();
         std::fs::remove_file(&p).unwrap();
         ours.snoozed.insert("z".into(), at("2030-01-01T00:00:00Z"));
+        let kept = ours.clone();
         ours.save_merged(&p, &mut base).unwrap();
-        let mut kept = State::default();
-        kept.snoozed.insert("z".into(), at("2030-01-01T00:00:00Z"));
         assert_eq!(ours, kept);
+        assert_eq!(State::load(&p).unwrap(), kept);
     }
 
     #[test]

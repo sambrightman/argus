@@ -754,6 +754,61 @@ fn switching_does_not_fail_for_submodules_that_cannot_be_listed() {
     assert_eq!(git(&r, &["branch", "--show-current"]).trim(), "other");
 }
 
+/// A submodule that isn't checked out: left so if it wasn't before
+/// (whatever its path looks like), said if it came with the branch.
+#[test]
+fn switching_leaves_submodules_not_checked_out_and_says_of_new_ones() {
+    let sb = Sandbox::new();
+    let (r, _) = submodule_bumped(&sb, "app");
+    let lib = sb.path("forge/acme/lib.git");
+    let allow = ["-c", "protocol.file.allow=always"];
+    let mut add: Vec<&str> = allow.to_vec();
+    add.extend(["submodule", "add", "-q", lib.to_str().unwrap(), "my (lib)"]);
+    git(&r, &add);
+    git(&r, &["commit", "-q", "-m", "another, oddly named"]);
+    git(&r, &["submodule", "deinit", "-q", "-f", "my (lib)"]);
+    git(&r, &["config", "--unset", "submodule.active"]);
+    let listed = git(&r, &["submodule", "status"]);
+    assert!(
+        listed.contains("-") && listed.contains("my (lib)"),
+        "{listed}"
+    );
+    git(&r, &["branch", "-q", "other"]);
+    let switch = |r: &std::path::Path, b: &str| ops::run(r, &Op::Switch { branch: b.into() });
+    let out = switch(&r, "other");
+    assert!(out.success, "{}", out.output);
+    assert!(
+        !out.output.contains("my (lib)"),
+        "its standing: {}",
+        out.output
+    );
+    assert!(r.join("lib/README").exists(), "the other still followed");
+    // a clone that never checked `lib` out, from a branch without it to
+    // one with it: not checked out, and said
+    let fresh = sb.path("fresh");
+    git(
+        &sb.root(),
+        &["clone", "-q", r.to_str().unwrap(), fresh.to_str().unwrap()],
+    );
+    git(&fresh, &["switch", "-q", "-c", "without"]);
+    git(&fresh, &["rm", "-q", "lib", "my (lib)"]);
+    git(&fresh, &["commit", "-q", "-m", "none"]);
+    let out = switch(&fresh, "other");
+    assert!(out.success, "{}", out.output);
+    for path in ["lib", "my (lib)"] {
+        let said = format!("{path} isn't checked out (git submodule update --init -- {path})");
+        assert!(out.output.contains(&said), "{}", out.output);
+    }
+    // inverse: back and forth again, they're as they were: nothing said
+    assert!(switch(&fresh, "without").success);
+    let out = switch(&fresh, "other");
+    assert!(
+        out.success && out.output.contains("isn't checked out"),
+        "{}",
+        out.output
+    );
+}
+
 #[test]
 fn a_pull_never_overwrites_a_submodules_changes() {
     // the bumped commit adds `new` (in the way) and leaves README (carried)

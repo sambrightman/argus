@@ -77,7 +77,7 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
     }
     let mut rt = Runtime::new(opts);
 
-    let mut terminal = ratatui::init();
+    let mut terminal = init_terminal(&rt.panics);
     app.scanning = true;
     rt.exec(&mut app, Effect::Scan);
     let mut tick = 0usize;
@@ -102,6 +102,10 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
                 icons: icons.clone(),
                 tick,
             };
+            for what in rt.take_panics() {
+                app.report_error(format!("a background task failed (a bug): {what}"));
+                dirty = true;
+            }
             let busy = app.scanning || !app.running.is_empty();
             // (the spinner turns at its own pace however often results
             // are looked for)
@@ -144,7 +148,7 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
                     println!("{}", suspend_banner(&program, &cwd));
                     let r = run_suspended(&program, &args, &cwd, login_shell);
                     dirty = true;
-                    terminal = ratatui::init();
+                    terminal = init_terminal(&rt.panics);
                     let _ = terminal.clear();
                     for e in app.on_msg(Msg::Suspended(r)) {
                         left.extend(rt.exec(&mut app, e));
@@ -230,6 +234,34 @@ pub fn wait_for_key(working: bool, busy: bool) -> Duration {
     }
 }
 
+/// What background threads panicked with, for the loop to report.
+type Panics = Arc<std::sync::Mutex<Vec<String>>>;
+
+/// The terminal set up for the TUI. ratatui has a panic put the terminal
+/// back before it's reported, which is right for the thread that draws:
+/// the program is ending. A panic in background work ends only that work,
+/// so there it's kept for the loop to report (`panics`) and the terminal
+/// is left alone, the TUI still being on it.
+fn init_terminal(panics: &Panics) -> ratatui::DefaultTerminal {
+    let terminal = ratatui::init();
+    keep_background_panics(std::thread::current().id(), panics.clone());
+    terminal
+}
+
+/// Have a panic on any thread but `ui` kept in `panics` instead of going
+/// to the panic hook there is now (which, for `ui`, still gets it).
+fn keep_background_panics(ui: std::thread::ThreadId, panics: Panics) {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if std::thread::current().id() == ui {
+            return hook(info);
+        }
+        if let Ok(mut kept) = panics.lock() {
+            kept.push(info.to_string());
+        }
+    }));
+}
+
 /// So many threads, each taking work as it's free: the rest waits its
 /// turn, in a queue, not in a thread of its own (a question for every
 /// repo opened at once is a queue of thousands, not thousands of threads).
@@ -286,6 +318,8 @@ pub struct Runtime {
     /// Forge requests out at once: as many as other network work
     /// (`concurrency.network`), however many repos are opened together.
     forge_pool: Option<Pool>,
+    /// What background work panicked with, not yet reported.
+    panics: Panics,
     /// The forge clients made so far, by kind and host.
     forges: pull::Clients,
 }
@@ -299,6 +333,7 @@ impl Runtime {
             cancel: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(AtomicUsize::new(0)),
             forge_pool: None,
+            panics: Panics::default(),
             forges: Default::default(),
             opts,
         }
@@ -368,6 +403,14 @@ impl Runtime {
     /// Whether background work is out, its results still to come.
     pub fn working(&self) -> bool {
         self.pending.load(Ordering::SeqCst) > 0
+    }
+
+    /// What background work has panicked with since last asked.
+    pub fn take_panics(&mut self) -> Vec<String> {
+        self.panics
+            .lock()
+            .map(|mut p| std::mem::take(&mut *p))
+            .unwrap_or_default()
     }
 
     /// Whether results have come and not been handled yet: the last one
@@ -486,15 +529,33 @@ impl Runtime {
                 let (tx, pending) = (self.tx.clone(), Pending::new(&self.pending));
                 pool.run(move || {
                     let _pending = pending;
+                    // (answered whatever happens: asking that panics is
+                    // an answer too, not a question left open)
+                    struct Answer(Sender<Msg>, Option<(PathBuf, Vec<String>)>);
+                    impl Drop for Answer {
+                        fn drop(&mut self) {
+                            if let Some((path, branches)) = self.1.take() {
+                                let info = Err("asking failed unexpectedly (a bug)".to_string());
+                                let _ = self.0.send(Msg::Forge {
+                                    path,
+                                    branches,
+                                    info,
+                                });
+                            }
+                        }
+                    }
+                    let mut answer = Answer(tx, Some((path, branches.clone())));
                     let ask = |f: Arc<dyn argus_core::forge::Forge>| {
                         f.info(&id, &branches, &owners).map_err(|e| e.to_string())
                     };
                     let info = forge.and_then(ask);
-                    let _ = tx.send(Msg::Forge {
-                        path,
-                        branches,
-                        info,
-                    });
+                    if let Some((path, branches)) = answer.1.take() {
+                        let _ = answer.0.send(Msg::Forge {
+                            path,
+                            branches,
+                            info,
+                        });
+                    }
                 });
             }
             Effect::Describe(path) => self.spawn(move |tx| {
@@ -588,6 +649,35 @@ mod tests {
             );
             assert!(ran.lock().unwrap().len() <= threads, "{size}");
         }
+    }
+
+    #[test]
+    fn a_panic_off_the_drawing_thread_is_kept_and_the_hook_not_run() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // (the hook there was, standing in for ratatui's)
+        let ran = Arc::new(AtomicUsize::new(0));
+        let before = std::panic::take_hook();
+        let count = ran.clone();
+        std::panic::set_hook(Box::new(move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+        }));
+        let panics = super::Panics::default();
+        super::keep_background_panics(std::thread::current().id(), panics.clone());
+        let off = std::thread::spawn(|| panic!("in the background")).join();
+        assert!(off.is_err());
+        assert_eq!(ran.load(Ordering::SeqCst), 0, "the terminal left alone");
+        let kept = panics.lock().unwrap().clone();
+        assert!(
+            matches!(&kept[..], [one] if one.contains("in the background")),
+            "{kept:?}"
+        );
+        // inverse: on the drawing thread, the hook has it, nothing is kept
+        let on = std::panic::catch_unwind(|| panic!("drawing"));
+        assert!(on.is_err());
+        assert_eq!(ran.load(Ordering::SeqCst), 1);
+        assert_eq!(panics.lock().unwrap().len(), 1);
+        std::panic::set_hook(before);
     }
 
     #[test]

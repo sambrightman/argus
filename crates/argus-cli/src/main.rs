@@ -1474,7 +1474,7 @@ fn demo(ctx: &Ctx, theme: Option<String>, icons: Option<String>) -> Result<()> {
     ws.scan();
     d.apply_marks(&mut ws);
     let state_path = d.sandbox.path("state.toml");
-    ws.state.save(&state_path)?;
+    ws.save_state(&state_path)?;
     let opts = argus_tui::Options {
         state_path,
         config_path: d.sandbox.path("config.toml"),

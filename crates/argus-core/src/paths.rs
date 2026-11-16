@@ -88,15 +88,22 @@ pub fn write_atomically(path: &Path, text: &str) -> std::io::Result<()> {
     if let Some(d) = target.parent() {
         std::fs::create_dir_all(d)?;
     }
-    let tmp = target.with_extension(format!("tmp.{}", std::process::id()));
-    let written = std::fs::write(&tmp, text).and_then(|()| {
-        // (as the file it replaces could be read and written: one kept
-        // to its owner stays so)
-        if let Ok(was) = std::fs::metadata(&target) {
-            std::fs::set_permissions(&tmp, was.permissions())?;
-        }
-        std::fs::rename(&tmp, &target)
-    });
+    // a name of this write's own (two at once, in one process or two,
+    // never share one), made new and, from the first, as private as the
+    // file it replaces
+    static WRITES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = target.with_extension(format!("tmp.{}.{n}", std::process::id()));
+    let mut new = std::fs::OpenOptions::new();
+    new.write(true).create_new(true);
+    #[cfg(unix)]
+    if let Ok(was) = std::fs::metadata(&target) {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        new.mode(was.permissions().mode());
+    }
+    let mut file = new.open(&tmp)?;
+    let written = std::io::Write::write_all(&mut file, text.as_bytes())
+        .and_then(|()| std::fs::rename(&tmp, &target));
     if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -196,6 +203,19 @@ mod tests {
         std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o644)).unwrap();
         write_atomically(&private, "newer").unwrap();
         assert_eq!(mode(&private), 0o644);
+        // many at once: each its own temporary file, all of them written
+        let shared = d.path().join("shared.toml");
+        std::thread::scope(|s| {
+            for n in 0..16 {
+                let shared = &shared;
+                s.spawn(move || write_atomically(shared, &format!("writer {n}")).unwrap());
+            }
+        });
+        assert!(
+            std::fs::read_to_string(&shared)
+                .unwrap()
+                .starts_with("writer ")
+        );
         // a folder where the file should be: refused, no temporary file left
         let taken = d.path().join("dir.toml");
         std::fs::create_dir_all(taken.join("inside")).unwrap();

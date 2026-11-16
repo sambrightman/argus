@@ -3760,7 +3760,12 @@ impl App {
             let file = std::env::temp_dir().join(format!("argus-{}-{n}.diff", std::process::id()));
             let mut opts = std::fs::OpenOptions::new();
             let made = opts.write(true).create_new(true).mode(0o600).open(&file);
-            (made.and_then(|mut f| f.write_all(text.as_bytes())), file)
+            let written = made.and_then(|mut f| {
+                // (made here, so here's to take it away half-written)
+                f.write_all(text.as_bytes())
+                    .inspect_err(|_| drop(std::fs::remove_file(&file)))
+            });
+            (written, file)
         };
         let next = || EDITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let taken = |r: &std::io::Result<()>| matches!(r, Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists);

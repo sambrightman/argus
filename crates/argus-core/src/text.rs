@@ -9,7 +9,7 @@ const REPLACED: char = '\u{fffd}';
 /// `s` without control characters (escape among them), each replaced:
 /// what a name or a title can show of itself. Line breaks and tabs stay.
 pub fn printable(s: &str) -> Cow<'_, str> {
-    let bad = |c: char| c.is_control() && c != '\n' && c != '\t';
+    let bad = |c: char| unshown(c) && c != '\n' && c != '\t';
     match s.contains(bad) {
         false => Cow::Borrowed(s),
         true => Cow::Owned(
@@ -20,13 +20,22 @@ pub fn printable(s: &str) -> Cow<'_, str> {
     }
 }
 
+/// Whether `c` does something to the text around it instead of showing:
+/// a control character, a line or paragraph separator, or one of those
+/// that turn the direction of what follows (which make text read as
+/// other than it is).
+fn unshown(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
 /// `s` if it's a web address fit to hand to a terminal or a browser:
 /// `http://` or `https://`, with no control character or space in it.
 pub fn web_url(s: &str) -> Option<&str> {
     // (the `url` crate reads as a browser does, past tabs and line breaks
     // and with the slashes left out: here an address is written in full)
     let written = s.starts_with("https://") || s.starts_with("http://");
-    if !written || s.contains(|c: char| c.is_control() || c.is_whitespace()) {
+    if !written || s.contains(|c: char| unshown(c) || c.is_whitespace()) {
         return None;
     }
     let url = url::Url::parse(s).ok()?;
@@ -58,6 +67,9 @@ pub fn terminal_safe(s: &str) -> String {
 const LINK: &str = "\x1b]8;;";
 const LINK_END: &str = "\x1b\\";
 
+/// The most parts of an operating system command `vte` keeps.
+const OSC_PARTS: usize = 16;
+
 /// The colour and style codes argus writes (and a theme may ask for):
 /// reset, bold, dim, italic, underline, reverse and their ends, and the
 /// sixteen foreground colours. Not concealed text, nor backgrounds.
@@ -75,7 +87,7 @@ struct Kept {
 impl vte::Perform for Kept {
     fn print(&mut self, c: char) {
         // (the controls above ASCII come as characters)
-        self.out.push(if c.is_control() { REPLACED } else { c });
+        self.out.push(if unshown(c) { REPLACED } else { c });
     }
 
     fn execute(&mut self, byte: u8) {
@@ -98,8 +110,11 @@ impl vte::Perform for Kept {
     fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
         // `8 ; ; address`, ended as argus ends it: a link to a web address,
         // or (no address) a link's end. An address's own `;` split it.
+        // (as many parts as the parser keeps: there may have been more,
+        // and the address would be short of them)
+        let whole = params.len() < OSC_PARTS;
         let address = match params {
-            [b"8", b"", address @ ..] if !bell_terminated => {
+            [b"8", b"", address @ ..] if !bell_terminated && whole => {
                 String::from_utf8(address.join(&b';')).ok()
             }
             _ => None,
@@ -140,6 +155,13 @@ mod tests {
         // line breaks and tabs are text
         assert_eq!(printable("one\n\ttwo"), "one\n\ttwo");
         assert_eq!(printable("a\rb"), "a\u{fffd}b");
+        // nor what turns the text around it
+        assert_eq!(printable("evil\u{202e}txt.exe"), "evil\u{fffd}txt.exe");
+        assert_eq!(
+            printable("שלום \u{200f}ok"),
+            "שלום \u{200f}ok",
+            "a mark, not an override"
+        );
     }
 
     #[test]
@@ -162,6 +184,7 @@ mod tests {
             "http://[::1",
             "https://exa mple.com/",
             "HTTPS:nothing",
+            "https://x/\u{202e}gpj.exe",
         ] {
             assert_eq!(web_url(bad), None, "{bad:?}");
         }
@@ -181,6 +204,19 @@ mod tests {
             (
                 "\x1b]8;;https://x/123\x1b\\\x07",
                 format!("\x1b]8;;https://x/123\x1b\\{r}\x1b]8;;\x1b\\"),
+            ),
+            // text that turns the direction of what follows, or breaks the
+            // line where no line break is
+            ("a\u{202e}b\u{2066}c\u{2028}d", format!("a{r}b{r}c{r}d")),
+            // an address in more parts than are kept isn't a link: it
+            // would be to somewhere else
+            (
+                "\x1b]8;;https://x/0;1;2;3;4;5;6;7;8;9;10;11;12;13;14;15\x1b\\t",
+                format!("{r}t"),
+            ),
+            (
+                "\x1b]8;;https://x/0;1;2;3;4;5;6;7;8;9;10;11;12\x1b\\t\x1b]8;;\x1b\\",
+                "\x1b]8;;https://x/0;1;2;3;4;5;6;7;8;9;10;11;12\x1b\\t\x1b]8;;\x1b\\".to_string(),
             ),
             // an address with `;` in it is one address
             (

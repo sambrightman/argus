@@ -1032,11 +1032,18 @@ fn switch(cwd: &Path, op: &Op, started: Instant) -> OpOutcome {
     // the branch's submodules now, each following unless it had been
     // put somewhere else before (one the branch left didn't have, too)
     let now = submodule_states(cwd);
-    let moved = |path: &String| before.iter().any(|(p, s)| p == path && *s == '+');
-    let (stay, follow): (Vec<&String>, Vec<&String>) =
-        now.iter().map(|(p, _)| p).partition(|p| moved(p));
     if now.is_empty() {
         return o;
+    }
+    let was = |path: &String| before.iter().find(|(p, _)| p == path).map(|(_, s)| *s);
+    let (mut stay, mut follow) = (vec![], vec![]);
+    for (path, state) in &now {
+        match (state, was(path)) {
+            // not checked out, as it was: left so
+            ('-', Some('-')) => {}
+            (_, Some('+')) => stay.push(path),
+            _ => follow.push(path),
+        }
     }
     if !follow.is_empty() {
         let mut args = vec!["submodule", "update", "--recursive", "--"];
@@ -1053,6 +1060,22 @@ fn switch(cwd: &Path, op: &Op, started: Instant) -> OpOutcome {
     for path in stay {
         o.output.push_str(&format!(
             "\nargus: {path} left where it was: it wasn't at the commit recorded for it"
+        ));
+    }
+    // one that came with the branch and was never set up isn't checked
+    // out by that, nor does git count it a failure: said
+    let came = |path: &&String| was(path).is_none() && follow.contains(path);
+    let absent: Vec<String> = match now.iter().any(|(p, s)| *s == '-' && came(&p)) {
+        true => submodule_states(cwd),
+        false => vec![],
+    }
+    .into_iter()
+    .filter(|(p, s)| *s == '-' && came(&p))
+    .map(|(p, _)| p)
+    .collect();
+    for path in absent {
+        o.output.push_str(&format!(
+            "\nargus: {path} isn't checked out (git submodule update --init -- {path})"
         ));
     }
     o.duration = started.elapsed();
@@ -1075,10 +1098,15 @@ fn submodule_states(cwd: &Path) -> Vec<(String, char)> {
     // have been trimmed away with the output's ends)
     let line = |l: &str| {
         let state = l.chars().next().filter(|c| "+-U".contains(*c));
+        let state = state.unwrap_or(' ');
         let (_, rest) = l.trim_start_matches(['+', '-', 'U', ' ']).split_once(' ')?;
-        // (then how the commit is described, in brackets, when it can be)
-        let path = rest.rsplit_once(" (").map_or(rest, |(path, _)| path);
-        Some((path.to_string(), state.unwrap_or(' ')))
+        // (a checked-out one's commit is described after its path, in
+        // brackets; the rest have their path alone, brackets and all)
+        let path = match rest.rsplit_once(" (") {
+            Some((path, _)) if matches!(state, ' ' | '+') && rest.ends_with(')') => path,
+            _ => rest,
+        };
+        Some((path.to_string(), state))
     };
     listed.output.lines().filter_map(line).collect()
 }
