@@ -250,9 +250,17 @@ Two findings:
   under the cursor, planned per file by `ops::stage_ops` / `unstage_ops` /
   `discard_ops` and run as jobs (one family per repo, so in order).
   Discard always asks, naming the file or the count. Hunk and line
-  operations would build on the same diff rows.
+  operations build on the same diff rows.
+* **Marks in the details are one tree:** a file (where a section lists
+  it), its hunks, their added and removed lines. Two sets hold them,
+  files marked whole and lines marked one by one, and what a file's or
+  hunk's row shows (marked, partly, not) is worked out from both and the
+  diff. A hunk or line toggled under a file marked whole turns the
+  file's mark into its lines' first. Lines are known by hunk and place
+  in it, as the diff was read: they go when the repo's status is read
+  again. Actions take both sets together: lines as patches, files whole.
 * **No forgetting.** Nothing about a repo is dropped because scans no
-  longer find it (an earlier version dropped tags after 30 days; that
+  longer find it (an earlier version dropped marks after 30 days; that
   broke the rule that permanent loss needs confirmation). Expired snoozes
   (of repos and of issues) are removed, as they end by design. Tags an older version kept in state
   are left there and shown as config lines to copy.
@@ -304,8 +312,17 @@ Two findings:
     (untracked, keep index) that start from `[stash]` and last the session;
     choosing a switch keeps the menu open. Its actions stash everything,
     staged changes only, with a message, or the files marked in the details
-    view (Space on a file line; marks on files no longer changed are
-    dropped as rows are rebuilt). A refusal in any selected repo stashes
+    view (Space on a file line; a file's mark goes when it leaves the
+    section it was marked in, as rows are rebuilt). With lines marked it
+    stashes those lines by themselves (`Op::StashLines`): `git stash
+    --staged` can't when a changed line beside them stays (it takes them
+    out of the work tree with a patch whose context no longer matches),
+    and `--patch` asks at a terminal. So the stash is made as git makes
+    one: a commit of a copy of the index with the lines staged into it,
+    on a commit of the index as it is, stored with `git stash store`;
+    then the lines are taken out of the work tree with the patch `K`
+    would use, and if that fails the stash is dropped again. The index
+    itself isn't touched. A refusal in any selected repo stashes
     none. No `argus stash` command: for one repo it
     would only pass git's own options through, and `argus fix -k stash`
     stashes in bulk.

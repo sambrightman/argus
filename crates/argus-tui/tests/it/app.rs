@@ -5627,6 +5627,106 @@ fn marked_files_and_marked_lines_are_acted_on_together() {
     );
 }
 
+/// `z m` with lines marked stashes those lines by themselves; a file
+/// marked whole beside them goes as its lines. What can't go that way (an
+/// untracked file, staged lines) is said, and nothing stashed.
+#[test]
+fn marked_lines_can_be_stashed() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        two_hunks(sb);
+        write(&sb.path("dev/dirty"), "README", "changed again\n");
+        write(&sb.path("dev/dirty"), "new", "a\n");
+    });
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    let stash_marked = |app: &mut App| {
+        app.on_key(key('z'));
+        assert!(
+            menu_items(app).contains(&"m stash marked*".to_string()),
+            "{:?}",
+            menu_items(app)
+        );
+        app.on_key(key('m'))
+    };
+    app.cursor = shown_row(&app, "+added");
+    app.on_key(key(' '));
+    match job_ops(&stash_marked(&mut app)).as_slice() {
+        [
+            Op::StashLines {
+                message,
+                stage,
+                discard,
+                lines: 1,
+            },
+        ] => {
+            assert!(message.starts_with("argus "), "{message}");
+            assert!(
+                stage.contains("+added") && !stage.contains("three"),
+                "{stage}"
+            );
+            assert!(discard.contains("+added"), "{discard}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(app.marked_lines.is_empty(), "acted on, unmarked");
+    app.running.clear();
+    // a file marked whole with them (its diff not even open): its lines
+    app.cursor = shown_row(&app, "+added");
+    app.on_key(key(' '));
+    to_file(&mut app, "README");
+    app.on_key(key(' '));
+    match job_ops(&stash_marked(&mut app)).as_slice() {
+        [
+            Op::StashLines {
+                stage, lines: 3, ..
+            },
+        ] => {
+            assert!(
+                stage.contains("a/f")
+                    && stage.contains("+added")
+                    && stage.contains("+changed again"),
+                "{stage}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    app.running.clear();
+    // an untracked file can't go in a stash of lines
+    app.cursor = shown_row(&app, "+added");
+    app.on_key(key(' '));
+    to_file(&mut app, "new");
+    app.on_key(key(' '));
+    assert!(stash_marked(&mut app).is_empty());
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "not stashing: new is marked whole and lines of other files are too: \
+         a stash of lines takes changed text files (unmark one or the other)"
+    );
+    assert_eq!(app.marked_lines.len(), 1, "kept");
+    app.on_key(key('U'));
+    // nor lines that are staged
+    let d = app.current().unwrap().path.clone();
+    git(&d, &["add", "f"]);
+    app.ws.refresh(&d);
+    app.rebuild();
+    to_staged(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    app.cursor = app.rows.len() - 1;
+    while !matches!(&app.rows[app.cursor], Row::Detail { line, .. }
+        if line.diff.as_deref().is_some_and(|d| d.at.is_some() && d.side == argus_core::diff::Side::Staged
+            && d.line.as_ref().is_some_and(|l| l.text == "added")))
+    {
+        app.cursor -= 1;
+    }
+    app.on_key(key(' '));
+    assert_eq!(app.marked_lines.len(), 1);
+    assert!(stash_marked(&mut app).is_empty());
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "not stashing: some marked lines are staged (z g stashes what's staged): unmark them (space) first"
+    );
+}
+
 /// `M` marks all there is where the cursor is, `U` unmarks it: among the
 /// repos, those listed (a filter's, say); in a repo's details, its files.
 /// Neither touches the other's marks.

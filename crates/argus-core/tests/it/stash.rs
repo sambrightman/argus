@@ -459,3 +459,166 @@ fn no_stash_before_the_first_commit() {
     let p = argus_core::ops::stash_problem(&r, &st(&r), true, false, &[]).unwrap();
     assert!(p.contains("no commit"), "{p}");
 }
+
+/// `f`, thirty lines, with lines 3 and 4 changed side by side and a line
+/// added near the end; `g` changed and staged. Returns the patches that
+/// stage and that discard line 3's change and the added line, leaving
+/// line 4's.
+fn lines_to_stash(sb: &Sandbox) -> (std::path::PathBuf, String, String) {
+    use argus_core::diff::{self, FileDiff, LineKind, Side};
+    let r = sb.init("r");
+    let lines: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+    write(&r, "f", &lines);
+    write(&r, "g", "g\n");
+    git(&r, &["add", "f", "g"]);
+    git(&r, &["commit", "-q", "-m", "files"]);
+    write(&r, "g", "g2\n");
+    git(&r, &["add", "g"]);
+    let changed = lines
+        .replace("line 3\n", "line three\n")
+        .replace("line 4\n", "line four\n")
+        .replace("line 28\n", "line 28\nadded\n");
+    write(&r, "f", &changed);
+    let Ok(FileDiff::Text(hunks)) = diff::file_diff(&r, "f", Side::Unstaged) else {
+        panic!("f's diff");
+    };
+    assert_eq!(hunks.len(), 2);
+    let of = |hunk: &diff::Hunk, texts: &[&str]| -> Vec<usize> {
+        let lines = hunk.lines.iter().enumerate();
+        lines
+            .filter(|(_, l)| l.kind != LineKind::Context && texts.contains(&l.text.as_str()))
+            .map(|(at, _)| at)
+            .collect()
+    };
+    let (first, second) = (
+        of(&hunks[0], &["line 3", "line three"]),
+        of(&hunks[1], &["added"]),
+    );
+    assert_eq!((first.len(), second.len()), (2, 1));
+    let parts = [
+        (&hunks[0], Some(&first[..])),
+        (&hunks[1], Some(&second[..])),
+    ];
+    (
+        r,
+        diff::patch_hunks("f", &parts, false),
+        diff::patch_hunks("f", &parts, true),
+    )
+}
+
+/// Lines of a file are stashed by themselves: out of the work tree, the
+/// changed line beside them left (which git's own staged-only stash can't
+/// do), what's staged left staged; popped, they're back.
+#[test]
+fn lines_are_stashed_by_themselves() {
+    let sb = Sandbox::new();
+    let (r, stage, discard) = lines_to_stash(&sb);
+    let before = std::fs::read_to_string(r.join("f")).unwrap();
+    let op = Op::StashLines {
+        message: "some lines".into(),
+        stage,
+        discard,
+        lines: 3,
+    };
+    assert_eq!(op.label(), "stash 3 lines");
+    let out = ops::run(&r, &op);
+    assert!(out.success, "{}", out.output);
+    let text = std::fs::read_to_string(r.join("f")).unwrap();
+    assert!(
+        text.contains("line 3\nline four\n") && !text.contains("added"),
+        "{text}"
+    );
+    assert_eq!(changes(&r), [" M f", "M  g"]);
+    let list = git(&r, &["stash", "list"]);
+    assert!(list.trim_end().ends_with("On main: some lines"), "{list}");
+    assert_eq!(list.lines().count(), 1);
+    // nothing of the making left behind
+    let left: Vec<_> = std::fs::read_dir(r.join(".git"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains("argus"))
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+    // the stash holds those lines, and the index as it is
+    let held = git(&r, &["diff", "HEAD", "stash@{0}", "--", "f"]);
+    assert!(
+        held.contains("+line three") && held.contains("+added") && !held.contains("four"),
+        "{held}"
+    );
+    assert_eq!(
+        git(&r, &["rev-parse", "stash@{0}^2^{tree}"]),
+        git(&r, &["write-tree"])
+    );
+    // popped (onto the file without changes of its own: git pops onto no
+    // other, as after its own `stash -p`), they're back
+    git(&r, &["checkout", "-q", "--", "f"]);
+    let pop = ops::run(&r, &Op::StashPop);
+    assert!(pop.success, "{}", pop.output);
+    assert_eq!(
+        std::fs::read_to_string(r.join("f")).unwrap(),
+        // (the added line after what's left of the removed ones, as when
+        // staging it by itself)
+        before.replace("line three\nline four\n", "line 4\nline three\n")
+    );
+    assert_eq!(changes(&r), [" M f", "M  g"]);
+}
+
+/// Lines that can't be taken out of the work tree aren't stashed either:
+/// nothing changes, and no stash is left.
+#[test]
+fn a_stash_of_lines_that_fails_changes_nothing() {
+    let sb = Sandbox::new();
+    let (r, stage, discard) = lines_to_stash(&sb);
+    let before = std::fs::read_to_string(r.join("f")).unwrap();
+    let nothing_changed = |r: &Path| {
+        assert_eq!(std::fs::read_to_string(r.join("f")).unwrap(), before);
+        assert_eq!(changes(r), [" M f", "M  g"]);
+        assert_eq!(git(r, &["stash", "list"]), "");
+        let left = std::fs::read_dir(r.join(".git")).unwrap();
+        let left = left.filter(|e| {
+            let name = e.as_ref().unwrap().file_name();
+            name.to_string_lossy().contains("argus")
+        });
+        assert_eq!(left.count(), 0);
+    };
+    // the work tree changed since the patch was made
+    let op = Op::StashLines {
+        message: "m".into(),
+        stage: stage.clone(),
+        discard: discard.replace("+added", "+something else"),
+        lines: 3,
+    };
+    let out = ops::run(&r, &op);
+    assert!(
+        !out.success && out.output.contains("not stashed"),
+        "{}",
+        out.output
+    );
+    nothing_changed(&r);
+    // the index did
+    let op = Op::StashLines {
+        message: "m".into(),
+        stage: stage
+            .replace("+added", "+something else")
+            .replace(" line 29", " line x"),
+        discard,
+        lines: 3,
+    };
+    let out = ops::run(&r, &op);
+    assert!(
+        !out.success && out.output.contains("not stashed"),
+        "{}",
+        out.output
+    );
+    nothing_changed(&r);
+    // no commit to stash against
+    let fresh = sb.path("fresh");
+    std::fs::create_dir_all(&fresh).unwrap();
+    git(&fresh, &["init", "-q"]);
+    let out = ops::run(&fresh, &op);
+    assert!(
+        !out.success && out.output.contains("no commit yet"),
+        "{}",
+        out.output
+    );
+}

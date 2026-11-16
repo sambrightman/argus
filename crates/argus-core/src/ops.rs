@@ -108,6 +108,18 @@ pub enum Op {
         staged: bool,
         paths: Vec<String>,
     },
+    /// Stash `lines` added or removed lines of files by themselves, which
+    /// `git stash` only does when asked line by line: `stage` is the patch
+    /// that stages them, `discard` the one that takes them out of the work
+    /// tree (see [`crate::diff::patch_hunks`]). What's staged stays
+    /// staged. All or nothing: if the lines can't be taken out, the stash
+    /// isn't kept.
+    StashLines {
+        message: String,
+        stage: String,
+        discard: String,
+        lines: usize,
+    },
     /// Move the current branch to `commit`.
     Reset {
         mode: ResetMode,
@@ -320,6 +332,8 @@ impl Op {
             }
             Op::Amend { message: None } => v(&["commit", "--amend", "--no-edit"]),
             Op::Amend { message: Some(m) } => v(&["commit", "--amend", "--message", m]),
+            // run in steps by stash_lines; this is its last
+            Op::StashLines { .. } => v(&["stash", "store"]),
             // the patch goes on stdin
             Op::Apply { index, reverse, .. } => {
                 let mut a = v(&["apply", "--recount", "--whitespace=nowarn"]);
@@ -487,6 +501,9 @@ impl Op {
                 if squash.is_some() { "squash" } else { "fixup" },
                 &commit[..commit.len().min(7)]
             ),
+            Op::StashLines { lines, .. } => {
+                format!("stash {lines} {}", crate::plural(*lines, "line", "lines"))
+            }
             Op::Apply { what, .. } => what.clone(),
             Op::SpinOff { name, stay: false } => format!("spin off {name}"),
             Op::SpinOff { name, stay: true } => format!("spin out {name}"),
@@ -807,7 +824,13 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
         Op::Pull => return pull(&cwd, started),
         Op::Switch { .. } | Op::SwitchTrack { .. } => return switch(&cwd, op, started),
         Op::SpinOff { name, stay } => return spin_off(&cwd, name, *stay, started),
-        Op::Apply { patch, .. } => return git_stdin(&cwd, &op.args(), patch, started),
+        Op::Apply { patch, .. } => return git_stdin(&cwd, &op.args(), patch, None, started),
+        Op::StashLines {
+            message,
+            stage,
+            discard,
+            ..
+        } => return stash_lines(&cwd, message, stage, discard, started),
         Op::Fixup {
             commit,
             instant: true,
@@ -1114,12 +1137,125 @@ fn submodule_states(cwd: &Path) -> Vec<(String, char)> {
 }
 
 /// `git` with `input` on its stdin.
-fn git_stdin(cwd: &Path, args: &[String], input: &str, started: Instant) -> OpOutcome {
+/// A file removed when it's no longer needed, however that comes about.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// [`Op::StashLines`]: the stash is made as `git stash` makes one, a
+/// commit of the index with the lines staged into it (a copy: the index
+/// itself isn't touched) on one of the index as it is, and stored; then
+/// the lines are taken out of the work tree. If that fails the stash is
+/// dropped again, so it's all or nothing.
+fn stash_lines(
+    cwd: &Path,
+    message: &str,
+    stage: &str,
+    discard: &str,
+    started: Instant,
+) -> OpOutcome {
+    let not = |why: &str| refused(format!("not stashed: {why}"), started);
+    let run = |args: &[&str]| {
+        let out = git_in(cwd, args);
+        out.success.then(|| out.output.trim().to_string())
+    };
+    let Some(head) = run(&["rev-parse", "-q", "--verify", "HEAD^{commit}"]) else {
+        return not("no commit yet to stash against");
+    };
+    let Some(index) = run(&["rev-parse", "--git-path", "index"]) else {
+        return not("no index");
+    };
+    let index = cwd.join(index);
+    let scratch = Scratch(index.with_file_name(format!("argus-index.{}", std::process::id())));
+    if let Err(e) = std::fs::copy(&index, &scratch.0) {
+        return not(&format!("copying the index: {e}"));
+    }
+    let apply = |patch: &str, to: Option<&Path>, reverse: bool| {
+        let op = Op::Apply {
+            patch: String::new(),
+            index: to.is_some(),
+            reverse,
+            what: String::new(),
+        };
+        git_stdin(cwd, &op.args(), patch, to, started)
+    };
+    let staged = apply(stage, Some(&scratch.0), false);
+    if !staged.success {
+        return not(&format!(
+            "the lines no longer apply (refresh and mark them again)\n{}",
+            staged.output
+        ));
+    }
+    let scratch_index = scratch.0.to_string_lossy().into_owned();
+    let with_lines = Command::new("git")
+        .current_dir(cwd)
+        .arg("write-tree")
+        .env("GIT_INDEX_FILE", &scratch_index)
+        .envs(crate::isolation::git_env().iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::null())
+        .output();
+    let with_lines = with_lines
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let branch = run(&["symbolic-ref", "--short", "-q", "HEAD"]);
+    let branch = branch.unwrap_or_else(|| "(no branch)".into());
+    let title = run(&["log", "-1", "--format=%h %s", "HEAD"]).unwrap_or_default();
+    let on_index = format!("index on {branch}: {title}");
+    let on_branch = format!("On {branch}: {message}");
+    // (an index with conflicts in it has no tree to write)
+    let stash = with_lines.and_then(|with_lines| {
+        let as_is = run(&["write-tree"])?;
+        let base = run(&["commit-tree", &as_is, "-p", &head, "-m", &on_index])?;
+        let parents = ["-p", &head, "-p", &base];
+        run(&[
+            &["commit-tree", &with_lines],
+            &parents[..],
+            &["-m", &on_branch],
+        ]
+        .concat())
+    });
+    let Some(stash) = stash else {
+        return not("git couldn't make the stash's commits (conflicts in the index?)");
+    };
+    let stored = git_in(cwd, &["stash", "store", "-m", &on_branch, &stash]);
+    if !stored.success {
+        return not(&stored.output);
+    }
+    let taken = apply(discard, None, true);
+    if taken.success {
+        return OpOutcome {
+            output: on_branch,
+            ..taken
+        };
+    }
+    // (still the newest: nothing else ran in this repo meanwhile)
+    if is_stash(cwd, 0, &stash) {
+        git_in(cwd, &["stash", "drop", "-q", "stash@{0}"]);
+    }
+    not(&format!(
+        "the lines couldn't be taken out of the work tree\n{}",
+        taken.output
+    ))
+}
+
+fn git_stdin(
+    cwd: &Path,
+    args: &[String],
+    input: &str,
+    index: Option<&Path>,
+    started: Instant,
+) -> OpOutcome {
     use std::io::Write;
     let child = Command::new("git")
         .current_dir(cwd)
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .envs(index.map(|i| ("GIT_INDEX_FILE", i)))
         .envs(crate::isolation::git_env().iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

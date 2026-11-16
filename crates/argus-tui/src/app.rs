@@ -3099,7 +3099,9 @@ impl App {
                 if self.ws.entries[i].status().is_some_and(|s| !s.stashes.is_empty()));
         menu.items.retain(|it| match it.action {
             Action::Stash(StashKind::Staged) => staged,
-            Action::Stash(StashKind::MarkedFiles) => !self.marked_files.is_empty(),
+            Action::Stash(StashKind::MarkedFiles) => {
+                !self.marked_files.is_empty() || !self.marked_lines.is_empty()
+            }
             Action::PopStash | Action::DropStash => stashes,
             _ => true,
         });
@@ -4223,7 +4225,8 @@ impl App {
     /// A stash of `kind`, now or (the message switch on) once its message
     /// has been asked for.
     fn stash_action(&mut self, kind: StashKind) -> Vec<Effect> {
-        if kind == StashKind::MarkedFiles && self.marked_files.is_empty() {
+        let marked = !self.marked_files.is_empty() || !self.marked_lines.is_empty();
+        if kind == StashKind::MarkedFiles && !marked {
             self.info("mark files in the details view first (Tab, then space on a file)");
             return vec![];
         }
@@ -4238,13 +4241,97 @@ impl App {
     }
 
     fn stash_now(&mut self, kind: StashKind, message: Option<String>) -> Vec<Effect> {
+        let mut lines = vec![];
         let targets: Vec<(usize, Vec<String>)> = match kind {
             StashKind::All | StashKind::Staged => {
                 self.selected().into_iter().map(|i| (i, vec![])).collect()
             }
-            StashKind::MarkedFiles => self.marked_file_names(),
+            StashKind::MarkedFiles => match self.marked_lines_stashes() {
+                Ok(by_lines) => {
+                    // (a repo with lines marked: its files went with them)
+                    let mut files = self.marked_file_names();
+                    files.retain(|(i, _)| {
+                        let path = &self.ws.entries[*i].path;
+                        by_lines.iter().all(|(repo, _)| repo != path)
+                    });
+                    lines = by_lines;
+                    files
+                }
+                Err(why) => {
+                    self.error(format!("not stashing: {why}"));
+                    return vec![];
+                }
+            },
         };
-        self.stash_jobs(targets, kind == StashKind::Staged, message)
+        self.stash_jobs(targets, kind == StashKind::Staged, message, lines)
+    }
+
+    /// For each repo with lines marked, what stashes them (its message to
+    /// come): the lines, and with them those of its files marked whole.
+    /// An error says what can't go that way: staged lines, or a file
+    /// marked whole whose lines there's no taking (untracked, staged, not
+    /// text).
+    fn marked_lines_stashes(&mut self) -> Result<Vec<(PathBuf, Op)>, String> {
+        if self.marked_lines.iter().any(|k| k.2 != Side::Unstaged) {
+            return Err("some marked lines are staged (z g stashes what's staged): \
+                 unmark them (space) first"
+                .into());
+        }
+        // by repo, then file: hunk -> its marked lines
+        type Chosen = BTreeMap<String, BTreeMap<usize, Vec<usize>>>;
+        let mut by: BTreeMap<PathBuf, Chosen> = BTreeMap::new();
+        for (repo, file, _, h, at) in &self.marked_lines {
+            let hunks = by.entry(repo.clone()).or_default();
+            let lines = hunks.entry(file.clone()).or_default();
+            lines.entry(*h).or_default().push(*at);
+        }
+        let mut out = vec![];
+        for (repo, mut chosen) in by {
+            let whole = self.marked_files.get(&repo).cloned().unwrap_or_default();
+            for (section, file) in whole {
+                let key = (repo.clone(), file.clone(), Side::Unstaged);
+                let text = section == Section::Unstaged
+                    && matches!(
+                        self.diffs.entry(key).or_insert_with(|| {
+                            diff::file_diff(&repo, &file, Side::Unstaged).map_err(|e| e.to_string())
+                        }),
+                        Ok(FileDiff::Text(_))
+                    );
+                if !text {
+                    return Err(format!(
+                        "{file} is marked whole and lines of other files are too: \
+                         a stash of lines takes changed text files (unmark one or the other)"
+                    ));
+                }
+                let all = self.changed_lines(&repo, &file, Side::Unstaged);
+                let hunks = chosen.entry(file).or_default();
+                for (h, at) in all.unwrap_or_default() {
+                    hunks.entry(h).or_default().push(at);
+                }
+            }
+            let (mut stage, mut discard, mut lines) = (String::new(), String::new(), 0);
+            for (file, hunks) in &chosen {
+                let key = (repo.clone(), file.clone(), Side::Unstaged);
+                let Some(Ok(FileDiff::Text(all))) = self.diffs.get(&key) else {
+                    continue;
+                };
+                let parts: Vec<(&diff::Hunk, Option<&[usize]>)> = hunks
+                    .iter()
+                    .filter_map(|(h, at)| Some((all.get(*h)?, Some(at.as_slice()))))
+                    .collect();
+                stage.push_str(&diff::patch_hunks(file, &parts, false));
+                discard.push_str(&diff::patch_hunks(file, &parts, true));
+                lines += hunks.values().map(Vec::len).sum::<usize>();
+            }
+            let op = Op::StashLines {
+                message: String::new(),
+                stage,
+                discard,
+                lines,
+            };
+            out.push((repo, op));
+        }
+        Ok(out)
     }
 
     /// Pop or drop a stash: the one under the cursor, else the repo's
@@ -4324,6 +4411,7 @@ impl App {
         targets: Vec<(usize, Vec<String>)>,
         staged: bool,
         message: Option<String>,
+        lines: Vec<(PathBuf, Op)>,
     ) -> Vec<Effect> {
         let Op::Stash {
             message: default_message,
@@ -4332,7 +4420,16 @@ impl App {
         else {
             unreachable!()
         };
+        let message = |default: &String| message.clone().unwrap_or_else(|| default.clone());
+        // stashes of marked lines, as made by marked_lines_stashes
         let mut jobs = vec![];
+        for (path, mut op) in lines {
+            if let Op::StashLines { message: m, .. } = &mut op {
+                *m = message(&default_message);
+            }
+            jobs.extend(self.job(&path, op));
+        }
+        let by_lines: Vec<PathBuf> = jobs.iter().map(|j| j.path.clone()).collect();
         let mut refused = vec![];
         for (i, paths) in targets {
             let e = &self.ws.entries[i];
@@ -4342,7 +4439,7 @@ impl App {
                 Some(why) => refused.push(format!("{}: {why}", e.display_name())),
                 None => {
                     let op = Op::Stash {
-                        message: message.clone().unwrap_or_else(|| default_message.clone()),
+                        message: message(&default_message),
                         untracked: self.stash.untracked,
                         keep_index: self.stash.keep_index,
                         staged,
@@ -4365,6 +4462,7 @@ impl App {
             self.info("nothing to stash");
             return vec![];
         }
+        self.marked_lines.retain(|k| !by_lines.contains(&k.0));
         self.start_jobs(jobs)
     }
 

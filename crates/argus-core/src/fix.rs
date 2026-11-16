@@ -926,6 +926,7 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
         | Op::SwitchTrack { .. }
         | Op::SpinOff { .. }
         | Op::Apply { .. }
+        | Op::StashLines { .. }
         | Op::Reset { .. }
         | Op::Amend { .. }
         | Op::Add { .. }
