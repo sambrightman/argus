@@ -15,7 +15,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Mode, Prompt, Row};
+use crate::app::{App, Marked, Mode, Prompt, Row};
 use crate::menu::MenuId;
 use crate::refine;
 use crate::theme::{Theme, Ui};
@@ -292,21 +292,33 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) -> Vec<LinkAt> 
                 // two in from the name: past the marker, flags and a space
                 let indent = "  ".repeat(app.ws.depth(*repo)) + &" ".repeat(flags_w + 4);
                 let path = &app.ws.entries[*repo].path;
-                let marked = match (line.diff.as_deref(), &line.file) {
-                    (None, Some(f)) => app.marked_files.get(path).is_some_and(|m| m.contains(f)),
-                    (Some(d), Some(f)) => d.hunk.zip(d.at).is_some_and(|(h, at)| {
-                        let key = (path.clone(), f.clone(), d.side, h, at);
-                        app.marked_lines.contains(&key) || region.contains(&key)
-                    }),
-                    _ => false,
+                // a file of the changes, a hunk of its diff, or a line of one
+                let marked = match (&line.file, line.section, line.diff.as_deref()) {
+                    (Some(f), Some(section), None) => app.marked_of(path, section, f, None),
+                    (Some(f), Some(section), Some(d)) => match (d.hunk, d.at, &d.line) {
+                        (Some(h), None, _) => app.marked_of(path, section, f, Some(h)),
+                        (Some(h), Some(at), Some(l)) if l.kind != LineKind::Context => {
+                            let key = (path.clone(), f.clone(), d.side, h, at);
+                            let marked = app.marked_lines.contains(&key)
+                                || region.contains(&key)
+                                || app.file_marked(path, section, f);
+                            if marked { Marked::Wholly } else { Marked::No }
+                        }
+                        _ => Marked::No,
+                    },
+                    _ => Marked::No,
                 };
-                let mut spans = if marked {
-                    vec![
-                        Span::styled(v.icons.marked.to_string(), t.ui(Ui::Marked)),
+                let icon = match marked {
+                    Marked::Wholly => Some(&v.icons.marked),
+                    Marked::Partly => Some(&v.icons.partly_marked),
+                    Marked::No => None,
+                };
+                let mut spans = match icon {
+                    Some(icon) => vec![
+                        Span::styled(icon.to_string(), t.ui(Ui::Marked)),
                         Span::raw(indent[1..].to_string()),
-                    ]
-                } else {
-                    vec![Span::raw(indent)]
+                    ],
+                    None => vec![Span::raw(indent)],
                 };
                 let style =
                     |role: &Option<Role>| role.map(|r| t.role(r)).unwrap_or(t.ui(Ui::Detail));
@@ -724,7 +736,15 @@ pub fn help_lines() -> Vec<(String, String)> {
         ("Tab Enter", "unfold / fold details"),
         (
             "Space",
-            "mark repo, or file in the details (actions apply to marked, else current)",
+            "mark a repo; in the details a file, a hunk or a line (actions take the marked, else current)",
+        ),
+        (
+            "M",
+            "mark all: the repos listed, or in a repo's details its files",
+        ),
+        (
+            "U Esc C-g",
+            "unmark all, likewise (Esc clears a filter first)",
         ),
         (
             "s u K",
@@ -742,7 +762,6 @@ pub fn help_lines() -> Vec<(String, String)> {
             "i",
             "add untracked files (marked, else current) to a .gitignore…",
         ),
-        ("U Esc C-g", "unmark all (Esc also clears filter)"),
         ("/ C-s", "filter (readline keys)"),
         ("a", "toggle attention only"),
         ("H", "toggle hidden repos"),
@@ -842,6 +861,11 @@ pub fn legend<'a>(i: &'a Icons, tags: &'a [(String, String)]) -> Vec<(&'a str, R
         (&i.submodule, Role::Dim, "submodule"),
         (i.spin(0), Role::Dim, "job running"),
         (&i.marked, Role::Dim, "marked for a batch action"),
+        (
+            &i.partly_marked,
+            Role::Dim,
+            "a file or hunk with some of its lines marked",
+        ),
         (&i.ok, Role::Ahead, "job or fix succeeded"),
         (&i.failed, Role::Error, "job or fix failed"),
     ];

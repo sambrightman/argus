@@ -1530,11 +1530,11 @@ fn files_marked_in_details_can_be_stashed() {
         out.lines().any(|l| l.contains('▌') && l.contains("README")),
         "{out}"
     );
-    // with its diff open, only the file's own line carries the mark
+    // with its diff open, the hunk and its two changed lines show it too
     app.cursor = at;
     app.on_key(code(KeyCode::Tab));
     let out = render(&mut app, 100, 30);
-    assert_eq!(out.lines().filter(|l| l.contains('▌')).count(), 1, "{out}");
+    assert_eq!(out.lines().filter(|l| l.contains('▌')).count(), 4, "{out}");
     app.cursor = at;
     app.on_key(code(KeyCode::Tab));
     app.on_key(key('z'));
@@ -2916,7 +2916,9 @@ fn untracked_files_go_into_the_gitignore_chosen() {
     app.ws.refresh(&c);
     app.marked_files.insert(
         c.clone(),
-        ["sub/a.log".to_string(), "sub/b.log".to_string()].into(),
+        ["sub/a.log", "sub/b.log"]
+            .map(|f| (argus_tui::details::Section::Untracked, f.to_string()))
+            .into(),
     );
     app.act(Action::GitignoreMenu);
     assert_eq!(
@@ -5337,6 +5339,381 @@ fn marked_lines_case(then: Then) {
         other => panic!("{other:?}"),
     }
     assert!(app.marked_lines.is_empty(), "acted on, unmarked");
+}
+
+/// `dirty` with `f` changed in two hunks: line 3 replaced (a removed and
+/// an added line), and a line added after line 28.
+fn two_hunks(sb: &Sandbox) {
+    let d = sb.path("dev/dirty");
+    let lines: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+    write(&d, "f", &lines);
+    commit(&d, "f");
+    let changed = lines
+        .replace("line 3\n", "line three\n")
+        .replace("line 28\n", "line 28\nadded\n");
+    write(&d, "f", &changed);
+}
+
+/// The row of `f`'s diff with this text: a line's, or a hunk's header
+/// (`@@ -1,6`: how it starts).
+fn shown_row(app: &App, text: &str) -> usize {
+    let found = app.rows.iter().position(|r| {
+        let Row::Detail { line, .. } = r else {
+            return false;
+        };
+        let shown: String = line.parts.iter().map(|p| p.1.as_str()).collect();
+        line.diff.is_some() && shown.trim_start().starts_with(text.trim_start())
+    });
+    found.unwrap_or_else(|| panic!("{text}: {:?}", trimmed(app)))
+}
+
+/// How the rows showing `text` are marked: `M` wholly, `p` partly, `-` not.
+fn marks_of(app: &mut App, texts: &[&str]) -> String {
+    let screen = render(app, 100, 60);
+    let icons = argus_core::icons::UNICODE;
+    texts
+        .iter()
+        .map(|text| {
+            let line = screen
+                .lines()
+                .find(|l| l.contains(text))
+                .unwrap_or_else(|| panic!("{text}: {screen}"));
+            if line.contains(&*icons.marked) {
+                'M'
+            } else if line.contains(&*icons.partly_marked) {
+                'p'
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+/// A file's mark is its hunks' and lines': marking the file shows them
+/// all marked, a line or hunk taken out of it leaves the file (and the
+/// hunk) partly marked, and space on something partly marked unmarks
+/// it, then marks it all.
+#[test]
+fn marks_of_a_file_its_hunks_and_its_lines_are_one() {
+    use argus_tui::details::Section;
+    let (_sb, mut app) = setup_with("", two_hunks);
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    let file = app.cursor;
+    // the file, its two hunks, their three changed lines, and one unchanged
+    let rows = [
+        "M f",
+        "@@ -1,6",
+        "-line 3",
+        "+line three",
+        "@@ -26,5",
+        "+added",
+        " line 29",
+    ];
+    let dirty = app.current().unwrap().path.clone();
+    assert_eq!(marks_of(&mut app, &rows), "-------");
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "MMMMMM-");
+    assert_eq!(
+        app.marked_files[&dirty],
+        [(Section::Unstaged, "f".to_string())].into()
+    );
+    assert!(app.marked_lines.is_empty());
+    // a line out of it: its hunk has none left, the file is partly marked
+    app.cursor = shown_row(&app, "+added");
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "pMMM---");
+    assert!(app.marked_files.is_empty());
+    assert_eq!(app.marked_lines.len(), 2);
+    // a line out of the other hunk: that's partly marked too
+    app.cursor = shown_row(&app, "+line three");
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "ppM----");
+    // (and back into it, its other line marked or not)
+    app.cursor = shown_row(&app, "+line three");
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "pMMM---");
+    app.cursor = shown_row(&app, "+line three");
+    app.on_key(key(' '));
+    // space on a hunk partly marked unmarks it; again marks it all
+    let hunk = shown_row(&app, "@@ -1,6");
+    app.cursor = hunk;
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "-------");
+    assert_eq!(app.cursor, hunk + 1, "moves on");
+    app.cursor = hunk;
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "pMMM---");
+    // and on a hunk wholly marked unmarks it
+    app.cursor = hunk;
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "-------");
+    app.cursor = hunk;
+    app.on_key(key(' '));
+    // every line marked one way or another: the file shows as marked
+    app.cursor = shown_row(&app, "@@ -26,5");
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "MMMMMM-");
+    assert!(app.marked_files.is_empty() && app.marked_lines.len() == 3);
+    // the file: wholly marked to unmarked, to marked, to unmarked
+    app.cursor = file;
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "-------");
+    assert!(app.marked_files.is_empty() && app.marked_lines.is_empty());
+    app.cursor = file;
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "MMMMMM-");
+    app.cursor = file;
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "-------");
+    // partly marked: to unmarked first
+    app.cursor = shown_row(&app, "+added");
+    app.on_key(key(' '));
+    app.cursor = file;
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "-------");
+    assert!(app.marked_files.is_empty() && app.marked_lines.is_empty());
+    // a hunk out of a marked file
+    app.cursor = file;
+    app.on_key(key(' '));
+    app.cursor = hunk;
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "p---MM-");
+    app.on_key(code(KeyCode::Esc));
+    // an unchanged line is nothing to mark: space only moves on
+    let unchanged = shown_row(&app, " line 29");
+    app.cursor = unchanged;
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "-------");
+    assert_eq!(app.cursor, unchanged + 1);
+    assert!(app.marked.is_empty() && app.marked_files.is_empty());
+}
+
+/// A file listed twice (staged, and changed since) is marked where it's
+/// marked: its other line isn't. An untracked file is marked whole, from
+/// any line of it.
+#[test]
+fn a_file_is_marked_in_its_section_and_an_untracked_one_whole() {
+    use argus_tui::details::Section;
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    to_staged(&mut app, "both");
+    let staged = app.cursor;
+    app.on_key(key(' '));
+    to_file(&mut app, "both");
+    let unstaged = app.cursor;
+    assert_ne!(staged, unstaged);
+    let icon = argus_core::icons::UNICODE.marked;
+    let marked = |app: &mut App| -> Vec<usize> {
+        let top = app.scroll;
+        let screen = render(app, 100, 60);
+        // (the rows start under the title line)
+        let rows = screen.lines().skip(1).enumerate();
+        rows.filter(|(_, l)| l.contains(&*icon))
+            .map(|(i, _)| i + top)
+            .collect()
+    };
+    assert_eq!(marked(&mut app), [staged]);
+    let dirty = app.current().unwrap().path.clone();
+    assert_eq!(
+        app.marked_files[&dirty],
+        [(Section::Staged, "both".to_string())].into()
+    );
+    app.on_key(code(KeyCode::Esc));
+    // an untracked file's lines aren't staged by themselves
+    to_file(&mut app, "new");
+    let new = app.cursor;
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+b");
+    app.on_key(key(' '));
+    assert_eq!(
+        app.marked_files[&dirty],
+        [(Section::Untracked, "new".to_string())].into()
+    );
+    assert!(app.marked_lines.is_empty());
+    assert!(marked(&mut app).contains(&new));
+    app.cursor = shown_row(&app, "+a");
+    app.on_key(key(' '));
+    assert!(app.marked_files.is_empty(), "and unmarked from any");
+}
+
+/// A file's mark goes when the file leaves the section it was marked in.
+#[test]
+fn a_files_mark_goes_with_its_place_in_its_section() {
+    let (sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "both");
+    app.on_key(key(' '));
+    to_file(&mut app, "README");
+    app.on_key(key(' '));
+    let d = sb.path("dev/dirty");
+    // staged: `both` is still changed, but no longer under unstaged
+    git(&d, &["add", "both"]);
+    app.ws.refresh(&d);
+    app.rebuild();
+    assert_eq!(
+        app.marked_files[&d],
+        [(argus_tui::details::Section::Unstaged, "README".to_string())].into()
+    );
+}
+
+/// `s` `u` `K` take marked files and marked lines together: the lines as
+/// patches, the files whole.
+#[test]
+fn marked_files_and_marked_lines_are_acted_on_together() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        two_hunks(sb);
+        write(&sb.path("dev/dirty"), "README", "changed again\n");
+        write(&sb.path("dev/dirty"), "new", "a\n");
+    });
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+added");
+    app.on_key(key(' '));
+    to_file(&mut app, "README");
+    app.on_key(key(' '));
+    to_file(&mut app, "new");
+    app.on_key(key(' '));
+    app.act(Action::Top);
+    let what = |ops: &[Op]| -> Vec<String> {
+        ops.iter()
+            .map(|op| match op {
+                Op::Apply { what, .. } => what.clone(),
+                other => other.label(),
+            })
+            .collect()
+    };
+    // K asks once, for all of it
+    assert!(app.on_key(key('K')).is_empty());
+    assert!(
+        render(&mut app, 140, 30).contains(
+            "Discard 1 marked line, unstaged changes to 1 file and delete 1 untracked? They're lost. (y/n)"
+        ),
+        "{}",
+        render(&mut app, 140, 30)
+    );
+    app.on_key(key('n'));
+    assert!(
+        !app.marked_files.is_empty() && !app.marked_lines.is_empty(),
+        "kept on no"
+    );
+    let fx = app.on_key(key('K'));
+    assert!(fx.is_empty());
+    let fx = app.on_key(key('y'));
+    let ops = job_ops(&fx);
+    assert_eq!(
+        what(&ops),
+        [
+            "discard 1 line of f",
+            "discard README",
+            "delete untracked new"
+        ]
+    );
+    // (the marks go when the repo's status says what's left)
+    assert_eq!(app.marked_lines.len(), 1);
+    app.running.clear();
+    // s: the line, then the files
+    let fx = app.on_key(key('s'));
+    let ops = job_ops(&fx);
+    assert_eq!(what(&ops)[0], "stage 1 line of f");
+    assert_eq!(
+        ops[1..],
+        [
+            Op::AddTracked {
+                paths: paths(&["README"])
+            },
+            Op::Add {
+                paths: paths(&["new"])
+            }
+        ]
+    );
+}
+
+/// `M` marks all there is where the cursor is, `U` unmarks it: among the
+/// repos, those listed (a filter's, say); in a repo's details, its files.
+/// Neither touches the other's marks.
+#[test]
+fn mark_all_and_unmark_all_go_by_where_the_cursor_is() {
+    use argus_tui::details::Section;
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    assert_eq!(names(&app).len(), 3);
+    // in the details: the repo's files, each where it's listed
+    to_file(&mut app, "README");
+    let dirty = app.current().unwrap().path.clone();
+    app.on_key(key('M'));
+    let files = |list: &[(Section, &str)]| -> std::collections::BTreeSet<(Section, String)> {
+        list.iter().map(|(s, f)| (*s, f.to_string())).collect()
+    };
+    assert_eq!(
+        app.marked_files[&dirty],
+        files(&[
+            (Section::Untracked, "bin"),
+            (Section::Untracked, "new"),
+            (Section::Unstaged, "README"),
+            (Section::Unstaged, "both"),
+            (Section::Staged, "both"),
+        ])
+    );
+    assert!(app.marked.is_empty(), "no repo is");
+    // (a file marked in two sections is one file to act on)
+    assert_eq!(
+        job_ops(&app.on_key(key('s'))),
+        [
+            Op::AddTracked {
+                paths: paths(&["README", "both"])
+            },
+            Op::Add {
+                paths: paths(&["bin", "new"])
+            }
+        ]
+    );
+    app.running.clear();
+    // lines marked one by one give way to their files
+    app.on_key(key('U'));
+    to_file(&mut app, "README");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+hello there");
+    app.on_key(key(' '));
+    assert_eq!(app.marked_lines.len(), 1);
+    app.on_key(key('M'));
+    assert!(app.marked_lines.is_empty());
+    assert_eq!(app.marked_files[&dirty].len(), 5);
+    // among the repos: those listed
+    app.act(Action::Top);
+    for c in "/dty".chars() {
+        app.on_key(key(c));
+    }
+    app.on_key(code(KeyCode::Enter));
+    assert_eq!(names(&app), ["acme/dirty"]);
+    app.on_key(key('M'));
+    assert_eq!(app.marked, [dirty.clone()].into());
+    app.on_key(code(KeyCode::Esc)); // the filter
+    app.on_key(key('M'));
+    assert_eq!(app.marked.len(), 3);
+    assert_eq!(app.marked_files[&dirty].len(), 5, "the files' marks stay");
+    // U among the repos unmarks those listed, and not the files
+    for c in "/dty".chars() {
+        app.on_key(key(c));
+    }
+    app.on_key(code(KeyCode::Enter));
+    app.on_key(key('U'));
+    assert!(app.marked.len() == 2 && !app.marked.contains(&dirty));
+    app.on_key(code(KeyCode::Esc));
+    app.on_key(key('U'));
+    assert!(app.marked.is_empty());
+    assert_eq!(app.marked_files[&dirty].len(), 5);
+    // U in the details unmarks its files and lines, and not the repos
+    app.on_key(key('M'));
+    app.cursor = shown_row(&app, "+hello there");
+    app.on_key(key(' '));
+    assert_eq!(app.marked_lines.len(), 1);
+    app.on_key(key('U'));
+    assert!(app.marked_files.is_empty() && app.marked_lines.is_empty());
+    assert_eq!(app.marked.len(), 3);
+    // Esc as U
+    to_file(&mut app, "README");
+    app.on_key(key(' '));
+    app.on_key(code(KeyCode::Esc));
+    assert!(app.marked_files.is_empty());
+    assert_eq!(app.marked.len(), 3);
 }
 
 /// `C-space` starts a region in a diff: the added and removed lines
