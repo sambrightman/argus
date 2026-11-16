@@ -2089,3 +2089,52 @@ fn saving_the_state_keeps_what_another_argus_wrote_since_it_was_read() {
             .contains_key("elsewhere")
     );
 }
+
+/// A nested repo's entry is found by where it is in its parent's work
+/// tree: not an entry elsewhere, nor under another parent, nor one that
+/// isn't nested.
+#[test]
+fn a_nested_entry_is_found_by_its_place_in_its_parent() {
+    let sb = Sandbox::new();
+    let (a, b) = (sb.init("dev/a"), sb.init("dev/b"));
+    for r in [&a, &b] {
+        let n = r.join("inner");
+        std::fs::create_dir_all(&n).unwrap();
+        git(&n, &["init", "-q"]);
+    }
+    let cfg = format!("roots = ['{}']\nmax_depth = 1", sb.path("dev").display());
+    let mut w = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    w.scan();
+    let a = w
+        .entries
+        .iter()
+        .find(|e| e.path.ends_with("a"))
+        .unwrap()
+        .path
+        .clone();
+    let b = w
+        .entries
+        .iter()
+        .find(|e| e.path.ends_with("b"))
+        .unwrap()
+        .path
+        .clone();
+    assert_eq!(w.nested_index(&a, "inner"), None, "not added yet");
+    let in_b = w.nested(&b, "inner").unwrap();
+    assert_eq!(w.nested_index(&a, "inner"), None, "b's, not a's");
+    let in_a = w.nested(&a, "inner").unwrap();
+    let in_b = w
+        .nested_index(&b, "inner")
+        .filter(|_| in_b < usize::MAX)
+        .unwrap();
+    assert_ne!(in_a, in_b);
+    assert_eq!(w.nested_index(&a, "inner"), Some(in_a));
+    assert!(w.entries[in_a].path.ends_with("a/inner"));
+    assert!(w.entries[in_b].path.ends_with("b/inner"));
+    // a listed repo, reached as if it were inside another: not nested
+    assert_eq!(
+        w.nested_index(&sb.path("dev").canonicalize().unwrap(), "a"),
+        None
+    );
+    assert_eq!(w.nested_index(&a, "nothing-there"), None);
+}

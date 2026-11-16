@@ -8129,6 +8129,40 @@ fn a_rescan_reads_what_is_unfolded_again() {
     assert_eq!(count(&app, "zz"), 2, "{:?}", trimmed(&app));
 }
 
+/// A stash unfolded, then dropped; an issue unfolded, then resolved: both
+/// forgotten. One still there stays unfolded.
+#[test]
+fn what_was_unfolded_under_a_stash_or_an_issue_goes_with_it() {
+    let (sb, mut app) = setup_with("", |_| {});
+    let d = sb.path("dev/dirty");
+    git(&d, &["stash", "push", "-q", "-m", "one"]);
+    write(&d, "README", "again\n");
+    status_arrives(&mut app, &d);
+    cursor_on_detail(&mut app, "dirty", "          stash@{0}");
+    app.on_key(code(KeyCode::Tab));
+    cursor_on_detail(&mut app, "dirty", "issue     1 uncommitted path(s)");
+    app.on_key(code(KeyCode::Tab));
+    let kinds = |app: &App| -> Vec<&'static str> {
+        let ids = app.toggled.values().flatten();
+        ids.map(|id| match id.first() {
+            Some(Seg::Stashes) => "stash",
+            Some(Seg::Issue(..)) => "issue",
+            _ => "other",
+        })
+        .collect()
+    };
+    assert_eq!(kinds(&app), ["issue", "stash"]);
+    // inverse: a status with both still there keeps both
+    status_arrives(&mut app, &d);
+    assert_eq!(kinds(&app), ["issue", "stash"]);
+    git(&d, &["stash", "drop", "-q"]);
+    status_arrives(&mut app, &d);
+    assert_eq!(kinds(&app), ["issue"]);
+    git(&d, &["checkout", "-q", "--", "README"]);
+    status_arrives(&mut app, &d);
+    assert!(app.toggled.is_empty(), "{:?}", app.toggled);
+}
+
 /// Fold the hunk whose line the cursor is on, as if from elsewhere: the
 /// cursor is left to find its way.
 fn fold_hunk_under_cursor(app: &mut App) {
