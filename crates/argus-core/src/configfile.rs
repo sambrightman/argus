@@ -162,7 +162,7 @@ pub fn example() -> String {
 enum Kind {
     Value,
     Table,
-    /// Tables by name (`[marks.<name>]`).
+    /// Tables by name (`[tags.<name>]`).
     MapOfTables,
     ArrayOfTables,
 }
@@ -489,10 +489,31 @@ fn docs_highest_first(path: &Path) -> Result<Vec<Doc>, EditError> {
         if docs.iter().any(|d| same_dir(&d.path, &f)) {
             continue; // extended twice: its last merge is what counts
         }
-        let (text, doc) = load(&f)?;
+        let (text, mut doc) = load(&f)?;
+        rename_marks(&mut doc);
         docs.push(Doc { path: f, text, doc });
     }
     Ok(docs)
+}
+
+/// `[marks]`, as tags were in 0.2.0 (and are still read), renamed to
+/// `[tags]` where it stands, so an edit finds one name and a file that's
+/// written anyway is brought up to date. (Both in one file doesn't load.)
+fn rename_marks(doc: &mut toml_edit::DocumentMut) {
+    let root = doc.as_table_mut();
+    let order: Vec<String> = root.iter().map(|(k, _)| k.to_string()).collect();
+    let Some((key, marks)) = root.remove_entry("marks") else {
+        return;
+    };
+    let tags = toml_edit::Key::new("tags")
+        .with_leaf_decor(key.leaf_decor().clone())
+        .with_dotted_decor(key.dotted_decor().clone());
+    root.insert_formatted(&tags, marks);
+    let place = |k: &toml_edit::Key| {
+        let was = if k.get() == "tags" { "marks" } else { k.get() };
+        order.iter().position(|o| o == was)
+    };
+    root.sort_values_by(|a, _, b, _| place(a).cmp(&place(b)));
 }
 
 /// The strings in list `key` of `doc` (none if it's absent).
@@ -527,7 +548,7 @@ fn add_target(docs: &[Doc], key: &str) -> Option<(usize, String)> {
     })
 }
 
-/// A dotted key's tables and last part: `marks.ignore.repos` is (`[marks.ignore]`,
+/// A dotted key's tables and last part: `tags.ignore.repos` is (`[tags.ignore]`,
 /// `repos`).
 fn split_path(path: &str) -> (Vec<&str>, &str) {
     let mut parts: Vec<&str> = path.split('.').collect();
@@ -535,7 +556,7 @@ fn split_path(path: &str) -> (Vec<&str>, &str) {
     (parts, last)
 }
 
-/// Whether the mark or issue list at dotted `key` is empty by default.
+/// Whether the tag or issue list at dotted `key` is empty by default.
 fn default_is_empty(key: &str) -> bool {
     let defaults = Config::default();
     List::all(&defaults)
@@ -543,8 +564,8 @@ fn default_is_empty(key: &str) -> bool {
         .is_none_or(|l| l.get(&defaults).is_empty())
 }
 
-/// The `extend_` form of a dotted key: `marks.ignore.repos` is
-/// `marks.ignore.extend_repos`.
+/// The `extend_` form of a dotted key: `tags.ignore.repos` is
+/// `tags.ignore.extend_repos`.
 fn extend_path(path: &str) -> String {
     match path.rsplit_once('.') {
         Some((tables, key)) => format!("{tables}.extend_{key}"),
@@ -552,7 +573,7 @@ fn extend_path(path: &str) -> String {
     }
 }
 
-/// The table at `tables` (`[marks.ignore]`, or dotted keys `marks.ignore.x = …`),
+/// The table at `tables` (`[tags.ignore]`, or dotted keys `tags.ignore.x = …`),
 /// created when `create`.
 fn table_mut<'a>(
     doc: &'a mut toml_edit::DocumentMut,
@@ -788,8 +809,8 @@ pub fn remove_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsRemoved, EditE
 /// ones go to the highest file with the list or its `extend_` form (see
 /// `add_target`), else a new list in the main file, as for roots. No
 /// changes, no write.
-pub fn update_mark_lists(path: &Path, before: &Config, after: &Config) -> Result<(), EditError> {
-    // (marks are defined in config, the same before and after)
+pub fn update_tag_lists(path: &Path, before: &Config, after: &Config) -> Result<(), EditError> {
+    // (tags are defined in config, the same before and after)
     let changes: Vec<(String, Vec<&String>, Vec<&String>)> = List::all(after)
         .map(|l| {
             let (old, new) = (l.get(before), l.get(after));
@@ -885,8 +906,8 @@ mod tests {
         assert!(
             ["favourite", "pull", "ignore"]
                 .iter()
-                .all(|m| c.marks[*m].repos.is_empty()),
-            "no repo is marked by default"
+                .all(|m| c.tags[*m].repos.is_empty()),
+            "no repo is tagged by default"
         );
         assert_eq!(c.ignore_issues(), d.ignore_issues());
         assert_eq!(c.tracks.len(), 1);
@@ -918,11 +939,11 @@ mod tests {
                 "fix",
                 "tools",
                 "ui",
-                "marks",
-                "marks.favourite",
-                "marks.pull",
-                "marks.ignore",
-                "marks.ignore.issues",
+                "tags",
+                "tags.favourite",
+                "tags.pull",
+                "tags.ignore",
+                "tags.ignore.issues",
                 "stashes",
                 "non_default_branch",
                 "track",
@@ -960,17 +981,17 @@ mod tests {
     }
 
     #[test]
-    fn marks_after_the_first_are_listed_briefly() {
+    fn tags_after_the_first_are_listed_briefly() {
         let ex = example();
         // the first is explained key by key; the others give their defaults
-        let fav = ex.find("# [marks.favourite]").unwrap();
+        let fav = ex.find("# [tags.favourite]").unwrap();
         let likewise: Vec<usize> = ex.match_indices("## Likewise").map(|m| m.0).collect();
         assert_eq!(likewise.len(), 2, "pull and ignore");
         assert!(likewise[0] > fav, "not before the first");
-        assert!(ex.contains("## Likewise, with its own defaults:\n# [marks.pull]\n# key = \"p\"\n# sort = 0\n# repos = []\n"));
-        assert!(ex.contains("# [marks.ignore]\n# key = \"I\"\n"));
+        assert!(ex.contains("## Likewise, with its own defaults:\n# [tags.pull]\n# key = \"p\"\n# sort = 0\n# repos = []\n"));
+        assert!(ex.contains("# [tags.ignore]\n# key = \"I\"\n"));
         // and the first one's keys each have their say
-        assert!(ex[fav..likewise[0]].contains("## Its key in the TUI's Mark menu"));
+        assert!(ex[fav..likewise[0]].contains("## Its key in the TUI's Tag menu"));
     }
 
     #[test]
@@ -991,7 +1012,7 @@ mod tests {
             ("roots", r#"["~/dev"]"#),
             (
                 "colors",
-                r#"{ branch = "bold magenta", "mark.favourite" = "yellow" }"#,
+                r#"{ branch = "bold magenta", "tag.favourite" = "yellow" }"#,
             ),
             ("icon_overrides", r#"{ pull = "⇣" }"#),
         ] {
@@ -999,9 +1020,9 @@ mod tests {
             assert!(ex.contains(&want), "{want}\n{ex}");
         }
         assert!(ex.contains("\n# forge = \"github\"\n"), "{ex}");
-        // a mark of your own, after the built-in ones
+        // a tag of your own, after the built-in ones
         assert!(
-            ex.contains("## One of your own, for example:\n# [marks.work]\n# key = \"w\"\n"),
+            ex.contains("## One of your own, for example:\n# [tags.work]\n# key = \"w\"\n"),
             "{ex}"
         );
     }
@@ -1193,24 +1214,24 @@ mod tests {
     }
 
     #[test]
-    fn mark_lists_are_edited_in_place() {
+    fn tag_lists_are_edited_in_place() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("config.toml");
-        let text = "# my config\nroots = [\"~/dev\"]\nmarks.favourite.repos = [\"a/x\", \"b/*\"] # keep\n\n[ui]\ntheme = \"dark\"\n";
+        let text = "# my config\nroots = [\"~/dev\"]\ntags.favourite.repos = [\"a/x\", \"b/*\"] # keep\n\n[ui]\ntheme = \"dark\"\n";
         std::fs::write(&p, text).unwrap();
         let before = Config::parse(text).unwrap();
         // nothing changed: the file isn't touched
-        update_mark_lists(&p, &before, &before).unwrap();
+        update_tag_lists(&p, &before, &before).unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), text);
         let mut after = before.clone();
-        after.marks["favourite"].repos = vec!["b/*".into(), "c/y".into()];
-        after.marks["ignore"].repos = vec!["!d/z".into()];
-        update_mark_lists(&p, &before, &after).unwrap();
+        after.tags["favourite"].repos = vec!["b/*".into(), "c/y".into()];
+        after.tags["ignore"].repos = vec!["!d/z".into()];
+        update_tag_lists(&p, &before, &after).unwrap();
         let out = std::fs::read_to_string(&p).unwrap();
         let c = Config::parse(&out).unwrap();
-        assert_eq!(c.marks["favourite"].repos, ["b/*", "c/y"]);
-        assert_eq!(c.marks["ignore"].repos, ["!d/z"], "created when missing");
-        assert!(c.marks["pull"].repos.is_empty());
+        assert_eq!(c.tags["favourite"].repos, ["b/*", "c/y"]);
+        assert_eq!(c.tags["ignore"].repos, ["!d/z"], "created when missing");
+        assert!(c.tags["pull"].repos.is_empty());
         // the rest of the file is as written
         assert!(
             out.starts_with("# my config\nroots = [\"~/dev\"]\n"),
@@ -1224,15 +1245,41 @@ mod tests {
     }
 
     #[test]
-    fn mark_lists_create_the_config_if_needed() {
+    fn tag_lists_create_the_config_if_needed() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("new/config.toml");
         let before = Config::default();
         let mut after = Config::default();
-        after.marks["pull"].repos = vec!["acme/*".into()];
-        update_mark_lists(&p, &before, &after).unwrap();
+        after.tags["pull"].repos = vec!["acme/*".into()];
+        update_tag_lists(&p, &before, &after).unwrap();
         let c = Config::parse(&std::fs::read_to_string(&p).unwrap()).unwrap();
-        assert_eq!(c.marks["pull"].repos, ["acme/*"]);
+        assert_eq!(c.tags["pull"].repos, ["acme/*"]);
         assert_eq!(c.max_depth, Config::default().max_depth);
+    }
+
+    /// A file still saying `[marks]` (0.2.0's name for tags) has it renamed
+    /// when a tag is saved to it, where it stands and with its comments;
+    /// a file the change doesn't touch is left as written.
+    #[test]
+    fn a_file_saying_marks_is_renamed_when_a_tag_is_saved_to_it() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().join("base.toml");
+        let base_text = "[marks.home]\nrepos = ['x/y']\n";
+        std::fs::write(&base, base_text).unwrap();
+        let p = d.path().join("config.toml");
+        let text = "extend = ['base.toml']\n# mine\nmarks.favourite.repos = [\"a/x\"] # keep\nmax_depth = 3\n\n# work's\n[marks.work]\nkey = \"w\"\n\n[ui]\ntheme = \"dark\"\n";
+        std::fs::write(&p, text).unwrap();
+        let before = Config::load(&p).unwrap();
+        let mut after = before.clone();
+        after.tags["favourite"].repos.push("c/y".into());
+        update_tag_lists(&p, &before, &after).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "extend = ['base.toml']\n# mine\ntags.favourite.repos = [\"a/x\", \"c/y\"] # keep\nmax_depth = 3\n\n# work's\n[tags.work]\nkey = \"w\"\n\n[ui]\ntheme = \"dark\"\n"
+        );
+        assert_eq!(std::fs::read_to_string(&base).unwrap(), base_text);
+        let c = Config::load(&p).unwrap();
+        assert_eq!(c.tags["favourite"].repos, ["a/x", "c/y"]);
+        assert_eq!(c.tags["home"].repos, ["x/y"]);
     }
 }

@@ -165,7 +165,7 @@ pub struct Fix {
 /// Nothing is proposed while a merge/rebase is in progress or conflicts exist:
 /// that needs a human.
 /// `stash` gives the stash fix's options (the `[stash]` defaults).
-/// Fixes that would undo a state `[marks.ignore.issues]` says is normal: switching to
+/// Fixes that would undo a state `[tags.ignore.issues]` says is normal: switching to
 /// the default branch for an ignored non-default-branch branch,
 /// reattaching an ignored detached HEAD, publishing for an ignored missing
 /// or gone upstream, pulling for ignored "behind", popping when any stash

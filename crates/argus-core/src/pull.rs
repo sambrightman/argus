@@ -128,7 +128,7 @@ impl PullPlan {
     }
 }
 
-/// Pull/fetch every repo marked for pull: snoozed ones too (hidden for a
+/// Pull/fetch every repo tagged for pull: snoozed ones too (hidden for a
 /// while, still kept up to date); an ignored one never is.
 pub fn plan_updates(ws: &Workspace) -> Vec<Job> {
     let mut jobs = vec![];

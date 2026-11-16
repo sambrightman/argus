@@ -30,7 +30,7 @@ use app::{App, Effect, Msg};
 
 pub struct Options {
     pub state_path: PathBuf,
-    /// Where marks (favourite, pull, ignore) are saved.
+    /// Where tags (favourite, pull, ignore) are saved.
     pub config_path: PathBuf,
     pub forge_factory: ForgeFactory<'static>,
     /// Startup notices (e.g. the current-directory fallback), shown after scans.
@@ -66,7 +66,7 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
     ws.keep_repos_open();
     check_terminal()?;
     let (mut theme, mut warnings) = theme::Theme::for_config(&ws.config);
-    warnings.extend(menu::mark_key_clashes(&ws.config));
+    warnings.extend(menu::tag_key_clashes(&ws.config));
     let mut theme_name = ws.config.ui.theme.clone();
     let (mut icons, icon_warnings) = ws.config.icons();
     let mut icons_name = ws.config.ui.icons.clone();
@@ -439,9 +439,9 @@ impl Runtime {
     pub fn exec(&mut self, app: &mut App, e: Effect) -> Vec<Effect> {
         match e {
             Effect::Quit => app.quit = true,
-            Effect::SaveMarks(before) => {
+            Effect::SaveTags(before) => {
                 let path = &self.opts.config_path;
-                if let Err(err) = configfile::update_mark_lists(path, &before, &app.ws.config) {
+                if let Err(err) = configfile::update_tag_lists(path, &before, &app.ws.config) {
                     app.report_error(err.to_string());
                 }
             }

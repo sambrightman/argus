@@ -88,18 +88,18 @@ fn path(app: &App, name: &str) -> PathBuf {
 }
 
 #[test]
-fn marks_are_written_to_the_config_file() {
+fn tags_are_written_to_the_config_file() {
     let (sb, mut app, mut rt) = setup("");
     select(&mut app, "acme/clean");
     let fx = app.act(Action::ToggleLabel(0));
     run(&mut app, &mut rt, fx);
     let saved = Config::load(&sb.path("config.toml")).unwrap();
-    assert_eq!(saved.marks["favourite"].repos, ["github.com/acme/clean"]);
+    assert_eq!(saved.tags["favourite"].repos, ["github.com/acme/clean"]);
     // inverse: toggling back removes it
     let fx = app.act(Action::ToggleLabel(0));
     run(&mut app, &mut rt, fx);
     assert!(
-        Config::load(&sb.path("config.toml")).unwrap().marks["favourite"]
+        Config::load(&sb.path("config.toml")).unwrap().tags["favourite"]
             .repos
             .is_empty()
     );
@@ -254,7 +254,7 @@ fn auto_fix_applies_and_refreshes() {
 #[test]
 fn a_fix_asked_for_an_ignored_state_still_leaves_it_alone() {
     let (_sb, mut app, mut rt) = setup(
-        "[fix]\nauto = ['switch-default']\n[marks.ignore.issues]\nnon_default_branch = ['acme/feature@feat']",
+        "[fix]\nauto = ['switch-default']\n[tags.ignore.issues]\nnon_default_branch = ['acme/feature@feat']",
     );
     let feature = path(&app, "acme/feature");
     // as a stale selection might: the runtime checks for itself

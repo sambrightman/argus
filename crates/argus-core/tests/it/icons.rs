@@ -61,16 +61,16 @@ fn falls_back_cleanly(c: char) -> bool {
 
 #[test]
 fn unicode_icons_are_in_common_fonts_or_known_gaps() {
-    // the built-in marks' icons too
-    let marks = Config::default();
-    let marks: Vec<(&str, String)> = marks
-        .marks
+    // the built-in tags' icons too
+    let tags = Config::default();
+    let tags: Vec<(&str, String)> = tags
+        .tags
         .keys()
-        .map(|n| (n.as_str(), marks.mark_icon(n, "unicode")))
+        .map(|n| (n.as_str(), tags.tag_icon(n, "unicode")))
         .collect();
     let set = UNICODE;
     let mut all_icons: Vec<(&str, &str)> = icons(&set);
-    all_icons.extend(marks.iter().map(|(n, i)| (*n, i.as_str())));
+    all_icons.extend(tags.iter().map(|(n, i)| (*n, i.as_str())));
     for &(name, icon) in &all_icons {
         for c in icon.chars() {
             assert!(

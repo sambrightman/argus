@@ -17,7 +17,7 @@ use argus_core::config::Config;
 use argus_core::diff::{Side, file_diff};
 use argus_core::discover::{DiscoverOptions, Skip, Tuning, discover_all};
 use argus_core::identity::RepoId;
-use argus_core::rules::{Mark, RuleSet};
+use argus_core::rules::{RuleSet, Tag};
 use argus_core::status::{StatusOptions, status};
 use argus_core::testkit::{Sandbox, commit, git, write};
 use argus_core::{State, Workspace};
@@ -149,7 +149,7 @@ fn config(c: &mut Criterion) {
     let d = t.path();
     std::fs::write(
         d.join("base.toml"),
-        "max_depth = 3\nmarks.favourite.repos = ['base/*']\n[[track]]\nowner = 'a'\n",
+        "max_depth = 3\ntags.favourite.repos = ['base/*']\n[[track]]\nowner = 'a'\n",
     )
     .unwrap();
     std::fs::create_dir_all(d.join("conf.d")).unwrap();
@@ -163,7 +163,7 @@ fn config(c: &mut Criterion) {
     let main = d.join("config.toml");
     std::fs::write(
         &main,
-        "extend = ['base.toml', 'conf.d/*.toml']\nmarks.favourite.extend_repos = ['x/y']\n",
+        "extend = ['base.toml', 'conf.d/*.toml']\ntags.favourite.extend_repos = ['x/y']\n",
     )
     .unwrap();
     let mut g = c.benchmark_group("config");
@@ -178,16 +178,16 @@ fn config(c: &mut Criterion) {
 
 fn rules(c: &mut Criterion) {
     let mut config = Config::default();
-    config.marks["pull"].repos = (0..20).map(|i| format!("!org{i}/legacy-*")).collect();
-    config.marks["favourite"].repos = (0..20).map(|i| format!("org{i}/*")).collect();
+    config.tags["pull"].repos = (0..20).map(|i| format!("!org{i}/legacy-*")).collect();
+    config.tags["favourite"].repos = (0..20).map(|i| format!("org{i}/*")).collect();
     let rs = RuleSet::new(&config).unwrap();
     let ids: Vec<RepoId> = (0..1000)
         .filter_map(|i| RepoId::from_url(&format!("git@github.com:org{}/repo{i}.git", i % 40)))
         .collect();
-    c.bench_function("decide 3 marks for 1000 repos, 40 patterns", |b| {
+    c.bench_function("decide 3 tags for 1000 repos, 40 patterns", |b| {
         b.iter(|| {
             for id in &ids {
-                for m in Mark::all(&config) {
+                for m in Tag::all(&config) {
                     black_box(rs.decide(m, Some(id), Path::new("/x")));
                 }
             }

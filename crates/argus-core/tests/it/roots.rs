@@ -146,7 +146,7 @@ fn the_highest_file_with_either_key_gets_it() {
     );
     assert_eq!(roots(&main), ["c", "a", "b"]);
     assert!(r.replaces.is_empty(), "{r:?}");
-    // a file with both: extend_roots, applied last (as for marks, where
+    // a file with both: extend_roots, applied last (as for tags, where
     // order matters)
     let (t, main) = setup(&[("config.toml", "roots = ['{a}']\nextend_roots = ['{c}']\n")]);
     add_roots(&main, &[dir(&t, "b")]).unwrap();

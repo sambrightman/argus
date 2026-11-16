@@ -12,7 +12,7 @@ use argus_core::fix::{self, Applied, FixKind};
 use argus_core::gitignore::IgnoreFile;
 use argus_core::ops::{self, Op, OpOutcome, ResetMode};
 use argus_core::pull::{self, Job, PullPlan};
-use argus_core::rules::{IgnoreState, IssueList, Mark};
+use argus_core::rules::{IgnoreState, IssueList, Tag};
 use argus_core::status::RepoStatus;
 use argus_core::{Entry, ViewFilter, Workspace, paths, plural};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -25,7 +25,7 @@ use crate::menu::{self, Item, Menu, MenuId};
 pub enum Scope {
     /// Marked repos, or the repo under the cursor if none are marked.
     Selected,
-    /// Every visible repo (for pull: every one marked for pull).
+    /// Every visible repo (for pull: every one tagged for pull).
     All,
 }
 
@@ -124,12 +124,12 @@ pub enum Action {
     /// Fix auto: that, then the next, until nothing more applies.
     FixAuto(Scope),
     PullAndClone,
-    /// Toggle the mark at this place in `[marks]` (its key in the Mark menu).
+    /// Toggle the tag at this place in `[tags]` (its key in the Tag menu).
     ToggleLabel(usize),
     TogglePull,
     ToggleIgnore,
-    /// A mark for the selected repo's owner as a whole.
-    ToggleOwnerMark(Mark),
+    /// A tag for the selected repo's owner as a whole.
+    ToggleOwnerTag(Tag),
     /// Open the ignore menu for the repo under the cursor: its issues that
     /// can be ignored, each with its state.
     IgnoreIssues,
@@ -164,7 +164,7 @@ pub enum Action {
     Snooze,
     Unsnooze,
     Ack,
-    ClearMarks,
+    ClearTags,
     Shell,
     GitUi,
     Editor,
@@ -531,8 +531,8 @@ pub enum Effect {
     },
     Open(String),
     SaveState,
-    /// Write the mark lists' changes since this config to the config file.
-    SaveMarks(Box<argus_core::Config>),
+    /// Write the tag lists' changes since this config to the config file.
+    SaveTags(Box<argus_core::Config>),
     Quit,
 }
 
@@ -648,7 +648,7 @@ pub enum Mode {
 /// Actions that need confirmation, with what they apply to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Confirmed {
-    ClearMarks(Vec<String>),
+    ClearTags(Vec<String>),
     /// Open the edited patch that didn't apply again (no drops it).
     EditAgain,
     /// Files to discard, by repo path.
@@ -947,14 +947,14 @@ impl App {
                 }
             }
         }
-        // `#work` / `!#work` terms by marks, the rest fuzzily
-        let (marks, text) = argus_core::rules::MarkFilter::parse(&self.filter);
+        // `#work` / `!#work` terms by tags, the rest fuzzily
+        let (tags, text) = argus_core::rules::TagFilter::parse(&self.filter);
         let mut fuzzy = (!text.is_empty()).then(|| crate::fuzzy::Fuzzy::new(&text));
         let (icons, _) = self.ws.config.icons();
         let mut rows = vec![];
         for i in self.ws.ordered(self.view) {
             let e = &self.ws.entries[i];
-            if !marks.matches(&e.flags) {
+            if !tags.matches(&e.flags) {
                 continue;
             }
             if let Some(f) = &mut fuzzy
@@ -1718,7 +1718,7 @@ impl App {
             }
             OpenMenu(m) => {
                 let mut menu = m.menu();
-                self.add_marks(&mut menu);
+                self.add_tags(&mut menu);
                 self.state_labels(&mut menu);
                 self.drop_inapplicable(&mut menu);
                 let mut cursor = 0;
@@ -2037,22 +2037,22 @@ impl App {
                 self.info("listing forges…");
                 return vec![Effect::PlanPullAndClone];
             }
-            ToggleLabel(i) => return self.toggle_mark(Mark::Label(i)),
-            TogglePull => return self.toggle_mark(Mark::Pull),
-            ToggleIgnore => return self.toggle_mark(Mark::Ignore),
-            ToggleOwnerMark(m) => return self.toggle_owner_mark(m),
+            ToggleLabel(i) => return self.toggle_tag(Tag::Label(i)),
+            TogglePull => return self.toggle_tag(Tag::Pull),
+            ToggleIgnore => return self.toggle_tag(Tag::Ignore),
+            ToggleOwnerTag(m) => return self.toggle_owner_tag(m),
             IgnoreIssues => return self.open_ignore_menu(),
-            ClearMarks => {
+            ClearTags => {
                 let keys = self.selected_keys();
-                let n = self.ws.marked_count(&self.selected());
+                let n = self.ws.tagged_count(&self.selected());
                 if n > 1 {
                     self.mode = Mode::Confirm {
-                        question: format!("Clear marks of {n} repos?"),
-                        then: Confirmed::ClearMarks(keys),
+                        question: format!("Clear tags of {n} repos?"),
+                        then: Confirmed::ClearTags(keys),
                     };
                     return vec![];
                 }
-                return self.confirmed(Confirmed::ClearMarks(keys));
+                return self.confirmed(Confirmed::ClearTags(keys));
             }
             Snooze if let Some((key, issue, ignored)) = self.issue_under_cursor() => {
                 if ignored {
@@ -2165,22 +2165,22 @@ impl App {
         Some(format!("{}/{}", id.host, id.owner))
     }
 
-    fn toggle_owner_mark(&mut self, m: Mark) -> Vec<Effect> {
-        // relative to the first selected repo's owner, as toggle_mark goes
+    fn toggle_owner_tag(&mut self, m: Tag) -> Vec<Effect> {
+        // relative to the first selected repo's owner, as toggle_tag goes
         let sel = self.selected();
-        let Some(on) = sel.first().and_then(|&i| self.ws.owner_marked(i, m)) else {
+        let Some(on) = sel.first().and_then(|&i| self.ws.owner_tagged(i, m)) else {
             return vec![];
         };
         let before = self.ws.config.clone();
-        if let Err(e) = self.ws.set_owner_mark(&sel, m, !on) {
+        if let Err(e) = self.ws.set_owner_tag(&sel, m, !on) {
             self.error(e.to_string());
             return vec![];
         }
         self.rebuild();
-        vec![Effect::SaveMarks(Box::new(before))]
+        vec![Effect::SaveTags(Box::new(before))]
     }
 
-    fn toggle_mark(&mut self, m: Mark) -> Vec<Effect> {
+    fn toggle_tag(&mut self, m: Tag) -> Vec<Effect> {
         // Toggle relative to the first selected repo so a mixed selection converges.
         let sel = self.selected();
         let Some(&first) = sel.first() else {
@@ -2188,12 +2188,12 @@ impl App {
         };
         let on = !m.of(&self.ws.entries[first].flags, &self.ws.config);
         let before = self.ws.config.clone();
-        if let Err(e) = self.ws.set_mark(&sel, m, on) {
+        if let Err(e) = self.ws.set_tag(&sel, m, on) {
             self.error(e.to_string());
             return vec![];
         }
         self.rebuild();
-        vec![Effect::SaveMarks(Box::new(before))]
+        vec![Effect::SaveTags(Box::new(before))]
     }
 
     /// What opened details set going in the background.
@@ -2808,7 +2808,7 @@ impl App {
         {
             *open = menu;
         }
-        vec![Effect::SaveMarks(Box::new(before))]
+        vec![Effect::SaveTags(Box::new(before))]
     }
 
     /// What fixing the repos at `paths` would do, once or (`auto`) until
@@ -3088,24 +3088,24 @@ impl App {
         {
             pop.label = "pop".into();
         }
-        // a repo without a forge identity has no owner to mark
+        // a repo without a forge identity has no owner to tag
         if self.owner().is_none() {
             menu.items
                 .retain(|it| it.action != Action::OpenMenu(MenuId::Owner));
         }
     }
 
-    /// The Mark and Owner menus' items for each mark with a key, first, in
-    /// config order: "mark work" or "unmark work" by the first selected
+    /// The Tag and Owner menus' items for each tag with a key, first, in
+    /// config order: "tag work" or "untag work" by the first selected
     /// repo (the Owner menu's are labelled by [`Self::state_labels`]). A
     /// key the menu has already is left to it (warned about at startup).
-    fn add_marks(&self, menu: &mut Menu) {
-        if !matches!(menu.id, MenuId::Mark | MenuId::Owner) {
+    fn add_tags(&self, menu: &mut Menu) {
+        if !matches!(menu.id, MenuId::Tag | MenuId::Owner) {
             return;
         }
         let first = self.selected().first().map(|&i| &self.ws.entries[i].flags);
         let mut items = vec![];
-        for (i, (name, def)) in self.ws.config.marks.iter().enumerate() {
+        for (i, (name, def)) in self.ws.config.tags.iter().enumerate() {
             let Some(key) = def.key else { continue };
             if menu.items.iter().any(|it| it.key == key) {
                 continue;
@@ -3113,11 +3113,11 @@ impl App {
             // pull and ignore have their items already: they take the key
             if let Some(m) = Some(name.as_str())
                 .filter(|n| argus_core::config::acts(n))
-                .and_then(|n| Mark::label(&self.ws.config, n))
+                .and_then(|n| Tag::label(&self.ws.config, n))
             {
                 let theirs = |a: &Action| match (m, a) {
-                    (Mark::Pull, Action::TogglePull) | (Mark::Ignore, Action::ToggleIgnore) => true,
-                    (_, Action::ToggleOwnerMark(o)) => *o == m,
+                    (Tag::Pull, Action::TogglePull) | (Tag::Ignore, Action::ToggleIgnore) => true,
+                    (_, Action::ToggleOwnerTag(o)) => *o == m,
                     _ => false,
                 };
                 if let Some(it) = menu.items.iter_mut().find(|it| theirs(&it.action)) {
@@ -3126,28 +3126,28 @@ impl App {
                 continue;
             }
             let (label, action) = match menu.id {
-                MenuId::Owner => (String::new(), Action::ToggleOwnerMark(Mark::Label(i))),
+                MenuId::Owner => (String::new(), Action::ToggleOwnerTag(Tag::Label(i))),
                 _ if first.is_some_and(|f| f.has(name)) => {
-                    (format!("unmark {name}"), Action::ToggleLabel(i))
+                    (format!("untag {name}"), Action::ToggleLabel(i))
                 }
-                _ => (format!("mark {name}"), Action::ToggleLabel(i)),
+                _ => (format!("tag {name}"), Action::ToggleLabel(i)),
             };
             items.push(menu::item(key, label, action));
         }
         menu.items.splice(0..0, items);
     }
 
-    /// Labels for toggles saying what choosing them does now: mark or
-    /// unmark (by the first selected repo, as toggling goes), show or hide.
+    /// Labels for toggles saying what choosing them does now: tag or
+    /// untag (by the first selected repo, as toggling goes), show or hide.
     fn state_labels(&self, menu: &mut Menu) {
         let first = self.selected().first().map(|&i| &self.ws.entries[i].flags);
         let label = |action: &Action| -> Option<&'static str> {
             use Action::*;
             Some(match (menu.id, action) {
-                (MenuId::Mark, TogglePull) if first?.pull => "stop pulling",
-                (MenuId::Mark, TogglePull) => "pull (with F a and argus pull)",
-                (MenuId::Mark, ToggleIgnore) if first?.ignored => "unignore repo",
-                (MenuId::Mark, ToggleIgnore) => "ignore repo",
+                (MenuId::Tag, TogglePull) if first?.pull => "stop pulling",
+                (MenuId::Tag, TogglePull) => "pull (with F a and argus pull)",
+                (MenuId::Tag, ToggleIgnore) if first?.ignored => "unignore repo",
+                (MenuId::Tag, ToggleIgnore) => "ignore repo",
                 (MenuId::View, ToggleAttention) if self.view.attention_only => "show all repos",
                 (MenuId::View, ToggleAttention) => "show only repos needing attention",
                 (MenuId::View, ToggleHidden) if self.view.show_hidden => {
@@ -3170,17 +3170,17 @@ impl App {
         {
             menu.title = format!("Owner {owner} (all its repos)");
             for it in &mut menu.items {
-                let Action::ToggleOwnerMark(m) = it.action else {
+                let Action::ToggleOwnerTag(m) = it.action else {
                     continue;
                 };
-                let on = self.ws.owner_marked(i, m) == Some(true);
+                let on = self.ws.owner_tagged(i, m) == Some(true);
                 it.label = match (m, on) {
-                    (Mark::Label(_), true) => format!("unmark {}", m.label_text(&self.ws.config)),
-                    (Mark::Label(_), false) => format!("mark {}", m.label_text(&self.ws.config)),
-                    (Mark::Pull, true) => "stop pulling".into(),
-                    (Mark::Pull, false) => "pull".into(),
-                    (Mark::Ignore, true) => "unignore".into(),
-                    (Mark::Ignore, false) => "ignore".into(),
+                    (Tag::Label(_), true) => format!("untag {}", m.label_text(&self.ws.config)),
+                    (Tag::Label(_), false) => format!("tag {}", m.label_text(&self.ws.config)),
+                    (Tag::Pull, true) => "stop pulling".into(),
+                    (Tag::Pull, false) => "pull".into(),
+                    (Tag::Ignore, true) => "unignore".into(),
+                    (Tag::Ignore, false) => "ignore".into(),
                 };
             }
         }
@@ -3224,38 +3224,38 @@ impl App {
                 }
                 fx
             }
-            Confirmed::ClearMarks(keys) => {
+            Confirmed::ClearTags(keys) => {
                 // by key: a scan may have arrived while asking
                 let indices: Vec<usize> = (0..self.ws.entries.len())
                     .filter(|&i| keys.contains(&self.ws.entries[i].key))
                     .collect();
                 let before = self.ws.config.clone();
-                if let Err(e) = self.ws.clear_marks(&indices) {
+                if let Err(e) = self.ws.clear_tags(&indices) {
                     self.error(e.to_string());
                     return vec![];
                 }
                 for k in &keys {
                     self.ws.state.snoozed.remove(k);
                 }
-                // what patterns (or tracking) still mark
+                // what patterns (or tracking) still tag
                 let left: Vec<String> = indices
                     .iter()
                     .filter_map(|&i| {
-                        let marks = self.ws.remaining_marks(i);
-                        (!marks.is_empty()).then(|| {
-                            format!("{} {}", self.ws.entries[i].display_name(), marks.join(", "))
+                        let tags = self.ws.remaining_tags(i);
+                        (!tags.is_empty()).then(|| {
+                            format!("{} {}", self.ws.entries[i].display_name(), tags.join(", "))
                         })
                     })
                     .collect();
                 let what = match indices.len() {
-                    1 => "marks cleared".to_string(),
-                    n => format!("marks cleared for {n} repos"),
+                    1 => "tags cleared".to_string(),
+                    n => format!("tags cleared for {n} repos"),
                 };
                 self.info(match left.is_empty() {
                     true => what,
                     false => format!("{what}; still: {}", left.join("; ")),
                 });
-                let mut fx = vec![Effect::SaveMarks(Box::new(before))];
+                let mut fx = vec![Effect::SaveTags(Box::new(before))];
                 fx.extend(self.flags_changed());
                 fx
             }

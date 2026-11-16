@@ -227,12 +227,12 @@ fn the_filter_matches_fuzzily() {
     assert!(names(&app).is_empty(), "{:?}", names(&app));
 }
 
-/// `#mark` in `/` filters by marks, `!#mark` by not having one, `|`
+/// `#tag` in `/` filters by tags, `!#tag` by not having one, `|`
 /// either; with text, both must match.
 #[test]
-fn the_filter_takes_marks() {
+fn the_filter_takes_tags() {
     let (_sb, mut app) = setup(
-        "[marks.work]\nrepos = ['acme/clean', 'acme/dirty']\n[marks.home]\nrepos = ['acme/feature']\n",
+        "[tags.work]\nrepos = ['acme/clean', 'acme/dirty']\n[tags.home]\nrepos = ['acme/feature']\n",
     );
     let filter = |app: &mut App, q: &str| {
         app.on_key(key('/'));
@@ -325,26 +325,26 @@ fn toggle_favourite_edits_the_config_list_and_resorts() {
     let (_sb, mut app) = setup("");
     assert_eq!(names(&app), ["acme/dirty", "acme/feature", "acme/clean"]);
     app.on_key(key('j')); // feature
-    app.on_key(key('m'));
+    app.on_key(key('t'));
     let before = app.ws.config.clone();
     let fx = app.on_key(key('f'));
     // saved as a change from the config before
-    assert_eq!(fx, vec![Effect::SaveMarks(Box::new(before))]);
+    assert_eq!(fx, vec![Effect::SaveTags(Box::new(before))]);
     assert_eq!(
-        app.ws.config.marks["favourite"].repos,
+        app.ws.config.tags["favourite"].repos,
         ["github.com/acme/feature"]
     );
     assert_eq!(names(&app), ["acme/feature", "acme/dirty", "acme/clean"]);
     assert_eq!(current(&app), "acme/feature", "cursor follows the repo");
     // inverse: a clean favourite stays below unclean repos
     app.act(Action::Bottom);
-    app.on_key(key('m'));
+    app.on_key(key('t'));
     app.on_key(key('f'));
     assert_eq!(names(&app)[2], "acme/clean");
-    app.on_key(key('m'));
+    app.on_key(key('t'));
     app.on_key(key('f'));
     assert_eq!(
-        app.ws.config.marks["favourite"].repos,
+        app.ws.config.tags["favourite"].repos,
         ["github.com/acme/feature"],
         "off again: removed"
     );
@@ -530,7 +530,7 @@ fn auto_fix_only_targets_repos_with_applicable_fixes() {
 #[test]
 fn auto_fix_all_leaves_hidden_repos_alone_even_when_shown() {
     // feature is the one repo with an applicable fix (see above)
-    let (_sb, mut app) = setup("marks.ignore.repos = ['acme/feature']");
+    let (_sb, mut app) = setup("tags.ignore.repos = ['acme/feature']");
     app.on_key(key('H'));
     assert_eq!(names(&app).len(), 3, "shown");
     assert!(app.act(Action::AutoFix(Scope::All)).is_empty());
@@ -539,7 +539,7 @@ fn auto_fix_all_leaves_hidden_repos_alone_even_when_shown() {
 #[test]
 fn auto_fix_leaves_an_ignored_state_alone() {
     // feature's only fix switches it to main; its branch is ignored
-    let (_sb, mut app) = setup("[marks.ignore.issues]\nnon_default_branch = ['acme/feature@feat']");
+    let (_sb, mut app) = setup("[tags.ignore.issues]\nnon_default_branch = ['acme/feature@feat']");
     assert!(app.act(Action::AutoFix(Scope::All)).is_empty());
     let texts: Vec<String> = {
         app.cursor = app
@@ -631,10 +631,10 @@ fn render_main_screen() {
 #[test]
 fn render_menu_and_help_and_narrow_terminal() {
     let (_sb, mut app) = setup("");
-    app.on_key(key('m'));
+    app.on_key(key('t'));
     let out = render(&mut app, 80, 16);
     assert!(
-        out.contains("Mark · 1 repo") && out.contains("f  mark favourite"),
+        out.contains("Tag · 1 repo") && out.contains("f  tag favourite"),
         "{out}"
     );
     app.on_key(code(KeyCode::Esc));
@@ -1046,7 +1046,7 @@ fn ascii_icons_render_without_other_symbols() {
     );
     let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
     ws.scan();
-    d.apply_marks(&mut ws);
+    d.apply_tags(&mut ws);
     let mut app = App::new(ws);
     app.act(Action::ToggleMark);
     app.act(Action::ExpandAll);
@@ -1086,7 +1086,7 @@ fn demo_renders_in_every_theme_and_icon_set() {
     );
     let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
     ws.scan();
-    d.apply_marks(&mut ws);
+    d.apply_tags(&mut ws);
     let mut app = App::new(ws);
     app.act(Action::ExpandAll);
     let out = render(&mut app, 120, 200);
@@ -1114,43 +1114,43 @@ fn demo_renders_in_every_theme_and_icon_set() {
 }
 
 #[test]
-fn clearing_marks_of_several_repos_asks_first() {
-    use argus_core::rules::Mark;
+fn clearing_tags_of_several_repos_asks_first() {
+    use argus_core::rules::Tag;
     let (_sb, mut app) = setup("");
     let all: Vec<usize> = (0..app.ws.entries.len()).collect();
-    app.ws.set_mark(&all, Mark::Label(0), true).unwrap();
-    let favourites = |app: &App| app.ws.config.marks["favourite"].repos.len();
+    app.ws.set_tag(&all, Tag::Label(0), true).unwrap();
+    let favourites = |app: &App| app.ws.config.tags["favourite"].repos.len();
     for e in &app.ws.entries {
         app.marked.insert(e.path.clone());
     }
-    let fx = app.act(Action::ClearMarks);
+    let fx = app.act(Action::ClearTags);
     assert!(fx.is_empty(), "nothing saved before an answer: {fx:?}");
     assert!(matches!(app.mode, Mode::Confirm { .. }));
-    assert!(render(&mut app, 100, 8).contains("Clear marks of 3 repos? (y/n)"));
+    assert!(render(&mut app, 100, 8).contains("Clear tags of 3 repos? (y/n)"));
     // anything but y cancels, changing nothing
     let fx = app.on_key(key('n'));
     assert!(fx.is_empty() && matches!(app.mode, Mode::Normal));
     assert_eq!(favourites(&app), 3);
     assert!(app.message.as_ref().unwrap().0.contains("cancelled"));
-    app.act(Action::ClearMarks);
+    app.act(Action::ClearTags);
     app.on_key(code(KeyCode::Esc));
     assert_eq!(favourites(&app), 3);
     // y clears them, saving config and state
     let before = app.ws.config.clone();
-    app.act(Action::ClearMarks);
+    app.act(Action::ClearTags);
     let fx = app.on_key(key('y'));
-    assert!(fx.contains(&Effect::SaveMarks(Box::new(before))) && fx.contains(&Effect::SaveState));
+    assert!(fx.contains(&Effect::SaveTags(Box::new(before))) && fx.contains(&Effect::SaveState));
     assert_eq!(favourites(&app), 0);
-    // one repo losing marks: no question (a snooze doesn't count)
-    app.ws.set_mark(&[0], Mark::Ignore, true).unwrap();
+    // one repo losing tags: no question (a snooze doesn't count)
+    app.ws.set_tag(&[0], Tag::Ignore, true).unwrap();
     let k1 = app.ws.entries[1].key.clone();
     app.ws.state.snoozed.insert(
         k1,
         jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
     );
-    let fx = app.act(Action::ClearMarks);
+    let fx = app.act(Action::ClearTags);
     assert!(fx.contains(&Effect::SaveState) && matches!(app.mode, Mode::Normal));
-    assert!(app.ws.config.marks["ignore"].repos.is_empty() && app.ws.state.snoozed.is_empty());
+    assert!(app.ws.config.tags["ignore"].repos.is_empty() && app.ws.state.snoozed.is_empty());
 }
 
 /// The stash ops in `fx`'s jobs, by repo name.
@@ -2047,7 +2047,7 @@ fn the_stash_list_says_how_many_are_ignored_and_stops_after_ten() {
     for (n, extra, first, more) in [
         (
             10,
-            "[marks.ignore.issues]\nstashes = []",
+            "[tags.ignore.issues]\nstashes = []",
             "stashes   10",
             None,
         ),
@@ -2534,7 +2534,7 @@ fn the_ignore_menu_steps_an_issue_through_its_states() {
     );
     // counted, pinned (the default), ignored everywhere, counted; the menu stays
     let fx = app.on_key(key('1'));
-    assert!(matches!(fx.as_slice(), [Effect::SaveMarks(_)]), "{fx:?}");
+    assert!(matches!(fx.as_slice(), [Effect::SaveTags(_)]), "{fx:?}");
     assert_eq!(nd(&app), ["github.com/acme/feature@feat"]);
     assert_eq!(
         menu_items(&app)[0],
@@ -2595,7 +2595,7 @@ fn all_ignores_the_remaining_issues_and_none_stops_ignoring_them() {
     assert!(app.on_key(key('a')).is_empty());
     assert_eq!(app.ws.config.ignore_issues().stashes, stashes);
     let fx = app.on_key(key('n'));
-    assert!(matches!(fx.as_slice(), [Effect::SaveMarks(_)]), "{fx:?}");
+    assert!(matches!(fx.as_slice(), [Effect::SaveTags(_)]), "{fx:?}");
     assert!(app.ws.config.ignore_issues().non_default_branch.is_empty());
     assert_eq!(
         app.ws.config.ignore_issues().stashes[stashes.len()..],
@@ -2709,11 +2709,11 @@ fn toggles_say_what_they_will_do() {
         app.on_key(ctrl('g'));
         l
     };
-    assert_eq!(label(&mut app, 'm', 'f'), "f mark favourite");
-    assert_eq!(label(&mut app, 'm', 'I'), "I ignore repo");
-    assert_eq!(label(&mut app, 'm', 'i'), "i ignore issues…");
+    assert_eq!(label(&mut app, 't', 'f'), "f tag favourite");
+    assert_eq!(label(&mut app, 't', 'I'), "I ignore repo");
+    assert_eq!(label(&mut app, 't', 'i'), "i ignore issues…");
     app.act(Action::ToggleLabel(0));
-    assert_eq!(label(&mut app, 'm', 'f'), "f unmark favourite");
+    assert_eq!(label(&mut app, 't', 'f'), "f untag favourite");
     assert_eq!(
         label(&mut app, 'v', 'a'),
         "a show only repos needing attention"
@@ -2727,11 +2727,11 @@ fn toggles_say_what_they_will_do() {
     assert_eq!(label(&mut app, 'v', 'l'), "l hide process log");
 
     assert_eq!(
-        label(&mut app, 'm', 'p'),
+        label(&mut app, 't', 'p'),
         "p pull (with F a and argus pull)"
     );
     app.act(Action::TogglePull);
-    assert_eq!(label(&mut app, 'm', 'p'), "p stop pulling");
+    assert_eq!(label(&mut app, 't', 'p'), "p stop pulling");
     app.act(Action::ToggleAttention);
     assert_eq!(label(&mut app, 'v', 'a'), "a show all repos");
     app.act(Action::ToggleHidden);
@@ -2743,7 +2743,7 @@ fn toggles_say_what_they_will_do() {
     app.act(Action::ToggleAttention);
     app.act(Action::ToggleIgnore);
     assert_eq!(current(&app), "acme/feature");
-    assert_eq!(label(&mut app, 'm', 'I'), "I unignore repo");
+    assert_eq!(label(&mut app, 't', 'I'), "I unignore repo");
 }
 
 #[test]
@@ -3740,7 +3740,7 @@ fn reset_with_no_commits_says_so() {
 fn a_ctrl_key_in_a_menu_isnt_its_letter() {
     let (_sb, mut app) = setup("");
     app.on_key(key('F'));
-    // `a` pulls all marked for pull; C-a doesn't
+    // `a` pulls all tagged for pull; C-a doesn't
     assert!(app.on_key(ctrl('a')).is_empty());
     assert!(matches!(app.mode, Mode::Menu { .. }));
 }
@@ -3853,7 +3853,7 @@ fn branch_lines_show_upstream_state_merged_and_unpushed_work() {
 #[test]
 fn detail_lines_carry_their_issue_fix_and_unfolding() {
     use argus_core::attention::Issue;
-    let (_sb, mut app) = setup_with("[marks.ignore.issues]\nbehind = ['acme/clean']", |sb| {
+    let (_sb, mut app) = setup_with("[tags.ignore.issues]\nbehind = ['acme/clean']", |sb| {
         let seed = sb.path("seed/acme/clean");
         commit(&seed, "upstream");
         let bare = sb.path("forge/acme/clean.git");
@@ -4627,11 +4627,11 @@ fn a_nested_repo_unfolds_into_its_own_details_and_acts_there() {
     assert_eq!(below(&app, "    nested", 4), Vec::<String>::new());
 }
 
-/// Clearing says what's left: marks that patterns (or tracking) still give.
+/// Clearing says what's left: tags that patterns (or tracking) still give.
 #[test]
-fn clearing_marks_says_what_patterns_still_give() {
-    use argus_core::rules::Mark;
-    let (_sb, mut app) = setup("marks.favourite.repos = ['acme/c*']");
+fn clearing_tags_says_what_patterns_still_give() {
+    use argus_core::rules::Tag;
+    let (_sb, mut app) = setup("tags.favourite.repos = ['acme/c*']");
     let msg = |app: &App| app.message.as_ref().unwrap().0.clone();
     let at = |app: &App, n: &str| {
         app.ws
@@ -4641,17 +4641,15 @@ fn clearing_marks_says_what_patterns_still_give() {
             .unwrap()
     };
     let (clean, dirty) = (at(&app, "clean"), at(&app, "dirty"));
-    app.ws
-        .set_mark(&[clean, dirty], Mark::Ignore, true)
-        .unwrap();
+    app.ws.set_tag(&[clean, dirty], Tag::Ignore, true).unwrap();
     app.marked = [clean, dirty]
         .map(|i| app.ws.entries[i].path.clone())
         .into();
-    app.act(Action::ClearMarks);
+    app.act(Action::ClearTags);
     app.on_key(key('y'));
     assert_eq!(
         msg(&app),
-        "marks cleared for 2 repos; still: acme/clean favourite (acme/c*)"
+        "tags cleared for 2 repos; still: acme/clean favourite (acme/c*)"
     );
     // inverse: nothing left to mention
     app.marked.clear();
@@ -4660,14 +4658,14 @@ fn clearing_marks_says_what_patterns_still_give() {
         .iter()
         .position(|r| matches!(r, Row::Repo(i) if *i == dirty))
         .unwrap();
-    app.ws.set_mark(&[dirty], Mark::Label(0), true).unwrap();
-    app.act(Action::ClearMarks);
-    assert_eq!(msg(&app), "marks cleared");
+    app.ws.set_tag(&[dirty], Tag::Label(0), true).unwrap();
+    app.act(Action::ClearTags);
+    assert_eq!(msg(&app), "tags cleared");
     // the menu item
     app.act(Action::Top);
-    app.on_key(key('m'));
+    app.on_key(key('t'));
     assert!(
-        menu_items(&app).iter().any(|l| l == "c clear marks"),
+        menu_items(&app).iter().any(|l| l == "c clear tags"),
         "{:?}",
         menu_items(&app)
     );
@@ -4676,18 +4674,18 @@ fn clearing_marks_says_what_patterns_still_give() {
 /// The flag column: favourite, then pull (the commonest, last); names stay
 /// aligned however many flags a row has, in every icon set.
 #[test]
-fn rows_show_the_pull_mark_and_names_stay_aligned() {
+fn rows_show_the_pull_tag_and_names_stay_aligned() {
     let (_sb, mut app) = setup(
-        "marks.favourite.repos = ['acme/clean']\nmarks.pull.repos = ['acme/clean', 'acme/dirty']",
+        "tags.favourite.repos = ['acme/clean']\ntags.pull.repos = ['acme/clean', 'acme/dirty']",
     );
     for (icons, set) in [
         (argus_core::icons::UNICODE, "unicode"),
         (argus_core::icons::NERD, "nerd"),
         (argus_core::icons::ASCII, "ascii"),
     ] {
-        // marks' icons follow the configured set
+        // tags' icons follow the configured set
         app.ws.config.ui.icons = set.into();
-        let fav = app.ws.config.mark_icon("favourite", set);
+        let fav = app.ws.config.tag_icon("favourite", set);
         let pull = icons.pull.to_string();
         let screen = render_with(&mut app, 100, 8, icons);
         let row = |name: &str| {
@@ -4780,11 +4778,11 @@ fn staging_a_nested_repo_explains_itself() {
     );
 }
 
-/// `m o` marks the selected repo's owner as a whole, with the same keys.
+/// `t o` tags the selected repo's owner as a whole, with the same keys.
 #[test]
-fn an_owner_is_marked_from_the_mark_menu() {
+fn an_owner_is_tagged_from_the_tag_menu() {
     let (_sb, mut app) = setup("");
-    app.on_key(key('m'));
+    app.on_key(key('t'));
     app.on_key(key('o'));
     match &app.mode {
         Mode::Menu { menu, .. } => {
@@ -4793,22 +4791,19 @@ fn an_owner_is_marked_from_the_mark_menu() {
         _ => panic!("no menu"),
     }
     assert!(
-        menu_items(&app).iter().any(|l| l == "f mark favourite"),
+        menu_items(&app).iter().any(|l| l == "f tag favourite"),
         "{:?}",
         menu_items(&app)
     );
     let before = app.ws.config.clone();
     let fx = app.on_key(key('f'));
-    assert!(fx.contains(&Effect::SaveMarks(Box::new(before))), "{fx:?}");
-    assert_eq!(
-        app.ws.config.marks["favourite"].repos,
-        ["github.com/acme/*"]
-    );
+    assert!(fx.contains(&Effect::SaveTags(Box::new(before))), "{fx:?}");
+    assert_eq!(app.ws.config.tags["favourite"].repos, ["github.com/acme/*"]);
     assert!(app.ws.entries.iter().all(|e| e.flags.has("favourite")));
-    app.on_key(key('m'));
+    app.on_key(key('t'));
     app.on_key(key('o'));
     assert!(
-        menu_items(&app).iter().any(|l| l == "f unmark favourite"),
+        menu_items(&app).iter().any(|l| l == "f untag favourite"),
         "{:?}",
         menu_items(&app)
     );
@@ -4823,7 +4818,7 @@ fn an_owner_is_marked_from_the_mark_menu() {
         .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("zlocal")))
         .unwrap();
     assert!(app.current().unwrap().id.is_none());
-    app.on_key(key('m'));
+    app.on_key(key('t'));
     let items = menu_items(&app);
     assert!(
         !items.iter().any(|l| l.starts_with("o ")),
@@ -5868,7 +5863,7 @@ fn issue_row(app: &App, name: &str) -> usize {
         .unwrap_or_else(|| panic!("{name}: {:?}", trimmed(app)))
 }
 
-/// `m z` on an issue line snoozes that issue only; `m u` there ends it,
+/// `t z` on an issue line snoozes that issue only; `t u` there ends it,
 /// and on the repo ends the repo's snooze and its issues'.
 #[test]
 fn an_issue_is_snoozed_from_its_line() {
@@ -6206,13 +6201,13 @@ fn picking_past_the_branch_list_does_nothing() {
     );
 }
 
-/// A mark of your own: in the Mark menu by its key, toggled there; its
+/// A tag of your own: in the Tag menu by its key, toggled there; its
 /// icon in the flag column, its name in the details, its line in the
 /// legend. One without a key isn't in the menu.
 #[test]
-fn a_mark_of_your_own_is_set_from_the_mark_menu_and_shown() {
+fn a_tag_of_your_own_is_set_from_the_tag_menu_and_shown() {
     let (_sb, mut app) = setup(
-        "[marks.work]\nkey = 'w'\nicon = 'W'\n[marks.later]\nicon = 'L'\nrepos = ['acme/dirty']\n",
+        "[tags.work]\nkey = 'w'\nicon = 'W'\n[tags.later]\nicon = 'L'\nrepos = ['acme/dirty']\n",
     );
     app.cursor = app
         .rows
@@ -6221,18 +6216,18 @@ fn a_mark_of_your_own_is_set_from_the_mark_menu_and_shown() {
             |r| matches!(r, Row::Repo(i) if app.ws.entries[*i].display_name() == "acme/clean"),
         )
         .unwrap();
-    app.on_key(key('m'));
+    app.on_key(key('t'));
     let items = menu_items(&app);
-    assert_eq!(items[..2], ["f mark favourite", "w mark work"], "{items:?}");
+    assert_eq!(items[..2], ["f tag favourite", "w tag work"], "{items:?}");
     assert!(
         !items.iter().any(|i| i.contains("later")),
         "no key: {items:?}"
     );
     app.on_key(key('w'));
     assert!(app.current().unwrap().flags.has("work"));
-    assert_eq!(app.ws.config.marks["work"].repos, ["github.com/acme/clean"]);
-    app.on_key(key('m'));
-    assert!(menu_items(&app).contains(&"w unmark work".to_string()));
+    assert_eq!(app.ws.config.tags["work"].repos, ["github.com/acme/clean"]);
+    app.on_key(key('t'));
+    assert!(menu_items(&app).contains(&"w untag work".to_string()));
     app.on_key(ctrl('g'));
     let out = render(&mut app, 80, 10);
     let row = out.lines().find(|l| l.contains("acme/clean")).unwrap();
@@ -6253,7 +6248,7 @@ fn a_mark_of_your_own_is_set_from_the_mark_menu_and_shown() {
     app.on_key(key('?'));
     let help = render(&mut app, 100, 200);
     assert!(
-        help.contains("W  mark: work") && help.contains("L  mark: later"),
+        help.contains("W  tag: work") && help.contains("L  tag: later"),
         "{help}"
     );
 }
@@ -7056,12 +7051,12 @@ fn a_pull_request_is_coloured_by_how_it_stands() {
 }
 
 #[test]
-fn pull_and_ignore_take_their_marks_keys_in_the_mark_menus() {
-    let (_sb, mut app) = setup("[marks.pull]\nkey = 'P'\n[marks.ignore]\nkey = 'x'\n");
+fn pull_and_ignore_take_their_tags_keys_in_the_tag_menus() {
+    let (_sb, mut app) = setup("[tags.pull]\nkey = 'P'\n[tags.ignore]\nkey = 'x'\n");
     while current(&app) != "acme/clean" {
         app.act(Action::Down);
     }
-    app.on_key(key('m'));
+    app.on_key(key('t'));
     let items = menu_items(&app);
     assert!(
         items.contains(&"P pull (with F a and argus pull)".to_string()),
@@ -7077,7 +7072,7 @@ fn pull_and_ignore_take_their_marks_keys_in_the_mark_menus() {
     // and the keys do it, the label then saying how to undo it
     app.on_key(key('P'));
     assert!(app.current().unwrap().flags.pull);
-    app.on_key(key('m'));
+    app.on_key(key('t'));
     assert!(menu_items(&app).contains(&"P stop pulling".to_string()));
     // the owner's menu has them on the same keys
     app.on_key(key('o'));
@@ -7095,7 +7090,7 @@ fn pull_and_ignore_take_their_marks_keys_in_the_mark_menus() {
     app.on_key(ctrl('g'));
     // inverse: by default they are where they were
     let (_sb, mut app) = setup("");
-    app.on_key(key('m'));
+    app.on_key(key('t'));
     let items = menu_items(&app);
     assert!(items.iter().any(|i| i.starts_with("p ")) && items.iter().any(|i| i.starts_with("I ")));
 }
@@ -7104,7 +7099,7 @@ fn pull_and_ignore_take_their_marks_keys_in_the_mark_menus() {
 fn a_pull_says_what_became_of_orphans_and_asks_before_following_a_rename() {
     use argus_core::identity::RepoId;
     use argus_core::pull::{Orphan, OrphanState, PullPlan};
-    let (sb, mut app) = setup("[marks.pull]\nrepos = ['!acme/*']\n");
+    let (sb, mut app) = setup("[tags.pull]\nrepos = ['!acme/*']\n");
     let orphan = |name: &str, state: OrphanState| Orphan {
         path: sb.path(&format!("dev/{name}")),
         id: RepoId::new("github.com", "acme", name),
@@ -7560,7 +7555,7 @@ fn links_are_drawn_over_the_text_they_link() {
         !links.iter().any(|l| l.text.starts_with("#12")),
         "{links:?}"
     );
-    app.on_key(key('m'));
+    app.on_key(key('t'));
     assert!(draw(&mut app, 120, 40).0.is_empty());
 }
 
@@ -8496,7 +8491,7 @@ fn every_line_says_where_it_is() {
         write(&f, "README", "stashed\n");
         git(&f, &["stash", "push", "-q", "-m", "mine"]);
     };
-    let (_sb, mut app) = setup_with("[marks.ignore.issues]\nstashes = []\n", prep);
+    let (_sb, mut app) = setup_with("[tags.ignore.issues]\nstashes = []\n", prep);
     cursor_on_detail(&mut app, "feature", "issue     1 unpushed commit");
     let at = |start: &str| id_of(&app, start).unwrap_or_else(|| panic!("{start}"));
     let issue = |name: &'static str, shown: &'static str| vec![Seg::Issue(name, shown)];
@@ -8513,7 +8508,7 @@ fn every_line_says_where_it_is() {
     assert_eq!(at("branches"), [Seg::Branches]);
     // an ignored issue's line, and a snoozed one's: their own
     let (_sb, mut app) = setup_with(
-        "[marks.ignore.issues]\nstashes = ['**']\nnon_default_branch = ['**']\n",
+        "[tags.ignore.issues]\nstashes = ['**']\nnon_default_branch = ['**']\n",
         prep,
     );
     cursor_on_detail(&mut app, "feature", "issue     1 unpushed commit");
@@ -8568,7 +8563,7 @@ fn a_question_from_the_background_waits_for_the_user_and_its_answer_for_a_busy_r
     use argus_core::identity::RepoId;
     use argus_core::pull::{Orphan, OrphanState, PullPlan};
     // dirty is pulled, so the pull that finds it renamed is running in it
-    let (sb, mut app) = setup("[marks.pull]\nrepos = ['acme/dirty']\n");
+    let (sb, mut app) = setup("[tags.pull]\nrepos = ['acme/dirty']\n");
     let d = sb.path("dev/dirty");
     let renamed = || Msg::PullPlanned {
         tracks: argus_core::State::default(),

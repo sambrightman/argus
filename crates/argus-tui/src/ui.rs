@@ -89,7 +89,7 @@ pub fn draw(f: &mut Frame, app: &mut App, v: &View) -> Vec<LinkAt> {
     // (nothing is linked under something drawn over the list)
     match &app.mode {
         Mode::Menu { .. } => app.menu_shown = draw_menu(f, app, v, main),
-        Mode::Help { scroll } => draw_help(f, v, &app.ws.config.mark_icons(), main, *scroll),
+        Mode::Help { scroll } => draw_help(f, v, &app.ws.config.tag_icons(), main, *scroll),
         Mode::Pick { .. } => draw_pick(f, app, v, main),
         _ => return links,
     }
@@ -261,13 +261,13 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) -> Vec<LinkAt> 
         .min(body.width as usize / 2);
     // as wide as the repo with the most flags, listed or not (hidden, or
     // not needing attention), so the column stays put as the view changes
-    let marks = app.ws.config.mark_icons();
+    let tags = app.ws.config.tag_icons();
     let flags_w = app
         .ws
         .entries
         .iter()
         .filter(|e| !e.nested)
-        .map(|e| flags_width(e, &v.icons, &marks))
+        .map(|e| flags_width(e, &v.icons, &tags))
         .max()
         .unwrap_or(0);
     let branch_w = app
@@ -418,13 +418,13 @@ fn repo_line<'a>(
         Span::raw(" ")
     });
     // flags, then a space, in a column as wide as the most of them
-    let marks = app.ws.config.mark_icons();
-    let flags = badges::flags(e, &v.icons, &marks);
+    let tags = app.ws.config.tag_icons();
+    let flags = badges::flags(e, &v.icons, &tags);
     for b in &flags {
         spans.push(Span::styled(b.text.clone(), t.role(b.role)));
     }
     spans.push(Span::raw(
-        " ".repeat(flags_w + 1 - flags_width(e, &v.icons, &marks)),
+        " ".repeat(flags_w + 1 - flags_width(e, &v.icons, &tags)),
     ));
 
     let depth = app.ws.depth(i);
@@ -590,7 +590,7 @@ fn draw_status(f: &mut Frame, app: &App, v: &View, area: Rect) {
                     ("f", "fetch"),
                     ("P", "push"),
                     ("x", "fix"),
-                    ("m", "mark"),
+                    ("t", "tag"),
                     ("o", "open"),
                     ("/", "filter"),
                     ("q", "quit"),
@@ -769,25 +769,23 @@ pub fn help_lines() -> Vec<(String, String)> {
 }
 
 /// How wide a repo's flag badges are.
-fn flags_width(e: &argus_core::Entry, i: &Icons, marks: &[(String, String)]) -> usize {
-    badges::flags(e, i, marks)
+fn flags_width(e: &argus_core::Entry, i: &Icons, tags: &[(String, String)]) -> usize {
+    badges::flags(e, i, tags)
         .iter()
         .map(|b| UnicodeWidthStr::width(b.text.as_str()))
         .sum()
 }
 
-/// Every icon in `i`, and each mark's (`marks`: name and icon, in config
+/// Every icon in `i`, and each tag's (`tags`: name and icon, in config
 /// order), with its meaning and colour role, for the help legend.
-pub fn legend<'a>(i: &'a Icons, marks: &'a [(String, String)]) -> Vec<(&'a str, Role, String)> {
-    let mut v: Vec<(&str, Role, String)> = marks
+pub fn legend<'a>(i: &'a Icons, tags: &'a [(String, String)]) -> Vec<(&'a str, Role, String)> {
+    let mut v: Vec<(&str, Role, String)> = tags
         .iter()
         .enumerate()
-        .map(|(n, (name, icon))| (icon.as_str(), Role::Mark(n), format!("mark: {name}")))
+        .map(|(n, (name, icon))| (icon.as_str(), Role::Tag(n), format!("tag: {name}")))
         .collect();
-    let pull = marks
-        .iter()
-        .position(|(n, _)| n == argus_core::config::PULL);
-    let pull = Role::Mark(pull.unwrap_or(usize::MAX));
+    let pull = tags.iter().position(|(n, _)| n == argus_core::config::PULL);
+    let pull = Role::Tag(pull.unwrap_or(usize::MAX));
     let rest: Vec<(&str, Role, &str)> = vec![
         (
             &i.new,
@@ -854,7 +852,7 @@ pub fn legend<'a>(i: &'a Icons, marks: &'a [(String, String)]) -> Vec<(&'a str, 
     v
 }
 
-fn draw_help(f: &mut Frame, v: &View, marks: &[(String, String)], area: Rect, scroll: u16) {
+fn draw_help(f: &mut Frame, v: &View, tags: &[(String, String)], area: Rect, scroll: u16) {
     let t = v.theme;
     let mut lines: Vec<Line> = help_lines()
         .into_iter()
@@ -870,7 +868,7 @@ fn draw_help(f: &mut Frame, v: &View, marks: &[(String, String)], area: Rect, sc
         format!("{:>26}  ", "legend"),
         t.ui(Ui::Title),
     )));
-    for (icon, role, meaning) in legend(&v.icons, marks) {
+    for (icon, role, meaning) in legend(&v.icons, tags) {
         let icon = if icon.is_empty() { "main" } else { icon };
         lines.push(Line::from(vec![
             Span::raw(format!("{:>w$}", "", w = 26 - icon.chars().count().min(26))),

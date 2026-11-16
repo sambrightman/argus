@@ -516,7 +516,7 @@ pub fn details(
         (e.flags.snoozed, "snoozed"),
         (e.flags.new, "new"),
     ];
-    let mut fl: Vec<String> = e.flags.marks.clone();
+    let mut fl: Vec<String> = e.flags.tags.clone();
     fl.extend(flags.iter().filter(|f| f.0).map(|f| f.1.to_string()));
     if let Some(t) = &e.flags.tracked {
         fl.push(format!("tracked by {t}"));

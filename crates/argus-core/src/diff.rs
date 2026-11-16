@@ -98,7 +98,7 @@ pub fn patch_hunks(path: &str, hunks: &[(&Hunk, Option<&[usize]>)], reverse: boo
         out.push('\n');
         for (i, l) in hunk.lines.iter().enumerate() {
             let chosen = only.is_none_or(|o| o.contains(&i));
-            let mark = match (l.kind, chosen, reverse) {
+            let tag = match (l.kind, chosen, reverse) {
                 (LineKind::Context, ..) => ' ',
                 (LineKind::Add, true, _) => '+',
                 (LineKind::Remove, true, _) => '-',
@@ -107,7 +107,7 @@ pub fn patch_hunks(path: &str, hunks: &[(&Hunk, Option<&[usize]>)], reverse: boo
                 (LineKind::Add, false, false) | (LineKind::Remove, false, true) => continue,
                 (LineKind::Remove, false, false) | (LineKind::Add, false, true) => ' ',
             };
-            out.push(mark);
+            out.push(tag);
             out.push_str(&l.text);
             out.push('\n');
             if l.no_newline {

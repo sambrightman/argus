@@ -13,8 +13,8 @@ use crate::workspace::Entry;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Role {
-    /// The mark at this place in `[marks]`.
-    Mark(usize),
+    /// The tag at this place in `[tags]`.
+    Tag(usize),
     New,
     Hidden,
     Branch,
@@ -41,19 +41,19 @@ pub struct Badge {
     pub text: String,
 }
 
-/// Flag badges, shown before the name: the repo's marks (`marks`: each
-/// mark's name and icon, in config order, as [`crate::Config::mark_icons`]
+/// Flag badges, shown before the name: the repo's tags (`tags`: each
+/// tag's name and icon, in config order, as [`crate::Config::tag_icons`]
 /// gives them), then new, hidden and pull.
-pub fn flags(e: &Entry, i: &Icons, marks: &[(String, String)]) -> Vec<Badge> {
+pub fn flags(e: &Entry, i: &Icons, tags: &[(String, String)]) -> Vec<Badge> {
     let mut v = vec![];
     let b = |role, text: &str| Badge {
         role,
         text: text.to_string(),
     };
-    for (n, (name, icon)) in marks.iter().enumerate() {
+    for (n, (name, icon)) in tags.iter().enumerate() {
         // (pull and ignore show as states, below)
         if !crate::config::acts(name) && e.flags.has(name) {
-            v.push(b(Role::Mark(n), icon));
+            v.push(b(Role::Tag(n), icon));
         }
     }
     if e.flags.new {
@@ -66,9 +66,9 @@ pub fn flags(e: &Entry, i: &Icons, marks: &[(String, String)]) -> Vec<Badge> {
     }
     // (never with ignored: ignore excludes pull)
     if e.flags.pull {
-        // (a mark like the others, shown here among the states)
-        let at = marks.iter().position(|(n, _)| n == crate::config::PULL);
-        v.push(b(Role::Mark(at.unwrap_or(usize::MAX)), &i.pull));
+        // (a tag like the others, shown here among the states)
+        let at = tags.iter().position(|(n, _)| n == crate::config::PULL);
+        v.push(b(Role::Tag(at.unwrap_or(usize::MAX)), &i.pull));
     }
     v
 }

@@ -1,6 +1,6 @@
-//! Resolution of per-repo flags from tracked owners, the marks' `repos`
+//! Resolution of per-repo flags from tracked owners, the tags' `repos`
 //! lists in config (pull and ignore among them), and state (snoozes,
-//! "new"); and which issues the `[marks.ignore.issues]` lists turn off.
+//! "new"); and which issues the `[tags.ignore.issues]` lists turn off.
 
 use std::path::Path;
 
@@ -17,9 +17,9 @@ use crate::status::{Head, RepoStatus};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Flags {
-    /// The `[marks]` the repo has, by name, in config order.
+    /// The `[tags]` the repo has, by name, in config order.
     #[serde(default)]
-    pub marks: Vec<String>,
+    pub tags: Vec<String>,
     /// The sum of their sort points.
     #[serde(default)]
     pub sort: i32,
@@ -38,65 +38,65 @@ impl Flags {
         self.ignored || self.snoozed
     }
 
-    /// Whether the repo has the mark named `name`.
+    /// Whether the repo has the tag named `name`.
     pub fn has(&self, name: &str) -> bool {
         match name {
             crate::config::PULL => self.pull,
             crate::config::IGNORE => self.ignored,
-            _ => self.marks.iter().any(|m| m == name),
+            _ => self.tags.iter().any(|m| m == name),
         }
     }
 }
 
-/// The per-repo settings kept as lists in config: each of `[marks]`, by its
+/// The per-repo settings kept as lists in config: each of `[tags]`, by its
 /// place there, but the two argus acts on, which have their own variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Mark {
+pub enum Tag {
     Label(usize),
     Pull,
     Ignore,
 }
 
-impl Mark {
-    /// Every mark of `c`: its `[marks]` in order, then pull and ignore.
-    pub fn all(c: &Config) -> Vec<Mark> {
-        c.marks
+impl Tag {
+    /// Every tag of `c`: its `[tags]` in order, then pull and ignore.
+    pub fn all(c: &Config) -> Vec<Tag> {
+        c.tags
             .keys()
             .enumerate()
             .filter(|(_, n)| !crate::config::acts(n))
-            .map(|(i, _)| Mark::Label(i))
-            .chain([Mark::Pull, Mark::Ignore])
+            .map(|(i, _)| Tag::Label(i))
+            .chain([Tag::Pull, Tag::Ignore])
             .collect()
     }
 
-    /// The mark of `c`'s `[marks]` named `name`.
-    pub fn label(c: &Config, name: &str) -> Option<Mark> {
+    /// The tag of `c`'s `[tags]` named `name`.
+    pub fn label(c: &Config, name: &str) -> Option<Tag> {
         match name {
-            crate::config::PULL => Some(Mark::Pull),
-            crate::config::IGNORE => Some(Mark::Ignore),
-            _ => c.marks.get_index_of(name).map(Mark::Label),
+            crate::config::PULL => Some(Tag::Pull),
+            crate::config::IGNORE => Some(Tag::Ignore),
+            _ => c.tags.get_index_of(name).map(Tag::Label),
         }
     }
 
-    /// Its table in `[marks]`.
-    pub fn table(self, c: &Config) -> &crate::config::MarkDef {
+    /// Its table in `[tags]`.
+    pub fn table(self, c: &Config) -> &crate::config::TagDef {
         match self {
-            Mark::Label(i) => Self::def(c, i).1,
-            Mark::Pull => &c.marks[crate::config::PULL],
-            Mark::Ignore => &c.marks[crate::config::IGNORE],
+            Tag::Label(i) => Self::def(c, i).1,
+            Tag::Pull => &c.tags[crate::config::PULL],
+            Tag::Ignore => &c.tags[crate::config::IGNORE],
         }
     }
 
-    fn def(c: &Config, i: usize) -> (&String, &crate::config::MarkDef) {
-        c.marks.get_index(i).expect("a mark of this config")
+    fn def(c: &Config, i: usize) -> (&String, &crate::config::TagDef) {
+        c.tags.get_index(i).expect("a tag of this config")
     }
 
     /// The config key, dotted.
     pub fn path(self, c: &Config) -> String {
         match self {
-            Mark::Label(i) => format!("marks.{}.repos", Self::def(c, i).0),
-            Mark::Pull => "marks.pull.repos".into(),
-            Mark::Ignore => "marks.ignore.repos".into(),
+            Tag::Label(i) => format!("tags.{}.repos", Self::def(c, i).0),
+            Tag::Pull => "tags.pull.repos".into(),
+            Tag::Ignore => "tags.ignore.repos".into(),
         }
     }
 
@@ -106,53 +106,53 @@ impl Mark {
 
     pub fn list_mut(self, c: &mut Config) -> &mut Vec<String> {
         let def = match self {
-            Mark::Label(i) => c.marks.get_index_mut(i).expect("a mark of this config").1,
-            Mark::Pull => &mut c.marks[crate::config::PULL],
-            Mark::Ignore => &mut c.marks[crate::config::IGNORE],
+            Tag::Label(i) => c.tags.get_index_mut(i).expect("a tag of this config").1,
+            Tag::Pull => &mut c.tags[crate::config::PULL],
+            Tag::Ignore => &mut c.tags[crate::config::IGNORE],
         };
         &mut def.repos
     }
 
     pub fn of(self, f: &Flags, c: &Config) -> bool {
         match self {
-            Mark::Label(i) => f.has(Self::def(c, i).0),
-            Mark::Pull => f.pull,
-            Mark::Ignore => f.ignored,
+            Tag::Label(i) => f.has(Self::def(c, i).0),
+            Tag::Pull => f.pull,
+            Tag::Ignore => f.ignored,
         }
     }
 
-    /// How a repo with the mark is described: its name, `pull`, `ignored`.
+    /// How a repo with the tag is described: its name, `pull`, `ignored`.
     pub fn label_text(self, c: &Config) -> String {
         match self {
-            Mark::Label(i) => Self::def(c, i).0.clone(),
-            Mark::Pull => "pull".into(),
-            Mark::Ignore => "ignored".into(),
+            Tag::Label(i) => Self::def(c, i).0.clone(),
+            Tag::Pull => "pull".into(),
+            Tag::Ignore => "ignored".into(),
         }
     }
 
-    /// Its sort points: a mark with some gives way to ignoring.
+    /// Its sort points: a tag with some gives way to ignoring.
     pub fn points(self, c: &Config) -> i32 {
         match self {
             // hiding a repo is all ignoring does to its place
-            Mark::Ignore => 0,
+            Tag::Ignore => 0,
             _ => self.table(c).sort,
         }
     }
 }
 
-/// The mark terms of a filter (fzf's extended syntax, which `/` follows):
-/// `#work` has the mark, `!#work` hasn't; space is AND, `|` OR. Groups
-/// of mark terms joined by `|` each need one of theirs; every group must
-/// hold. (OR is between mark terms only: fuzzy matching has none.)
+/// The tag terms of a filter (fzf's extended syntax, which `/` follows):
+/// `#work` has the tag, `!#work` hasn't; space is AND, `|` OR. Groups
+/// of tag terms joined by `|` each need one of theirs; every group must
+/// hold. (OR is between tag terms only: fuzzy matching has none.)
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct MarkFilter {
-    /// Each group: (wanted, mark name) terms, one of which must hold.
+pub struct TagFilter {
+    /// Each group: (wanted, tag name) terms, one of which must hold.
     groups: Vec<Vec<(bool, String)>>,
 }
 
-impl MarkFilter {
-    /// Split `query` into its mark terms and the rest, the text to match
-    /// fuzzily (a group mixing marks and text is text).
+impl TagFilter {
+    /// Split `query` into its tag terms and the rest, the text to match
+    /// fuzzily (a group mixing tags and text is text).
     pub fn parse(query: &str) -> (Self, String) {
         let mut groups: Vec<Vec<&str>> = vec![];
         let mut join = false;
@@ -194,7 +194,7 @@ impl MarkFilter {
     }
 }
 
-/// Issues that can be ignored for some repos: the `[marks.ignore.issues]` lists other
+/// Issues that can be ignored for some repos: the `[tags.ignore.issues]` lists other
 /// than `repos`. Conflicts, operations in progress and commits only a
 /// detached HEAD holds can't be: they risk losing work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -219,7 +219,7 @@ impl IssueList {
         IssueList::Behind,
     ];
 
-    /// The key in `[marks.ignore.issues]`.
+    /// The key in `[tags.ignore.issues]`.
     pub fn name(self) -> &'static str {
         match self {
             IssueList::NonDefaultBranch => "non_default_branch",
@@ -263,7 +263,7 @@ impl IssueList {
         )
     }
 
-    /// Whether ignoring from the TUI or `argus mark` pins by default: where
+    /// Whether ignoring from the TUI or `argus tag` pins by default: where
     /// HEAD is, yes (a repo that moves is flagged again); stashes, no.
     pub fn pins_by_default(self) -> bool {
         self.pins() && !self.separate_values()
@@ -328,39 +328,39 @@ impl IssueList {
     }
 }
 
-/// Any list of repos kept in config: the marks and the issue lists.
+/// Any list of repos kept in config: the tags and the issue lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum List {
-    Mark(Mark),
+    Tag(Tag),
     Issue(IssueList),
 }
 
 impl List {
     /// Every list of `c`.
     pub fn all(c: &Config) -> impl Iterator<Item = List> {
-        Mark::all(c)
+        Tag::all(c)
             .into_iter()
-            .map(List::Mark)
+            .map(List::Tag)
             .chain(IssueList::ALL.into_iter().map(List::Issue))
     }
 
-    /// The config key, dotted (`marks.ignore.issues.detached`).
+    /// The config key, dotted (`tags.ignore.issues.detached`).
     pub fn path(self, c: &Config) -> String {
         match self {
-            List::Mark(m) => m.path(c),
-            List::Issue(l) => format!("marks.ignore.issues.{}", l.name()),
+            List::Tag(m) => m.path(c),
+            List::Issue(l) => format!("tags.ignore.issues.{}", l.name()),
         }
     }
 
     pub fn get(self, c: &Config) -> &Vec<String> {
         match self {
-            List::Mark(m) => m.list(c),
+            List::Tag(m) => m.list(c),
             List::Issue(l) => l.list(c),
         }
     }
 }
 
-/// One list entry: a repo or a pattern, `!` to turn the mark off.
+/// One list entry: a repo or a pattern, `!` to turn the tag off.
 #[derive(Clone)]
 struct Entry {
     text: String,
@@ -402,7 +402,7 @@ impl Entry {
     }
 }
 
-/// An `[marks.ignore.issues]` issue list entry: the repo part, and the pinned value
+/// An `[tags.ignore.issues]` issue list entry: the repo part, and the pinned value
 /// after `@`, if any.
 #[derive(Clone)]
 struct IssueEntry {
@@ -452,7 +452,7 @@ impl IssueEntry {
     }
 }
 
-/// The `[marks]`, `pull` and `ignore` lists, compiled.
+/// The `[tags]`, `pull` and `ignore` lists, compiled.
 #[derive(Clone)]
 pub struct RuleSet {
     labels: Vec<Vec<Entry>>,
@@ -463,7 +463,7 @@ pub struct RuleSet {
 
 impl RuleSet {
     pub fn new(config: &Config) -> Result<Self, ConfigError> {
-        let compile = |m: Mark| -> Result<Vec<Entry>, ConfigError> {
+        let compile = |m: Tag| -> Result<Vec<Entry>, ConfigError> {
             m.list(config).iter().map(|t| Entry::new(t)).collect()
         };
         let issues = IssueList::ALL
@@ -476,25 +476,25 @@ impl RuleSet {
             })
             .collect::<Result<_, _>>()?;
         Ok(Self {
-            labels: (0..config.marks.len())
-                .map(|i| compile(Mark::Label(i)))
+            labels: (0..config.tags.len())
+                .map(|i| compile(Tag::Label(i)))
                 .collect::<Result<_, _>>()?,
-            pull: compile(Mark::Pull)?,
-            ignore: compile(Mark::Ignore)?,
+            pull: compile(Tag::Pull)?,
+            ignore: compile(Tag::Ignore)?,
             issues,
         })
     }
 
-    fn entries(&self, m: Mark) -> &[Entry] {
+    fn entries(&self, m: Tag) -> &[Entry] {
         match m {
-            Mark::Label(i) => self.labels.get(i).map_or(&[], Vec::as_slice),
-            Mark::Pull => &self.pull,
-            Mark::Ignore => &self.ignore,
+            Tag::Label(i) => self.labels.get(i).map_or(&[], Vec::as_slice),
+            Tag::Pull => &self.pull,
+            Tag::Ignore => &self.ignore,
         }
     }
 
     /// What `m`'s list says about the repo: its last matching entry, if any.
-    pub fn decide(&self, m: Mark, id: Option<&RepoId>, path: &Path) -> Option<bool> {
+    pub fn decide(&self, m: Tag, id: Option<&RepoId>, path: &Path) -> Option<bool> {
         self.entries(m)
             .iter()
             .rev()
@@ -504,7 +504,7 @@ impl RuleSet {
 
     /// The entry that turns `m` on for the repo, if one does (its last
     /// matching entry, when that isn't a `!` one).
-    pub fn marking(&self, m: Mark, id: Option<&RepoId>, path: &Path) -> Option<&str> {
+    pub fn tagging(&self, m: Tag, id: Option<&RepoId>, path: &Path) -> Option<&str> {
         self.entries(m)
             .iter()
             .rev()
@@ -515,7 +515,7 @@ impl RuleSet {
 
     /// Whether a (possibly not yet cloned) repo is ignored.
     pub fn ignores(&self, id: &RepoId, path: &Path) -> bool {
-        self.decide(Mark::Ignore, Some(id), path).unwrap_or(false)
+        self.decide(Tag::Ignore, Some(id), path).unwrap_or(false)
     }
 
     /// Whether `list` ignores its issue for the repo in a state with these
@@ -569,7 +569,7 @@ impl RuleSet {
 
     /// Entries of `m`'s list naming this repo itself (not patterns), as
     /// written, `!` included.
-    pub fn own_entries(&self, m: Mark, id: Option<&RepoId>, path: &Path) -> Vec<String> {
+    pub fn own_entries(&self, m: Tag, id: Option<&RepoId>, path: &Path) -> Vec<String> {
         self.entries(m)
             .iter()
             .filter(|e| e.literal && e.matches(id, path))
@@ -585,18 +585,18 @@ pub fn owner_pattern(id: &RepoId) -> String {
 
 /// What `m`'s list says for `id`'s owner as a whole: as for a repo of its
 /// with no entries of its own (`None` when nothing matches).
-pub fn owner_decides(config: &Config, m: Mark, id: &RepoId) -> Result<Option<bool>, ConfigError> {
+pub fn owner_decides(config: &Config, m: Tag, id: &RepoId) -> Result<Option<bool>, ConfigError> {
     // a name no repo has
     let probe = RepoId::new(&id.host, &id.owner, "\u{0}");
     Ok(RuleSet::new(config)?.decide(m, Some(&probe), Path::new("")))
 }
 
-/// Edit `m`'s list so `id`'s owner as a whole ends up `on`, as [`set_mark`]
+/// Edit `m`'s list so `id`'s owner as a whole ends up `on`, as [`set_tag`]
 /// does for a repo: drop the owner pattern's entries, then add it (or `!`
 /// it) only if what's left (or `base`) doesn't already give `on`.
-pub fn set_owner_mark(
+pub fn set_owner_tag(
     config: &mut Config,
-    m: Mark,
+    m: Tag,
     id: &RepoId,
     base: bool,
     on: bool,
@@ -614,16 +614,16 @@ pub fn set_owner_mark(
 /// Edit `m`'s list in `config` so the repo ends up `on`: drop the entries
 /// naming it, then add `name` (or `!name`) only if what's left (patterns,
 /// or `base` when nothing matches) doesn't already give `on`.
-pub fn set_mark(
+pub fn set_tag(
     config: &mut Config,
-    m: Mark,
+    m: Tag,
     id: Option<&RepoId>,
     path: &Path,
     name: &str,
     base: bool,
     on: bool,
 ) -> Result<(), ConfigError> {
-    clear_mark(config, m, id, path)?;
+    clear_tag(config, m, id, path)?;
     let now = RuleSet::new(config)?.decide(m, id, path).unwrap_or(base);
     if now != on {
         let entry = if on {
@@ -712,7 +712,7 @@ pub fn set_issue_ignored(
     Ok(())
 }
 
-/// Where a repo's issue stands in its `[marks.ignore.issues]` list.
+/// Where a repo's issue stands in its `[tags.ignore.issues]` list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IgnoreState {
     /// Not ignored: it counts towards attention.
@@ -803,9 +803,9 @@ pub fn set_issue_state(
 }
 
 /// Drop the entries of `m`'s list naming the repo, so patterns decide.
-pub fn clear_mark(
+pub fn clear_tag(
     config: &mut Config,
-    m: Mark,
+    m: Tag,
     id: Option<&RepoId>,
     path: &Path,
 ) -> Result<(), ConfigError> {
@@ -849,17 +849,17 @@ pub fn resolve(
         f.tracked = Some(t.key());
     }
     let mut labels = vec![];
-    for m in Mark::all(config) {
+    for m in Tag::all(config) {
         if let Some(v) = rules.decide(m, id, path) {
             match m {
-                Mark::Label(_) if v => labels.push(m),
-                Mark::Label(_) => {}
-                Mark::Pull => f.pull = v,
-                Mark::Ignore => f.ignored = v,
+                Tag::Label(_) if v => labels.push(m),
+                Tag::Label(_) => {}
+                Tag::Pull => f.pull = v,
+                Tag::Ignore => f.ignored = v,
             }
         }
     }
-    // an ignored repo is neither pulled nor raised by marks with points,
+    // an ignored repo is neither pulled nor raised by tags with points,
     // whatever patterns say; labels stay
     if f.ignored {
         f.pull = false;
@@ -867,9 +867,9 @@ pub fn resolve(
     }
     f.sort = labels.iter().map(|m| m.points(config)).sum();
     if f.pull {
-        f.sort += Mark::Pull.points(config);
+        f.sort += Tag::Pull.points(config);
     }
-    f.marks = labels.iter().map(|m| m.label_text(config)).collect();
+    f.tags = labels.iter().map(|m| m.label_text(config)).collect();
     f.snoozed = state.is_snoozed(key, now);
     f.new = state.new.contains(key);
     f
@@ -912,27 +912,27 @@ mod tests {
     #[test]
     fn entries_match_identity_slug_and_path() {
         assert!(fav(
-            "marks.favourite.repos = ['github.com/acme/*']",
+            "tags.favourite.repos = ['github.com/acme/*']",
             URL,
             "/x"
         ));
-        assert!(fav("marks.favourite.repos = ['acme/widget']", URL, "/x"));
-        assert!(fav("marks.favourite.repos = ['/r/**']", URL, "/r/a/widget"));
+        assert!(fav("tags.favourite.repos = ['acme/widget']", URL, "/x"));
+        assert!(fav("tags.favourite.repos = ['/r/**']", URL, "/r/a/widget"));
         assert!(
-            fav("marks.favourite.repos = ['ACME/*']", URL, "/x"),
+            fav("tags.favourite.repos = ['ACME/*']", URL, "/x"),
             "case-insensitive"
         );
         // inverse: other owners, and `*` must not cross `/`
         assert!(!fav(
-            "marks.favourite.repos = ['github.com/other/*']",
+            "tags.favourite.repos = ['github.com/other/*']",
             URL,
             "/x"
         ));
-        assert!(!fav("marks.favourite.repos = ['github.com/*']", URL, "/x"));
-        assert!(!fav("marks.favourite.repos = ['/r/*']", URL, "/r/a/widget"));
+        assert!(!fav("tags.favourite.repos = ['github.com/*']", URL, "/x"));
+        assert!(!fav("tags.favourite.repos = ['/r/*']", URL, "/r/a/widget"));
     }
 
-    /// Whether `[marks.ignore.issues] <list>` in `cfg` ignores the issue for the widget
+    /// Whether `[tags.ignore.issues] <list>` in `cfg` ignores the issue for the widget
     /// repo in a state with these values.
     fn ignores(cfg: &str, list: IssueList, values: &[&str]) -> bool {
         let c = Config::parse(cfg).unwrap();
@@ -949,28 +949,28 @@ mod tests {
     fn issue_lists_pin_values_and_take_globs() {
         let off = IssueList::NonDefaultBranch;
         assert!(ignores(
-            "[marks.ignore.issues]\nnon_default_branch = ['acme/widget']",
+            "[tags.ignore.issues]\nnon_default_branch = ['acme/widget']",
             off,
             &["any"]
         ));
         assert!(ignores(
-            "[marks.ignore.issues]\nnon_default_branch = ['acme/widget@release-2']",
+            "[tags.ignore.issues]\nnon_default_branch = ['acme/widget@release-2']",
             off,
             &["release-2"]
         ));
         assert!(ignores(
-            "[marks.ignore.issues]\nnon_default_branch = ['acme/*@release-*']",
+            "[tags.ignore.issues]\nnon_default_branch = ['acme/*@release-*']",
             off,
             &["release-3"]
         ));
         // inverse: another value, another repo, or no list at all
         assert!(!ignores(
-            "[marks.ignore.issues]\nnon_default_branch = ['acme/widget@release-2']",
+            "[tags.ignore.issues]\nnon_default_branch = ['acme/widget@release-2']",
             off,
             &["main"]
         ));
         assert!(!ignores(
-            "[marks.ignore.issues]\nnon_default_branch = ['acme/other']",
+            "[tags.ignore.issues]\nnon_default_branch = ['acme/other']",
             off,
             &["x"]
         ));
@@ -979,28 +979,28 @@ mod tests {
         let det = IssueList::Detached;
         let state = ["v1.2", "v1.2-0-g1a2b3c4", "1a2b3c4", "1a2b3c4d5e6f"];
         assert!(ignores(
-            "[marks.ignore.issues]\ndetached = ['acme/widget@1a2b3c4']",
+            "[tags.ignore.issues]\ndetached = ['acme/widget@1a2b3c4']",
             det,
             &state
         ));
         assert!(ignores(
-            "[marks.ignore.issues]\ndetached = ['acme/widget@v1.*']",
+            "[tags.ignore.issues]\ndetached = ['acme/widget@v1.*']",
             det,
             &state
         ));
         assert!(!ignores(
-            "[marks.ignore.issues]\ndetached = ['acme/widget@v2.0']",
+            "[tags.ignore.issues]\ndetached = ['acme/widget@v2.0']",
             det,
             &state
         ));
         // the last match wins; ! turns it off
         assert!(!ignores(
-            "[marks.ignore.issues]\nstashes = ['acme/*', '!acme/widget']",
+            "[tags.ignore.issues]\nstashes = ['acme/*', '!acme/widget']",
             IssueList::Stashes,
             &[]
         ));
         assert!(ignores(
-            "[marks.ignore.issues]\nstashes = ['!acme/*', 'acme/widget']",
+            "[tags.ignore.issues]\nstashes = ['!acme/*', 'acme/widget']",
             IssueList::Stashes,
             &[]
         ));
@@ -1049,27 +1049,24 @@ mod tests {
     #[test]
     fn only_some_issue_lists_take_a_value() {
         for (cfg, ok) in [
-            ("[marks.ignore.issues]\nstashes = ['acme/widget@wip']", true),
-            ("[marks.ignore.issues]\nstashes = ['acme/widget@']", false),
-            ("[marks.ignore.issues]\nbehind = ['acme/widget@x']", false),
+            ("[tags.ignore.issues]\nstashes = ['acme/widget@wip']", true),
+            ("[tags.ignore.issues]\nstashes = ['acme/widget@']", false),
+            ("[tags.ignore.issues]\nbehind = ['acme/widget@x']", false),
             (
-                "[marks.ignore.issues]\nunpushed_branches = ['acme/widget@x']",
+                "[tags.ignore.issues]\nunpushed_branches = ['acme/widget@x']",
+                false,
+            ),
+            ("[tags.ignore.issues]\nno_remote = ['acme/widget@x']", false),
+            (
+                "[tags.ignore.issues]\nnon_default_branch = ['acme/widget@']",
                 false,
             ),
             (
-                "[marks.ignore.issues]\nno_remote = ['acme/widget@x']",
-                false,
-            ),
-            (
-                "[marks.ignore.issues]\nnon_default_branch = ['acme/widget@']",
-                false,
-            ),
-            (
-                "[marks.ignore.issues]\nno_upstream = ['acme/widget@feat']",
+                "[tags.ignore.issues]\nno_upstream = ['acme/widget@feat']",
                 true,
             ),
             (
-                "[marks.ignore.issues]\nnon_default_branch = ['acme/widget@feat']",
+                "[tags.ignore.issues]\nnon_default_branch = ['acme/widget@feat']",
                 true,
             ),
         ] {
@@ -1229,7 +1226,7 @@ mod tests {
 
     #[test]
     fn later_entries_win_and_bang_turns_off() {
-        let cfg = "marks.pull.repos = ['acme/*', '!acme/widget']";
+        let cfg = "tags.pull.repos = ['acme/*', '!acme/widget']";
         assert!(!flags(cfg, &State::default(), URL, "/x").pull);
         assert!(
             flags(
@@ -1242,13 +1239,13 @@ mod tests {
         );
         // order matters: a later pattern turns it back on
         assert!(fav(
-            "marks.favourite.repos = ['!acme/widget', 'acme/*']",
+            "tags.favourite.repos = ['!acme/widget', 'acme/*']",
             URL,
             "/x"
         ));
         // the lists are independent
         let f = flags(
-            "marks.favourite.repos = ['acme/*']\nmarks.ignore.repos = ['!acme/*']",
+            "tags.favourite.repos = ['acme/*']\ntags.ignore.repos = ['!acme/*']",
             &State::default(),
             URL,
             "/x",
@@ -1265,7 +1262,7 @@ mod tests {
         assert!(!flags("[[track]]\nowner='acme'\npull=false", &s, URL, "/x").pull);
         assert!(
             !flags(
-                "marks.pull.repos = ['!acme/widget']\n[[track]]\nowner='acme'",
+                "tags.pull.repos = ['!acme/widget']\n[[track]]\nowner='acme'",
                 &s,
                 URL,
                 "/x"
@@ -1322,7 +1319,7 @@ mod tests {
     #[test]
     fn repos_without_identity_match_by_path_only() {
         let f = flags(
-            "marks.ignore.repos = ['/local/**']",
+            "tags.ignore.repos = ['/local/**']",
             &State::default(),
             "",
             "/local/thing",
@@ -1330,16 +1327,16 @@ mod tests {
         assert!(f.ignored);
     }
 
-    /// `#work` has it, `!#work` hasn't, space is AND, `|` OR between marks;
+    /// `#work` has it, `!#work` hasn't, space is AND, `|` OR between tags;
     /// the rest is text.
     #[test]
-    fn mark_filters_parse_and_match() {
-        let f = |marks: &[&str]| Flags {
-            marks: marks.iter().map(|s| s.to_string()).collect(),
+    fn tag_filters_parse_and_match() {
+        let f = |tags: &[&str]| Flags {
+            tags: tags.iter().map(|s| s.to_string()).collect(),
             ..Flags::default()
         };
         let (work, home, both, none) = (f(&["work"]), f(&["home"]), f(&["work", "home"]), f(&[]));
-        let pass = |q: &str, fl: &Flags| MarkFilter::parse(q).0.matches(fl);
+        let pass = |q: &str, fl: &Flags| TagFilter::parse(q).0.matches(fl);
         assert!(pass("#work", &work) && !pass("#work", &home));
         assert!(pass("!#work", &home) && !pass("!#work", &work));
         assert!(
@@ -1353,79 +1350,79 @@ mod tests {
         assert!(!pass("#work | #home", &none));
         assert!(pass("#work | #home !#home", &work) && !pass("#work | #home !#home", &both));
         // the rest is text; a group mixing both is text
-        let (m, rest) = MarkFilter::parse("api #work | #home acme");
+        let (m, rest) = TagFilter::parse("api #work | #home acme");
         assert_eq!(rest, "api acme");
         assert!(m.matches(&work) && !m.matches(&none));
-        let (m, rest) = MarkFilter::parse("#work | api");
+        let (m, rest) = TagFilter::parse("#work | api");
         assert!(m.groups.is_empty() && rest == "#work api", "{rest}");
-        let (m, rest) = MarkFilter::parse("  ");
+        let (m, rest) = TagFilter::parse("  ");
         assert!(m.groups.is_empty() && rest.is_empty() && m.matches(&none));
-        // not marks: a bare `#`, a leading `|`, `!` alone
-        let (m, rest) = MarkFilter::parse("| # ! !x");
+        // not tags: a bare `#`, a leading `|`, `!` alone
+        let (m, rest) = TagFilter::parse("| # ! !x");
         assert!(m.groups.is_empty(), "{m:?}");
         assert_eq!(rest, "# ! !x");
     }
 
     #[test]
-    fn each_mark_reads_its_own_flag() {
-        let c = Config::parse("[marks.work]\n").unwrap();
-        let fav = Mark::label(&c, "favourite").unwrap();
-        let work = Mark::label(&c, "work").unwrap();
-        assert!(matches!((fav, work), (Mark::Label(_), Mark::Label(_))));
+    fn each_tag_reads_its_own_flag() {
+        let c = Config::parse("[tags.work]\n").unwrap();
+        let fav = Tag::label(&c, "favourite").unwrap();
+        let work = Tag::label(&c, "work").unwrap();
+        assert!(matches!((fav, work), (Tag::Label(_), Tag::Label(_))));
         // the two argus acts on are found by name too, as themselves
-        assert_eq!(Mark::label(&c, "pull"), Some(Mark::Pull));
-        assert_eq!(Mark::label(&c, "ignore"), Some(Mark::Ignore));
-        assert!(!Mark::all(&c).iter().any(|m| matches!(m, Mark::Label(i) if c.marks.get_index(*i).is_some_and(|(n, _)| crate::config::acts(n)))));
-        assert_eq!(Mark::all(&c).len(), 4);
-        let f = |marks: &[&str], pull, ignored| Flags {
-            marks: marks.iter().map(|s| s.to_string()).collect(),
+        assert_eq!(Tag::label(&c, "pull"), Some(Tag::Pull));
+        assert_eq!(Tag::label(&c, "ignore"), Some(Tag::Ignore));
+        assert!(!Tag::all(&c).iter().any(|m| matches!(m, Tag::Label(i) if c.tags.get_index(*i).is_some_and(|(n, _)| crate::config::acts(n)))));
+        assert_eq!(Tag::all(&c).len(), 4);
+        let f = |tags: &[&str], pull, ignored| Flags {
+            tags: tags.iter().map(|s| s.to_string()).collect(),
             pull,
             ignored,
             ..Flags::default()
         };
         assert!(fav.of(&f(&["favourite"], false, false), &c));
         assert!(work.of(&f(&["work"], false, false), &c));
-        assert!(Mark::Pull.of(&f(&[], true, false), &c));
-        assert!(Mark::Ignore.of(&f(&[], false, true), &c));
+        assert!(Tag::Pull.of(&f(&[], true, false), &c));
+        assert!(Tag::Ignore.of(&f(&[], false, true), &c));
         // inverse: not the others'
-        for m in Mark::all(&c) {
+        for m in Tag::all(&c) {
             assert!(!m.of(&f(&[], false, false), &c), "{m:?}");
         }
         assert!(!fav.of(&f(&["work"], true, true), &c));
-        assert!(!Mark::Pull.of(&f(&["favourite"], false, true), &c));
-        assert!(!Mark::Ignore.of(&f(&["favourite"], true, false), &c));
-        assert_eq!(Mark::all(&c), [fav, work, Mark::Pull, Mark::Ignore]);
+        assert!(!Tag::Pull.of(&f(&["favourite"], false, true), &c));
+        assert!(!Tag::Ignore.of(&f(&["favourite"], true, false), &c));
+        assert_eq!(Tag::all(&c), [fav, work, Tag::Pull, Tag::Ignore]);
         assert_eq!(
-            (work.path(&c), Mark::Pull.path(&c), Mark::Ignore.path(&c)),
+            (work.path(&c), Tag::Pull.path(&c), Tag::Ignore.path(&c)),
             (
-                "marks.work.repos".into(),
-                "marks.pull.repos".into(),
-                "marks.ignore.repos".into()
+                "tags.work.repos".into(),
+                "tags.pull.repos".into(),
+                "tags.ignore.repos".into()
             )
         );
         assert_eq!(
-            (fav.points(&c), work.points(&c), Mark::Pull.points(&c)),
+            (fav.points(&c), work.points(&c), Tag::Pull.points(&c)),
             (1, 0, 0)
         );
     }
 
     #[test]
     fn bad_patterns_are_config_errors() {
-        let c = Config::parse("marks.favourite.repos = ['acme/[oops']").unwrap();
+        let c = Config::parse("tags.favourite.repos = ['acme/[oops']").unwrap();
         let Err(e) = RuleSet::new(&c) else {
             panic!("accepted")
         };
         assert!(e.to_string().contains("[oops"), "{e}");
     }
 
-    /// `set_mark` on the widget, returning the favourite list after.
+    /// `set_tag` on the widget, returning the favourite list after.
     fn set(list: &[&str], on: bool) -> Vec<String> {
         let mut c = Config::default();
-        c.marks["favourite"].repos = list.iter().map(|s| s.to_string()).collect();
+        c.tags["favourite"].repos = list.iter().map(|s| s.to_string()).collect();
         let id = RepoId::from_url(URL).unwrap();
-        set_mark(
+        set_tag(
             &mut c,
-            Mark::Label(0),
+            Tag::Label(0),
             Some(&id),
             Path::new("/r/widget"),
             "github.com/acme/widget",
@@ -1433,11 +1430,11 @@ mod tests {
             on,
         )
         .unwrap();
-        c.marks["favourite"].repos.clone()
+        c.tags["favourite"].repos.clone()
     }
 
     #[test]
-    fn marking_adds_or_removes_the_repo_itself_only() {
+    fn tagging_adds_or_removes_the_repo_itself_only() {
         // on: added once; already on: unchanged
         assert_eq!(set(&[], true), ["github.com/acme/widget"]);
         assert_eq!(
@@ -1473,13 +1470,13 @@ mod tests {
     }
 
     #[test]
-    fn marking_off_a_tracked_repo_needs_a_bang() {
+    fn tagging_off_a_tracked_repo_needs_a_bang() {
         let mut c = Config::parse("[[track]]\nowner='acme'").unwrap();
         let id = RepoId::from_url(URL).unwrap();
         let p = Path::new("/r/widget");
-        set_mark(
+        set_tag(
             &mut c,
-            Mark::Pull,
+            Tag::Pull,
             Some(&id),
             p,
             "github.com/acme/widget",
@@ -1487,10 +1484,10 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(c.marks["pull"].repos, ["!github.com/acme/widget"]);
-        set_mark(
+        assert_eq!(c.tags["pull"].repos, ["!github.com/acme/widget"]);
+        set_tag(
             &mut c,
-            Mark::Pull,
+            Tag::Pull,
             Some(&id),
             p,
             "github.com/acme/widget",
@@ -1498,11 +1495,11 @@ mod tests {
             true,
         )
         .unwrap();
-        assert!(c.marks["pull"].repos.is_empty());
+        assert!(c.tags["pull"].repos.is_empty());
         // clearing drops its own entries only
-        c.marks["pull"].repos = vec!["acme/*".into(), "!acme/widget".into()];
-        clear_mark(&mut c, Mark::Pull, Some(&id), p).unwrap();
-        assert_eq!(c.marks["pull"].repos, ["acme/*"]);
+        c.tags["pull"].repos = vec!["acme/*".into(), "!acme/widget".into()];
+        clear_tag(&mut c, Tag::Pull, Some(&id), p).unwrap();
+        assert_eq!(c.tags["pull"].repos, ["acme/*"]);
     }
 
     #[test]
@@ -1517,12 +1514,12 @@ mod tests {
         assert!(!f(false, false).has("pull") && !f(false, false).has("ignore"));
         // inverse: a label of that name in the list isn't what counts
         let named = Flags {
-            marks: vec!["pull".into(), "ignore".into()],
+            tags: vec!["pull".into(), "ignore".into()],
             ..Flags::default()
         };
         assert!(!named.has("pull") && !named.has("ignore"));
-        let c = Config::parse("[marks.ignore]\nsort = 9\n[marks.pull]\nsort = 3\n").unwrap();
-        assert_eq!(Mark::Ignore.points(&c), 0);
-        assert_eq!(Mark::Pull.points(&c), 3);
+        let c = Config::parse("[tags.ignore]\nsort = 9\n[tags.pull]\nsort = 3\n").unwrap();
+        assert_eq!(Tag::Ignore.points(&c), 0);
+        assert_eq!(Tag::Pull.points(&c), 3);
     }
 }

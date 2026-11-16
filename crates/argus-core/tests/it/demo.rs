@@ -10,7 +10,7 @@ fn demo_covers_every_state() {
     let cfg = format!("roots = ['{}']", d.root.display());
     let mut ws = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
     ws.scan();
-    d.apply_marks(&mut ws);
+    d.apply_tags(&mut ws);
     let has = |f: &dyn Fn(&argus_core::Entry) -> bool| ws.entries.iter().any(f);
     let issue = |i: fn(&Issue) -> bool| has(&|e| e.issues.iter().any(i));
     let checks: Vec<(&str, bool)> = vec![

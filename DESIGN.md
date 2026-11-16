@@ -19,7 +19,7 @@ attention, fix them, and keep everything (including whole forge orgs) up to date
 | lazygit / gitui / magit | Go/Rust/elisp | single repo | — | — | ✔ | ✔ | Excellent *per repo*; argus should hand off to them |
 
 None combines: forge-aware org/team membership (auto-detect new repos), sync
-flags, marks/exclusions/snoozes, attention-sorted status, safe auto-fixes,
+flags, tags/exclusions/snoozes, attention-sorted status, safe auto-fixes,
 and a TUI with both arrow-key and transient-style menus. So we build, and
 **delegate to existing tools** where they already excel (git for network
 mutations and user config, `gh` for auth, lazygit/magit/`$SHELL` for deep work).
@@ -138,12 +138,12 @@ Two findings:
   `node_modules`, `target`, `.git` internals and configurable globs.
 * **Identity.** `host/owner/name` parsed from the `origin` remote URL (or the
   first remote).
-* **Marks: `[marks.<name>] repos`** (favourite, yours, pull and ignore)
-  are lists in config, one per mark (see §9, custom marks). An entry is a repo or a glob, matched against identity, `owner/name`
-  or path; the last matching entry wins and `!` turns the mark off, as in
-  gitignore. Names: `[marks.ignore] repos` hides a repo and leaves it out of
+* **Tags: `[tags.<name>] repos`** (favourite, yours, pull and ignore)
+  are lists in config, one per tag (see §9, custom tags). An entry is a repo or a glob, matched against identity, `owner/name`
+  or path; the last matching entry wins and `!` turns the tag off, as in
+  gitignore. Names: `[tags.ignore] repos` hides a repo and leaves it out of
   pulls, clones and bulk actions; *hidden* is the wider set, ignored or
-  snoozed. The `[marks.ignore.issues]` lists turn off one issue (non-default-branch,
+  snoozed. The `[tags.ignore.issues]` lists turn off one issue (non-default-branch,
   detached, no remote, no upstream, stashes, unpushed branches, behind):
   ignoring a whole repo is the special case of ignoring everything about
   it, so one section holds both. `repo@value` pins the branch, tag,
@@ -158,7 +158,7 @@ Two findings:
   moves from `issues` to `snoozed_issues`: no attention, shown dimmed with
   the time left, and its fix turned off as an ignored one's. An ignored
   issue stays ignored. A repo's snooze hides the repo; an issue's doesn't.
-  Unsnoozing a repo (`m u` on it, `argus unsnooze`, `argus unmark --all`) ends its issue
+  Unsnoozing a repo (`t u` on it, `argus unsnooze`, `argus untag --all`) ends its issue
   snoozes too; on an issue line, or with `--issue`, just that one.
 * **Stashes are ignored one by one, and argus's own aren't by default.**
   A detached HEAD's tags, describe and commit are names for one thing, so
@@ -174,7 +174,7 @@ Two findings:
   `--pin` / `--no-pin` choose the other way. An entry splits at its first
   `@`, as a message may hold another.
 * **A list with a default is added to with `extend_`.** When no file has
-  the list yet, the TUI and `argus mark` write `extend_<list>`, since a
+  the list yet, the TUI and `argus tag` write `extend_<list>`, since a
   plain list replaces the default.
 * **Ignoring hides warnings, never facts.** A badge stating a fact (the
   behind count, the stash count, where HEAD is) shows whether or not its
@@ -183,7 +183,7 @@ Two findings:
   only a detached HEAD holds can't be ignored: they risk losing work.
   `exclude_paths` is the other kind of exclusion: directories discovery
   never enters, matched by name or path, as rsync's and ripgrep's
-  `--exclude` mean it. Tracked owners' repos are pulled unless `pull` says `!`. Marking
+  `--exclude` mean it. Tracked owners' repos are pulled unless `pull` says `!`. Tagging
   from the TUI or CLI drops the repo's own (glob-free) entries, then adds
   its name, or `!name`, only if the patterns left don't already give the
   wanted value; clearing drops its own entries. Changes are written as
@@ -204,7 +204,7 @@ Two findings:
   and lists replace, lists of tables (`[[track]]`) add up, and
   `extend_<list>` appends at any level, for every list setting without
   listing them; on a non-list or unknown key it's an error. The merge
-  records the order files were merged in. Roots and the mark
+  records the order files were merged in. Roots and the tag
   lists are edited by one rule, chosen so an addition always takes
   effect: append to the highest-precedence file with the list or its
   `extend_` form, into `extend_` if it has both (it applies last, so a
@@ -212,7 +212,7 @@ Two findings:
   neither anywhere, start the list in the main file (`roots` at the
   top). Nothing above that file sets the list, so the addition counts;
   and when a shared base sets a list that the main file extends,
-  additions stay in the main file (an empty `marks.pull.extend_repos = []`
+  additions stay in the main file (an empty `tags.pull.extend_repos = []`
   there steers them). Precedence: the main file, then a later extended
   file before an earlier one, a file before the files it extends
   (`Layers.files` reversed). Removal takes an entry out of every file
@@ -252,20 +252,20 @@ Two findings:
   Discard always asks, naming the file or the count. Hunk and line
   operations would build on the same diff rows.
 * **No forgetting.** Nothing about a repo is dropped because scans no
-  longer find it (an earlier version dropped marks after 30 days; that
+  longer find it (an earlier version dropped tags after 30 days; that
   broke the rule that permanent loss needs confirmation). Expired snoozes
-  (of repos and of issues) are removed, as they end by design. Marks an older version kept in state
+  (of repos and of issues) are removed, as they end by design. Tags an older version kept in state
   are left there and shown as config lines to copy.
 * **Tracked owners.** `[[track]] forge="github" owner="acme" [team="platform"] into="~/dev/acme" clone="auto"|"notify"`.
   `argus pull` lists the forge, diffs it against local clones, and clones missing repos
   (`auto`) or flags them as *new on forge* (`notify`). Newly cloned repos are
-  marked + new until acknowledged. Tracked owners' repos are pulled by default.
+  tagged + new until acknowledged. Tracked owners' repos are pulled by default.
 * **Attention.** A repo needs attention if it has any of: conflicts or an
   in-progress operation, uncommitted changes, unpushed commits, a non-default
   branch, detached HEAD, stashes, a gone upstream, no upstream for the
   current branch, records of worktrees whose folder is gone, or a
   finished worktree. Sort order: needing attention before clean, then
-  marks' sort points (favourites first), then severity, then amount of change, then name.
+  tags' sort points (favourites first), then severity, then amount of change, then name.
 * **Auto-fixes** (planned and shown first, then executed; never destructive:
   the destructive kinds, `abort` and `delete-branches`, are confirmed
   first in the TUI and never chosen automatically):
@@ -483,7 +483,7 @@ Two findings:
   seen, not computed from font tables.
 * Two input styles at once:
   * arrows/Enter plus menus you can navigate with the cursor;
-  * transient-style prefix keys: `f` fix, `F` pull, `m` mark, `o` open, `?` help.
+  * transient-style prefix keys: `f` fix, `F` pull, `t` tag, `o` open, `?` help.
     One more key executes. `C-g`/Esc cancels.
   * emacs (`C-n C-p C-v M-v M-< M->`, `C-s` search) and vi (`j k g G /`) motions.
   * Menus of choices have only item keys. Menus that list things (the
@@ -521,7 +521,7 @@ rendering is snapshot-tested via `TestBackend`.
   breadth with generic mutations (`--in-diff` for changes).
 * **Coverage** (cargo-llvm-cov, region and line): about 93% overall.
   Effects are carried out by `Runtime`, separate from the terminal loop,
-  so tests drive it (`settle` waits for background work): saving marks
+  so tests drive it (`settle` waits for background work): saving tags
   and state and reporting failures, scans, refreshes, jobs, fixes, a pull
   and clone against a fake forge cloning for real, the URL opener (configurable, a
   recording script in tests), and running suspended programs. What's left
@@ -541,8 +541,8 @@ rendering is snapshot-tested via `TestBackend`.
   proceeds; otherwise the command refuses before changing anything. Each
   such operation is tested declined, refused and confirmed. Recoverable
   operations (stash, commit, switch, fast-forward, pull, push) don't ask.
-  Clearing marks asks when more than one repo has entries of its own in
-  the marks' `repos` lists (pull and ignore among them); snoozes and "new" flags don't count. `root remove` doesn't ask.
+  Clearing tags asks when more than one repo has entries of its own in
+  the tags' `repos` lists (pull and ignore among them); snoozes and "new" flags don't count. `root remove` doesn't ask.
 
 * **Absorbed: merged by content.** A forge's squash- or rebase-merge
   leaves the branch's commits out of the default branch's history, so
@@ -753,7 +753,7 @@ rendering is snapshot-tested via `TestBackend`.
   (`[ui] attention_only = true`); the header says how many repos there are
   in all and that `a` shows them.
 * **`sync` is now `pull`** (command, `pull` list and `[[track]] pull`,
-  `mark --pull`, the `pull` icon): it pulls, and clones new repos of
+  `tag --pull`, the `pull` icon): it pulls, and clones new repos of
   tracked owners, but never pushes, which "sync" suggested. Cloning stays
   part of it (`--no-clone` to skip), so one command serves cron. Old names
   are errors, except the state file's `last_sync`, read as `last_pull`.
@@ -900,7 +900,7 @@ with `Swatinem/rust-cache`, and mold as the Linux linker.
   Bencher's bare-metal `intel-v1` runners, which are dedicated, so runs
   are comparable, and tracked per commit with a t-test threshold on
   main's last 10-20 runs. An alert shows on Bencher and doesn't fail the
-  job: the test can't know a slowdown was accepted (custom marks' cost
+  job: the test can't know a slowdown was accepted (custom tags' cost
   kept main red for ten pushes), and at 99% over some 30 benchmarks one
   run in four raises an alert by chance. The free plan stops a job at 5 minutes,
   so the run uses 1 s of warm-up and 3 s of measurement per benchmark
@@ -931,18 +931,18 @@ considered and left too.
 
 In [TODO.md](TODO.md). Planned in detail:
 
-### Custom marks (built)
+### Custom tags (built)
 
-The aim: built-in marks aren't special. All of a mark's style and
+The aim: built-in tags aren't special. All of a tag's style and
 behaviour could come from config, though the defaults stay in code like
 every other default. favourite was the first to be unified; pull and
-ignore are marks too now, their behaviour found by name.
+ignore are tags too now, their behaviour found by name.
 
-* **A table per mark**, favourite included (its defaults in code, any
+* **A table per tag**, favourite included (its defaults in code, any
   field overridable):
   ```toml
-  [marks.work]
-  key = "w"                     # in the Mark menu
+  [tags.work]
+  key = "w"                     # in the Tag menu
   icon = "W"                    # or by icon set: { unicode = "◆", nerd = "…", ascii = "*" }
   color = "cyan"
   sort = 1                      # sort points; none: a pure label
@@ -950,61 +950,61 @@ ignore are marks too now, their behaviour found by name.
   ```
   Entries as today's lists: identity, `owner/name`, path or glob; the
   last match wins, `!` turns it off. A top-level `favourite = [...]` is an
-  error saying to move it to `[marks.favourite] repos` (no compatibility).
+  error saying to move it to `[tags.favourite] repos` (no compatibility).
 * **Behaviour: labels plus filtering, and sort points.** Repos sort by
-  attention, then the *sum* of their marks' `sort`, then severity and the
+  attention, then the *sum* of their tags' `sort`, then severity and the
   rest.
-* **pull and ignore are `[marks.pull]` and `[marks.ignore]`**, with the
+* **pull and ignore are `[tags.pull]` and `[tags.ignore]`**, with the
   same fields, and what they do is hard-coded to those names: `argus
   pull` pulls the repos with `pull` (a tracked owner's have it unless an
   entry turns it off); `ignore` hides a repo, keeps it out of pulls and
-  bulk actions, and turns off pull and marks with sort points. Behaviour
-  fields any mark could set (`pulls = true`) can come later without
-  changing this. The lists of issues not to flag are `[marks.ignore.issues]`,
-  one place for everything ignored; only that mark takes `issues` (another
+  bulk actions, and turns off pull and tags with sort points. Behaviour
+  fields any tag could set (`pulls = true`) can come later without
+  changing this. The lists of issues not to flag are `[tags.ignore.issues]`,
+  one place for everything ignored; only that tag takes `issues` (another
   is an error). Their entries keep the repo part (`acme/legacy@release-*`):
   it's what says which repos the issue is ignored in, and those aren't
   the hidden ones in `repos`. They show as states, as before: after the
   labels in the flag column, with the icon set's `pull` and `ignored`
-  glyphs (`[ui] icon_overrides`) unless the mark has an `icon`; pull in
-  the `pull` colour role unless the mark has a `color`; an ignored repo
-  in `hidden`, which `[marks.ignore] color` can't change (a warning says
-  so). Their `key` moves their items in the Mark and Owner menus. `#pull`
+  glyphs (`[ui] icon_overrides`) unless the tag has an `icon`; pull in
+  the `pull` colour role unless the tag has a `color`; an ignored repo
+  in `hidden`, which `[tags.ignore] color` can't change (a warning says
+  so). Their `key` moves their items in the Tag and Owner menus. `#pull`
   and `#ignore` filter. Top-level `pull`, `extend_pull` and `[ignore]`
   are errors saying where they moved.
-* **Theming.** A mark's colour: `[ui] colors` naming it (`"mark.work" =
+* **Theming.** A tag's colour: `[ui] colors` naming it (`"tag.work" =
   "bold cyan"`), else the theme's own entry for it (built-in themes keep
-  favourite's as `mark.favourite`), else the mark's `color`, else the
-  theme's flag colour. Its icon: the mark's, one string or one per set.
-* **Flag column:** each mark's icon in its colour, in config order, then
+  favourite's as `tag.favourite`), else the tag's `color`, else the
+  theme's flag colour. Its icon: the tag's, one string or one per set.
+* **Flag column:** each tag's icon in its colour, in config order, then
   the states (new, hidden, pull). new, snoozed and ignored stay states,
-  not marks: they come from state or behaviour, not lists you write.
+  not tags: they come from state or behaviour, not lists you write.
 * **Filtering**, fzf's extended syntax, which `/` already follows:
-  `#work` has the mark, `!#work` hasn't, space is AND (`#work api`: marked
+  `#work` has the tag, `!#work` hasn't, space is AND (`#work api`: tagged
   work and fuzzily "api"), `|` is OR (`#work | #home`). The CLI takes the
-  same: `argus status --filter '#work !#old'`, and `--mark work`
-  (repeatable, AND) as shorthand. `MarkFilter::parse` (core) splits a
-  query: groups joined by `|` made only of mark terms filter by marks;
+  same: `argus status --filter '#work !#old'`, and `--tag work`
+  (repeatable, AND) as shorthand. `TagFilter::parse` (core) splits a
+  query: groups joined by `|` made only of tag terms filter by tags;
   everything else goes to nucleo as text, which has no OR, so `|` works
-  between marks only. An unknown name in `/` matches nothing; in
-  `--mark`, it's an error naming the marks there are.
-* **Setting them:** the Mark menu has an item per mark by its `key` (a
-  clash with the menu's own keys warns at load); `m o`, the owner's menu,
-  lists them too. CLI: `argus mark <mark> PATTERNS…` / `argus unmark
-  <mark> PATTERNS…`, `<mark>` being one of `[marks]` or pull or ignore
-  (so no mark may be named either), `--owner` for the owner's pattern;
-  `argus unmark --all` clears every mark of the repos and their snoozes.
-  Written back into `[marks.X] repos` in place, as `configfile` edits the
-  lists. Snoozes and ignored issues aren't marks: `argus snooze PATTERNS
+  between tags only. An unknown name in `/` matches nothing; in
+  `--tag`, it's an error naming the tags there are.
+* **Setting them:** the Tag menu has an item per tag by its `key` (a
+  clash with the menu's own keys warns at load); `t o`, the owner's menu,
+  lists them too. CLI: `argus tag <tag> PATTERNS…` / `argus untag
+  <tag> PATTERNS…`, `<tag>` being one of `[tags]` or pull or ignore
+  (so no tag may be named either), `--owner` for the owner's pattern;
+  `argus untag --all` clears every tag of the repos and their snoozes.
+  Written back into `[tags.X] repos` in place, as `configfile` edits the
+  lists. Snoozes and ignored issues aren't tags: `argus snooze PATTERNS
   --for 3d [--issue …]`, `argus unsnooze`, `argus ignore-issue` /
   `unignore-issue`.
-* **Done this way:** `Mark` is `Label(index) | Pull | Ignore` (the two
+* **Done this way:** `Tag` is `Label(index) | Pull | Ignore` (the two
   keep their variants: code asks for them by what they do, and
-  `Mark::all` leaves their indices out of the labels), the index
-  into `[marks]` (config doesn't change during a session), so it stays
-  `Copy` for menu actions. Badges carry `Role::Mark(index)`; the theme
-  resolves each mark's style once (`Theme::with_marks`). The CLI maps a
-  mark's colour to ANSI where it's one of the 16 names with bold or dim,
-  else yellow. A mark without `key` isn't in the Mark menu (the CLI still
+  `Tag::all` leaves their indices out of the labels), the index
+  into `[tags]` (config doesn't change during a session), so it stays
+  `Copy` for menu actions. Badges carry `Role::Tag(index)`; the theme
+  resolves each tag's style once (`Theme::with_tags`). The CLI maps a
+  tag's colour to ANSI where it's one of the 16 names with bold or dim,
+  else yellow. A tag without `key` isn't in the Tag menu (the CLI still
   sets it); one whose key the menu has warns at startup. `argus demo
-  --glyphs` lists each mark's icon by set.
+  --glyphs` lists each tag's icon by set.

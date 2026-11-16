@@ -15,7 +15,7 @@ use crate::discover::{self, DiscoverOptions, RepoKind, Skip};
 use crate::forge::LocalForges;
 use crate::identity::RepoId;
 use crate::paths::contract_tilde;
-use crate::rules::{self, Flags, IssueList, Mark, RuleSet};
+use crate::rules::{self, Flags, IssueList, RuleSet, Tag};
 use crate::state::State;
 use crate::status::{self, RepoStatus};
 
@@ -29,17 +29,17 @@ pub struct Entry {
     /// its line there, not listed, and left out of everything done to all.
     pub nested: bool,
     pub id: Option<RepoId>,
-    /// Key for marks/snoozes: identity for main clones, path otherwise.
+    /// Key for tags/snoozes: identity for main clones, path otherwise.
     pub key: String,
     pub flags: Flags,
     pub status: Option<Result<RepoStatus, String>>,
     /// Issues that count: those of the status, less ignored ones.
     pub issues: Vec<Issue>,
-    /// Issues the status shows that `[marks.ignore.issues]` turns off for this repo.
+    /// Issues the status shows that `[tags.ignore.issues]` turns off for this repo.
     pub ignored_issues: Vec<Issue>,
     /// Issues the status shows that are snoozed (until their snooze ends).
     pub snoozed_issues: Vec<Issue>,
-    /// For each of the status's stashes, whether `[marks.ignore.issues] stashes` covers it.
+    /// For each of the status's stashes, whether `[tags.ignore.issues] stashes` covers it.
     pub stash_ignored: Vec<bool>,
     /// Every issue of the status, before ignoring.
     all_issues: Vec<Issue>,
@@ -298,34 +298,34 @@ impl Workspace {
         }
     }
 
-    /// The entry naming a repo in the mark lists: its identity, or its path
+    /// The entry naming a repo in the tag lists: its identity, or its path
     /// (`~/…`) without one.
-    fn mark_name(e: &Entry) -> String {
+    fn tag_name(e: &Entry) -> String {
         match &e.id {
             Some(id) => id.to_string(),
             None => contract_tilde(&e.path),
         }
     }
 
-    /// Mark (or unmark) the repos at `indices` in `config` (see
-    /// [`rules::set_mark`]); flags follow. Saving config is the caller's.
-    /// Ignore excludes pull and marks with sort points: ignoring turns them
+    /// Tag (or untag) the repos at `indices` in `config` (see
+    /// [`rules::set_tag`]); flags follow. Saving config is the caller's.
+    /// Ignore excludes pull and tags with sort points: ignoring turns them
     /// off, and turning one on stops ignoring (labels don't).
-    pub fn set_mark(&mut self, indices: &[usize], m: Mark, on: bool) -> Result<(), ConfigError> {
-        let marks = exclusive(&self.config, m, on);
+    pub fn set_tag(&mut self, indices: &[usize], m: Tag, on: bool) -> Result<(), ConfigError> {
+        let tags = exclusive(&self.config, m, on);
         for &i in indices {
             let e = &self.entries[i];
             let tracked_pull =
                 e.id.as_ref()
                     .and_then(|id| rules::track_for(&self.config, &self.state, id))
                     .is_some_and(|t| t.pull);
-            let (id, path, name) = (e.id.clone(), e.path.clone(), Self::mark_name(e));
-            for &(m, on) in &marks {
-                let base = m == Mark::Pull && tracked_pull;
-                rules::set_mark(&mut self.config, m, id.as_ref(), &path, &name, base, on)?;
+            let (id, path, name) = (e.id.clone(), e.path.clone(), Self::tag_name(e));
+            for &(m, on) in &tags {
+                let base = m == Tag::Pull && tracked_pull;
+                rules::set_tag(&mut self.config, m, id.as_ref(), &path, &name, base, on)?;
             }
         }
-        self.marks_changed()
+        self.tags_changed()
     }
 
     /// Ignore (`on`) or stop ignoring `list`'s issue for the repos at
@@ -345,7 +345,7 @@ impl Workspace {
         for &i in indices {
             let e = &self.entries[i];
             let values = e.status().map(|s| list.values(s)).unwrap_or_default();
-            let (id, path, name) = (e.id.clone(), e.path.clone(), Self::mark_name(e));
+            let (id, path, name) = (e.id.clone(), e.path.clone(), Self::tag_name(e));
             rules::set_issue_ignored(
                 &mut self.config,
                 list,
@@ -357,7 +357,7 @@ impl Workspace {
                 pin,
             )?;
         }
-        self.marks_changed()
+        self.tags_changed()
     }
 
     /// Where repo `i`'s `list` issue stands (see [`rules::IgnoreState`]).
@@ -382,7 +382,7 @@ impl Workspace {
         for &i in indices {
             let e = &self.entries[i];
             let values = e.status().map(|s| list.values(s)).unwrap_or_default();
-            let (id, path, name) = (e.id.clone(), e.path.clone(), Self::mark_name(e));
+            let (id, path, name) = (e.id.clone(), e.path.clone(), Self::tag_name(e));
             rules::set_issue_state(
                 &mut self.config,
                 list,
@@ -393,28 +393,28 @@ impl Workspace {
                 state,
             )?;
         }
-        self.marks_changed()
+        self.tags_changed()
     }
 
-    /// Drop the entries naming the repos at `indices` from every mark list,
+    /// Drop the entries naming the repos at `indices` from every tag list,
     /// so patterns decide again.
-    pub fn clear_marks(&mut self, indices: &[usize]) -> Result<(), ConfigError> {
+    pub fn clear_tags(&mut self, indices: &[usize]) -> Result<(), ConfigError> {
         for &i in indices {
             let (id, path) = (self.entries[i].id.clone(), self.entries[i].path.clone());
-            for m in Mark::all(&self.config) {
-                rules::clear_mark(&mut self.config, m, id.as_ref(), &path)?;
+            for m in Tag::all(&self.config) {
+                rules::clear_tag(&mut self.config, m, id.as_ref(), &path)?;
             }
         }
-        self.marks_changed()
+        self.tags_changed()
     }
 
-    /// Mark (or unmark) the owners of the repos at `indices` as a whole,
+    /// Tag (or untag) the owners of the repos at `indices` as a whole,
     /// with their pattern (`github.com/acme/*`), ignore excluding the
     /// others as for a repo. Repos without an identity have no owner.
-    pub fn set_owner_mark(
+    pub fn set_owner_tag(
         &mut self,
         indices: &[usize],
-        m: Mark,
+        m: Tag,
         on: bool,
     ) -> Result<(), ConfigError> {
         // (an owner several repos share gets the same edit again: a no-op)
@@ -424,30 +424,30 @@ impl Workspace {
             .collect();
         for id in &owners {
             for (m, on) in exclusive(&self.config, m, on) {
-                let base = m == Mark::Pull && self.tracked_pull(id);
-                rules::set_owner_mark(&mut self.config, m, id, base, on)?;
+                let base = m == Tag::Pull && self.tracked_pull(id);
+                rules::set_owner_tag(&mut self.config, m, id, base, on)?;
             }
         }
-        self.marks_changed()
+        self.tags_changed()
     }
 
-    /// Whether the owner of the repo at `i` is marked `m` as a whole;
+    /// Whether the owner of the repo at `i` is tagged `m` as a whole;
     /// `None` for a repo without an identity.
-    pub fn owner_marked(&self, i: usize, m: Mark) -> Option<bool> {
+    pub fn owner_tagged(&self, i: usize, m: Tag) -> Option<bool> {
         let id = self.entries[i].id.as_ref()?;
-        let decided = |m: Mark| -> Option<bool> {
-            let base = m == Mark::Pull && self.tracked_pull(id);
+        let decided = |m: Tag| -> Option<bool> {
+            let base = m == Tag::Pull && self.tracked_pull(id);
             Some(
                 rules::owner_decides(&self.config, m, id)
                     .ok()?
                     .unwrap_or(base),
             )
         };
-        let ignored = decided(Mark::Ignore)?;
+        let ignored = decided(Tag::Ignore)?;
         // ignore wins, as for a repo, except over a label
         Some(match m {
-            Mark::Ignore => ignored,
-            Mark::Label(_) if m.points(&self.config) == 0 => decided(m)?,
+            Tag::Ignore => ignored,
+            Tag::Label(_) if m.points(&self.config) == 0 => decided(m)?,
             _ => decided(m)? && !ignored,
         })
     }
@@ -457,17 +457,17 @@ impl Workspace {
         rules::track_for(&self.config, &self.state, id).is_some_and(|t| t.pull)
     }
 
-    /// The marks the repo at `i` has without entries of its own (as after
-    /// [`Self::clear_marks`]), each with what gives it: `favourite
+    /// The tags the repo at `i` has without entries of its own (as after
+    /// [`Self::clear_tags`]), each with what gives it: `favourite
     /// (acme/*)`, or for pull a tracked owner, `pull (tracking
     /// github.com/acme)`.
-    pub fn remaining_marks(&self, i: usize) -> Vec<String> {
+    pub fn remaining_tags(&self, i: usize) -> Vec<String> {
         let e = &self.entries[i];
-        Mark::all(&self.config)
+        Tag::all(&self.config)
             .into_iter()
             .filter(|&m| m.of(&e.flags, &self.config))
             .filter_map(|m| {
-                let why = match self.rules.marking(m, e.id.as_ref(), &e.path) {
+                let why = match self.rules.tagging(m, e.id.as_ref(), &e.path) {
                     Some(entry) => entry.to_string(),
                     None => format!("tracking {}", e.flags.tracked.as_ref()?),
                 };
@@ -477,20 +477,20 @@ impl Workspace {
     }
 
     /// How many of the repos at `indices` have entries of their own in the
-    /// mark lists: clearing those of more than one needs confirmation.
-    pub fn marked_count(&self, indices: &[usize]) -> usize {
+    /// tag lists: clearing those of more than one needs confirmation.
+    pub fn tagged_count(&self, indices: &[usize]) -> usize {
         indices
             .iter()
             .filter(|&&i| {
                 let e = &self.entries[i];
-                Mark::all(&self.config)
+                Tag::all(&self.config)
                     .into_iter()
                     .any(|m| !self.rules.own_entries(m, e.id.as_ref(), &e.path).is_empty())
             })
             .count()
     }
 
-    fn marks_changed(&mut self) -> Result<(), ConfigError> {
+    fn tags_changed(&mut self) -> Result<(), ConfigError> {
         self.rules = RuleSet::new(&self.config)?;
         self.resolve_flags();
         Ok(())
@@ -725,7 +725,7 @@ impl Workspace {
     }
 
     /// Indices into `entries` in display order: top-level repos sorted by
-    /// marks' sort points, severity, amount of change and name; each followed by its
+    /// tags' sort points, severity, amount of change and name; each followed by its
     /// children (worktrees, submodules).
     pub fn ordered(&self, filter: ViewFilter) -> Vec<usize> {
         let visible = |e: &Entry| {
@@ -872,20 +872,20 @@ impl Workspace {
     }
 }
 
-/// The marks to set for `m` `on`: ignore excludes pull and the marks with
+/// The tags to set for `m` `on`: ignore excludes pull and the tags with
 /// sort points (which would raise a repo you hid); pure labels go with it.
-fn exclusive(c: &Config, m: Mark, on: bool) -> Vec<(Mark, bool)> {
+fn exclusive(c: &Config, m: Tag, on: bool) -> Vec<(Tag, bool)> {
     match (m, on) {
-        (Mark::Ignore, true) => std::iter::once((m, on))
+        (Tag::Ignore, true) => std::iter::once((m, on))
             .chain(
-                Mark::all(c)
+                Tag::all(c)
                     .into_iter()
-                    .filter(|&o| o == Mark::Pull || o.points(c) != 0)
+                    .filter(|&o| o == Tag::Pull || o.points(c) != 0)
                     .map(|o| (o, false)),
             )
             .collect(),
-        (Mark::Label(_), true) if m.points(c) == 0 => vec![(m, on)],
-        (_, true) => vec![(m, on), (Mark::Ignore, false)],
+        (Tag::Label(_), true) if m.points(c) == 0 => vec![(m, on)],
+        (_, true) => vec![(m, on), (Tag::Ignore, false)],
         _ => vec![(m, on)],
     }
 }

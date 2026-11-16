@@ -372,12 +372,12 @@ fn fix_with_explicit_kind_and_pattern() {
 }
 
 #[test]
-fn mark_snooze_and_ack_roundtrip_through_state() {
+fn tag_snooze_and_ack_roundtrip_through_state() {
     let sb = Sandbox::new();
     three(&sb);
     // favourites lead their group, but unclean repos still come first
     argus(&sb)
-        .args(["mark", "favourite", "acme/clean", "acme/feature"])
+        .args(["tag", "favourite", "acme/clean", "acme/feature"])
         .assert()
         .success();
     let out = argus(&sb).args(["status", "--all"]).output().unwrap();
@@ -433,7 +433,7 @@ fn mark_snooze_and_ack_roundtrip_through_state() {
         .failure()
         .stderr(predicate::str::contains("bad duration"));
     argus(&sb)
-        .args(["mark", "ignore", "nomatch/*"])
+        .args(["tag", "ignore", "nomatch/*"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("no repos match"));
@@ -445,12 +445,12 @@ fn mark_snooze_and_ack_roundtrip_through_state() {
 }
 
 #[test]
-fn pull_pulls_marked_repos_and_reports_failures_with_exit_code() {
+fn pull_pulls_tagged_repos_and_reports_failures_with_exit_code() {
     let sb = Sandbox::new();
     three(&sb);
     sb.advance_remote("acme", "clean", "upstream-file");
     let cfg = sb.path("cfg.toml");
-    std::fs::write(&cfg, "marks.pull.repos = ['acme/clean']\n").unwrap();
+    std::fs::write(&cfg, "tags.pull.repos = ['acme/clean']\n").unwrap();
     argus(&sb)
         .arg("--config")
         .arg(&cfg)
@@ -537,8 +537,8 @@ fn help_documents_every_flag_and_repeatable_options() {
         &["status"][..],
         &["pull"],
         &["fix"],
-        &["mark"],
-        &["unmark"],
+        &["tag"],
+        &["untag"],
         &["snooze"],
         &["unsnooze"],
         &["ignore-issue"],
@@ -974,7 +974,7 @@ fn every_command_prints_json() {
     assert_eq!(v[0]["exists"], true, "{v}");
     assert!(v[0]["path"].is_string());
 
-    let v = run(&["mark", "pull", "acme/clean"]);
+    let v = run(&["tag", "pull", "acme/clean"]);
     assert_eq!(v[0]["repo"], "acme/clean", "{v}");
     assert_eq!(v[0]["pull"], true, "{v}");
     assert!(v[0]["key"].is_string());
@@ -1021,7 +1021,7 @@ fn every_command_prints_json() {
     assert_eq!(v["removed"].as_array().unwrap().len(), 1, "{v}");
 
     let v = run(&["demo", "--glyphs"]);
-    assert_eq!(v["sets"]["unicode"]["mark.favourite"], "◆", "{v}");
+    assert_eq!(v["sets"]["unicode"]["tag.favourite"], "◆", "{v}");
     assert_eq!(v["sets"]["ascii"]["ok"], "ok", "{v}");
     assert!(v["punctuation"].is_string() && v["alternatives"].is_string());
 
@@ -1037,11 +1037,11 @@ fn every_command_prints_json() {
 }
 
 #[test]
-fn clearing_marks_of_several_repos_needs_confirmation() {
+fn clearing_tags_of_several_repos_needs_confirmation() {
     let sb = Sandbox::new();
     three(&sb);
     argus(&sb)
-        .args(["mark", "favourite", "acme/*"])
+        .args(["tag", "favourite", "acme/*"])
         .assert()
         .success();
     let favourites = |sb: &Sandbox| -> usize {
@@ -1050,7 +1050,7 @@ fn clearing_marks_of_several_repos_needs_confirmation() {
             .unwrap()
             .iter()
             .filter(|e| {
-                e["flags"]["marks"]
+                e["flags"]["tags"]
                     .as_array()
                     .unwrap()
                     .iter()
@@ -1061,50 +1061,50 @@ fn clearing_marks_of_several_repos_needs_confirmation() {
     assert_eq!(favourites(&sb), 3);
     // no terminal to ask on, and no --yes: refused, nothing changed
     argus(&sb)
-        .args(["unmark", "--all", "acme/*"])
+        .args(["untag", "--all", "acme/*"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("clear marks of 3 repos"))
+        .stderr(predicate::str::contains("clear tags of 3 repos"))
         .stderr(predicate::str::contains("--yes"));
     assert_eq!(favourites(&sb), 3);
     // one repo: no question
     argus(&sb)
-        .args(["unmark", "--all", "acme/clean"])
+        .args(["untag", "--all", "acme/clean"])
         .assert()
         .success();
     assert_eq!(favourites(&sb), 2);
     // --yes / -y proceed
     argus(&sb)
-        .args(["unmark", "--all", "acme/*", "--yes"])
+        .args(["untag", "--all", "acme/*", "--yes"])
         .assert()
         .success();
     assert_eq!(favourites(&sb), 0);
     argus(&sb)
-        .args(["mark", "favourite", "acme/*"])
+        .args(["tag", "favourite", "acme/*"])
         .assert()
         .success();
     argus(&sb)
-        .args(["-y", "unmark", "--all", "acme/*"])
+        .args(["-y", "untag", "--all", "acme/*"])
         .assert()
         .success();
     assert_eq!(favourites(&sb), 0);
     // repos with nothing to lose don't count
     argus(&sb)
-        .args(["mark", "pull", "acme/dirty"])
+        .args(["tag", "pull", "acme/dirty"])
         .assert()
         .success();
     argus(&sb)
-        .args(["unmark", "--all", "acme/*"])
+        .args(["untag", "--all", "acme/*"])
         .assert()
         .success();
 }
 
 #[test]
-fn marks_are_written_to_the_config_lists() {
+fn tags_are_written_to_the_config_lists() {
     let sb = Sandbox::new();
     three(&sb);
     let cfg = sb.path("cfg.toml");
-    std::fs::write(&cfg, "# mine\nmarks.pull.repos = ['acme/*']\n").unwrap();
+    std::fs::write(&cfg, "# mine\ntags.pull.repos = ['acme/*']\n").unwrap();
     let run = |args: &[&str]| {
         argus(&sb)
             .arg("--config")
@@ -1113,27 +1113,27 @@ fn marks_are_written_to_the_config_lists() {
             .assert()
             .success();
     };
-    run(&["mark", "favourite", "acme/clean"]);
-    run(&["unmark", "pull", "acme/dirty"]);
-    run(&["mark", "ignore", "acme/feature"]);
+    run(&["tag", "favourite", "acme/clean"]);
+    run(&["untag", "pull", "acme/dirty"]);
+    run(&["tag", "ignore", "acme/feature"]);
     let text = std::fs::read_to_string(&cfg).unwrap();
     let c = argus_core::Config::parse(&text).unwrap();
-    assert_eq!(c.marks["favourite"].repos, ["github.com/acme/clean"]);
+    assert_eq!(c.tags["favourite"].repos, ["github.com/acme/clean"]);
     // ignoring also turns off pulling, which the pattern gave it
     assert_eq!(
-        c.marks["pull"].repos,
+        c.tags["pull"].repos,
         [
             "acme/*",
             "!github.com/acme/dirty",
             "!github.com/acme/feature"
         ]
     );
-    assert_eq!(c.marks["ignore"].repos, ["github.com/acme/feature"]);
+    assert_eq!(c.tags["ignore"].repos, ["github.com/acme/feature"]);
     assert!(text.starts_with("# mine\n"), "{text}");
     // --all: the repo's own entries go; what patterns still give is said
     let clear = |repo: &str| {
         let o = argus(&sb)
-            .args(["--config", cfg.to_str().unwrap(), "unmark", "--all", repo])
+            .args(["--config", cfg.to_str().unwrap(), "untag", "--all", repo])
             .output()
             .unwrap();
         assert!(o.status.success());
@@ -1142,13 +1142,44 @@ fn marks_are_written_to_the_config_lists() {
     assert_eq!(clear("acme/dirty"), "acme/dirty: still pull (acme/*)\n");
     let c = argus_core::Config::parse(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
     // only acme/dirty's entries went; ignored acme/feature keeps its own
-    assert_eq!(
-        c.marks["pull"].repos,
-        ["acme/*", "!github.com/acme/feature"]
-    );
+    assert_eq!(c.tags["pull"].repos, ["acme/*", "!github.com/acme/feature"]);
     // inverse: nothing left, nothing said
-    std::fs::write(&cfg, "marks.favourite.repos = ['acme/clean']\n").unwrap();
+    std::fs::write(&cfg, "tags.favourite.repos = ['acme/clean']\n").unwrap();
     assert_eq!(clear("acme/clean"), "");
+}
+
+/// Tags were marks in 0.2.0: `argus mark` and `unmark`, `status --mark`
+/// and `[marks]` in config all still work.
+#[test]
+fn what_0_2_0_called_marks_still_works() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "# mine\n[marks.work]\nrepos = ['acme/dirty']\n").unwrap();
+    let run = |args: &[&str]| {
+        let o = argus(&sb)
+            .arg("--config")
+            .arg(&cfg)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{args:?}: {o:?}");
+        String::from_utf8(o.stdout).unwrap()
+    };
+    run(&["mark", "work", "acme/clean"]);
+    let out = run(&["status", "--all", "--mark", "work"]);
+    assert!(
+        out.contains("acme/clean") && out.contains("acme/dirty") && !out.contains("acme/feature"),
+        "{out}"
+    );
+    run(&["unmark", "work", "acme/dirty"]);
+    assert_eq!(
+        std::fs::read_to_string(&cfg).unwrap(),
+        "# mine\n[tags.work]\nrepos = [\"github.com/acme/clean\"]\n"
+    );
+    // they're not what help offers
+    let help = run(&["--help"]);
+    assert!(help.contains("  tag ") && !help.contains("mark"), "{help}");
 }
 
 #[test]
@@ -1169,7 +1200,7 @@ fn old_marks_in_state_are_shown_as_config_and_kept() {
     let out = run(&["status"]);
     let err = String::from_utf8(out.stderr).unwrap();
     assert!(
-        err.contains("marks.favourite.repos = [\"github.com/acme/clean\"]"),
+        err.contains("tags.favourite.repos = [\"github.com/acme/clean\"]"),
         "{err}"
     );
     assert!(err.contains("config"), "{err}");
@@ -1184,7 +1215,7 @@ fn old_marks_in_state_are_shown_as_config_and_kept() {
         .iter()
         .find(|e| e["key"] == "github.com/acme/clean")
         .unwrap();
-    assert_eq!(clean["flags"]["marks"], serde_json::json!([]));
+    assert_eq!(clean["flags"]["tags"], serde_json::json!([]));
     // a command that saves state keeps them
     assert!(run(&["ack"]).status.success());
     let text = std::fs::read_to_string(&state).unwrap();
@@ -1267,18 +1298,18 @@ fn completion_offers_commands_options_and_repo_names() {
     let cfg = sb.path("cfg.toml");
     std::fs::write(&cfg, format!("roots = ['{}']\n", sb.path("dev").display())).unwrap();
     assert!(complete(&sb, &cfg, &["pu"]).contains(&"pull".to_string()));
-    assert!(complete(&sb, &cfg, &["unmark", "--a"]).contains(&"--all".to_string()));
-    // marks, then repos
+    assert!(complete(&sb, &cfg, &["untag", "--a"]).contains(&"--all".to_string()));
+    // tags, then repos
     assert_eq!(
-        complete(&sb, &cfg, &["mark", ""])[..3],
+        complete(&sb, &cfg, &["tag", ""])[..3],
         ["favourite", "pull", "ignore"]
     );
     assert_eq!(complete(&sb, &cfg, &["ignore-issue", "st"]), ["stashes"]);
-    assert!(complete(&sb, &cfg, &["unmark", "fa"]).contains(&"favourite".to_string()));
+    assert!(complete(&sb, &cfg, &["untag", "fa"]).contains(&"favourite".to_string()));
     // repo names, by owner/name or path, for every command taking patterns
     for cmd in [
-        &["mark", "favourite"][..],
-        &["unmark", "pull"],
+        &["tag", "favourite"][..],
+        &["untag", "pull"],
         &["snooze"],
         &["unsnooze"],
         &["ignore-issue", "stashes"],
@@ -1290,7 +1321,7 @@ fn completion_offers_commands_options_and_repo_names() {
         args.push("acme/c");
         assert_eq!(complete(&sb, &cfg, &args), ["acme/clean"], "{cmd:?}");
     }
-    let all = complete(&sb, &cfg, &["mark", "favourite", ""]);
+    let all = complete(&sb, &cfg, &["tag", "favourite", ""]);
     for name in ["acme/clean", "acme/dirty", "acme/feature"] {
         assert!(all.contains(&name.to_string()), "{all:?}");
     }
@@ -1299,7 +1330,7 @@ fn completion_offers_commands_options_and_repo_names() {
         "local repos by path: {all:?}"
     );
     // inverse: nothing matches, nothing offered
-    assert!(complete(&sb, &cfg, &["mark", "favourite", "nomatch/"]).is_empty());
+    assert!(complete(&sb, &cfg, &["tag", "favourite", "nomatch/"]).is_empty());
 }
 
 #[test]
@@ -1362,7 +1393,7 @@ fn fix_leaves_an_ignored_state_alone() {
     let cfg = sb.path("cfg.toml");
     std::fs::write(
         &cfg,
-        "[marks.ignore.issues]\nnon_default_branch = ['acme/feature@feat']\n",
+        "[tags.ignore.issues]\nnon_default_branch = ['acme/feature@feat']\n",
     )
     .unwrap();
     let fix = |args: &[&str]| {
@@ -1380,7 +1411,7 @@ fn fix_leaves_an_ignored_state_alone() {
     // inverse: pinned to another branch, it's fixed as before
     std::fs::write(
         &cfg,
-        "[marks.ignore.issues]\nnon_default_branch = ['acme/feature@other']\n",
+        "[tags.ignore.issues]\nnon_default_branch = ['acme/feature@other']\n",
     )
     .unwrap();
     fix(&["fix"]).stdout(predicate::str::contains("switch main"));
@@ -1494,7 +1525,7 @@ fn destructive_fixes_are_listed_and_need_yes() {
 }
 
 #[test]
-fn ack_and_mark_reach_hidden_repos_and_ack_keeps_the_other_new_ones() {
+fn ack_and_tag_reach_hidden_repos_and_ack_keeps_the_other_new_ones() {
     let sb = Sandbox::new();
     three(&sb);
     for n in ["n1", "n2"] {
@@ -1515,7 +1546,7 @@ fn ack_and_mark_reach_hidden_repos_and_ack_keeps_the_other_new_ones() {
         .success();
     // a pattern reaches hidden repos too (a name always would)
     argus(&sb)
-        .args(["mark", "favourite", "acme/n*"])
+        .args(["tag", "favourite", "acme/n*"])
         .assert()
         .success()
         .stdout(predicate::str::contains("acme/n2"));
@@ -1552,7 +1583,7 @@ fn pull_takes_patterns_indents_failures_and_json_says_failed() {
     let sb = Sandbox::new();
     three(&sb);
     let cfg = sb.path("cfg.toml");
-    std::fs::write(&cfg, "marks.pull.repos = ['acme/clean', 'acme/feature']\n").unwrap();
+    std::fs::write(&cfg, "tags.pull.repos = ['acme/clean', 'acme/feature']\n").unwrap();
     argus(&sb)
         .arg("--config")
         .arg(&cfg)
@@ -1756,7 +1787,7 @@ fn pull_reports_what_a_directory_forge_has_and_no_longer_has() {
     assert!(
         stdout.contains(
             "orphan: ~/dev/acme/gone: gone from the forge, or out of reach \
-             (to hide it: argus mark ignore acme/gone)\n"
+             (to hide it: argus tag ignore acme/gone)\n"
         ),
         "{stdout}"
     );
@@ -1824,7 +1855,7 @@ fn forge_list_reads_a_directory() {
 }
 
 #[test]
-fn mark_owner_marks_the_repos_owners_as_a_whole() {
+fn tag_owner_tags_the_repos_owners_as_a_whole() {
     let sb = Sandbox::new();
     three(&sb);
     let cfg = sb.path("cfg.toml");
@@ -1839,31 +1870,31 @@ fn mark_owner_marks_the_repos_owners_as_a_whole() {
     };
     let read = || argus_core::Config::parse(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
     assert!(
-        run(&["mark", "favourite", "acme/clean", "--owner"])
+        run(&["tag", "favourite", "acme/clean", "--owner"])
             .status
             .success()
     );
-    assert_eq!(read().marks["favourite"].repos, ["github.com/acme/*"]);
+    assert_eq!(read().tags["favourite"].repos, ["github.com/acme/*"]);
     assert!(
-        run(&["mark", "ignore", "acme/*", "--owner"])
+        run(&["tag", "ignore", "acme/*", "--owner"])
             .status
             .success()
     );
     let c = read();
     assert!(
-        c.marks["favourite"].repos.is_empty(),
+        c.tags["favourite"].repos.is_empty(),
         "ignore excludes favourite"
     );
-    assert_eq!(c.marks["ignore"].repos, ["github.com/acme/*"]);
+    assert_eq!(c.tags["ignore"].repos, ["github.com/acme/*"]);
     assert!(
-        run(&["unmark", "ignore", "acme/*", "--owner"])
+        run(&["untag", "ignore", "acme/*", "--owner"])
             .status
             .success()
     );
-    assert!(read().marks["ignore"].repos.is_empty());
-    // only for marking and unmarking one mark
+    assert!(read().tags["ignore"].repos.is_empty());
+    // only for tagging and untagging one tag
     for args in [
-        &["unmark", "--all", "--owner", "acme/clean"][..],
+        &["untag", "--all", "--owner", "acme/clean"][..],
         &["snooze", "--owner", "acme/clean", "--for", "1d"],
         &["ignore-issue", "behind", "acme/clean", "--owner"],
     ] {
@@ -1928,15 +1959,15 @@ fn snooze_one_issue() {
         .stderr(predicate::str::contains("--for"));
 }
 
-/// A mark of your own: `argus mark work …` / `argus unmark work …` edit
-/// `[marks.work] repos`; status shows its icon; an unknown mark is named
+/// A tag of your own: `argus tag work …` / `argus untag work …` edit
+/// `[tags.work] repos`; status shows its icon; an unknown tag is named
 /// with the ones there are.
 #[test]
-fn marks_of_your_own_are_set_and_shown() {
+fn tags_of_your_own_are_set_and_shown() {
     let sb = Sandbox::new();
     three(&sb);
     let cfg = sb.path("cfg.toml");
-    std::fs::write(&cfg, "[marks.work]\nicon = 'W'\n").unwrap();
+    std::fs::write(&cfg, "[tags.work]\nicon = 'W'\n").unwrap();
     let run = |args: &[&str]| {
         argus(&sb)
             .arg("--config")
@@ -1945,24 +1976,24 @@ fn marks_of_your_own_are_set_and_shown() {
             .output()
             .unwrap()
     };
-    let out = run(&["mark", "work", "acme/*", "--json"]);
+    let out = run(&["tag", "work", "acme/*", "--json"]);
     assert!(
         out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v[0]["marks"], serde_json::json!(["work"]), "{v}");
-    assert!(run(&["unmark", "work", "acme/dirty"]).status.success());
+    assert_eq!(v[0]["tags"], serde_json::json!(["work"]), "{v}");
+    assert!(run(&["untag", "work", "acme/dirty"]).status.success());
     let c = argus_core::Config::parse(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
     // each repo by name (a pattern selects repos; `--owner` writes one)
     assert_eq!(
-        c.marks["work"].repos,
+        c.tags["work"].repos,
         ["github.com/acme/clean", "github.com/acme/feature"]
     );
     assert_eq!(
-        c.marks["work"].icon,
-        Some(argus_core::config::MarkIcon::One("W".into()))
+        c.tags["work"].icon,
+        Some(argus_core::config::TagIcon::One("W".into()))
     );
     let status = String::from_utf8(run(&["status", "--all"]).stdout).unwrap();
     let line = |n: &str| status.lines().find(|l| l.contains(n)).unwrap().to_string();
@@ -1974,26 +2005,26 @@ fn marks_of_your_own_are_set_and_shown() {
         line("acme/dirty").trim_start().starts_with("acme/dirty"),
         "{status}"
     );
-    let o = run(&["mark", "home", "acme/clean"]);
+    let o = run(&["tag", "home", "acme/clean"]);
     assert!(!o.status.success());
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(err.contains("favourite, pull, ignore, work"), "{err}");
-    // and one patterns don't name: nothing marked
-    let o = run(&["unmark", "work"]);
+    // and one patterns don't name: nothing tagged
+    let o = run(&["untag", "work"]);
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("which repos"));
 }
 
-/// `status --filter` takes `/`'s syntax (`#mark`, `!#mark`, `|`, fuzzy
-/// text); `--mark` is shorthand for having each mark. An unknown mark is an
+/// `status --filter` takes `/`'s syntax (`#tag`, `!#tag`, `|`, fuzzy
+/// text); `--tag` is shorthand for having each tag. An unknown tag is an
 /// error, the ones there are named.
 #[test]
-fn status_filters_by_marks() {
+fn status_filters_by_tags() {
     let sb = Sandbox::new();
     three(&sb);
     let cfg = sb.path("cfg.toml");
     std::fs::write(
         &cfg,
-        "[marks.work]\nrepos = ['acme/clean', 'acme/dirty']\n[marks.home]\nrepos = ['acme/feature']\n",
+        "[tags.work]\nrepos = ['acme/clean', 'acme/dirty']\n[tags.home]\nrepos = ['acme/feature']\n",
     )
     .unwrap();
     let shown = |args: &[&str]| -> Vec<String> {
@@ -2019,15 +2050,15 @@ fn status_filters_by_marks() {
     assert_eq!(shown(&["--filter", "#work"]), ["clean", "dirty"]);
     assert_eq!(shown(&["--filter", "!#work"]), ["feature"]);
     assert_eq!(shown(&["--filter", "#work | #home"]).len(), 3);
-    // pull and ignore filter as marks do
+    // pull and ignore filter as tags do
     std::fs::write(
         &cfg,
-        "[marks.work]\nrepos = ['acme/clean', 'acme/dirty']\n[marks.home]\nrepos = ['acme/feature']\n\
-         [marks.pull]\nrepos = ['acme/dirty']\n[marks.ignore]\nrepos = ['acme/feature']\n",
+        "[tags.work]\nrepos = ['acme/clean', 'acme/dirty']\n[tags.home]\nrepos = ['acme/feature']\n\
+         [tags.pull]\nrepos = ['acme/dirty']\n[tags.ignore]\nrepos = ['acme/feature']\n",
     )
     .unwrap();
     assert_eq!(shown(&["--filter", "#pull"]), ["dirty"]);
-    assert_eq!(shown(&["--mark", "pull"]), ["dirty"]);
+    assert_eq!(shown(&["--tag", "pull"]), ["dirty"]);
     assert_eq!(shown(&["--hidden", "--filter", "#ignore"]), ["feature"]);
     assert_eq!(
         shown(&["--hidden", "--filter", "!#ignore !#pull"]),
@@ -2035,21 +2066,21 @@ fn status_filters_by_marks() {
     );
     std::fs::write(
         &cfg,
-        "[marks.work]\nrepos = ['acme/clean', 'acme/dirty']\n[marks.home]\nrepos = ['acme/feature']\n",
+        "[tags.work]\nrepos = ['acme/clean', 'acme/dirty']\n[tags.home]\nrepos = ['acme/feature']\n",
     )
     .unwrap();
     assert_eq!(shown(&["--filter", "#work cln"]), ["clean"]);
     // text matches the key too: github.com/acme/…
     assert_eq!(shown(&["--filter", "#work gthb"]), ["clean", "dirty"]);
-    assert_eq!(shown(&["--mark", "work", "--filter", "drt"]), ["dirty"]);
+    assert_eq!(shown(&["--tag", "work", "--filter", "drt"]), ["dirty"]);
     assert_eq!(
-        shown(&["--mark", "work", "--mark", "home"]),
+        shown(&["--tag", "work", "--tag", "home"]),
         Vec::<String>::new()
     );
     let o = argus(&sb)
         .arg("--config")
         .arg(&cfg)
-        .args(["status", "--mark", "nope"])
+        .args(["status", "--tag", "nope"])
         .output()
         .unwrap();
     assert!(!o.status.success());
@@ -2058,21 +2089,21 @@ fn status_filters_by_marks() {
     let out = argus(&sb)
         .arg("--config")
         .arg(&cfg)
-        .args(["status", "--all", "--mark", "home"])
+        .args(["status", "--all", "--tag", "home"])
         .output()
         .unwrap();
     assert!(String::from_utf8_lossy(&out.stdout).contains("1 matches the filter"));
 }
 
-/// `demo --glyphs` lists each mark's icon by set, and in yours, the set
+/// `demo --glyphs` lists each tag's icon by set, and in yours, the set
 /// your config chooses.
 #[test]
-fn glyphs_list_marks_by_set() {
+fn glyphs_list_tags_by_set() {
     let sb = Sandbox::new();
     let cfg = sb.path("cfg.toml");
     std::fs::write(
         &cfg,
-        "[ui]\nicons = 'ascii'\n[marks.work]\nicon = { unicode = 'W', ascii = 'w' }\n",
+        "[ui]\nicons = 'ascii'\n[tags.work]\nicon = { unicode = 'W', ascii = 'w' }\n",
     )
     .unwrap();
     let out = argus(&sb)
@@ -2082,14 +2113,14 @@ fn glyphs_list_marks_by_set() {
         .output()
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["sets"]["unicode"]["mark.favourite"], "◆");
-    assert_eq!(v["sets"]["yours"]["mark.favourite"], "*", "{v}");
-    assert_eq!(v["sets"]["unicode"]["mark.work"], "W");
-    assert_eq!(v["sets"]["yours"]["mark.work"], "w");
+    assert_eq!(v["sets"]["unicode"]["tag.favourite"], "◆");
+    assert_eq!(v["sets"]["yours"]["tag.favourite"], "*", "{v}");
+    assert_eq!(v["sets"]["unicode"]["tag.work"], "W");
+    assert_eq!(v["sets"]["yours"]["tag.work"], "w");
 }
 
 /// Completion follows `--root` and `--config` given earlier on the line:
-/// repos from that root, marks from that config.
+/// repos from that root, tags from that config.
 #[test]
 fn completion_follows_root_and_config_on_the_line() {
     let sb = Sandbox::new();
@@ -2116,16 +2147,12 @@ fn completion_follows_root_and_config_on_the_line() {
         "the configured roots replaced, as when running"
     );
     let mine = sb.path("mine.toml");
-    std::fs::write(&mine, "[marks.work]\n").unwrap();
+    std::fs::write(&mine, "[tags.work]\n").unwrap();
     assert_eq!(
-        complete(
-            &sb,
-            &cfg,
-            &["--config", mine.to_str().unwrap(), "mark", "w"]
-        ),
+        complete(&sb, &cfg, &["--config", mine.to_str().unwrap(), "tag", "w"]),
         ["work"]
     );
-    assert!(complete(&sb, &cfg, &["mark", "w"]).is_empty());
+    assert!(complete(&sb, &cfg, &["tag", "w"]).is_empty());
 }
 
 #[test]
@@ -2418,7 +2445,7 @@ fn orphaned(sb: &Sandbox) -> (std::path::PathBuf, String) {
     let cfg = sb.path("cfg.toml");
     std::fs::write(
         &cfg,
-        "[marks.pull]\nrepos = ['!acme/dirty', '!acme/feature']\n[[track]]\nowner = 'acme'\nclone = 'notify'\n",
+        "[tags.pull]\nrepos = ['!acme/dirty', '!acme/feature']\n[[track]]\nowner = 'acme'\nclone = 'notify'\n",
     )
     .unwrap();
     let (base, _requests) = fake_api_routes(vec![
@@ -2459,7 +2486,7 @@ fn pull_says_what_became_of_orphans() {
     );
     // gone: the clone may be the only copy, so only hiding it is offered
     assert!(
-        out.contains("orphan: ~/dev/feature: gone from the forge, or out of reach (to hide it: argus mark ignore acme/feature)\n"),
+        out.contains("orphan: ~/dev/feature: gone from the forge, or out of reach (to hide it: argus tag ignore acme/feature)\n"),
         "{out}"
     );
     assert!(!out.contains("clean"), "{out}");
@@ -2520,8 +2547,8 @@ fn status_names_line_up_whatever_flags_the_rows_have() {
     };
     // a nerd icon carries its own space; one row has two flags, one none
     let c = columns(
-        "[ui]\nicons = 'nerd'\n[marks.favourite]\nrepos = ['acme/clean', 'acme/dirty']\n\
-         [marks.work]\nicon = 'W'\nrepos = ['acme/dirty']\n",
+        "[ui]\nicons = 'nerd'\n[tags.favourite]\nrepos = ['acme/clean', 'acme/dirty']\n\
+         [tags.work]\nicon = 'W'\nrepos = ['acme/dirty']\n",
     );
     assert_eq!(c.len(), 3);
     assert!(c.iter().all(|w| *w == c[0]), "{c:?}");
@@ -2529,10 +2556,10 @@ fn status_names_line_up_whatever_flags_the_rows_have() {
     assert_eq!(c[0], 4);
     // inverse: with no flags anywhere, just the space
     assert_eq!(columns(""), [1, 1, 1]);
-    // and three marks on one row still line up
+    // and three tags on one row still line up
     let c = columns(
-        "[marks.a]\nrepos = ['acme/clean']\n[marks.b]\nrepos = ['acme/clean']\n\
-         [marks.c]\nrepos = ['acme/clean', 'acme/feature']\n",
+        "[tags.a]\nrepos = ['acme/clean']\n[tags.b]\nrepos = ['acme/clean']\n\
+         [tags.c]\nrepos = ['acme/clean', 'acme/feature']\n",
     );
     assert_eq!(c, [4, 4, 4]);
 }

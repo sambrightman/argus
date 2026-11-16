@@ -28,7 +28,7 @@ use argus_core::badges::{self, Badge, Role};
 use argus_core::fix::{self, FixKind};
 use argus_core::icons::{self, Icons};
 use argus_core::pull;
-use argus_core::rules::{IssueList, Mark};
+use argus_core::rules::{IssueList, Tag};
 use argus_core::runner::{self, Event};
 use argus_core::{Config, State, ViewFilter, Workspace, configfile, paths, plural};
 use clap::{Args, Parser, Subcommand};
@@ -83,13 +83,13 @@ enum Cmd {
         #[command(flatten)]
         view: View,
         /// Only repos matching this, as `/` does in the TUI: `#work` has
-        /// the mark, `!#work` hasn't, space is AND, `|` is OR between
-        /// marks; other words match the name fuzzily.
+        /// the tag, `!#work` hasn't, space is AND, `|` is OR between
+        /// tags; other words match the name fuzzily.
         #[arg(long, value_name = "QUERY")]
         filter: Option<String>,
-        /// Only repos with this mark; repeatable (all of them).
-        #[arg(long, value_name = "MARK", add = mark_completer())]
-        mark: Vec<String>,
+        /// Only repos with this tag; repeatable (all of them).
+        #[arg(long, alias = "mark", value_name = "TAG", add = tag_completer())]
+        tag: Vec<String>,
         /// Under each repo, what the TUI's details show: where it is, its
         /// issues, the fixes on offer, its branches, changes and stashes.
         #[arg(long)]
@@ -101,7 +101,7 @@ enum Cmd {
         #[arg(long)]
         forge: bool,
     },
-    /// Pull the repos marked for pull; list tracked owners and clone their
+    /// Pull the repos tagged for pull; list tracked owners and clone their
     /// new repos.
     Pull {
         /// Show what would happen.
@@ -138,20 +138,22 @@ enum Cmd {
         #[arg(add = repo_completer())]
         patterns: Vec<String>,
     },
-    /// Mark repos with MARK, whatever patterns in config say: one of
-    /// `[marks]` (favourite, or one of your own), `pull` (pulled by `argus
+    /// Tag repos with TAG, whatever patterns in config say: one of
+    /// `[tags]` (favourite, or one of your own), `pull` (pulled by `argus
     /// pull`) or `ignore` (hidden, left out of pulls and bulk actions).
     /// Edits that list in config.
-    Mark(MarkArgs),
-    /// Unmark repos, whatever patterns in config say; `--all`: drop the
-    /// repos' own entries from every mark and end their snoozes.
-    Unmark(UnmarkArgs),
+    #[command(alias = "mark")]
+    Tag(TagArgs),
+    /// Untag repos, whatever patterns in config say; `--all`: drop the
+    /// repos' own entries from every tag and end their snoozes.
+    #[command(alias = "unmark")]
+    Untag(UntagArgs),
     /// Hide repos for a while, or with `--issue` just that issue of them.
     Snooze(SnoozeArgs),
     /// End snoozes early: the repos' and all their issues', or with
     /// `--issue` just that one.
     Unsnooze(UnsnoozeArgs),
-    /// Ignore one issue for some repos (`[marks.ignore.issues] <issue>`).
+    /// Ignore one issue for some repos (`[tags.ignore.issues] <issue>`).
     IgnoreIssue(IgnoreIssueArgs),
     /// Stop ignoring an issue for some repos.
     UnignoreIssue(UnignoreIssueArgs),
@@ -215,11 +217,11 @@ impl From<View> for ViewFilter {
 }
 
 #[derive(Args)]
-struct MarkArgs {
-    /// One of `[marks]` (favourite, or one of your own), `pull` or
+struct TagArgs {
+    /// One of `[tags]` (favourite, or one of your own), `pull` or
     /// `ignore`.
-    #[arg(add = mark_completer())]
-    mark: String,
+    #[arg(add = tag_completer())]
+    tag: String,
     /// Repos (glob on name/key/path).
     #[arg(required = true, add = repo_completer())]
     patterns: Vec<String>,
@@ -230,18 +232,18 @@ struct MarkArgs {
 }
 
 #[derive(Args)]
-struct UnmarkArgs {
-    /// Every mark (the repos' own entries; what patterns give stays, and
-    /// is noted), and their snoozes. Then there's no MARK.
+struct UntagArgs {
+    /// Every tag (the repos' own entries; what patterns give stays, and
+    /// is noted), and their snoozes. Then there's no TAG.
     #[arg(long)]
     all: bool,
     /// The repos' owners as a whole instead (their `github.com/acme/*`
     /// pattern).
     #[arg(long, conflicts_with = "all")]
     owner: bool,
-    /// MARK (as for `mark`), unless `--all`; then the repos (glob on
+    /// TAG (as for `tag`), unless `--all`; then the repos (glob on
     /// name/key/path).
-    #[arg(value_name = "[MARK] PATTERNS", required = true, add = mark_or_repo_completer())]
+    #[arg(value_name = "[TAG] PATTERNS", required = true, add = tag_or_repo_completer())]
     args: Vec<String>,
 }
 
@@ -461,7 +463,7 @@ fn run() -> Result<()> {
         Cmd::Status {
             view,
             filter,
-            mark,
+            tag,
             details,
             forge,
         } => {
@@ -469,10 +471,10 @@ fn run() -> Result<()> {
                 bail!("--forge isn't part of --json output yet: leave one of them out");
             }
             scan(&mut ws);
-            for m in &mark {
-                mark_named(&ws, m)?;
+            for m in &tag {
+                tag_named(&ws, m)?;
             }
-            let query = mark
+            let query = tag
                 .iter()
                 .map(|m| format!("#{m}"))
                 .chain(filter)
@@ -506,22 +508,22 @@ fn run() -> Result<()> {
             }
             fix_cmd(&mut ws, &kinds, dry_run, auto, &patterns, json, cli.yes)?;
         }
-        Cmd::Mark(m) => {
+        Cmd::Tag(m) => {
             scan(&mut ws);
-            set_mark(&mut ws, &ctx, &m.mark, &m.patterns, m.owner, true, json)?;
+            set_tag(&mut ws, &ctx, &m.tag, &m.patterns, m.owner, true, json)?;
         }
-        Cmd::Unmark(m) if m.all => {
+        Cmd::Untag(m) if m.all => {
             scan(&mut ws);
-            unmark_all(&mut ws, &ctx, &m.args, json, cli.yes)?;
+            untag_all(&mut ws, &ctx, &m.args, json, cli.yes)?;
             save_state(&mut ws, &ctx)?;
         }
-        Cmd::Unmark(m) => {
+        Cmd::Untag(m) => {
             scan(&mut ws);
-            let (mark, patterns) = m.args.split_first().expect("required");
+            let (tag, patterns) = m.args.split_first().expect("required");
             if patterns.is_empty() {
-                bail!("which repos? `argus unmark {mark} PATTERNS…`");
+                bail!("which repos? `argus untag {tag} PATTERNS…`");
             }
-            set_mark(&mut ws, &ctx, mark, patterns, m.owner, false, json)?;
+            set_tag(&mut ws, &ctx, tag, patterns, m.owner, false, json)?;
         }
         Cmd::Snooze(a) => {
             scan(&mut ws);
@@ -720,22 +722,22 @@ fn starting(
         .collect()
 }
 
-/// Mark names: `[marks]`, pull and ignore among them.
-fn mark_names() -> Vec<String> {
+/// Tag names: `[tags]`, pull and ignore among them.
+fn tag_names() -> Vec<String> {
     let c = completion_config();
-    c.marks.keys().cloned().collect()
+    c.tags.keys().cloned().collect()
 }
 
-fn mark_completer() -> clap_complete::ArgValueCompleter {
+fn tag_completer() -> clap_complete::ArgValueCompleter {
     clap_complete::ArgValueCompleter::new(|current: &std::ffi::OsStr| {
-        starting(mark_names(), current)
+        starting(tag_names(), current)
     })
 }
 
-/// `unmark`'s arguments: a mark, then repos (or repos alone, with --all).
-fn mark_or_repo_completer() -> clap_complete::ArgValueCompleter {
+/// `untag`'s arguments: a tag, then repos (or repos alone, with --all).
+fn tag_or_repo_completer() -> clap_complete::ArgValueCompleter {
     clap_complete::ArgValueCompleter::new(|current: &std::ffi::OsStr| {
-        let mut names = mark_names();
+        let mut names = tag_names();
         names.extend(repo_names());
         starting(names, current)
     })
@@ -883,8 +885,8 @@ fn forge_factory() -> pull::ForgeFactory<'static> {
 
 struct Paint {
     color: bool,
-    /// Each mark's colour code, in config order (see [`Paint::marks`]).
-    marks: Vec<String>,
+    /// Each tag's colour code, in config order (see [`Paint::tags`]).
+    tags: Vec<String>,
     /// Whether text can carry links (OSC 8): a terminal, coloured or not.
     links: bool,
 }
@@ -893,7 +895,7 @@ impl Paint {
     fn detect() -> Self {
         Self {
             color: std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none(),
-            marks: vec![],
+            tags: vec![],
             links: std::io::stdout().is_terminal(),
         }
     }
@@ -921,17 +923,17 @@ impl Paint {
         }
     }
 
-    /// With `c`'s marks' colours: each one's `[ui] colors` `mark.<name>`,
+    /// With `c`'s tags' colours: each one's `[ui] colors` `tag.<name>`,
     /// else its `color`, as far as the terminal's 16 colours and bold or
     /// dim go; else yellow (blue for pull).
-    fn marks(mut self, c: &argus_core::Config) -> Self {
-        self.marks = c
-            .marks
+    fn tags(mut self, c: &argus_core::Config) -> Self {
+        self.tags = c
+            .tags
             .iter()
             .map(|(name, def)| {
                 let spec =
                     c.ui.colors
-                        .get(&format!("mark.{name}"))
+                        .get(&format!("tag.{name}"))
                         .or(def.color.as_ref());
                 let own = if name == argus_core::config::PULL {
                     "34"
@@ -951,7 +953,7 @@ impl Paint {
             return s.to_string();
         }
         let code = match role {
-            Role::Mark(i) => self.marks.get(i).map_or("33", String::as_str),
+            Role::Tag(i) => self.tags.get(i).map_or("33", String::as_str),
             Role::New => "1;36",
             Role::Hidden | Role::Dim => "2",
             Role::Branch => "35",
@@ -1023,12 +1025,12 @@ fn status(
     details: bool,
     forge: bool,
 ) -> Result<()> {
-    let (marks, text) = argus_core::rules::MarkFilter::parse(query);
+    let (tags, text) = argus_core::rules::TagFilter::parse(query);
     let mut fuzzy = (!text.is_empty()).then(|| argus_tui::fuzzy::Fuzzy::new(&text));
     let mut order = ws.ordered(filter);
     order.retain(|&i| {
         let e = &ws.entries[i];
-        marks.matches(&e.flags)
+        tags.matches(&e.flags)
             && fuzzy
                 .as_mut()
                 .is_none_or(|f| f.score(&e.display_name()).is_some() || f.score(&e.key).is_some())
@@ -1037,9 +1039,9 @@ fn status(
         let v: Vec<_> = order.iter().map(|&i| &ws.entries[i]).collect();
         return print_json(&v);
     }
-    let p = Paint::detect().marks(&ws.config);
+    let p = Paint::detect().tags(&ws.config);
     let ic = icons(ws);
-    let marks = ws.config.mark_icons();
+    let tags = ws.config.tag_icons();
     let hints = argus_tui::details::Hints::Commands {
         describe_limit: ws.config.describe_limit,
     };
@@ -1075,7 +1077,7 @@ fn status(
             let e = &ws.entries[i];
             // flags side by side as the TUI has them, padded below to the
             // row with the most
-            let flags = badges::flags(e, &ic, &marks);
+            let flags = badges::flags(e, &ic, &tags);
             let width = |t: &str| UnicodeWidthStr::width(t);
             let flags = Cell {
                 text: flags.iter().map(|b| p.role(b.role, &b.text)).collect(),
@@ -1437,7 +1439,7 @@ fn print_forge_news(
                 " (argus pull --yes points its remote there)".to_string()
             }
             pull::OrphanState::Gone => {
-                format!(" (to hide it: argus mark ignore {})", o.id.slug())
+                format!(" (to hide it: argus tag ignore {})", o.id.slug())
             }
             _ => String::new(),
         };
@@ -1472,7 +1474,7 @@ fn demo(ctx: &Ctx, theme: Option<String>, icons: Option<String>) -> Result<()> {
     let config = demo_config(&d.root, Config::load(&ctx.config_path).ok(), theme, icons);
     let mut ws = Workspace::new(config, State::default())?;
     ws.scan();
-    d.apply_marks(&mut ws);
+    d.apply_tags(&mut ws);
     let state_path = d.sandbox.path("state.toml");
     ws.save_state(&state_path)?;
     let opts = argus_tui::Options {
@@ -1525,16 +1527,16 @@ fn demo_glyphs(ctx: &Ctx, json: bool) -> Result<()> {
     for w in warnings {
         eprintln!("argus: config: {w}");
     }
-    // the icons, then each mark's (`mark.<name>`)
+    // the icons, then each tag's (`tag.<name>`)
     let names: Vec<String> = icons::ICON_NAMES
         .iter()
         .map(|n| n.to_string())
-        .chain(c.marks.keys().map(|n| format!("mark.{n}")))
+        .chain(c.tags.keys().map(|n| format!("tag.{n}")))
         .collect();
     // a glyph by name in a set (by its name: `yours` is the configured one)
     let glyph = |set: &str, i: &Icons, name: &str| -> String {
-        match name.strip_prefix("mark.") {
-            Some(m) => c.mark_icon(m, if set == "yours" { &c.ui.icons } else { set }),
+        match name.strip_prefix("tag.") {
+            Some(m) => c.tag_icon(m, if set == "yours" { &c.ui.icons } else { set }),
             None => i.get(name).unwrap_or_default().to_string(),
         }
     };
@@ -1855,9 +1857,9 @@ fn fix_cmd(
     Ok(())
 }
 
-// ---------- mark ----------
+// ---------- tag ----------
 
-/// An `[marks.ignore.issues]` issue list by name (`non-default-branch` or `non_default_branch`).
+/// An `[tags.ignore.issues]` issue list by name (`non-default-branch` or `non_default_branch`).
 fn issue_list(s: &str) -> std::result::Result<IssueList, String> {
     IssueList::from_name(s).ok_or_else(|| {
         let names: Vec<String> = IssueList::ALL
@@ -1891,20 +1893,20 @@ fn matching(ws: &Workspace, patterns: &[String]) -> Result<Vec<usize>> {
     Ok(sel)
 }
 
-/// A mark by name: one of `[marks]`, `pull` or `ignore`.
-fn mark_named(ws: &Workspace, name: &str) -> Result<Mark> {
-    Mark::label(&ws.config, name).with_context(|| {
-        let names: Vec<&str> = ws.config.marks.keys().map(String::as_str).collect();
+/// A tag by name: one of `[tags]`, `pull` or `ignore`.
+fn tag_named(ws: &Workspace, name: &str) -> Result<Tag> {
+    Tag::label(&ws.config, name).with_context(|| {
+        let names: Vec<&str> = ws.config.tags.keys().map(String::as_str).collect();
         format!(
-            "{name:?} isn't a mark; these are: {} (yours go in [marks.<name>])",
+            "{name:?} isn't a tag; these are: {} (yours go in [tags.<name>])",
             names.join(", ")
         )
     })
 }
 
-/// What `mark`, `unmark`, `snooze` and the issue commands print for the
-/// repos at `sel`: names, or with `--json` each one's marks and snoozes.
-fn print_marks(ws: &Workspace, sel: &[usize], json: bool) -> Result<()> {
+/// What `tag`, `untag`, `snooze` and the issue commands print for the
+/// repos at `sel`: names, or with `--json` each one's tags and snoozes.
+fn print_tags(ws: &Workspace, sel: &[usize], json: bool) -> Result<()> {
     if !json {
         for &i in sel {
             println!("{}", ws.entries[i].display_name());
@@ -1918,7 +1920,7 @@ fn print_marks(ws: &Workspace, sel: &[usize], json: bool) -> Result<()> {
             serde_json::json!({
                 "repo": e.display_name(),
                 "key": e.key,
-                "marks": e.flags.marks,
+                "tags": e.flags.tags,
                 "pull": e.flags.pull,
                 "ignore": e.flags.ignored,
                 "ignored_issues": e.ignored_issues.iter()
@@ -1932,8 +1934,8 @@ fn print_marks(ws: &Workspace, sel: &[usize], json: bool) -> Result<()> {
     print_json(&records)
 }
 
-/// `mark` (`on`) and `unmark`: the repos, or with `owner` their owners.
-fn set_mark(
+/// `tag` (`on`) and `untag`: the repos, or with `owner` their owners.
+fn set_tag(
     ws: &mut Workspace,
     ctx: &Ctx,
     name: &str,
@@ -1942,21 +1944,21 @@ fn set_mark(
     on: bool,
     json: bool,
 ) -> Result<()> {
-    let m = mark_named(ws, name)?;
+    let m = tag_named(ws, name)?;
     let sel = matching(ws, patterns)?;
     let before = ws.config.clone();
     if owner {
-        ws.set_owner_mark(&sel, m, on)?;
+        ws.set_owner_tag(&sel, m, on)?;
     } else {
-        ws.set_mark(&sel, m, on)?;
+        ws.set_tag(&sel, m, on)?;
     }
-    configfile::update_mark_lists(&ctx.config_path, &before, &ws.config)?;
-    print_marks(ws, &sel, json)
+    configfile::update_tag_lists(&ctx.config_path, &before, &ws.config)?;
+    print_tags(ws, &sel, json)
 }
 
-/// `unmark --all`: the repos' own entries go from every mark, and their
+/// `untag --all`: the repos' own entries go from every tag, and their
 /// snoozes; what patterns (or a tracked owner) still give is noted.
-fn unmark_all(
+fn untag_all(
     ws: &mut Workspace,
     ctx: &Ctx,
     patterns: &[String],
@@ -1964,27 +1966,27 @@ fn unmark_all(
     yes: bool,
 ) -> Result<()> {
     let sel = matching(ws, patterns)?;
-    let n = ws.marked_count(&sel);
+    let n = ws.tagged_count(&sel);
     if n > 1 {
-        confirm(&format!("clear marks of {n} repos"), yes)?;
+        confirm(&format!("clear tags of {n} repos"), yes)?;
     }
     let before = ws.config.clone();
-    ws.clear_marks(&sel)?;
+    ws.clear_tags(&sel)?;
     for &i in &sel {
-        let marks = ws.remaining_marks(i);
-        if !marks.is_empty() {
+        let tags = ws.remaining_tags(i);
+        if !tags.is_empty() {
             eprintln!(
                 "{}: still {}",
                 ws.entries[i].display_name(),
-                marks.join(", ")
+                tags.join(", ")
             );
         }
         let key = ws.entries[i].key.clone();
         ws.state.unsnooze_all(&key);
     }
-    configfile::update_mark_lists(&ctx.config_path, &before, &ws.config)?;
+    configfile::update_tag_lists(&ctx.config_path, &before, &ws.config)?;
     ws.resolve_flags();
-    print_marks(ws, &sel, json)
+    print_tags(ws, &sel, json)
 }
 
 /// `snooze` (`duration`) and `unsnooze` (`None`): the repos, or just
@@ -2021,7 +2023,7 @@ fn snooze(
         }
     }
     ws.resolve_flags();
-    print_marks(ws, &sel, json)
+    print_tags(ws, &sel, json)
 }
 
 /// `ignore-issue` (`on`) and `unignore-issue`.
@@ -2037,8 +2039,8 @@ fn ignore_issue(
     let sel = matching(ws, patterns)?;
     let before = ws.config.clone();
     ws.set_issue_ignored(&sel, list, on, pin)?;
-    configfile::update_mark_lists(&ctx.config_path, &before, &ws.config)?;
-    print_marks(ws, &sel, json)
+    configfile::update_tag_lists(&ctx.config_path, &before, &ws.config)?;
+    print_tags(ws, &sel, json)
 }
 
 // ---------- forge ----------
@@ -2077,7 +2079,7 @@ mod tests {
     /// The 16 colours' names and bold or dim map to ANSI; anything else
     /// (hex, 256 colours) doesn't.
     #[test]
-    fn mark_colours_map_to_ansi_where_they_can() {
+    fn tag_colours_map_to_ansi_where_they_can() {
         assert_eq!(ansi("cyan").as_deref(), Some("36"));
         assert_eq!(ansi("bold red").as_deref(), Some("1;31"));
         assert_eq!(ansi("dim black").as_deref(), Some("2;30"));
@@ -2086,16 +2088,16 @@ mod tests {
         assert_eq!(ansi("bold 208"), None);
         assert_eq!(ansi(""), None);
         let c = Config::parse(
-            "[marks.work]\ncolor = 'cyan'\n[marks.odd]\ncolor = '#123456'\n\
-             [ui.colors]\n'mark.favourite' = 'bold blue'\n",
+            "[tags.work]\ncolor = 'cyan'\n[tags.odd]\ncolor = '#123456'\n\
+             [ui.colors]\n'tag.favourite' = 'bold blue'\n",
         )
         .unwrap();
         let p = Paint {
             color: true,
-            marks: vec![],
+            tags: vec![],
             links: true,
         }
-        .marks(&c);
+        .tags(&c);
         // a link wraps the text, colours and all; none where output can't
         assert_eq!(
             p.link("#12", "https://x/pull/12"),
@@ -2132,25 +2134,25 @@ mod tests {
             "a \x1b]8;;https://x\x1b\\\x1b[32mb\x1b[0m\x1b]8;;\x1b\\ c"
         );
         assert_eq!(plain.line(&l), "a b c");
-        assert_eq!(p.marks, ["1;34", "34", "33", "36", "33"]);
-        assert_eq!(p.role(Role::Mark(3), "W"), "\x1b[36mW\x1b[0m");
-        // pull keeps its own colour unless its mark is given one
-        assert_eq!(p.role(Role::Mark(1), "p"), "\x1b[34mp\x1b[0m");
+        assert_eq!(p.tags, ["1;34", "34", "33", "36", "33"]);
+        assert_eq!(p.role(Role::Tag(3), "W"), "\x1b[36mW\x1b[0m");
+        // pull keeps its own colour unless its tag is given one
+        assert_eq!(p.role(Role::Tag(1), "p"), "\x1b[34mp\x1b[0m");
         for cfg in [
-            "[marks.pull]\ncolor = 'bold red'\n",
-            "[ui.colors]\n'mark.pull' = 'bold red'\n",
+            "[tags.pull]\ncolor = 'bold red'\n",
+            "[ui.colors]\n'tag.pull' = 'bold red'\n",
         ] {
             let c = Config::parse(cfg).unwrap();
             let p = Paint {
                 color: true,
-                marks: vec![],
+                tags: vec![],
                 links: false,
             }
-            .marks(&c);
-            assert_eq!(p.role(Role::Mark(1), "p"), "\x1b[1;31mp\x1b[0m", "{cfg}");
+            .tags(&c);
+            assert_eq!(p.role(Role::Tag(1), "p"), "\x1b[1;31mp\x1b[0m", "{cfg}");
         }
         assert_eq!(
-            p.role(Role::Mark(9), "?"),
+            p.role(Role::Tag(9), "?"),
             "\x1b[33m?\x1b[0m",
             "unknown: yellow"
         );

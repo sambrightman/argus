@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use crate::rules::Mark;
+use crate::rules::Tag;
 use crate::testkit::{Sandbox, commit, git, git_may_fail, write};
 use crate::workspace::Workspace;
 
@@ -215,10 +215,10 @@ fn conflicting_branch(r: &std::path::Path) {
 }
 
 impl Demo {
-    /// Set the marks the sample repos are named after: favourite and
+    /// Set the tags the sample repos are named after: favourite and
     /// ignored in `ws.config`, new and snoozed in `ws.state`; and a label of
     /// its own, `work`. Call after a scan, so repo keys are known.
-    pub fn apply_marks(&self, ws: &mut Workspace) {
+    pub fn apply_tags(&self, ws: &mut Workspace) {
         let index = |ws: &Workspace, name: &str| {
             ws.entries
                 .iter()
@@ -229,14 +229,14 @@ impl Demo {
             .iter()
             .filter_map(|n| index(ws, n))
             .collect();
-        let fav = Mark::label(&ws.config, "favourite").expect("built in");
-        ws.set_mark(&favourites, fav, true).unwrap();
+        let fav = Tag::label(&ws.config, "favourite").expect("built in");
+        ws.set_tag(&favourites, fav, true).unwrap();
         ws.config
-            .marks
+            .tags
             .entry("work".into())
-            .or_insert(crate::config::MarkDef {
+            .or_insert(crate::config::TagDef {
                 key: Some('w'),
-                icon: Some(crate::config::MarkIcon::One("W".into())),
+                icon: Some(crate::config::TagIcon::One("W".into())),
                 color: Some("cyan".into()),
                 ..Default::default()
             });
@@ -244,10 +244,10 @@ impl Demo {
             .iter()
             .filter_map(|n| index(ws, n))
             .collect();
-        let label = Mark::label(&ws.config, "work").expect("just added");
-        ws.set_mark(&work, label, true).unwrap();
+        let label = Tag::label(&ws.config, "work").expect("just added");
+        ws.set_tag(&work, label, true).unwrap();
         if let Some(i) = index(ws, "ignored") {
-            ws.set_mark(&[i], Mark::Ignore, true).unwrap();
+            ws.set_tag(&[i], Tag::Ignore, true).unwrap();
         }
         if let Some(k) = key(ws, "new") {
             ws.state.new.insert(k);

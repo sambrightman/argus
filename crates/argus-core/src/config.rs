@@ -64,17 +64,17 @@ pub struct Config {
     /// Protocol for new clones; unset asks the forge (`gh config get git_protocol`).
     #[schemars(example = crate::forge::Protocol::Ssh)]
     pub clone_protocol: Option<crate::forge::Protocol>,
-    /// Marks, each a table: `favourite` (sort points 1, `f` in the Mark
-    /// menu) and any of your own, `[marks.<name>]`, a word of letters,
+    /// Tags, each a table: `favourite` (sort points 1, `f` in the Tag
+    /// menu) and any of your own, `[tags.<name>]`, a word of letters,
     /// digits, `-` and `_`. They show in the flag column and filter (`/`
-    /// with `#name`, `argus status --mark name`). Two do something:
+    /// with `#name`, `argus status --tag name`). Two do something:
     /// `pull` is the repos `argus pull` pulls (a tracked owner's are,
     /// unless an entry turns one off: `"!acme/huge-monorepo"`), and
     /// `ignore` the repos hidden and left out of pulls, clones and bulk
-    /// operations, with `[marks.ignore.issues]` for what not to flag in
+    /// operations, with `[tags.ignore.issues]` for what not to flag in
     /// repos that stay listed.
-    #[schemars(example = example_marks())]
-    pub marks: IndexMap<String, MarkDef>,
+    #[schemars(example = example_tags())]
+    pub tags: IndexMap<String, TagDef>,
     /// Forge owners (orgs/users/teams) whose repos should all be cloned and
     /// pulled. Their repos are pulled unless `pull` turns them off.
     #[serde(rename = "track")]
@@ -121,10 +121,10 @@ impl Default for Config {
             concurrency: Concurrency::default(),
             describe_limit: DESCRIBE_LIMIT,
             clone_protocol: None,
-            marks: IndexMap::from([
-                ("favourite".to_string(), MarkDef::favourite()),
-                (PULL.to_string(), MarkDef::pull()),
-                (IGNORE.to_string(), MarkDef::ignore()),
+            tags: IndexMap::from([
+                ("favourite".to_string(), TagDef::favourite()),
+                (PULL.to_string(), TagDef::pull()),
+                (IGNORE.to_string(), TagDef::ignore()),
             ]),
             tracks: vec![],
             fix: FixConfig::default(),
@@ -207,15 +207,15 @@ fn example_icon_overrides() -> BTreeMap<&'static str, &'static str> {
 }
 
 fn example_colors() -> BTreeMap<&'static str, &'static str> {
-    BTreeMap::from([("mark.favourite", "yellow"), ("branch", "bold magenta")])
+    BTreeMap::from([("tag.favourite", "yellow"), ("branch", "bold magenta")])
 }
 
-fn example_marks() -> IndexMap<String, MarkDef> {
+fn example_tags() -> IndexMap<String, TagDef> {
     IndexMap::from([(
         "work".to_string(),
-        MarkDef {
+        TagDef {
             key: Some('w'),
-            icon: Some(MarkIcon::One("W".into())),
+            icon: Some(TagIcon::One("W".into())),
             color: Some("cyan".into()),
             sort: 0,
             repos: vec!["acme/*".into(), "!acme/legacy".into()],
@@ -224,16 +224,16 @@ fn example_marks() -> IndexMap<String, MarkDef> {
     )])
 }
 
-/// A mark (`[marks.<name>]`): which repos have it, and how it looks and
+/// A tag (`[tags.<name>]`): which repos have it, and how it looks and
 /// sorts.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(
     default,
     deny_unknown_fields,
-    expecting = "a table: [marks.<name>] with its options"
+    expecting = "a table: [tags.<name>] with its options"
 )]
-pub struct MarkDef {
-    /// Its key in the TUI's Mark menu (`m`), one character.
+pub struct TagDef {
+    /// Its key in the TUI's Tag menu (`t`), one character.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<char>,
     /// Its icon in the flag column: one for every icon set, or by set
@@ -241,46 +241,46 @@ pub struct MarkDef {
     /// for one left out). None: the name's first letter (pull and
     /// ignore: the icon set's, as `[ui] icon_overrides` has them).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub icon: Option<MarkIcon>,
+    pub icon: Option<TagIcon>,
     /// Its colour, as in `[ui] colors`. Coming first: `[ui] colors`
-    /// naming it (`"mark.<name>"`), then the theme's own for it. (An
+    /// naming it (`"tag.<name>"`), then the theme's own for it. (An
     /// ignored repo takes `[ui] colors` `hidden`, not this.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
-    /// Sort points: repos sort by the sum of their marks' (after needing
-    /// attention, before severity). A mark with points gives way to
+    /// Sort points: repos sort by the sum of their tags' (after needing
+    /// attention, before severity). A tag with points gives way to
     /// ignoring a repo, and stops it being ignored; one without (a label)
     /// doesn't. (Ignore's own aren't counted: it hides.)
     pub sort: i32,
-    /// Repos with the mark. Each entry is a repo or a pattern, matched
+    /// Repos with the tag. Each entry is a repo or a pattern, matched
     /// against its identity (`github.com/acme/app`), `owner/name` or path
     /// (`~/dev/x`); `*` stays within one level, `**` crosses them. Later
     /// entries win, and `!` turns it off again: `["acme/*",
-    /// "!acme/legacy"]`. Marking from the TUI or `argus mark` edits it.
+    /// "!acme/legacy"]`. Tagging from the TUI or `argus tag` edits it.
     pub repos: Vec<String>,
-    /// `[marks.ignore]` only: issues not to flag, each in the repos its
+    /// `[tags.ignore]` only: issues not to flag, each in the repos its
     /// list names (the Ignore menu and `argus ignore-issue` edit them).
     #[serde(skip_serializing_if = "IgnoreIssues::is_empty")]
     pub issues: IgnoreIssues,
 }
 
-/// The mark whose repos `argus pull` pulls.
+/// The tag whose repos `argus pull` pulls.
 pub const PULL: &str = "pull";
-/// The mark whose repos are hidden, with the issues not to flag.
+/// The tag whose repos are hidden, with the issues not to flag.
 pub const IGNORE: &str = "ignore";
 
-/// Whether `name` is a mark argus acts on (pull, ignore), which shows as
+/// Whether `name` is a tag argus acts on (pull, ignore), which shows as
 /// a state, not among the labels.
 pub fn acts(name: &str) -> bool {
     name == PULL || name == IGNORE
 }
 
-impl MarkDef {
+impl TagDef {
     /// The built-in `favourite`: sorted above others in their group.
     pub fn favourite() -> Self {
         Self {
             key: Some('f'),
-            icon: Some(MarkIcon::BySet {
+            icon: Some(TagIcon::BySet {
                 unicode: Some("◆".into()),
                 nerd: Some("\u{eb59} ".into()), // cod-star_full
                 ascii: Some("*".into()),
@@ -311,10 +311,10 @@ impl MarkDef {
     }
 }
 
-/// A mark's icon: one for every icon set, or by set.
+/// A tag's icon: one for every icon set, or by set.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(untagged)]
-pub enum MarkIcon {
+pub enum TagIcon {
     One(String),
     BySet {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -326,14 +326,14 @@ pub enum MarkIcon {
     },
 }
 
-/// `[marks.ignore.issues]`: an issue, and the repos not to flag it in.
-/// Entries as for a mark's `repos` (a repo or a pattern, matched against
+/// `[tags.ignore.issues]`: an issue, and the repos not to flag it in.
+/// Entries as for a tag's `repos` (a repo or a pattern, matched against
 /// identity, `owner/name` or path; the last match wins, `!` turns it off).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(
     default,
     deny_unknown_fields,
-    expecting = "a table: [marks.ignore.issues] with a list of repos per issue"
+    expecting = "a table: [tags.ignore.issues] with a list of repos per issue"
 )]
 pub struct IgnoreIssues {
     /// Repos normally on a branch other than the default. `repo@branch`
@@ -608,6 +608,7 @@ impl Layers {
             })?;
         let bases = take_extend(&mut layer, path)?;
         moved_keys(&layer, Some(path))?;
+        renamed_keys(&mut layer, Some(path))?;
         chain.push(real);
         let dir = path.parent().unwrap_or(Path::new("."));
         for inc in &bases {
@@ -755,7 +756,7 @@ pub enum ConfigError {
     },
     #[error("{key}: {reason}")]
     Extend { key: String, reason: &'static str },
-    #[error("[marks.ignore.issues] {list}: {entry:?}: {reason}")]
+    #[error("[tags.ignore.issues] {list}: {entry:?}: {reason}")]
     IgnoreEntry {
         list: &'static str,
         entry: String,
@@ -763,35 +764,79 @@ pub enum ConfigError {
     },
     #[error("{path}: extend {what}")]
     ExtendFile { path: PathBuf, what: String },
-    #[error("[marks.{0}]: a mark's name is letters, digits, - and _")]
-    MarkName(String),
-    #[error("[marks.{0}] issues: only [marks.ignore] has issues not to flag")]
-    MarkIssues(String),
+    #[error("[tags.{0}]: a tag's name is letters, digits, - and _")]
+    TagName(String),
+    #[error("[tags.{0}] issues: only [tags.ignore] has issues not to flag")]
+    TagIssues(String),
     #[error("{key} is now `{to}`: move its entries there")]
-    Moved { key: String, to: &'static str },
+    Moved { key: String, to: String },
 }
 
 /// Settings that moved, said plainly instead of "unknown field"; `file`
 /// names where, if it's a file.
 fn moved_keys(layer: &toml::Table, file: Option<&Path>) -> Result<(), ConfigError> {
-    let ignore = "[marks.ignore] repos`, its issue lists `[marks.ignore.issues]";
+    let ignore = "[tags.ignore] repos`, its issue lists `[tags.ignore.issues]";
     let moved = [
-        ("favourite", "[marks.favourite] repos"),
-        ("extend_favourite", "[marks.favourite] extend_repos"),
-        ("pull", "[marks.pull] repos"),
-        ("extend_pull", "[marks.pull] extend_repos"),
+        ("favourite", "[tags.favourite] repos"),
+        ("extend_favourite", "[tags.favourite] extend_repos"),
+        ("pull", "[tags.pull] repos"),
+        ("extend_pull", "[tags.pull] extend_repos"),
         ("ignore", ignore),
     ];
     match moved.into_iter().find(|(k, _)| layer.contains_key(*k)) {
-        Some((k, to)) => Err(ConfigError::Moved {
-            key: match file {
-                Some(f) => format!("{}: `{k}`", f.display()),
-                None => format!("`{k}`"),
-            },
-            to,
-        }),
+        Some((k, to)) => Err(moved_error(file, k, to)),
         None => Ok(()),
     }
+}
+
+fn moved_error(file: Option<&Path>, key: &str, to: &str) -> ConfigError {
+    ConfigError::Moved {
+        key: match file {
+            Some(f) => format!("{}: `{key}`", f.display()),
+            None => format!("`{key}`"),
+        },
+        to: to.into(),
+    }
+}
+
+/// The name a `[ui] colors` key had when tags were marks, as it is now:
+/// `mark` and `mark.<name>`.
+fn renamed_color(key: &str) -> Option<String> {
+    match key.strip_prefix("mark") {
+        Some("") => Some("tag".into()),
+        Some(rest) if rest.starts_with('.') => Some(format!("tag{rest}")),
+        _ => None,
+    }
+}
+
+/// Names from before tags were tags, read as the new ones: `[marks]`
+/// (0.2.0's `[tags]`) and the `mark`, `mark.<name>` colours. A file with
+/// both names for one thing is an error, not a guess.
+fn renamed_keys(layer: &mut toml::Table, file: Option<&Path>) -> Result<(), ConfigError> {
+    if let Some(marks) = layer.remove("marks") {
+        if layer.contains_key("tags") {
+            return Err(moved_error(file, "marks", "[tags]"));
+        }
+        layer.insert("tags".into(), marks);
+    }
+    let colors = layer
+        .get_mut("ui")
+        .and_then(|ui| ui.get_mut("colors"))
+        .and_then(|c| c.as_table_mut());
+    if let Some(colors) = colors {
+        let old: Vec<(String, String)> = colors
+            .keys()
+            .filter_map(|k| Some((k.clone(), renamed_color(k)?)))
+            .collect();
+        for (key, to) in old {
+            if colors.contains_key(&to) {
+                return Err(moved_error(file, &format!("[ui] colors` `{key}"), &to));
+            }
+            let value = colors.remove(&key).expect("just listed");
+            colors.insert(to, value);
+        }
+    }
+    Ok(())
 }
 
 /// A TOML or type error in plain words: Rust's type names (`usize`,
@@ -836,6 +881,7 @@ impl Config {
         let mut layer: toml::Table = toml::from_str(s)?;
         let extend = take_extend(&mut layer, Path::new("config"))?;
         moved_keys(&layer, None)?;
+        renamed_keys(&mut layer, None)?;
         let mut layers = Layers::defaults();
         layers.merge(layer)?;
         let mut c: Config = toml::Value::Table(layers.table).try_into()?;
@@ -845,20 +891,20 @@ impl Config {
     }
 
     fn normalize(&mut self) -> Result<(), ConfigError> {
-        if let Some(bad) = self.marks.keys().find(|n| {
+        if let Some(bad) = self.tags.keys().find(|n| {
             n.is_empty()
                 || !n
                     .chars()
                     .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
         }) {
-            return Err(ConfigError::MarkName(bad.clone()));
+            return Err(ConfigError::TagName(bad.clone()));
         }
         if let Some((name, _)) = self
-            .marks
+            .tags
             .iter()
             .find(|(n, d)| *n != IGNORE && !d.issues.is_empty())
         {
-            return Err(ConfigError::MarkIssues(name.clone()));
+            return Err(ConfigError::TagIssues(name.clone()));
         }
         for r in &mut self.roots {
             *r = expand_tilde(r);
@@ -871,14 +917,14 @@ impl Config {
         Ok(())
     }
 
-    /// Mark `name`'s icon in the icon set `set` (`unicode`, `nerd`,
+    /// Tag `name`'s icon in the icon set `set` (`unicode`, `nerd`,
     /// `ascii`): its own for the set, else for unicode, else its name's
     /// first letter.
-    pub fn mark_icon(&self, name: &str, set: &str) -> String {
+    pub fn tag_icon(&self, name: &str, set: &str) -> String {
         let first = || name.chars().next().map(String::from).unwrap_or_default();
-        match self.marks.get(name).and_then(|m| m.icon.as_ref()) {
-            Some(MarkIcon::One(s)) => s.clone(),
-            Some(MarkIcon::BySet {
+        match self.tags.get(name).and_then(|m| m.icon.as_ref()) {
+            Some(TagIcon::One(s)) => s.clone(),
+            Some(TagIcon::BySet {
                 unicode,
                 nerd,
                 ascii,
@@ -894,34 +940,34 @@ impl Config {
         }
     }
 
-    /// The issues not to flag, and where (`[marks.ignore.issues]`).
+    /// The issues not to flag, and where (`[tags.ignore.issues]`).
     pub fn ignore_issues(&self) -> &IgnoreIssues {
-        &self.marks[IGNORE].issues
+        &self.tags[IGNORE].issues
     }
 
     pub fn ignore_issues_mut(&mut self) -> &mut IgnoreIssues {
-        &mut self.marks[IGNORE].issues
+        &mut self.tags[IGNORE].issues
     }
 
     /// The icons: the configured set with its overrides, then the pull
-    /// and ignore marks' own icons, if they're given one; plus warnings
+    /// and ignore tags' own icons, if they're given one; plus warnings
     /// for unknown names.
     pub fn icons(&self) -> (crate::icons::Icons, Vec<String>) {
         let (mut icons, warnings) = self.ui.icons();
-        if self.marks[PULL].icon.is_some() {
-            icons.pull = self.mark_icon(PULL, &self.ui.icons).into();
+        if self.tags[PULL].icon.is_some() {
+            icons.pull = self.tag_icon(PULL, &self.ui.icons).into();
         }
-        if self.marks[IGNORE].icon.is_some() {
-            icons.ignored = self.mark_icon(IGNORE, &self.ui.icons).into();
+        if self.tags[IGNORE].icon.is_some() {
+            icons.ignored = self.tag_icon(IGNORE, &self.ui.icons).into();
         }
         (icons, warnings)
     }
 
-    /// Each mark's name and icon in the configured icon set, in order.
-    pub fn mark_icons(&self) -> Vec<(String, String)> {
-        self.marks
+    /// Each tag's name and icon in the configured icon set, in order.
+    pub fn tag_icons(&self) -> Vec<(String, String)> {
+        self.tags
             .keys()
-            .map(|n| (n.clone(), self.mark_icon(n, &self.ui.icons)))
+            .map(|n| (n.clone(), self.tag_icon(n, &self.ui.icons)))
             .collect()
     }
 
@@ -1243,43 +1289,43 @@ mod tests {
             "sync = ['a/b']",
             "extend_sync = ['a/b']",
             "[[track]]\nowner = 'acme'\nsync = false",
-            "[marks.ignore.issues]\noff_default = ['a/b']",
-            "[marks.ignore.issues]\nextend_off_default = ['a/b']",
+            "[tags.ignore.issues]\noff_default = ['a/b']",
+            "[tags.ignore.issues]\nextend_off_default = ['a/b']",
         ] {
             assert!(Config::parse(old).is_err(), "{old}");
         }
         // settings that moved say where to
         for (old, to) in [
-            ("pull = ['a/b']", "`pull` is now `[marks.pull] repos`"),
+            ("pull = ['a/b']", "`pull` is now `[tags.pull] repos`"),
             (
                 "extend_pull = ['a/b']",
-                "`extend_pull` is now `[marks.pull] extend_repos`",
+                "`extend_pull` is now `[tags.pull] extend_repos`",
             ),
             (
                 "[ignore]\nrepos = ['a/b']",
-                "`ignore` is now `[marks.ignore] repos`, its issue lists `[marks.ignore.issues]`",
+                "`ignore` is now `[tags.ignore] repos`, its issue lists `[tags.ignore.issues]`",
             ),
             (
                 "ignore.stashes = []",
-                "`ignore` is now `[marks.ignore] repos`, its issue lists `[marks.ignore.issues]`",
+                "`ignore` is now `[tags.ignore] repos`, its issue lists `[tags.ignore.issues]`",
             ),
             (
                 "favourite = ['a/b']",
-                "`favourite` is now `[marks.favourite] repos`",
+                "`favourite` is now `[tags.favourite] repos`",
             ),
         ] {
             let e = Config::parse(old).unwrap_err().to_string();
             assert!(e.starts_with(to), "{old}: {e}");
         }
         // inverse: the new names
-        let c = Config::parse("[marks.ignore.issues]\nnon_default_branch = ['a/b']").unwrap();
+        let c = Config::parse("[tags.ignore.issues]\nnon_default_branch = ['a/b']").unwrap();
         assert_eq!(c.ignore_issues().non_default_branch, ["a/b"]);
         let c = Config::parse(
-            "exclude_paths = ['x']\nmarks.ignore.repos = ['a/b']\n[concurrency]\ndisk = 2\nnetwork = 5",
+            "exclude_paths = ['x']\ntags.ignore.repos = ['a/b']\n[concurrency]\ndisk = 2\nnetwork = 5",
         )
         .unwrap();
         assert_eq!(
-            (c.exclude_paths, c.marks["ignore"].repos.clone()),
+            (c.exclude_paths, c.tags["ignore"].repos.clone()),
             (vec!["x".into()], vec!["a/b".into()])
         );
         assert_eq!(
@@ -1290,11 +1336,42 @@ mod tests {
             }
         );
         let c = Config::parse(
-            "marks.pull.repos = ['a/b']\nmarks.pull.extend_repos = ['c/d']\n[[track]]\nowner = 'acme'\npull = false",
+            "tags.pull.repos = ['a/b']\ntags.pull.extend_repos = ['c/d']\n[[track]]\nowner = 'acme'\npull = false",
         )
         .unwrap();
-        assert_eq!(c.marks["pull"].repos, ["a/b", "c/d"]);
+        assert_eq!(c.tags["pull"].repos, ["a/b", "c/d"]);
         assert!(!c.tracks[0].pull);
+    }
+
+    /// Tags were `[marks]` in 0.2.0, their colours `mark` and
+    /// `mark.<name>`: read as the new names.
+    #[test]
+    fn marks_from_before_they_were_tags_are_read() {
+        let c = Config::parse(
+            "marks.pull.repos = ['a/b']\n[marks.work]\nkey = 'w'\n[ui.colors]\n'mark.work' = 'red'\nmark = 'blue'\nmarked = 'green'\n",
+        )
+        .unwrap();
+        assert_eq!(c.tags["pull"].repos, ["a/b"]);
+        assert_eq!(c.tags["work"].key, Some('w'));
+        assert_eq!(
+            c.ui.colors,
+            BTreeMap::from([
+                ("marked".to_string(), "green".to_string()),
+                ("tag".to_string(), "blue".to_string()),
+                ("tag.work".to_string(), "red".to_string()),
+            ]),
+            "`marked` is the marked rows' colour still"
+        );
+        // inverse: both names in one file isn't guessed at
+        let both = |text: &str| Config::parse(text).unwrap_err().to_string();
+        assert_eq!(
+            both("[marks.work]\n[tags.home]\n"),
+            "`marks` is now `[tags]`: move its entries there"
+        );
+        assert_eq!(
+            both("[ui.colors]\n'mark.work' = 'red'\n'tag.work' = 'blue'\n"),
+            "`[ui] colors` `mark.work` is now `tag.work`: move its entries there"
+        );
     }
 
     #[test]

@@ -68,67 +68,63 @@ fn flag_badges_show_favourite_new_ignored_or_snoozed_and_pull() {
     let texts = |extra: &str| {
         let mut ws = Workspace::new(Config::parse(&cfg(extra)).unwrap(), State::default()).unwrap();
         ws.scan();
-        badges::flags(
-            &ws.entries[0],
-            &ws.config.icons().0,
-            &ws.config.mark_icons(),
-        )
-        .into_iter()
-        .map(|b| b.text)
-        .collect::<Vec<_>>()
+        badges::flags(&ws.entries[0], &ws.config.icons().0, &ws.config.tag_icons())
+            .into_iter()
+            .map(|b| b.text)
+            .collect::<Vec<_>>()
     };
     assert!(texts("").is_empty());
     let path = r.display().to_string();
     assert_eq!(
-        texts(&format!("marks.favourite.repos = ['{path}']")),
+        texts(&format!("tags.favourite.repos = ['{path}']")),
         ["◆".to_string()]
     );
     assert_eq!(
-        texts(&format!("marks.ignore.repos = ['{path}']")),
+        texts(&format!("tags.ignore.repos = ['{path}']")),
         [UNICODE.ignored.to_string()]
     );
     // pulled by `argus pull`: after the others, being the most common
     assert_eq!(
-        texts(&format!("marks.pull.repos = ['{path}']")),
+        texts(&format!("tags.pull.repos = ['{path}']")),
         [UNICODE.pull.to_string()]
     );
     assert_eq!(
         texts(&format!(
-            "marks.pull.repos = ['{path}']\nmarks.favourite.repos = ['{path}']"
+            "tags.pull.repos = ['{path}']\ntags.favourite.repos = ['{path}']"
         )),
         ["◆".to_string(), UNICODE.pull.to_string()]
     );
-    // each in its mark's colour, pull's too (the marks: favourite, pull,
+    // each in its tag's colour, pull's too (the tags: favourite, pull,
     // ignore, in that order)
     let mut ws = Workspace::new(
         Config::parse(&cfg(&format!(
-            "marks.pull.repos = ['{path}']\nmarks.favourite.repos = ['{path}']"
+            "tags.pull.repos = ['{path}']\ntags.favourite.repos = ['{path}']"
         )))
         .unwrap(),
         State::default(),
     )
     .unwrap();
     ws.scan();
-    let roles: Vec<Role> = badges::flags(&ws.entries[0], &UNICODE, &ws.config.mark_icons())
+    let roles: Vec<Role> = badges::flags(&ws.entries[0], &UNICODE, &ws.config.tag_icons())
         .into_iter()
         .map(|b| b.role)
         .collect();
-    assert_eq!(roles, [Role::Mark(0), Role::Mark(1)]);
-    // the marks' own icons, when they're given one; else the icon set's
+    assert_eq!(roles, [Role::Tag(0), Role::Tag(1)]);
+    // the tags' own icons, when they're given one; else the icon set's
     assert_eq!(
         texts(&format!(
-            "[marks.pull]\nicon = 'P'\nrepos = ['{path}']\n[marks.favourite]\nrepos = ['{path}']"
+            "[tags.pull]\nicon = 'P'\nrepos = ['{path}']\n[tags.favourite]\nrepos = ['{path}']"
         )),
         ["◆".to_string(), "P".to_string()]
     );
     assert_eq!(
-        texts(&format!("[marks.ignore]\nicon = 'x'\nrepos = ['{path}']")),
+        texts(&format!("[tags.ignore]\nicon = 'x'\nrepos = ['{path}']")),
         ["x".to_string()]
     );
-    // an ignored repo isn't pulled, so it shows no pull mark
+    // an ignored repo isn't pulled, so it shows no pull tag
     assert_eq!(
         texts(&format!(
-            "marks.pull.repos = ['{path}']\nmarks.ignore.repos = ['{path}']"
+            "tags.pull.repos = ['{path}']\ntags.ignore.repos = ['{path}']"
         )),
         [UNICODE.ignored.to_string()]
     );
@@ -155,8 +151,8 @@ fn ignoring_keeps_badges_stating_facts_and_drops_warning_only_ones() {
     git(&r, &["stash", "push", "-q", "-m", "mine"]);
     let facts = ["↓1", "$1"];
     for extra in [
-        "[marks.ignore.issues]\nstashes = []",
-        "[marks.ignore.issues]\nbehind = ['**']\nstashes = ['**']",
+        "[tags.ignore.issues]\nstashes = []",
+        "[tags.ignore.issues]\nbehind = ['**']\nstashes = ['**']",
     ] {
         let b = state_badges(&r, extra);
         assert!(
@@ -174,7 +170,7 @@ fn ignoring_keeps_badges_stating_facts_and_drops_warning_only_ones() {
     assert!(warnings.iter().all(|w| b.contains(&w.to_string())), "{b:?}");
     let b = state_badges(
         &r,
-        "[marks.ignore.issues]\nno_upstream = ['**']\nunpushed_branches = ['**']",
+        "[tags.ignore.issues]\nno_upstream = ['**']\nunpushed_branches = ['**']",
     );
     assert!(
         !warnings.iter().any(|w| b.contains(&w.to_string())),
@@ -188,7 +184,7 @@ fn change_badges_count_each_kind_and_only_when_there_are_some() {
     let r = sb.init("dev/w");
     let i = &UNICODE;
     // (a local repo: its having no remote isn't what's counted here)
-    let local = "[marks.ignore.issues]\nno_remote = ['**']";
+    let local = "[tags.ignore.issues]\nno_remote = ['**']";
     assert_eq!(state_badges(&r, local), Vec::<String>::new(), "clean");
     argus_core::testkit::write(&r, "README", "staged\n");
     git(&r, &["add", "README"]);
@@ -238,7 +234,7 @@ fn a_repo_without_a_remote_says_so_unless_that_is_ignored() {
     let r = sb.init("dev/local");
     assert_eq!(state_badges(&r, ""), [UNICODE.no_remote.to_string()]);
     assert_eq!(
-        state_badges(&r, "[marks.ignore.issues]\nno_remote = ['**']"),
+        state_badges(&r, "[tags.ignore.issues]\nno_remote = ['**']"),
         Vec::<String>::new()
     );
     // inverse: with a remote, nothing
@@ -287,7 +283,7 @@ fn every_issue_has_an_icon_in_the_row() {
     git(&r, &["push", "-q", "-u", "origin", "wt-branch"]);
     assert!(badges_at(&sb, &r, "").contains(&UNICODE.off_default.to_string()));
     // (a warning: gone when the issue is ignored)
-    let ignored = "[marks.ignore.issues]\nnon_default_branch = ['**']";
+    let ignored = "[tags.ignore.issues]\nnon_default_branch = ['**']";
     assert!(!badges_at(&sb, &r, ignored).contains(&UNICODE.off_default.to_string()));
     // a finished worktree: merged, its upstream gone
     git(&r, &["switch", "-q", "main"]);

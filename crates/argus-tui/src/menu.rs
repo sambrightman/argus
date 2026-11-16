@@ -13,7 +13,7 @@ pub enum MenuId {
     Commit,
     Branch,
     Fix,
-    Mark,
+    Tag,
     Open,
     View,
     /// A repo's issues to ignore, built when opened (no prefix key).
@@ -24,7 +24,7 @@ pub enum MenuId {
     Reset,
     /// A commit to reset to or fix up, built when opened.
     PickCommit,
-    /// The Mark menu's marks for the selected repo's owner as a whole.
+    /// The Tag menu's tags for the selected repo's owner as a whole.
     Owner,
 }
 
@@ -83,14 +83,14 @@ impl MenuId {
             MenuId::Commit => 'c',
             MenuId::Branch => 'b',
             MenuId::Fix => 'x',
-            MenuId::Mark => 'm',
+            MenuId::Tag => 't',
             MenuId::Open => 'o',
             MenuId::View => 'v',
             MenuId::Ignore => 'I',
             MenuId::Gitignore => 'i',
             MenuId::Reset => 'X',
             MenuId::PickCommit => 'X',
-            MenuId::Owner => 'm',
+            MenuId::Owner => 't',
         }
     }
 
@@ -102,7 +102,7 @@ impl MenuId {
         MenuId::Commit,
         MenuId::Branch,
         MenuId::Fix,
-        MenuId::Mark,
+        MenuId::Tag,
         MenuId::Open,
         MenuId::View,
         MenuId::Reset,
@@ -125,10 +125,10 @@ impl MenuId {
                 "Pull",
                 vec![
                     item('p', "pull selected", Action::Pull(Scope::Selected)),
-                    item('a', "pull all marked for pull", Action::Pull(Scope::All)),
+                    item('a', "pull all tagged for pull", Action::Pull(Scope::All)),
                     item(
                         'c',
-                        "clone new repos of tracked owners, then pull all marked",
+                        "clone new repos of tracked owners, then pull all tagged",
                         Action::PullAndClone,
                     ),
                 ],
@@ -260,8 +260,8 @@ impl MenuId {
             ),
             // built when opened: see App::add_fixes
             MenuId::Fix => ("Fix", vec![]),
-            MenuId::Mark => (
-                "Mark",
+            MenuId::Tag => (
+                "Tag",
                 vec![
                     item('p', "toggle pull", Action::TogglePull),
                     item('i', "ignore issues…", Action::IgnoreIssues),
@@ -277,7 +277,7 @@ impl MenuId {
                         Action::Unsnooze,
                     ),
                     item('a', "acknowledge new", Action::Ack),
-                    item('c', "clear marks", Action::ClearMarks),
+                    item('c', "clear tags", Action::ClearTags),
                     item(
                         'o',
                         "the owner (all its repos)…",
@@ -323,19 +323,19 @@ impl MenuId {
             ),
             MenuId::PickCommit => ("Commits", vec![]),
             // titled with the owner and labelled as toggled when opened; its
-            // marks added then, as the Mark menu's
+            // tags added then, as the Tag menu's
             MenuId::Owner => (
                 "Owner",
                 vec![
                     item(
                         'p',
                         "toggle pull",
-                        Action::ToggleOwnerMark(argus_core::rules::Mark::Pull),
+                        Action::ToggleOwnerTag(argus_core::rules::Tag::Pull),
                     ),
                     item(
                         'I',
                         "toggle ignoring",
-                        Action::ToggleOwnerMark(argus_core::rules::Mark::Ignore),
+                        Action::ToggleOwnerTag(argus_core::rules::Tag::Ignore),
                     ),
                 ],
             ),
@@ -367,9 +367,9 @@ impl MenuId {
 /// closes menus. A list has at most this many items.
 pub const LIST_KEYS: &str = "1234567890abcdefghilmorstuvwxyz";
 
-/// Marks whose key the Mark menu (or the Owner menu) has already: they're
+/// Tags whose key the Tag menu (or the Owner menu) has already: they're
 /// left out of it, so say so.
-pub fn mark_key_clashes(c: &argus_core::Config) -> Vec<String> {
+pub fn tag_key_clashes(c: &argus_core::Config) -> Vec<String> {
     let taken = |id: MenuId| {
         id.menu()
             .items
@@ -377,9 +377,9 @@ pub fn mark_key_clashes(c: &argus_core::Config) -> Vec<String> {
             .map(|i| i.key)
             .collect::<Vec<_>>()
     };
-    let (mark, owner) = (taken(MenuId::Mark), taken(MenuId::Owner));
+    let (tag, owner) = (taken(MenuId::Tag), taken(MenuId::Owner));
     let mut seen = vec![];
-    c.marks
+    c.tags
         .iter()
         .filter_map(|(name, d)| Some((name, d.key?)))
         .filter_map(|(name, k)| {
@@ -391,13 +391,13 @@ pub fn mark_key_clashes(c: &argus_core::Config) -> Vec<String> {
             };
             let clash = if own == Some(k) {
                 None
-            } else if mark.contains(&k) || owner.contains(&k) {
+            } else if tag.contains(&k) || owner.contains(&k) {
                 Some(format!(
-                    "[marks.{name}] key {k:?} is the Mark menu's own: choose another"
+                    "[tags.{name}] key {k:?} is the Tag menu's own: choose another"
                 ))
             } else if seen.contains(&k) {
                 Some(format!(
-                    "[marks.{name}] key {k:?} is another mark's: choose another"
+                    "[tags.{name}] key {k:?} is another tag's: choose another"
                 ))
             } else {
                 None
@@ -438,36 +438,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_marks_key_the_menu_has_is_warned_about() {
+    fn a_tags_key_the_menu_has_is_warned_about() {
         let c = argus_core::Config::parse(
-            "[marks.work]\nkey = 'w'\n[marks.pulled]\nkey = 'z'\n[marks.other]\nkey = 'w'\n[marks.nokey]\n",
+            "[tags.work]\nkey = 'w'\n[tags.pulled]\nkey = 'z'\n[tags.other]\nkey = 'w'\n[tags.nokey]\n",
         )
         .unwrap();
-        let w = mark_key_clashes(&c);
+        let w = tag_key_clashes(&c);
         assert_eq!(w.len(), 2, "{w:?}");
         assert!(
-            w[0].contains("pulled") && w[0].contains("Mark menu"),
+            w[0].contains("pulled") && w[0].contains("Tag menu"),
             "{w:?}"
         );
         assert!(
-            w[1].contains("other") && w[1].contains("another mark"),
+            w[1].contains("other") && w[1].contains("another tag"),
             "{w:?}"
         );
-        assert!(mark_key_clashes(&argus_core::Config::default()).is_empty());
+        assert!(tag_key_clashes(&argus_core::Config::default()).is_empty());
         // pull and ignore may take other keys, but not the menu's own or
-        // another mark's
-        let ok = argus_core::Config::parse("[marks.pull]\nkey = 'P'\n[marks.ignore]\nkey = 'x'\n");
-        assert!(mark_key_clashes(&ok.unwrap()).is_empty());
-        let c = argus_core::Config::parse("[marks.pull]\nkey = 'z'\n[marks.ignore]\nkey = 'f'\n")
+        // another tag's
+        let ok = argus_core::Config::parse("[tags.pull]\nkey = 'P'\n[tags.ignore]\nkey = 'x'\n");
+        assert!(tag_key_clashes(&ok.unwrap()).is_empty());
+        let c = argus_core::Config::parse("[tags.pull]\nkey = 'z'\n[tags.ignore]\nkey = 'f'\n")
             .unwrap();
-        let w = mark_key_clashes(&c);
+        let w = tag_key_clashes(&c);
         assert_eq!(w.len(), 2, "{w:?}");
         assert!(
-            w[0].contains("[marks.pull]") && w[0].contains("Mark menu"),
+            w[0].contains("[tags.pull]") && w[0].contains("Tag menu"),
             "{w:?}"
         );
         assert!(
-            w[1].contains("[marks.ignore]") && w[1].contains("another mark"),
+            w[1].contains("[tags.ignore]") && w[1].contains("another tag"),
             "{w:?}"
         );
     }

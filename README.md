@@ -51,23 +51,23 @@ roots = ["~/dev", "~/work"]
 extend_exclude_paths = ["build-cache"]  # any list: extend_<name> adds instead of replacing
 max_depth = 6                    # levels below each root; 0: no limit
 
-# marks: `repos` are repos or globs on github.com/org/repo, org/repo or
-# path; later entries win, ! turns off; marking in the TUI or `argus mark`
+# tags: `repos` are repos or globs on github.com/org/repo, org/repo or
+# path; later entries win, ! turns off; tagging in the TUI or `argus tag`
 # edits these lists
-[marks.favourite]                # built in: sort points 1, `f` in the Mark menu
+[tags.favourite]                # built in: sort points 1, `f` in the Tag menu
 repos = ["my-org/core-*"]
-[marks.pull]                     # built in: what `argus pull` pulls
+[tags.pull]                     # built in: what `argus pull` pulls
 repos = ["someone/dotfiles", "my-org/*", "!my-org/huge-monorepo"]
-[marks.work]                     # your own: a label in the flag column, and a filter
-key = "w"                        # in the Mark menu
+[tags.work]                     # your own: a label in the flag column, and a filter
+key = "w"                        # in the Tag menu
 icon = "W"                       # or by set: { unicode = "◆", nerd = "…", ascii = "*" }
 color = "cyan"
-sort = 0                         # sort points: repos sort by the sum of their marks'
+sort = 0                         # sort points: repos sort by the sum of their tags'
 repos = ["my-org/*"]
 
-[marks.ignore]                   # built in: hidden, and left out of pulls, clones and bulk actions
+[tags.ignore]                   # built in: hidden, and left out of pulls, clones and bulk actions
 repos = ["~/dev/scratch/**"]
-[marks.ignore.issues]            # what not to flag in repos that stay listed
+[tags.ignore.issues]            # what not to flag in repos that stay listed
 non_default_branch = ["my-org/legacy@release-*"]  # normally on that branch: another is flagged
 detached = ["my-org/pinned@v1.2.0"]        # a tag, its describe, or the commit
 behind = ["my-org/big"]          # also no_remote, no_upstream, unpushed_branches, stashes
@@ -101,7 +101,7 @@ icons = "unicode"                # unicode | nerd (Nerd Font) | ascii
 [ui.icon_overrides]              # any icon, by its legend name
 pull = "⇣"
 [ui.colors]                      # any role: name, #rrggbb, 0-255, "bold red on black"
-"mark.favourite" = "yellow"      # a mark: before its own `color`
+"tag.favourite" = "yellow"      # a tag: before its own `color`
 ```
 
 `argus demo` opens the TUI on throwaway sample repos in every state
@@ -128,29 +128,35 @@ the repo's details looks all the way back, in the background, and the
 answer then replaces the commit id. Details list the commit, its tags and
 the describe line.
 
-Marks live in config, a table each (`[marks.<name>]`): favourite, your
+Tags (argus's own, on repos; nothing to do with git's) were "marks" in
+0.2.0. `[marks]` in config, `argus mark` and `unmark`, `--mark` and the
+`mark.<name>` colours are still read, and a config file saying `[marks]`
+is renamed when argus next saves a tag to it. The Tag menu moved from
+`m` to `t`.
+
+Tags live in config, a table each (`[tags.<name>]`): favourite, your
 own, and the two argus acts on, pull and ignore, which take the same
 `key`, `icon`, `color` and `sort` and filter the same way (`#pull`,
-`!#ignore`). Marking a repo in the TUI or with `argus mark`
+`!#ignore`). Tagging a repo in the TUI or with `argus tag`
 adds its name to the list (or `!name` to turn off what a pattern says) and
-saves the change, keeping the rest of the file as written; `argus unmark
---all` removes the repo's own entries, and says which marks patterns (or
-a tracked owner, for pull) still give it. A mark shows its icon in the
-flag column, in its colour (`[ui] colors` `mark.<name>`, else the theme's
-own for it, else its `color`), and repos sort by the sum of their marks'
-sort points (favourite's is 1). Ignore excludes pull and the marks with
-sort points: ignoring a repo turns them off, marking it with one of them
-stops ignoring it, and where patterns say both, ignore wins; a mark
-without points is a label, and stays. A repo's owner can be marked as a
-whole (`m o` in the TUI, `argus mark --owner`): that writes its pattern,
+saves the change, keeping the rest of the file as written; `argus untag
+--all` removes the repo's own entries, and says which tags patterns (or
+a tracked owner, for pull) still give it. A tag shows its icon in the
+flag column, in its colour (`[ui] colors` `tag.<name>`, else the theme's
+own for it, else its `color`), and repos sort by the sum of their tags'
+sort points (favourite's is 1). Ignore excludes pull and the tags with
+sort points: ignoring a repo turns them off, tagging it with one of them
+stops ignoring it, and where patterns say both, ignore wins; a tag
+without points is a label, and stays. A repo's owner can be tagged as a
+whole (`t o` in the TUI, `argus tag --owner`): that writes its pattern,
 `github.com/acme/*`, so every repo of its follows, clones to come
 included. With
 extended files, an entry is removed from every file that
 lists it, and new entries go where roots do: the highest-precedence file
 with the list or its `extend_` form (to keep them in your main file, give
-it e.g. `extend_repos = []` under `[marks.favourite]`). Nothing is dropped for
+it e.g. `extend_repos = []` under `[tags.favourite]`). Nothing is dropped for
 repos that have gone. Snoozes and "new"
-flags are kept in `~/.local/state/argus/state.toml`. Marks an older argus
+flags are kept in `~/.local/state/argus/state.toml`. Tags an older argus
 kept there are shown as config lines to copy, and left in place.
 
 Credentials and git behaviour are yours: argus runs `git pull`/`push`/`clone`
@@ -185,13 +191,13 @@ again runs it.
 | `s` `u` `K` | stage / unstage / discard files: the marked ones, else the one under the cursor in the details, or on a section's own line every file in it (`s` under untracked or unstaged, `u` under staged, `K` under untracked or unstaged; the wrong side says what to press instead). In a file's diff, the hunk under the cursor, whichever of its lines that's on (as magit); or just the lines marked with space there, across hunks. Discard drops unstaged changes (the work tree put back as the index has it) and deletes untracked files, or reverses the hunk or line in the work tree; it never touches what's staged, and always asks first, saying which of those it will do. A file with a `textconv` diff program (`diff.<driver>.textconv`) is diffed as that program's output, as `git diff` shows it: for reading, so there the keys act on the whole file |
 | `e` | in a diff, edit before staging, as `git add -p`'s `e`: the marked lines (else the hunk under the cursor) open as a patch in git's editor (`GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`); what's saved is staged, or unstaged when they're staged. Only the index changes, so whatever the edit leaves out stays in the work tree's diff. A patch that doesn't apply (or touches more than those files' hunks) asks whether to edit it again; an emptied one changes nothing |
 | `i` | **Gitignore** the untracked files marked, else under the cursor, else all of the selected repos': `t` top-level `.gitignore`, `d` their directory's, `p` `.git/info/exclude` (this clone), `g` global excludes. `a` switches between anchored (`/build/`: this path only, the default) and unanchored (`build/`: the name anywhere); each item shows the rules it adds |
-| `/` `C-s` | filter, fuzzily: the letters in order, not necessarily together (`acln` finds `acme/clean`; fzf's `^`, `$`, `'` and `!` work; readline editing). By marks: `#work` has the mark, `!#work` hasn't, `#work \| #home` either (space is AND), mixed with text: `#work api` |
+| `/` `C-s` | filter, fuzzily: the letters in order, not necessarily together (`acln` finds `acme/clean`; fzf's `^`, `$`, `'` and `!` work; readline editing). By tags: `#work` has the tag, `!#work` hasn't, `#work \| #home` either (space is AND), mixed with text: `#work api` |
 | `a` / `H` | show all / attention only (the default, `[ui] attention_only`); show hidden |
 | `g` `C-l` / `R` | refresh statuses / rescan roots |
 | `!` | shell in repo, a login shell as in a new terminal tab (TUI suspends; `exit` returns) |
 | `$` | process log |
 | `?` | help |
-| `F` | **Pull**: `p` selected, `a` all marked for pull, `c` clone new repos of tracked owners, then pull all marked |
+| `F` | **Pull**: `p` selected, `a` all tagged for pull, `c` clone new repos of tracked owners, then pull all tagged |
 | `f` | **Fetch**: `f` selected, `a` all shown except hidden |
 | `P` | **Push**: `p` push, `u` publish, `b` push other branches, `r` add a remote… |
 | `z` | **Stash**: switches `u` include untracked, `k` keep index, `M` message (ask for one first), from `[stash]`, for the session; `z` all, `m` marked files, `g` staged (what's staged only: the first two switches don't apply; a `*` marks them and what goes by them), `p` pop, `d` drop: the stash under the cursor, else the repo's only one, else one picked from a list (newest first); drop always asks. Each is offered only when there's something for it |
@@ -199,20 +205,20 @@ again runs it.
 | `X` | **Reset** the current branch (one repo at a time): `s` soft (changes stay staged), `m` mixed (unstaged), `k` keep (drops the commits' changes, refusing if uncommitted ones are in the way), `h` hard (drops uncommitted changes too; asks first). Then pick the commit from HEAD's recent history, those on a remote marked; the cursor starts on the commit before HEAD, or, pressed on a commit in the details, on the one before it |
 | `b` | **Branch**: `b` checkout a branch: type to narrow the list fuzzily, as `/` does (local branches, then remote ones without a local copy, which creates a local branch tracking it), `C-n`/`C-p` to move, Enter to check it out, `-` checkout the previous branch, `s` spin off (as magit's: the commits the branch's upstream doesn't have go to a new branch, checked out, and the branch goes back to what it shares with its upstream; nothing unpushed, the new branch is made anyway), `S` spin out (the same, staying on the branch; if uncommitted changes would be lost, it spins off instead), `d` switch to default, `r` reattach detached HEAD, `c` create a branch at HEAD and check it out… (on a detached HEAD, that names its commits), `x` delete merged branches…, `k` delete the branch under the cursor in the details… (as magit's `b k`), `f` fast-forward stale branches |
 | `x` | **Fix**: `x` fix once (one fix for each selected repo), `a` the same for all shown except hidden; `X` fix auto (fix after fix until nothing more applies) and `A` the same for all shown; each saying what it would do (and left out when it would do nothing); then every fix that applies to the selection, with its reason (or how many repos it applies to): `s` stash, `c` commit…, `i` gitignore…, `b` branch…, `p` push, `u` publish, `R` add-remote…, `P` push-branches, `d` switch-default, `r` reattach, `F` pull, `f` fast-forward, `D` delete-branches…, `S` submodule-update, `w` prune-worktrees, `W` remove-worktree…, `z` stash-pop, `k` abort…; on a repo whose folder is gone, `g` drops it from the list and `G` rescans. Those marked … ask first. Opened on a fix line in the details, it starts on that fix |
-| `m` | **Mark**: each mark by its `key` (`f` favourite, then yours: "mark work" / "unmark work"), `p` pull, `i` ignore issues (a menu of the repo's issues and their state), `I` ignore or unignore the repo, `z` snooze (on an issue line in the details, just that issue), `u` unsnooze (on an issue line, just that issue; else the repo and its issues), `a` ack new, `c` clear |
+| `t` | **Tag**: each tag by its `key` (`f` favourite, then yours: "tag work" / "untag work"), `p` pull, `i` ignore issues (a menu of the repo's issues and their state), `I` ignore or unignore the repo, `z` snooze (on an issue line in the details, just that issue), `u` unsnooze (on an issue line, just that issue; else the repo and its issues), `a` ack new, `c` clear |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page (on a branch with a pull request, the pull request) |
 | `v` | **View**: toggles, expand/collapse all, log |
 
 ## CLI
 
 ```sh
-argus status [-a|--all] [--hidden] [--filter QUERY] [--mark MARK]…   # repos needing attention; -a: the rest too; QUERY as `/` takes it
+argus status [-a|--all] [--hidden] [--filter QUERY] [--tag TAG]…   # repos needing attention; -a: the rest too; QUERY as `/` takes it
 argus status --details   # under each repo, what the TUI's details show: issues, fixes (with the command for each), branches, changes, stashes
 argus status --forge     # the details, with what GitHub says: open issues and pull requests, and each branch's pull request (asks now, once per repo listed)
 argus pull [-n] [--no-clone] [PATTERNS…]
 argus fix [-n] [-F] [--auto] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine; -F fetches first; --auto: keep fixing each repo until nothing more applies
-argus mark MARK PATTERNS… [--owner]   # MARK: favourite, one of yours, pull or ignore
-argus unmark MARK PATTERNS… [--owner] | unmark --all PATTERNS…   # --all: every mark, and snoozes
+argus tag TAG PATTERNS… [--owner]   # TAG: favourite, one of yours, pull or ignore
+argus untag TAG PATTERNS… [--owner] | untag --all PATTERNS…   # --all: every tag, and snoozes
 argus snooze PATTERNS… --for 3d [--issue ISSUE]…
 argus unsnooze PATTERNS… [--issue ISSUE]…
 argus ignore-issue ISSUE PATTERNS… [--pin|--no-pin]
@@ -230,12 +236,12 @@ document on stdout (messages and progress stay on stderr). For example
 `alternatives`; `argus --json pull` lists each job's `outcome` (`ok`,
 `failed`, `skipped`) and a `summary`.
 
-Completions cover commands, options, marks, issues and your repos' names
-(`argus mark favourite acme/<Tab>`). The shell asks `argus` for them as you type, so load the
+Completions cover commands, options, tags, issues and your repos' names
+(`argus tag favourite acme/<Tab>`). The shell asks `argus` for them as you type, so load the
 script fresh at shell startup, where it always matches the installed argus:
 `source <(argus completions zsh)` in `~/.zshrc` (likewise bash), or
 `argus completions fish | source` in `~/.config/fish/config.fish`. Repo
-names and marks come from your config (`ARGUS_CONFIG`, or `--config`
+names and tags come from your config (`ARGUS_CONFIG`, or `--config`
 earlier on the line), and `--root` earlier on the line replaces its roots,
 as when the command runs.
 
@@ -251,7 +257,7 @@ Anything that permanently loses data asks first: in the TUI a `y/n` in the
 status line, in the CLI a prompt on the terminal. `-y` / `--yes` proceeds
 without asking (scripts, cron); without a terminal and without `--yes`,
 the command refuses and changes nothing. Today that's discarding file
-changes (always) and clearing the marks of more than one repo.
+changes (always) and clearing the tags of more than one repo.
 
 Directories whose name starts with `.` are skipped (`skip_hidden`); add
 one as a root to scan it, e.g. `argus root add ~/.emacs.d`. `exclude_paths` lists
@@ -263,7 +269,7 @@ module cache under a root). Roots are always scanned.
 The scan stops at each repo; `scan_inside_repos = true` keeps walking its
 work tree for repos nested inside (slower; submodules are found from
 their parent either way).
-To keep scanning repos but hide them, list them in `[marks.ignore] repos`.
+To keep scanning repos but hide them, list them in `[tags.ignore] repos`.
 Hidden repos (ignored or snoozed; `H` shows them) are never part of a
 bulk action such as fetch all or fix all, even while shown; choosing one
 explicitly still works. Pulls are the exception for snoozed repos: they're
@@ -274,13 +280,13 @@ the details show the issue dimmed as ignored, and auto-fix leaves that
 state alone. Conflicts, operations in progress and commits only a
 detached HEAD holds can't be ignored.
 
-Or snooze just one issue for a while: `m z` on its line in the details,
+Or snooze just one issue for a while: `t z` on its line in the details,
 or `argus snooze acme/app --for 3d --issue dirty` (any issue, by kind, so
 more stashes or commits stay snoozed). It doesn't count until the snooze
 ends, shows dimmed with the time left, and auto-fix leaves its state
 alone, as for an ignored one; the repo and its other issues are still
-shown. `m u` on the line, or `argus unsnooze acme/app --issue dirty`, ends
-it early; plain `argus unsnooze` (or `m u` on the repo) ends the repo's
+shown. `t u` on the line, or `argus unsnooze acme/app --issue dirty`, ends
+it early; plain `argus unsnooze` (or `t u` on the repo) ends the repo's
 issue snoozes too.
 
 A daily crontab entry:
@@ -298,12 +304,12 @@ owner, `gone from the forge, or out of reach` when it was deleted or the
 token can't see it. For a renamed one, `argus pull --yes` (or yes when
 asked, at a terminal or in the TUI) points the clone's remote at the new
 name, the URL otherwise as it was. A gone one is never touched: the clone
-may be the only copy left. `argus mark ignore` hides it.
+may be the only copy left. `argus tag ignore` hides it.
 
 ## What counts as needing attention
 
 Repos needing attention come before clean ones; within each group, by
-their marks' sort points (favourites first), then by severity, then by
+their tags' sort points (favourites first), then by severity, then by
 amount of change:
 
 conflicts / in-progress merge or rebase › commits on a detached HEAD held by no
@@ -417,7 +423,7 @@ are never automatic are left out of `[fix] auto`, with a warning.
 Fixing once (`x x`, `argus fix`) applies **one** fix: the first kind in
 `[fix] auto` (or `-k`, in the order given) that the repo needs. An
 unpushed feature branch is pushed by one and switched back to the default
-branch by the next. Or snooze it in between (`m z`).
+branch by the next. Or snooze it in between (`t z`).
 Fix auto (`x X`, `argus fix --auto`) runs the whole sequence in one go:
 after each fix the repo's status is read again and the next one chosen
 from it, until nothing more applies or a fix fails (never the kinds that
@@ -463,15 +469,15 @@ changes in the index after stashing them. `message = true` has the TUI's
 stash menu ask for a message first (they're the menu's three switches as
 it opens).
 
-Stashes are judged one by one. By default `[marks.ignore.issues] stashes = ["**",
+Stashes are judged one by one. By default `[tags.ignore.issues] stashes = ["**",
 "!**@argus *"]`: your own stashes don't need attention, while those the
 stash fix made (`argus <date>`) do until you pop or drop them. An entry
 `repo@message` covers the stashes whose message (after git's
 `On <branch>: `) matches, glob allowed. Set `stashes = []` to flag every
 stash, and use `extend_stashes` to add to the default rather than replace
-it (the TUI and `argus mark` do).
+it (the TUI and `argus tag` do).
 
-In the TUI, `m i` lists the repo's issues that can be ignored, each with
+In the TUI, `t i` lists the repo's issues that can be ignored, each with
 its state: `·` not ignored, `○` ignored for its current value only (pinned:
 while on this branch, at this HEAD, for these stash messages), `●` ignored
 whatever the value. A digit moves its issue to the next state: not ignored,
