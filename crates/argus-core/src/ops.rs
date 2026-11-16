@@ -1036,15 +1036,11 @@ fn switch(cwd: &Path, op: &Op, started: Instant) -> OpOutcome {
         return o;
     }
     let was = |path: &String| before.iter().find(|(p, _)| p == path).map(|(_, s)| *s);
-    let (mut stay, mut follow) = (vec![], vec![]);
-    for (path, state) in &now {
-        match (state, was(path)) {
-            // not checked out, as it was: left so
-            ('-', Some('-')) => {}
-            (_, Some('+')) => stay.push(path),
-            _ => follow.push(path),
-        }
-    }
+    // (one not checked out is passed with the rest: git leaves it so)
+    let (stay, follow): (Vec<&String>, Vec<&String>) = now
+        .iter()
+        .map(|(p, _)| p)
+        .partition(|p| was(p) == Some('+'));
     if !follow.is_empty() {
         let mut args = vec!["submodule", "update", "--recursive", "--"];
         args.extend(follow.iter().map(|p| p.as_str()));
@@ -1064,14 +1060,20 @@ fn switch(cwd: &Path, op: &Op, started: Instant) -> OpOutcome {
     }
     // one that came with the branch and was never set up isn't checked
     // out by that, nor does git count it a failure: said
-    let came = |path: &&String| was(path).is_none() && follow.contains(path);
-    let absent: Vec<String> = match now.iter().any(|(p, s)| *s == '-' && came(&p)) {
-        true => submodule_states(cwd),
-        false => vec![],
+    let not_out = |states: &[(String, char)]| -> Vec<String> {
+        let out = states.iter().filter(|(_, s)| *s == '-');
+        out.map(|(p, _)| p.clone()).collect()
+    };
+    let came: Vec<String> = not_out(&now)
+        .into_iter()
+        .filter(|p| was(p).is_none())
+        .collect();
+    let absent: Vec<String> = match came.is_empty() {
+        true => vec![],
+        false => not_out(&submodule_states(cwd)),
     }
     .into_iter()
-    .filter(|(p, s)| *s == '-' && came(&p))
-    .map(|(p, _)| p)
+    .filter(|p| came.contains(p))
     .collect();
     for path in absent {
         o.output.push_str(&format!(

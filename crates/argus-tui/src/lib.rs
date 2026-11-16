@@ -405,6 +405,12 @@ impl Runtime {
         self.pending.load(Ordering::SeqCst) > 0
     }
 
+    /// Have panics off this thread kept for [`Self::take_panics`], as the
+    /// loop has them once the terminal is set up.
+    pub fn keep_panics(&self) {
+        keep_background_panics(std::thread::current().id(), self.panics.clone());
+    }
+
     /// What background work has panicked with since last asked.
     pub fn take_panics(&mut self) -> Vec<String> {
         self.panics

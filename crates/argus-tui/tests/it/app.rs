@@ -8128,6 +8128,24 @@ fn a_region_stays_in_the_copy_of_the_diff_it_was_started_in() {
             2,
             "the hunk's two changed lines up to the start"
         );
+        // on the blank line that ends its copy's diff (when anything
+        // follows it): the diff's end; on its file's own line: its start
+        let blank = (*start..app.rows.len()).find(|&r| {
+            matches!(&app.rows[r], Row::Detail { line, .. } if line.id.last() == Some(&Seg::Blank))
+        });
+        if n == 0 {
+            app.cursor = blank.expect("sections follow the issue's copy");
+            assert_eq!(ats(&app).len(), 2, "to the end");
+        }
+        let own_file = (0..*start)
+            .rev()
+            .find(|&r| {
+                matches!(&app.rows[r], Row::Detail { line, .. }
+                if line.file.as_deref() == Some("f") && line.diff.is_none())
+            })
+            .unwrap();
+        app.cursor = own_file;
+        assert_eq!(ats(&app).len(), 4, "from the start");
         // its diff folded: the same, the lines being the diff's, shown or not
         let file = (0..*start)
             .rev()

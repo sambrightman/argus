@@ -3638,16 +3638,15 @@ impl App {
             .and_then(|top| self.rows_of(top))
             .map(|(_, rows)| rows.filter(|n| self.id(*n).starts_with(&r.home)).collect())
             .unwrap_or_default();
-        let end = match (copy.first(), copy.last(), self.rows.get(self.cursor)) {
-            (Some(first), Some(last), Some(Row::Detail { line, .. }))
-                if (*first..=*last).contains(&self.cursor) =>
-            {
-                Self::diff_pos(line)
-            }
-            (Some(first), ..) if self.cursor < *first => DIFF_START,
-            (Some(_), ..) => DIFF_END,
+        use std::cmp::Ordering::{Greater, Less};
+        let sides = copy.first().zip(copy.last());
+        let sides = sides.map(|(first, last)| (self.cursor.cmp(first), self.cursor.cmp(last)));
+        let end = match (sides, self.rows.get(self.cursor)) {
+            (Some((Less, _)), _) => DIFF_START,
+            (Some((_, Greater)), _) => DIFF_END,
+            (Some(_), Some(Row::Detail { line, .. })) => Self::diff_pos(line),
             // (the copy folded away: no further than where it starts)
-            (None, ..) => r.at,
+            _ => r.at,
         };
         let (from, to) = (r.at.min(end), r.at.max(end));
         let mut lines = vec![];

@@ -689,6 +689,27 @@ fn a_forge_question_that_panics_is_answered_as_failed() {
 }
 
 #[test]
+fn a_panic_in_the_background_is_handed_over_once() {
+    let (_sb, _app, mut rt) = setup("");
+    let before = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    rt.keep_panics();
+    assert!(rt.take_panics().is_empty());
+    assert!(
+        std::thread::spawn(|| panic!("out of sight"))
+            .join()
+            .is_err()
+    );
+    let kept = rt.take_panics();
+    assert!(
+        matches!(&kept[..], [one] if one.contains("out of sight")),
+        "{kept:?}"
+    );
+    assert!(rt.take_panics().is_empty(), "once");
+    std::panic::set_hook(before);
+}
+
+#[test]
 fn the_runtime_is_working_while_results_are_still_to_come() {
     let (_sb, mut app, mut rt) = setup("");
     assert!(!rt.working(), "nothing asked");
