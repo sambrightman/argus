@@ -683,7 +683,8 @@ pub fn details(
         );
     }
     if !s.branches.is_empty() {
-        v.push(line(vec![styled(Role::Dim, "branches")]).at(Seg::Branches));
+        let heading = format!("branches ({})", s.branches.len());
+        v.push(line(vec![styled(Role::Dim, heading)]).at(Seg::Branches));
         for b in &s.branches {
             let mut parts = vec![
                 plain(if b.is_head { "  * " } else { "    " }),
@@ -768,7 +769,12 @@ pub fn details(
             0 => s.stashes.len().to_string(),
             _ => format!("{}, {ignored} ignored", s.stashes.len()),
         };
-        v.push(line(vec![styled(Role::Dim, format!("stashes ({count})"))]).at(Seg::Stashes));
+        // (in their colour while any of them counts as an issue)
+        let role = match ignored == s.stashes.len() {
+            true => Role::Dim,
+            false => Role::Stash,
+        };
+        v.push(line(vec![styled(role, format!("stashes ({count})"))]).at(Seg::Stashes));
         for (n, message) in s.stashes.iter().enumerate().take(MAX_STASHES) {
             let label = format!("    stash@{{{n}}} {message}");
             let id = s.stash_ids.get(n);

@@ -2064,6 +2064,12 @@ fn the_stash_list_says_how_many_are_ignored_and_stops_after_ten() {
         let texts = detail_texts(&app);
         let at = texts.iter().position(|t| t.starts_with("stashes")).unwrap();
         assert_eq!(texts[at], first, "{n}");
+        // in the stash colour while any of them counts as an issue
+        let Row::Detail { line, .. } = &app.rows[app.cursor] else {
+            panic!("the heading");
+        };
+        let role = argus_core::badges::Role::Stash;
+        assert_eq!(line.parts[0].0 == Some(role), n == 10, "{:?}", line.parts);
         let listed = texts[at + 1..]
             .iter()
             .take_while(|t| t.trim_start().starts_with("stash@"))
@@ -8109,7 +8115,7 @@ fn the_cursor_moves_on_as_magit_does_when_its_line_goes() {
     after(&mut app, &["add", "new"]);
     dirty_line(&mut app, Section::Staged, None);
     after(&mut app, &["commit", "-q", "-m", "all"]);
-    assert_eq!(here(&app), ("branches".into(), None));
+    assert_eq!(here(&app), ("branches (1)".into(), None));
     // a hunk folded away under the cursor, another file after its own in
     // the section: the hunk's own line
     write(&d, "README", "one more\n");
@@ -8351,7 +8357,7 @@ fn tab_on_a_line_with_nothing_under_it_folds_what_it_is_under() {
     assert!(app.expanded.contains(&d));
     let t = trimmed(&app);
     assert!(!t.iter().any(|t| t.starts_with("* main")), "{t:?}");
-    assert_eq!(t[app.cursor_line()], "branches");
+    assert_eq!(t[app.cursor_line()], "branches (1)");
     app.on_key(code(KeyCode::Tab));
     assert!(trimmed(&app).iter().any(|t| t.starts_with("* main")));
     // inverse: a line under nothing folds the repo
