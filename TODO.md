@@ -42,4 +42,12 @@ deferred.
 
 ## Known gaps
 
-None known.
+- **A stash of marked lines takes unstaged text changes only.** With
+  lines marked, `z m` refuses a file marked whole that's untracked,
+  listed under staged, or not text, and refuses staged lines; they'd
+  need the stash's tree built file by file.
+- **The partly marked icon (`│`) isn't checked in the fonts** beyond
+  being a glyph all of them have; whether it reads as "less than `▌`"
+  in each is for the glyph review above.
+- **`e` (edit a patch) goes by marked lines only:** a file marked whole
+  isn't opened as its hunks.
