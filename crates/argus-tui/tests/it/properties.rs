@@ -259,14 +259,14 @@ fn arranged(
 /// text.
 type PatchLine = (std::path::PathBuf, String, char, String);
 
+/// Lines to go as patches, and files to go whole (by repo).
+type Taken = (Vec<PatchLine>, BTreeSet<(std::path::PathBuf, String)>);
+
 /// What the rows say `verb` should take: the changed lines to go as
 /// patches and the files to go whole, or `None` when something marked is
 /// on the wrong side for it (nothing is to happen then). Worked out from
 /// what each row is and shows, not from what the keys read.
-fn expected(
-    app: &App,
-    verb: char,
-) -> Option<(Vec<PatchLine>, BTreeSet<(std::path::PathBuf, String)>)> {
+fn expected(app: &App, verb: char) -> Option<Taken> {
     let right = |s: Section| (s == Section::Staged) == (verb == 'u');
     let detail = |n: usize| match &app.rows[n] {
         Row::Detail { repo, line } => Some((app.ws.entries[*repo].path.clone(), line)),
@@ -363,7 +363,7 @@ fn expected(
 
 /// What `fx`'s jobs would change: the lines their patches take, and the
 /// files taken whole.
-fn changed(fx: &[Effect]) -> (Vec<PatchLine>, BTreeSet<(std::path::PathBuf, String)>) {
+fn changed(fx: &[Effect]) -> Taken {
     let (mut lines, mut files) = (vec![], BTreeSet::new());
     for e in fx {
         let Effect::Jobs(jobs) = e else { continue };
