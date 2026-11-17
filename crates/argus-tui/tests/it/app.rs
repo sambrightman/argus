@@ -1531,10 +1531,11 @@ fn files_marked_in_details_can_be_stashed() {
         "{out}"
     );
     // with its diff open, the hunk and its two changed lines show it too
+    // (and its section's heading, as the only file there)
     app.cursor = at;
     app.on_key(code(KeyCode::Tab));
     let out = render(&mut app, 100, 30);
-    assert_eq!(out.lines().filter(|l| l.contains('▌')).count(), 4, "{out}");
+    assert_eq!(out.lines().filter(|l| l.contains('▌')).count(), 5, "{out}");
     app.cursor = at;
     app.on_key(code(KeyCode::Tab));
     app.on_key(key('z'));
@@ -5518,7 +5519,8 @@ fn a_file_is_marked_in_its_section_and_an_untracked_one_whole() {
             .map(|(i, _)| i + top)
             .collect()
     };
-    assert_eq!(marked(&mut app), [staged]);
+    // (and its section's heading, as the only file there)
+    assert_eq!(marked(&mut app), [staged - 1, staged]);
     let dirty = app.current().unwrap().path.clone();
     assert_eq!(
         app.marked_files[&dirty],
@@ -5831,7 +5833,11 @@ fn what_is_marked_twice_over_counts_once() {
     app.on_key(key(' '));
     app.cursor = folder + 1;
     app.on_key(key(' '));
-    assert_eq!(marks_of(&mut app, &["build/", "build/a", "build/b"]), "-M-");
+    assert_eq!(marks_of(&mut app, &["build/", "build/a", "build/b"]), "pM-");
+    // (the folder partly marked: unmarked, then marked whole)
+    app.cursor = folder;
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &["build/", "build/a", "build/b"]), "---");
     app.cursor = folder;
     app.on_key(key(' '));
     app.on_key(key('K'));
@@ -6936,6 +6942,85 @@ fn a_tag_of_your_own_is_set_from_the_tag_menu_and_shown() {
     assert!(
         help.contains("W  tag: work") && help.contains("L  tag: later"),
         "{help}"
+    );
+}
+
+/// Marks in a repo's details show on what holds them: the repo's own row
+/// (folded or not) and the title, a section's heading, an untracked
+/// folder's line. And K from another repo says where it would discard.
+#[test]
+fn marks_show_on_what_holds_them_and_k_says_where() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        diff_fixture(sb);
+        write(&sb.path("dev/dirty"), "build/a", "a\n");
+        write(&sb.path("dev/dirty"), "build/b", "b\n");
+    });
+    let title = |app: &mut App| render(app, 140, 60).lines().next().unwrap().to_string();
+    assert_eq!(marks_of(&mut app, &["acme/dirty"]), "-");
+    to_file(&mut app, "README");
+    app.on_key(key(' '));
+    let rows = ["acme/dirty", "untracked (3)", "unstaged (2)", "staged (1)"];
+    assert_eq!(marks_of(&mut app, &rows), "p-p-");
+    assert!(
+        title(&mut app).contains(" · marked in details: 1 file"),
+        "{}",
+        title(&mut app)
+    );
+    // every file of a section: its heading shows it marked
+    to_file(&mut app, "both");
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "p-M-");
+    assert!(title(&mut app).contains("marked in details: 2 files"));
+    // lines count too, and a file in a folder marks the folder partly
+    app.on_key(key('U'));
+    to_file(&mut app, "README");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+hello there");
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "p-p-");
+    assert!(
+        title(&mut app).contains("marked in details: 1 line"),
+        "{}",
+        title(&mut app)
+    );
+    to_file(&mut app, "build/");
+    app.act(Action::ToggleExpand);
+    app.cursor += 1;
+    app.on_key(key(' '));
+    assert_eq!(
+        marks_of(&mut app, &["untracked (3)", "build/", "build/a"]),
+        "ppM"
+    );
+    assert!(title(&mut app).contains("marked in details: 1 file, 1 line"));
+    // folded away, the repo's row still shows there are some
+    app.on_key(key('U'));
+    to_file(&mut app, "README");
+    app.on_key(key(' '));
+    app.act(Action::Top);
+    while trimmed(&app).iter().any(|t| t == "M README") {
+        app.act(Action::ToggleExpand);
+    }
+    assert_eq!(marks_of(&mut app, &["acme/dirty", "acme/clean"]), "p-");
+    // a marked repo shows that, whatever is marked in it
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &["acme/dirty"]), "M");
+    app.act(Action::Top);
+    app.on_key(key(' '));
+    // K with the cursor in another repo says where the files are
+    cursor_on_detail(&mut app, "clean", "path");
+    app.on_key(key('K'));
+    assert!(
+        render(&mut app, 140, 60)
+            .contains("In acme/dirty: discard unstaged changes to README? They're lost. (y/n)"),
+        "{}",
+        render(&mut app, 140, 60)
+    );
+    app.on_key(key('n'));
+    // inverse: in its own repo, it needn't
+    cursor_on_detail(&mut app, "dirty", "path");
+    app.on_key(key('K'));
+    assert!(
+        render(&mut app, 140, 60).contains(" Discard unstaged changes to README? They're lost.")
     );
 }
 

@@ -1741,10 +1741,12 @@ impl App {
                         u.len()
                     ),
                 };
-                let then = targets
+                let then: Vec<(PathBuf, Vec<String>)> = targets
                     .iter()
                     .map(|(i, f)| (self.ws.entries[*i].path.clone(), f.clone()))
                     .collect();
+                let repos: Vec<&Path> = then.iter().map(|(p, _)| p.as_path()).collect();
+                let question = self.asked_where(&repos, question);
                 self.mode = Mode::Confirm {
                     question,
                     then: Confirmed::Discard(then),
@@ -3616,6 +3618,14 @@ impl App {
         if self.file_marked(repo, section, file) {
             return Marked::Wholly;
         }
+        // (an untracked folder with something marked in it)
+        let files = self.marked_files.get(repo).into_iter().flatten();
+        if files
+            .into_iter()
+            .any(|(s, f)| *s == section && within(file, f))
+        {
+            return Marked::Partly;
+        }
         let side = section.side();
         let within = |h: usize| hunk.is_none_or(|of| of == h);
         let marked = self.marked_lines.iter();
@@ -3630,6 +3640,60 @@ impl App {
             Some(all) if all.iter().filter(|l| within(l.0)).count() <= marked => Marked::Wholly,
             _ => Marked::Partly,
         }
+    }
+
+    /// How much of what `section` lists of the repo is marked: all its
+    /// files, or some file or line of one.
+    pub fn section_marked(&self, repo: &Path, section: Section) -> Marked {
+        let files = self.ws.get(repo).and_then(Entry::status);
+        let files = files.map(|s| section.files(s)).unwrap_or_default();
+        let of = |f: &String| self.marked_of(repo, section, f, None);
+        let marked: Vec<Marked> = files.iter().map(of).collect();
+        if !marked.is_empty() && marked.iter().all(|m| *m == Marked::Wholly) {
+            Marked::Wholly
+        } else if marked.iter().any(|m| *m != Marked::No) {
+            Marked::Partly
+        } else {
+            Marked::No
+        }
+    }
+
+    /// The files marked whole and the lines marked in the details of the
+    /// repo at `path` and of the repos nested in it (all repos' with
+    /// `None`).
+    pub fn marked_in(&self, path: Option<&Path>) -> (usize, usize) {
+        let within = |repo: &PathBuf| path.is_none_or(|p| repo.starts_with(p));
+        let files = self.marked_files.iter().filter(|(repo, _)| within(repo));
+        let lines = self.marked_lines.iter().filter(|k| within(&k.0));
+        (files.map(|(_, f)| f.len()).sum(), lines.count())
+    }
+
+    /// For a question about marked files or lines: which repo they're in,
+    /// when it isn't the one the cursor is in (`In acme/app: `), and the
+    /// question's first letter to go with it.
+    fn asked_where(&self, repos: &[&Path], question: String) -> String {
+        let here = self.current_path();
+        let elsewhere: Vec<&&Path> = repos
+            .iter()
+            .filter(|p| here.as_deref() != Some(**p))
+            .collect();
+        let name = |p: &Path| {
+            self.ws
+                .get(p)
+                .map_or_else(String::new, |e| e.display_name())
+        };
+        let whereabouts = match elsewhere.as_slice() {
+            [] => return question,
+            [one] if repos.len() == 1 => name(one),
+            _ => format!("{} repos", repos.len()),
+        };
+        let mut letters = question.chars();
+        let first = letters.next().map(|c| c.to_lowercase().to_string());
+        format!(
+            "In {whereabouts}: {}{}",
+            first.unwrap_or_default(),
+            letters.as_str()
+        )
     }
 
     /// Space on a file of the changes (`part` none), on a hunk's own line
@@ -3652,6 +3716,10 @@ impl App {
         let whole = self.file_marked(&repo, section, &file);
         if let Some(files) = self.marked_files.get_mut(&repo) {
             files.remove(&(section, file.clone()));
+            // (a folder's own line: what's marked in it, too)
+            if part.is_none() {
+                files.retain(|(s, f)| !(*s == section && within(&file, f)));
+            }
             if files.is_empty() {
                 self.marked_files.remove(&repo);
             }
@@ -4170,6 +4238,9 @@ impl App {
                     format!("Discard {} and {last}? They're lost.", all.join(", "))
                 }
             };
+            let mut repos: Vec<&Path> = ops.iter().map(|(p, _)| p.as_path()).collect();
+            repos.dedup();
+            let question = self.asked_where(&repos, question);
             self.mode = Mode::Confirm {
                 question,
                 then: Confirmed::Ops(ops),

@@ -208,6 +208,16 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) -> Vec<LinkAt> 
         if !app.marked.is_empty() {
             s.push_str(&format!(" · {} marked", app.marked.len()));
         }
+        // (which a folded repo's own row can only hint at)
+        let (files, lines) = app.marked_in(None);
+        let counted = [(files, "file", "files"), (lines, "line", "lines")];
+        let counted = counted.iter().filter(|(n, ..)| *n > 0);
+        let counted: Vec<String> = counted
+            .map(|(n, one, many)| format!("{n} {}", plural(*n, one, many)))
+            .collect();
+        if !counted.is_empty() {
+            s.push_str(&format!(" · marked in details: {}", counted.join(", ")));
+        }
         if app.scanning {
             s.push_str(&format!(" · scanning {}", v.icons.spin(v.tick)));
         }
@@ -295,6 +305,7 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) -> Vec<LinkAt> 
                 // a file of the changes, a hunk of its diff, or a line of one
                 let marked = match (&line.file, line.section, line.diff.as_deref()) {
                     (Some(f), Some(section), None) => app.marked_of(path, section, f, None),
+                    (None, Some(section), None) => app.section_marked(path, section),
                     (Some(f), Some(section), Some(d)) => match (d.hunk, d.at, &d.line) {
                         (Some(h), None, _) => app.marked_of(path, section, f, Some(h)),
                         (Some(h), Some(at), Some(l)) if l.kind != LineKind::Context => {
@@ -426,6 +437,9 @@ fn repo_line<'a>(
         Span::styled(v.icons.spin(v.tick).to_string(), t.ui(Ui::Running))
     } else if marked {
         Span::styled(v.icons.marked.to_string(), t.ui(Ui::Marked))
+    } else if app.marked_in(Some(&e.path)) != (0, 0) {
+        // something in its details is: seen here even when they're folded
+        Span::styled(v.icons.partly_marked.to_string(), t.ui(Ui::Marked))
     } else {
         Span::raw(" ")
     });
