@@ -5745,8 +5745,28 @@ fn space_on_a_sections_heading_marks_its_files() {
     app.on_key(key(' '));
     assert_eq!(marks_of(&mut app, &rows), "----");
     assert!(app.marked_files.is_empty() && app.marked_lines.is_empty());
+    // (the other section's lines aren't its to unmark)
+    to_staged(&mut app, "both");
+    app.act(Action::ToggleExpand);
+    let staged_line = (0..app.rows.len())
+        .rev()
+        .find(|n| {
+            matches!(&app.rows[*n], Row::Detail { line, .. }
+            if line.diff.as_deref().is_some_and(|d| d.at.is_some()
+                && d.side == argus_core::diff::Side::Staged
+                && d.line.as_ref().is_some_and(|l| l.text == "two")))
+        })
+        .expect("the staged line");
+    app.cursor = staged_line;
+    app.on_key(key(' '));
+    to_section(&mut app, Section::Unstaged);
+    app.on_key(key(' '));
+    to_section(&mut app, Section::Unstaged);
+    app.on_key(key(' '));
+    assert_eq!(app.marked_lines.len(), 1, "the staged line's mark stays");
+    app.on_key(ctrl('g'));
     // what's marked that way is what s takes
-    app.cursor = heading;
+    to_section(&mut app, Section::Unstaged);
     app.on_key(key(' '));
     app.act(Action::Top);
     assert_eq!(
@@ -6114,6 +6134,11 @@ fn a_region_of_diff_lines_is_staged() {
     while app.cursor < row_of(&app, "added") {
         app.on_key(code(KeyCode::Down));
     }
+    // (its lines show as they will be: marked)
+    assert_eq!(
+        marks_of(&mut app, &["+line three", " line 4", "+added"]),
+        "M-M"
+    );
     match app.act(Action::StageFiles).as_slice() {
         [Effect::Jobs(j)] => match &j[0].op {
             Op::Apply { patch, what, .. } => {
@@ -7015,7 +7040,9 @@ fn marks_show_on_what_holds_them_and_k_says_where() {
     let rows = ["acme/dirty", "untracked (3)", "unstaged (2)", "staged (1)"];
     assert_eq!(marks_of(&mut app, &rows), "p-p-");
     assert!(
-        title(&mut app).contains(" · marked in details: 1 file"),
+        title(&mut app)
+            .trim_end()
+            .ends_with(" · marked in details: 1 file"),
         "{}",
         title(&mut app)
     );
@@ -7075,6 +7102,36 @@ fn marks_show_on_what_holds_them_and_k_says_where() {
         "running 1 job(s)… · in acme/dirty"
     );
     app.running.clear();
+    // so does stashing them; stashing a repo says no such thing
+    app.on_key(key('z'));
+    assert!(!app.on_key(key('m')).is_empty());
+    assert!(
+        app.message
+            .as_ref()
+            .unwrap()
+            .0
+            .ends_with(" · in acme/dirty"),
+        "{:?}",
+        app.message
+    );
+    app.running.clear();
+    app.on_key(ctrl('g'));
+    cursor_on_detail(&mut app, "dirty", "path");
+    app.on_key(key('z'));
+    app.on_key(key('z'));
+    assert!(
+        !app.message.as_ref().unwrap().0.contains(" · in "),
+        "{:?}",
+        app.message
+    );
+    app.running.clear();
+    to_file(&mut app, "README");
+    app.on_key(key(' '));
+    app.act(Action::Top);
+    while trimmed(&app).iter().any(|t| t == "M README") {
+        app.act(Action::ToggleExpand);
+    }
+    cursor_on_detail(&mut app, "clean", "path");
     // and K where the files are
     app.on_key(key('K'));
     assert!(

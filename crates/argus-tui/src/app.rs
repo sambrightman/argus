@@ -657,8 +657,6 @@ pub enum Confirmed {
     ClearTags(Vec<String>),
     /// Open the edited patch that didn't apply again (no drops it).
     EditAgain,
-    /// Files to discard, by repo path.
-    Discard(Vec<(PathBuf, Vec<String>)>),
     /// Operations to run, by repo path.
     Ops(Vec<(PathBuf, Op)>),
 }
@@ -3129,14 +3127,6 @@ impl App {
     /// Carry out a confirmed (or harmless enough) destructive action.
     fn confirmed(&mut self, c: Confirmed) -> Vec<Effect> {
         match c {
-            Confirmed::Discard(by_repo) => {
-                let targets = by_repo
-                    .into_iter()
-                    .filter_map(|(p, f)| Some((self.ws.index_of(&p)?, f)))
-                    .collect();
-                let jobs = self.file_jobs(targets, ops::discard_ops);
-                self.start_jobs(jobs)
-            }
             Confirmed::EditAgain => self.editing.iter().map(PatchEdit::open).collect(),
             Confirmed::Ops(ops) => {
                 // a remote to point elsewhere waits for its repo's running
@@ -3417,9 +3407,7 @@ impl App {
         let names = |files: &BTreeSet<(Section, String)>| {
             let mut names: Vec<String> = vec![];
             for (_, f) in files {
-                // (once, and not besides a marked folder it's in)
-                let in_folder = files.iter().any(|(_, folder)| within(folder, f));
-                if !names.contains(f) && !in_folder {
+                if !names.contains(f) {
                     names.push(f.clone());
                 }
             }
@@ -3820,16 +3808,11 @@ impl App {
         let mut taken = vec![];
         for (repo, files) in &self.marked_files {
             for (section, file) in files {
-                // (not besides a marked folder it's in)
-                let in_folder =
-                    |(s, folder): &(Section, String)| s == section && within(folder, file);
-                if !files.iter().any(in_folder) {
-                    taken.push(Target::File {
-                        repo: repo.clone(),
-                        section: *section,
-                        file: file.clone(),
-                    });
-                }
+                taken.push(Target::File {
+                    repo: repo.clone(),
+                    section: *section,
+                    file: file.clone(),
+                });
             }
         }
         for (repo, file, side, hunk, at) in &self.marked_lines {
@@ -4012,11 +3995,12 @@ impl App {
             jobs.extend(file_jobs.into_iter().map(|(i, op)| self.file_job(i, op)));
             if jobs.is_empty() {
                 match nested.first() {
-                    Some(one) if verb == HunkVerb::Stage => self.info(format!(
+                    // (only staging leaves them out)
+                    Some(one) => self.info(format!(
                         "{one} is a repo of its own: staging would add it as an embedded repo \
                          (gitignore it, or make it a submodule)"
                     )),
-                    _ => self.info(format!("nothing to {word}")),
+                    None => self.info(format!("nothing to {word}")),
                 }
                 return vec![];
             }
@@ -4086,15 +4070,8 @@ impl App {
         repos.dedup();
         let repos: Vec<&Path> = repos.iter().map(PathBuf::as_path).collect();
         let question = self.asked_where(&repos, question);
-        // files alone are planned again when it's confirmed, from the
-        // status as it is then
-        let then = match patched {
-            0 => Confirmed::Discard(files.iter().map(|(i, f)| (path(*i), f.clone())).collect()),
-            _ => {
-                ops.extend(file_jobs.into_iter().map(|(i, op)| (path(i), op)));
-                Confirmed::Ops(ops)
-            }
-        };
+        ops.extend(file_jobs.into_iter().map(|(i, op)| (path(i), op)));
+        let then = Confirmed::Ops(ops);
         self.mode = Mode::Confirm { question, then };
         vec![]
     }
@@ -4117,22 +4094,6 @@ impl App {
             path: e.path.clone(),
             op,
         }
-    }
-
-    /// Jobs running `plan`'s ops for each target repo's files, in order.
-    fn file_jobs(
-        &self,
-        targets: Vec<(usize, Vec<String>)>,
-        plan: fn(&RepoStatus, &[String]) -> Vec<Op>,
-    ) -> Vec<Job> {
-        let mut jobs = vec![];
-        for (i, files) in targets {
-            let Some(s) = self.ws.entries[i].status() else {
-                continue;
-            };
-            jobs.extend(plan(s, &files).into_iter().map(|op| self.file_job(i, op)));
-        }
-        jobs
     }
 
     /// The added and removed lines of a region: those of its file and side
