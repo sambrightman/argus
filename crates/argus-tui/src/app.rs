@@ -1650,83 +1650,10 @@ impl App {
                 return self.start_jobs(jobs);
             }
             Stash(kind) => return self.stash_action(kind),
-            StageFiles => {
-                if let Some(fx) = self.hunk_op(HunkVerb::Stage) {
-                    return fx;
-                }
-                if let Some(why) = self.wrong_section(HunkVerb::Stage) {
-                    self.info(why);
-                    return vec![];
-                }
-                return self.file_op(ops::stage_ops, "stage");
-            }
-            UnstageFiles => {
-                if let Some(fx) = self.hunk_op(HunkVerb::Unstage) {
-                    return fx;
-                }
-                if let Some(why) = self.wrong_section(HunkVerb::Unstage) {
-                    self.info(why);
-                    return vec![];
-                }
-                return self.file_op(ops::unstage_ops, "unstage");
-            }
+            StageFiles => return self.take(HunkVerb::Stage),
+            UnstageFiles => return self.take(HunkVerb::Unstage),
             EditPatch => return self.edit_patch(),
-            DiscardFiles if let Some(fx) = self.hunk_op(HunkVerb::Discard) => return fx,
-            DiscardFiles => {
-                if let Some(why) = self.wrong_section(HunkVerb::Discard) {
-                    self.info(why);
-                    return vec![];
-                }
-                let targets = self.file_targets();
-                if targets.is_empty() {
-                    self.info(FILE_HINT);
-                    return vec![];
-                }
-                // what it would do, to say exactly that: unstaged changes
-                // dropped, untracked files deleted, staged work left
-                let planned: Vec<Op> = targets
-                    .iter()
-                    .filter_map(|(i, f)| Some(ops::discard_ops(self.ws.entries[*i].status()?, f)))
-                    .flatten()
-                    .collect();
-                let (mut changed, mut untracked) = (vec![], vec![]);
-                for op in &planned {
-                    match op {
-                        Op::Clean { paths } => untracked.extend(paths),
-                        Op::Restore { paths, .. } => changed.extend(paths),
-                        _ => {}
-                    }
-                }
-                let question = match (changed.as_slice(), untracked.as_slice()) {
-                    ([], []) => {
-                        self.info("nothing unstaged to discard (u unstages what's staged)");
-                        return vec![];
-                    }
-                    ([one], []) => format!("Discard unstaged changes to {one}? They're lost."),
-                    ([], [one]) => format!("Delete untracked {one}? It's lost."),
-                    (c, []) => format!(
-                        "Discard unstaged changes to {} files? They're lost.",
-                        c.len()
-                    ),
-                    ([], u) => format!("Delete {} untracked files? They're lost.", u.len()),
-                    (c, u) => format!(
-                        "Discard unstaged changes to {} {} and delete {} untracked? They're lost.",
-                        c.len(),
-                        plural(c.len(), "file", "files"),
-                        u.len()
-                    ),
-                };
-                let then: Vec<(PathBuf, Vec<String>)> = targets
-                    .iter()
-                    .map(|(i, f)| (self.ws.entries[*i].path.clone(), f.clone()))
-                    .collect();
-                let repos: Vec<&Path> = then.iter().map(|(p, _)| p.as_path()).collect();
-                let question = self.asked_where(&repos, question);
-                self.mode = Mode::Confirm {
-                    question,
-                    then: Confirmed::Discard(then),
-                };
-            }
+            DiscardFiles => return self.take(HunkVerb::Discard),
             OpenMenu(m) => {
                 let mut menu = m.menu();
                 self.add_tags(&mut menu);
@@ -2327,7 +2254,7 @@ impl App {
     /// The gitignore menu for the untracked files marked, or under the
     /// cursor (tracked ones left out: rules don't apply to them).
     fn open_gitignore_menu(&mut self) -> Vec<Effect> {
-        let files = self.file_targets();
+        let files = self.taken_files();
         if files.is_empty() {
             return self.open_gitignore_menu_for_repos();
         }
@@ -3561,25 +3488,6 @@ impl App {
         self.marked_lines.extend(new);
     }
 
-    /// Why `verb` isn't for the files marked whole, if it isn't for one of
-    /// them: each is taken where it's marked, never by its other side.
-    fn marked_files_problem(&self, verb: HunkVerb) -> Option<&'static str> {
-        let mut sections = self.marked_files.values().flatten().map(|(s, _)| *s);
-        let staged = |s: Section| s == Section::Staged;
-        match verb {
-            HunkVerb::Stage => sections
-                .any(staged)
-                .then_some("some marked files are staged already: unmark them (space) first"),
-            HunkVerb::Unstage => sections
-                .any(|s| !staged(s))
-                .then_some("some marked files aren't staged: unmark them (space) first"),
-            HunkVerb::Discard => sections.any(staged).then_some(
-                "some marked files are staged (u unstages them, then K discards them): \
-                 unmark them (space) first",
-            ),
-        }
-    }
-
     /// How much of `file` as `section` lists it is marked, or with `hunk`
     /// how much of that hunk of its diff: by the file's own mark, else by
     /// its lines'.
@@ -3848,47 +3756,318 @@ impl App {
         }
     }
 
-    /// The marked files, else the file under the cursor (its line or its
-    /// diff), by repo index.
-    fn file_targets(&self) -> Vec<(usize, Vec<String>)> {
-        if !self.marked_files.is_empty() {
-            return self.marked_file_names();
+    /// What `s`, `u` and `K` take, and whether that's by its marks: what's
+    /// marked in details, in every repo; with nothing marked, what the
+    /// cursor is on (a hunk, whichever of its lines that's on). The one
+    /// place that says so: each thing with where it's listed, so nothing
+    /// is taken by its other side.
+    pub fn taken(&self) -> (Vec<Target>, bool) {
+        if self.marked_files.is_empty() && self.marked_lines.is_empty() {
+            let at = self.target(self.cursor).map(|t| match t {
+                Target::Hunk {
+                    repo,
+                    section,
+                    file,
+                    hunk,
+                    ..
+                } => Target::Hunk {
+                    repo,
+                    section,
+                    file,
+                    hunk,
+                    at: None,
+                },
+                other => other,
+            });
+            return (at.into_iter().collect(), false);
         }
-        match self.rows.get(self.cursor) {
-            // a section's own line: every file in it
-            Some(Row::Detail { repo, line }) if Section::heads(line).is_some() => {
-                let files = Section::heads(line)
-                    .zip(self.ws.entries[*repo].status())
-                    .map(|(section, s)| section.files(s))
-                    .unwrap_or_default();
-                vec![(*repo, files)]
+        let mut taken = vec![];
+        for (repo, files) in &self.marked_files {
+            for (section, file) in files {
+                // (not besides a marked folder it's in)
+                let in_folder =
+                    |(s, folder): &(Section, String)| s == section && within(folder, file);
+                if !files.iter().any(in_folder) {
+                    taken.push(Target::File {
+                        repo: repo.clone(),
+                        section: *section,
+                        file: file.clone(),
+                    });
+                }
             }
-            Some(Row::Detail { repo, line }) => {
-                line.file.iter().map(|f| (*repo, vec![f.clone()])).collect()
-            }
-            _ => vec![],
         }
+        for (repo, file, side, hunk, at) in &self.marked_lines {
+            taken.push(Target::Hunk {
+                repo: repo.clone(),
+                section: match side {
+                    Side::Unstaged => Section::Unstaged,
+                    Side::Staged => Section::Staged,
+                },
+                file: file.clone(),
+                hunk: *hunk,
+                at: Some(*at),
+            });
+        }
+        (taken, true)
     }
 
-    /// Why `verb` isn't for the file or section under the cursor, if it
-    /// isn't: staging what's staged, unstaging or discarding the wrong
-    /// side; or with files marked, why it isn't for one of those.
-    fn wrong_section(&self, verb: HunkVerb) -> Option<&'static str> {
-        if !self.marked_files.is_empty() {
-            return self.marked_files_problem(verb);
+    /// The files of what's [taken](Self::taken), by repo index: a
+    /// section's are those it lists.
+    fn taken_files(&self) -> Vec<(usize, Vec<String>)> {
+        let mut by: Vec<(usize, Vec<String>)> = vec![];
+        for target in self.taken().0 {
+            let (repo, files) = match target {
+                Target::Section { repo, section } => {
+                    let s = self.ws.get(&repo).and_then(Entry::status);
+                    let files = s.map(|s| section.files(s)).unwrap_or_default();
+                    (repo, files)
+                }
+                Target::File { repo, file, .. } => (repo, vec![file]),
+                Target::Hunk { .. } => continue,
+            };
+            let Some(i) = self.ws.index_of(&repo) else {
+                continue;
+            };
+            let at = by.iter().position(|(n, _)| *n == i);
+            let at = at.unwrap_or_else(|| {
+                by.push((i, vec![]));
+                by.len() - 1
+            });
+            for f in files {
+                if !by[at].1.contains(&f) {
+                    by[at].1.push(f);
+                }
+            }
         }
-        let Some(Row::Detail { line, .. }) = self.rows.get(self.cursor) else {
-            return None;
+        by
+    }
+
+    /// Why `verb` isn't for one of `targets`, if it isn't: staging what's
+    /// staged, unstaging what isn't, discarding what's staged. Said of
+    /// what's under the cursor, or (`marked`) of the marks to take off.
+    fn not_for(verb: HunkVerb, targets: &[Target], marked: bool) -> Option<&'static str> {
+        let wrong = |t: &&Target| {
+            let (Target::Section { section, .. }
+            | Target::File { section, .. }
+            | Target::Hunk { section, .. }) = t;
+            (*section == Section::Staged) != (verb == HunkVerb::Unstage)
         };
-        match (verb, line.section?) {
-            (HunkVerb::Stage, Section::Staged) => Some("that's staged already: u unstages it"),
-            (HunkVerb::Unstage, Section::Untracked | Section::Unstaged) => {
-                Some("that's not staged: s stages it")
+        let wrong: Vec<&Target> = targets.iter().filter(wrong).collect();
+        let lines = wrong.iter().any(|t| matches!(t, Target::Hunk { .. }));
+        if wrong.is_empty() {
+            return None;
+        }
+        Some(match (verb, marked, lines) {
+            (HunkVerb::Stage, false, _) => "that's staged already: u unstages it",
+            (HunkVerb::Unstage, false, _) => "that's not staged: s stages it",
+            (HunkVerb::Discard, false, _) => "that's staged: u unstages it, then K discards it",
+            (HunkVerb::Unstage, true, true) => {
+                "some marked lines aren't staged: unmark them (space) first"
             }
-            (HunkVerb::Discard, Section::Staged) => {
-                Some("that's staged: u unstages it, then K discards it")
+            (_, true, true) => "some marked lines are staged: unmark them (space) first",
+            (HunkVerb::Stage, true, false) => {
+                "some marked files are staged already: unmark them (space) first"
             }
-            _ => None,
+            (HunkVerb::Unstage, true, false) => {
+                "some marked files aren't staged: unmark them (space) first"
+            }
+            (HunkVerb::Discard, true, false) => {
+                "some marked files are staged (u unstages them, then K discards them): \
+                 unmark them (space) first"
+            }
+        })
+    }
+
+    /// `s`, `u` or `K`: on what's [taken](Self::taken), each thing only
+    /// where it is. Lines and hunks go as patches (one per file and side,
+    /// built from the diff as it was read), files whole. Discarding asks
+    /// first, once, saying what goes.
+    fn take(&mut self, verb: HunkVerb) -> Vec<Effect> {
+        self.keep_region();
+        let (targets, marked) = self.taken();
+        if targets.is_empty() {
+            self.info(FILE_HINT);
+            return vec![];
+        }
+        if let Some(why) = Self::not_for(verb, &targets, marked) {
+            self.info(why);
+            return vec![];
+        }
+        let (index, reverse, word) = match verb {
+            HunkVerb::Stage => (true, false, "stage"),
+            HunkVerb::Unstage => (true, true, "unstage"),
+            HunkVerb::Discard => (false, true, "discard"),
+        };
+        // by repo, file and side: hunk -> its lines taken (all if None)
+        type Chosen = BTreeMap<(PathBuf, String, Side), BTreeMap<usize, Option<Vec<usize>>>>;
+        let mut chosen: Chosen = BTreeMap::new();
+        for target in &targets {
+            if let Target::Hunk {
+                repo,
+                section,
+                file,
+                hunk,
+                at,
+            } = target
+            {
+                let key = (repo.clone(), file.clone(), section.side());
+                let hunks = chosen.entry(key).or_default();
+                match at {
+                    None => drop(hunks.insert(*hunk, None)),
+                    Some(at) => {
+                        let lines = hunks.entry(*hunk).or_insert_with(|| Some(vec![]));
+                        lines.get_or_insert_default().push(*at);
+                    }
+                }
+            }
+        }
+        let mut ops: Vec<(PathBuf, Op)> = vec![];
+        let (mut lines, mut hunk) = (0, None);
+        for ((repo, file, side), hunks) in &chosen {
+            let key = (repo.clone(), file.clone(), *side);
+            let Some(Ok(FileDiff::Text(all))) = self.diffs.get(&key) else {
+                continue;
+            };
+            let parts: Vec<(&diff::Hunk, Option<&[usize]>)> = hunks
+                .iter()
+                .filter_map(|(h, at)| Some((all.get(*h)?, at.as_deref())))
+                .collect();
+            let n: usize = hunks.values().flatten().map(Vec::len).sum();
+            let whole = hunks.values().any(Option::is_none);
+            let what = match whole {
+                true => format!("{word} a hunk of {file}"),
+                false => format!("{word} {n} {} of {file}", plural(n, "line", "lines")),
+            };
+            lines += n;
+            hunk = whole.then(|| what.clone());
+            let patch = diff::patch_hunks(file, &parts, reverse);
+            ops.push((
+                repo.clone(),
+                Op::Apply {
+                    patch,
+                    index,
+                    reverse,
+                    what,
+                },
+            ));
+        }
+        // then the files, whole
+        let files = self.taken_files();
+        let plan = match verb {
+            HunkVerb::Stage => ops::stage_ops,
+            HunkVerb::Unstage => ops::unstage_ops,
+            HunkVerb::Discard => ops::discard_ops,
+        };
+        let patched = ops.len();
+        let mut nested: Vec<String> = vec![];
+        let mut file_jobs = vec![];
+        for (i, names) in &files {
+            let e = &self.ws.entries[*i];
+            let Some(s) = e.status() else { continue };
+            // (what staging leaves out, to say why when that's everything)
+            nested.extend(ops::nested_repos_in(s, names).into_iter().cloned());
+            file_jobs.extend(plan(s, names).into_iter().map(|op| (*i, op)));
+        }
+        if verb != HunkVerb::Discard {
+            let mut jobs: Vec<Job> = ops
+                .into_iter()
+                .filter_map(|(p, op)| self.job(&p, op))
+                .collect();
+            jobs.extend(file_jobs.into_iter().map(|(i, op)| self.file_job(i, op)));
+            if jobs.is_empty() {
+                match nested.first() {
+                    Some(one) if verb == HunkVerb::Stage => self.info(format!(
+                        "{one} is a repo of its own: staging would add it as an embedded repo \
+                         (gitignore it, or make it a submodule)"
+                    )),
+                    _ => self.info(format!("nothing to {word}")),
+                }
+                return vec![];
+            }
+            let fx = self.start_jobs(jobs);
+            self.unmark_lines_started(&fx);
+            return fx;
+        }
+        // what it would do, to say exactly that: unstaged changes dropped,
+        // untracked files deleted, staged work left
+        let (mut changed, mut untracked): (Vec<&String>, Vec<&String>) = (vec![], vec![]);
+        for (_, op) in &file_jobs {
+            match op {
+                Op::Clean { paths } => untracked.extend(paths),
+                Op::Restore { paths, .. } => changed.extend(paths),
+                _ => {}
+            }
+        }
+        let files_question = match (changed.as_slice(), untracked.as_slice()) {
+            ([], []) => None,
+            ([one], []) => Some(format!("unstaged changes to {one}? They're lost.")),
+            ([], [one]) => Some(format!("untracked {one}? It's lost.")),
+            (c, []) => Some(format!(
+                "unstaged changes to {} files? They're lost.",
+                c.len()
+            )),
+            ([], u) => Some(format!("{} untracked files? They're lost.", u.len())),
+            (c, u) => Some(format!(
+                "unstaged changes to {} {} and delete {} untracked? They're lost.",
+                c.len(),
+                plural(c.len(), "file", "files"),
+                u.len()
+            )),
+        };
+        let delete_only = changed.is_empty() && !untracked.is_empty();
+        let question = match (patched, &hunk, files_question) {
+            (0, _, None) => {
+                self.info("nothing unstaged to discard (u unstages what's staged)");
+                return vec![];
+            }
+            (0, _, Some(files)) if delete_only => format!("Delete {files}"),
+            (0, _, Some(files)) => format!("Discard {files}"),
+            (_, Some(hunk), None) => format!(
+                "{}? It's lost.",
+                capitalised(&hunk.replacen("a ", "this ", 1))
+            ),
+            (n, _, None) => format!(
+                "Discard the marked lines ({n} file{})? They're lost.",
+                if n == 1 { "" } else { "s" }
+            ),
+            (_, _, Some(files)) => {
+                let files = files.replace("It's lost.", "They're lost.");
+                let of = format!("{lines} marked {}", plural(lines, "line", "lines"));
+                match (delete_only, untracked.is_empty()) {
+                    (true, _) => format!("Discard {of} and delete {files}"),
+                    (false, true) => format!("Discard {of} and {files}"),
+                    (false, false) => format!("Discard {of}, {files}"),
+                }
+            }
+        };
+        let path = |i: usize| self.ws.entries[i].path.clone();
+        let mut repos: Vec<PathBuf> = ops.iter().map(|(p, _)| p.clone()).collect();
+        repos.extend(files.iter().map(|(i, _)| path(*i)));
+        repos.sort();
+        repos.dedup();
+        let repos: Vec<&Path> = repos.iter().map(PathBuf::as_path).collect();
+        let question = self.asked_where(&repos, question);
+        // files alone are planned again when it's confirmed, from the
+        // status as it is then
+        let then = match patched {
+            0 => Confirmed::Discard(files.iter().map(|(i, f)| (path(*i), f.clone())).collect()),
+            _ => {
+                ops.extend(file_jobs.into_iter().map(|(i, op)| (path(i), op)));
+                Confirmed::Ops(ops)
+            }
+        };
+        self.mode = Mode::Confirm { question, then };
+        vec![]
+    }
+
+    /// A job running a file operation in the repo at index `i`.
+    fn file_job(&self, i: usize, op: Op) -> Job {
+        let e = &self.ws.entries[i];
+        Job {
+            label: format!("{} in {}", op.label(), e.display_name()),
+            family: e.parent.clone().unwrap_or_else(|| e.path.clone()),
+            path: e.path.clone(),
+            op,
         }
     }
 
@@ -3900,88 +4079,12 @@ impl App {
     ) -> Vec<Job> {
         let mut jobs = vec![];
         for (i, files) in targets {
-            let e = &self.ws.entries[i];
-            let Some(s) = e.status() else { continue };
-            for op in plan(s, &files) {
-                jobs.push(Job {
-                    label: format!("{} in {}", op.label(), e.display_name()),
-                    family: e.parent.clone().unwrap_or_else(|| e.path.clone()),
-                    path: e.path.clone(),
-                    op,
-                });
-            }
+            let Some(s) = self.ws.entries[i].status() else {
+                continue;
+            };
+            jobs.extend(plan(s, &files).into_iter().map(|op| self.file_job(i, op)));
         }
         jobs
-    }
-
-    /// `s`/`u`/`K` in a diff, nothing marked: the hunk under the cursor,
-    /// whichever of its lines that's on. `None` elsewhere, for the file operation (and for an untracked
-    /// file, which is staged or discarded whole).
-    fn hunk_op(&mut self, verb: HunkVerb) -> Option<Vec<Effect>> {
-        use argus_core::diff::{self, FileDiff, Side};
-        self.keep_region();
-        if !self.marked_lines.is_empty() {
-            return Some(self.marked_lines_op(verb));
-        }
-        if !self.marked_files.is_empty() {
-            return None;
-        }
-        let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor) else {
-            return None;
-        };
-        let (d, file) = (line.diff.as_ref()?, line.file.clone()?);
-        let e = &self.ws.entries[*repo];
-        if e.status()?
-            .changes
-            .entry(&file)
-            .is_some_and(|c| c.index == '?')
-        {
-            return None;
-        }
-        let key = (e.path.clone(), file.clone(), d.side);
-        let Some(Ok(FileDiff::Text(hunks))) = self.diffs.get(&key) else {
-            return None;
-        };
-        // the whole hunk wherever in it the cursor is, as magit has it:
-        // single lines are for marking
-        let hunk = hunks.get(d.hunk?)?;
-        let path = e.path.clone();
-        let what = |verb: &str| format!("{verb} a hunk of {file}");
-        let wrong = match (verb, d.side) {
-            (HunkVerb::Stage, Side::Staged) => Some("that's staged already: u unstages it"),
-            (HunkVerb::Unstage, Side::Unstaged) => Some("that's not staged: s stages it"),
-            (HunkVerb::Discard, Side::Staged) => {
-                Some("that's staged: u unstages it, then K discards it")
-            }
-            _ => None,
-        };
-        if let Some(why) = wrong {
-            self.info(why);
-            return Some(vec![]);
-        }
-        let (index, reverse, label) = match verb {
-            HunkVerb::Stage => (true, false, what("stage")),
-            HunkVerb::Unstage => (true, true, what("unstage")),
-            HunkVerb::Discard => (false, true, what("discard")),
-        };
-        let op = Op::Apply {
-            patch: diff::patch(&file, hunk, None, reverse),
-            index,
-            reverse,
-            what: label.clone(),
-        };
-        if verb == HunkVerb::Discard {
-            self.mode = Mode::Confirm {
-                question: format!(
-                    "{}? It's lost.",
-                    capitalised(&label.replacen("a ", "this ", 1))
-                ),
-                then: Confirmed::Ops(vec![(path, op)]),
-            };
-            return Some(vec![]);
-        }
-        let jobs = self.job(&path, op).into_iter().collect();
-        Some(self.start_jobs(jobs))
     }
 
     /// The added and removed lines of a region: those of its file and side
@@ -4231,126 +4334,6 @@ impl App {
         }
     }
 
-    /// `s`/`u`/`K` on the marked lines: one patch per file and side, its
-    /// hunks with their marked lines. All must be on the side the verb
-    /// acts on; the marks go once acted on.
-    fn marked_lines_op(&mut self, verb: HunkVerb) -> Vec<Effect> {
-        use argus_core::diff::{self, FileDiff, Side};
-        let want = match verb {
-            HunkVerb::Stage | HunkVerb::Discard => Side::Unstaged,
-            HunkVerb::Unstage => Side::Staged,
-        };
-        if self.marked_lines.iter().any(|k| k.2 != want) {
-            self.info(match verb {
-                HunkVerb::Unstage => "some marked lines aren't staged: unmark them (space) first",
-                _ => "some marked lines are staged: unmark them (space) first",
-            });
-            return vec![];
-        }
-        if let Some(why) = self.marked_files_problem(verb) {
-            self.info(why);
-            return vec![];
-        }
-        // by repo and file: hunk -> its marked lines
-        let mut by: BTreeMap<(PathBuf, String), BTreeMap<usize, Vec<usize>>> = BTreeMap::new();
-        for (repo, file, _, h, at) in &self.marked_lines {
-            by.entry((repo.clone(), file.clone()))
-                .or_default()
-                .entry(*h)
-                .or_default()
-                .push(*at);
-        }
-        let (index, reverse, verb_word) = match verb {
-            HunkVerb::Stage => (true, false, "stage"),
-            HunkVerb::Unstage => (true, true, "unstage"),
-            HunkVerb::Discard => (false, true, "discard"),
-        };
-        let mut ops = vec![];
-        for ((repo, file), hunks) in by {
-            let key = (repo.clone(), file.clone(), want);
-            let Some(Ok(FileDiff::Text(all))) = self.diffs.get(&key) else {
-                continue;
-            };
-            let parts: Vec<(&diff::Hunk, Option<&[usize]>)> = hunks
-                .iter()
-                .filter_map(|(h, at)| Some((all.get(*h)?, Some(at.as_slice()))))
-                .collect();
-            let n: usize = hunks.values().map(Vec::len).sum();
-            let what = format!(
-                "{verb_word} {n} line{} of {file}",
-                if n == 1 { "" } else { "s" }
-            );
-            let op = Op::Apply {
-                patch: diff::patch_hunks(&file, &parts, reverse),
-                index,
-                reverse,
-                what,
-            };
-            ops.push((repo, op));
-        }
-        // then the files marked whole
-        let plan = match verb {
-            HunkVerb::Stage => ops::stage_ops,
-            HunkVerb::Unstage => ops::unstage_ops,
-            HunkVerb::Discard => ops::discard_ops,
-        };
-        let (files, lines) = (ops.len(), self.marked_lines.len());
-        for (i, names) in self.marked_file_names() {
-            let e = &self.ws.entries[i];
-            let planned = e.status().map(|s| plan(s, &names)).unwrap_or_default();
-            ops.extend(planned.into_iter().map(|op| (e.path.clone(), op)));
-        }
-        if verb == HunkVerb::Discard {
-            // (the marks stay until it's done: no is no)
-            let count = |of: fn(&Op) -> Option<&Vec<String>>| -> usize {
-                ops.iter().filter_map(|(_, op)| of(op)).map(Vec::len).sum()
-            };
-            let changed = count(|op| match op {
-                Op::Restore { paths, .. } => Some(paths),
-                _ => None,
-            });
-            let untracked = count(|op| match op {
-                Op::Clean { paths } => Some(paths),
-                _ => None,
-            });
-            let mut what = vec![];
-            if changed > 0 {
-                let files = plural(changed, "file", "files");
-                what.push(format!("unstaged changes to {changed} {files}"));
-            }
-            if untracked > 0 {
-                what.push(format!("delete {untracked} untracked"));
-            }
-            let question = match what.split_last() {
-                None => format!(
-                    "Discard the marked lines ({files} file{})? They're lost.",
-                    if files == 1 { "" } else { "s" }
-                ),
-                Some((last, rest)) => {
-                    let mut all =
-                        vec![format!("{lines} marked {}", plural(lines, "line", "lines"))];
-                    all.extend(rest.iter().cloned());
-                    format!("Discard {} and {last}? They're lost.", all.join(", "))
-                }
-            };
-            let mut repos: Vec<&Path> = ops.iter().map(|(p, _)| p.as_path()).collect();
-            repos.dedup();
-            let question = self.asked_where(&repos, question);
-            self.mode = Mode::Confirm {
-                question,
-                then: Confirmed::Ops(ops),
-            };
-            return vec![];
-        }
-        let jobs = ops
-            .into_iter()
-            .filter_map(|(p, op)| self.job(&p, op))
-            .collect();
-        let fx = self.start_jobs(jobs);
-        self.unmark_lines_started(&fx);
-        fx
-    }
-
     /// The marked lines of the repos jobs were started in are acted on,
     /// so unmarked; those of a repo too busy to start in stay.
     fn unmark_lines_started(&mut self, fx: &[Effect]) {
@@ -4359,32 +4342,6 @@ impl App {
                 .any(|e| matches!(e, Effect::Jobs(jobs) if jobs.iter().any(|j| j.path == *path)))
         };
         self.marked_lines.retain(|k| !started(&k.0));
-    }
-
-    fn file_op(&mut self, plan: fn(&RepoStatus, &[String]) -> Vec<Op>, verb: &str) -> Vec<Effect> {
-        let targets = self.file_targets();
-        if targets.is_empty() {
-            self.info(FILE_HINT);
-            return vec![];
-        }
-        // what staging leaves out, to say why when that's everything
-        let nested: Vec<String> = targets
-            .iter()
-            .filter_map(|(i, files)| Some((self.ws.entries[*i].status()?, files)))
-            .flat_map(|(s, files)| ops::nested_repos_in(s, files).into_iter().cloned())
-            .collect();
-        let jobs = self.file_jobs(targets, plan);
-        if jobs.is_empty() {
-            match nested.first() {
-                Some(one) if verb == "stage" => self.info(format!(
-                    "{one} is a repo of its own: staging would add it as an embedded repo \
-                     (gitignore it, or make it a submodule)"
-                )),
-                _ => self.info(format!("nothing to {verb}")),
-            }
-            return vec![];
-        }
-        self.start_jobs(jobs)
     }
 
     /// Whether row `i` is a section line (`n`/`p` stop there).

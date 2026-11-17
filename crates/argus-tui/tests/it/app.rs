@@ -5205,7 +5205,12 @@ fn hunks_and_lines_are_staged_unstaged_and_discarded() {
     assert!(patch.contains("+hello there"), "{patch}");
     app.running.clear();
     app.marked_lines.clear();
+    // (space moved on, to the blank line after the diff: nothing by
+    // itself, so nothing to take)
+    assert!(app.act(Action::UnstageFiles).is_empty());
+    assert!(app.message.as_ref().unwrap().0.contains("move to a file"));
     // unstaging an unstaged hunk says what to do instead
+    app.cursor = diff_row(&app, "hello there");
     assert!(app.act(Action::UnstageFiles).is_empty());
     assert!(app.message.as_ref().unwrap().0.contains("not staged"));
     // and staging or discarding a staged one
@@ -7137,11 +7142,11 @@ fn discarding_marked_lines_and_files_says_which_kinds() {
     };
     assert_eq!(
         asked(&mut app, "README"),
-        "Discard 2 marked lines and unstaged changes to 1 file? They're lost. (y/n)"
+        "Discard 2 marked lines and unstaged changes to README? They're lost. (y/n)"
     );
     assert_eq!(
         asked(&mut app, "new"),
-        "Discard 2 marked lines and delete 1 untracked? They're lost. (y/n)"
+        "Discard 2 marked lines and delete untracked new? They're lost. (y/n)"
     );
 }
 
