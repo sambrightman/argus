@@ -556,9 +556,7 @@ fn lines_are_stashed_by_themselves() {
     assert!(pop.success, "{}", pop.output);
     assert_eq!(
         std::fs::read_to_string(r.join("f")).unwrap(),
-        // (the added line after what's left of the removed ones, as when
-        // staging it by itself)
-        before.replace("line three\nline four\n", "line 4\nline three\n")
+        before.replace("line four", "line 4")
     );
     assert_eq!(changes(&r), [" M f", "M  g"]);
 }

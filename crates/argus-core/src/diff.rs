@@ -39,6 +39,9 @@ pub struct Line {
     /// The file ends here without a newline (git's "\ No newline at end of
     /// file").
     pub no_newline: bool,
+    /// The line ends with a carriage return (before its newline, if it
+    /// has one): kept apart from the text, which is for showing.
+    pub cr: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -56,17 +59,21 @@ impl Hunk {
     /// `@@ -a,b +c,d @@`, written as git writes it: `,1` left out, and an
     /// empty side numbered from the line before (0 for an empty file).
     pub fn header(&self) -> String {
-        let range = |start: u32, len: u32| match len {
-            0 => format!("{},0", start.saturating_sub(1)),
-            1 => format!("{start}"),
-            n => format!("{start},{n}"),
-        };
-        format!(
-            "@@ -{} +{} @@",
-            range(self.old_start, self.old_len),
-            range(self.new_start, self.new_len)
-        )
+        header(self.old_start, self.old_len, self.new_start, self.new_len)
     }
+}
+
+fn header(old_start: u32, old_len: u32, new_start: u32, new_len: u32) -> String {
+    let range = |start: u32, len: u32| match len {
+        0 => format!("{},0", start.saturating_sub(1)),
+        1 => format!("{start}"),
+        n => format!("{start},{n}"),
+    };
+    format!(
+        "@@ -{} +{} @@",
+        range(old_start, old_len),
+        range(new_start, new_len)
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -81,8 +88,7 @@ pub enum FileDiff {
     External,
 }
 
-/// A patch of `path`'s `hunk` for `git apply --recount` (which counts the
-/// lines itself, so the hunk's header serves): all its changes, or with
+/// A patch of `path`'s `hunk` for `git apply`: all its changes, or with
 /// `only` just the lines at those indices, the others left as they are
 /// where the patch applies. `reverse` for one applied backwards (`-R`:
 /// unstaging, discarding), where that's the hunk's new side.
@@ -90,32 +96,119 @@ pub fn patch(path: &str, hunk: &Hunk, only: Option<&[usize]>, reverse: bool) -> 
     patch_hunks(path, &[(hunk, only)], reverse)
 }
 
-/// [`patch`] of several of `path`'s hunks at once, each with its lines.
+/// A line of a patch being written: its sign, and the line.
+type Written<'a> = (char, &'a Line, bool);
+
+/// [`patch`] of several of `path`'s hunks at once, in the file's order,
+/// each with its lines.
+///
+/// What's left out changes what git must be told. Each hunk says where it
+/// goes on the side the patch is applied to, as the diff has it, and on
+/// the other side where that puts it given the hunks before it in this
+/// patch (git goes by that to place a hunk whose surroundings are found
+/// in several places). A line left out beside one taken stays where it
+/// is, the taken one's replacement in the taken one's place. And only a
+/// side's last line can lack a newline: one that would end up followed
+/// by another is given its newline.
 pub fn patch_hunks(path: &str, hunks: &[(&Hunk, Option<&[usize]>)], reverse: bool) -> String {
     let mut out = format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n");
+    // how far this patch's earlier hunks move the lines after them
+    let mut moved: i64 = 0;
     for (hunk, only) in hunks {
-        out.push_str(&hunk.header());
+        let lines = written(hunk, *only, reverse);
+        let count = |sign: char| lines.iter().filter(|l| l.0 == sign).count() as i64;
+        let (kept, removed, added) = (count(' '), count('-'), count('+'));
+        let at = |start: u32, by: i64| (i64::from(start) + by).max(0) as u32;
+        let (old_start, new_start) = match reverse {
+            false => (hunk.old_start, at(hunk.old_start, moved)),
+            true => (at(hunk.new_start, -moved), hunk.new_start),
+        };
+        let (old_len, new_len) = ((kept + removed) as u32, (kept + added) as u32);
+        out.push_str(&header(old_start, old_len, new_start, new_len));
         out.push('\n');
-        for (i, l) in hunk.lines.iter().enumerate() {
-            let chosen = only.is_none_or(|o| o.contains(&i));
-            let tag = match (l.kind, chosen, reverse) {
-                (LineKind::Context, ..) => ' ',
-                (LineKind::Add, true, _) => '+',
-                (LineKind::Remove, true, _) => '-',
-                // left alone: forwards, the old side lacks the addition and
-                // has the removed line; backwards, the new side the opposite
-                (LineKind::Add, false, false) | (LineKind::Remove, false, true) => continue,
-                (LineKind::Remove, false, false) | (LineKind::Add, false, true) => ' ',
-            };
-            out.push(tag);
+        moved += added - removed;
+        for (sign, l, no_newline) in lines {
+            out.push(sign);
             out.push_str(&l.text);
+            if l.cr {
+                out.push('\r');
+            }
             out.push('\n');
-            if l.no_newline {
+            if no_newline {
                 out.push_str("\\ No newline at end of file\n");
             }
         }
     }
     out
+}
+
+/// The lines of `hunk` as a patch of the chosen ones has them.
+fn written<'a>(hunk: &'a Hunk, only: Option<&[usize]>, reverse: bool) -> Vec<Written<'a>> {
+    let chosen = |i: usize| only.is_none_or(|o| o.contains(&i));
+    // the side the patch ends up with, and the one it's applied to
+    let (result, target) = if reverse { ('-', '+') } else { ('+', '-') };
+    let mut lines: Vec<Written> = vec![];
+    let mut i = 0;
+    while i < hunk.lines.len() {
+        if hunk.lines[i].kind == LineKind::Context {
+            lines.push((' ', &hunk.lines[i], hunk.lines[i].no_newline));
+            i += 1;
+            continue;
+        }
+        // a run of changes: its removed lines, then its added ones
+        let run = hunk.lines[i..]
+            .iter()
+            .take_while(|l| l.kind != LineKind::Context)
+            .count();
+        let of = |kind: LineKind| {
+            let run = (i..i + run).filter(move |&n| hunk.lines[n].kind == kind);
+            run.map(|n| (chosen(n), &hunk.lines[n]))
+        };
+        let (removed, added): (Vec<_>, Vec<_>) =
+            (of(LineKind::Remove).collect(), of(LineKind::Add).collect());
+        // The side applied to is there as it is: its chosen lines to go,
+        // the others staying. The other side's chosen lines come in where
+        // the chosen ones go: forwards after the last removed line taken,
+        // backwards before the first added line taken.
+        let (theirs, ours, ours_sign) = match reverse {
+            false => (&removed, &added, '+'),
+            true => (&added, &removed, '-'),
+        };
+        let coming = ours.iter().filter(|(taken, _)| *taken);
+        let coming: Vec<Written> = coming.map(|(_, l)| (ours_sign, *l, l.no_newline)).collect();
+        let place = match reverse {
+            false => theirs.iter().rposition(|(taken, _)| *taken).map(|n| n + 1),
+            true => theirs.iter().position(|(taken, _)| *taken),
+        };
+        let place = place.unwrap_or(if reverse { 0 } else { theirs.len() });
+        let staying =
+            |(taken, l): &(bool, &'a Line)| (if *taken { target } else { ' ' }, *l, l.no_newline);
+        let block = theirs[..place].iter().map(staying);
+        let block = block
+            .chain(coming)
+            .chain(theirs[place..].iter().map(staying));
+        lines.extend(block);
+        i += run;
+    }
+    // only the last line of the side being made can lack a newline
+    let mut last = lines.iter().rposition(|l| l.0 == ' ' || l.0 == result);
+    let mut n = 0;
+    while n < lines.len() {
+        let (sign, l, no_newline) = lines[n];
+        if no_newline && Some(n) != last {
+            if sign == result {
+                lines[n].2 = false;
+            } else if sign == ' ' {
+                // there without a newline, here with one
+                lines[n] = (target, l, true);
+                lines.insert(n + 1, (result, l, false));
+                last = last.map(|at| at + 1);
+                n += 1;
+            }
+        }
+        n += 1;
+    }
+    lines
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -269,6 +362,7 @@ impl ConsumeHunk for Collect {
                     },
                     text: text.trim_end_matches(['\n', '\r']).to_string(),
                     no_newline: !bytes.ends_with(b"\n"),
+                    cr: bytes.strip_suffix(b"\n").unwrap_or(bytes).ends_with(b"\r"),
                 }
             })
             .collect();

@@ -713,3 +713,169 @@ fn textconv_is_applied_and_says_so() {
         FileDiff::Text(_)
     ));
 }
+
+/// Apply the lines of `file`'s `side` diff written as `picks` (`-b`,
+/// `+B`: a removed or an added line by its text), from whichever hunks
+/// they're in, to the index or the work tree.
+fn apply_lines(r: &Path, file: &str, side: Side, picks: &[&str], index: bool, reverse: bool) {
+    let hunks = hunks(r, file, side);
+    let mut left: Vec<&str> = picks.to_vec();
+    let chosen: Vec<Vec<usize>> = hunks
+        .iter()
+        .map(|h| {
+            let lines = h.lines.iter().enumerate();
+            lines
+                .filter(|(_, l)| {
+                    let sign = match l.kind {
+                        LineKind::Add => '+',
+                        LineKind::Remove => '-',
+                        LineKind::Context => return false,
+                    };
+                    let pick = format!("{sign}{}", l.text);
+                    let found = left.iter().position(|p| **p == pick);
+                    found.map(|i| left.remove(i)).is_some()
+                })
+                .map(|(at, _)| at)
+                .collect()
+        })
+        .collect();
+    assert!(left.is_empty(), "not in the diff: {left:?}");
+    let parts: Vec<(&argus_core::diff::Hunk, Option<&[usize]>)> = hunks
+        .iter()
+        .zip(&chosen)
+        .filter(|(_, at)| !at.is_empty())
+        .map(|(h, at)| (h, Some(at.as_slice())))
+        .collect();
+    let op = ops::Op::Apply {
+        patch: argus_core::diff::patch_hunks(file, &parts, reverse),
+        index,
+        reverse,
+        what: "test".into(),
+    };
+    let o = ops::run(r, &op);
+    assert!(o.success, "{}", o.output);
+}
+
+fn repo_with(sb: &Sandbox, name: &str, committed: &str, now: &str) -> std::path::PathBuf {
+    let r = sb.init(name);
+    std::fs::write(r.join("f"), committed).unwrap();
+    commit(&r, "f");
+    std::fs::write(r.join("f"), now).unwrap();
+    r
+}
+
+fn in_index(r: &Path) -> String {
+    git(r, &["show", ":f"])
+}
+
+fn in_work_tree(r: &Path) -> String {
+    std::fs::read_to_string(r.join("f")).unwrap()
+}
+
+/// Lines taken from beside a last line that has no newline leave that
+/// line whole: nothing is joined to it.
+#[test]
+fn lines_beside_a_last_line_without_a_newline_keep_it_whole() {
+    let sb = Sandbox::new();
+    // the last line gains its newline, and a line before it changes:
+    // staging the changed line leaves the last one as it was
+    let r = repo_with(&sb, "a", "a\nb\nc", "a\nB\nc\n");
+    apply_lines(&r, "f", Side::Unstaged, &["-b", "+B"], true, false);
+    assert_eq!(in_index(&r), "a\nB\nc");
+    // and staging just the newline leaves the other line
+    let r = repo_with(&sb, "b", "a\nb\nc", "a\nB\nc\n");
+    apply_lines(&r, "f", Side::Unstaged, &["-c", "+c"], true, false);
+    assert_eq!(in_index(&r), "a\nb\nc\n");
+    // discarded from a work tree whose last line has none either
+    let r = repo_with(&sb, "c", "a\nb\nc", "a\nB\nc\nd");
+    apply_lines(&r, "f", Side::Unstaged, &["-c", "+c", "+d"], false, true);
+    assert_eq!(in_work_tree(&r), "a\nB\nc");
+    // a line added after one that had no newline gives it one
+    let r = repo_with(&sb, "d", "a\nc", "a\nc\nd\n");
+    apply_lines(&r, "f", Side::Unstaged, &["+d"], true, false);
+    assert_eq!(in_index(&r), "a\nc\nd\n");
+    // the same undone: the line taken away, the one before keeps the
+    // newline it has there
+    let r = repo_with(&sb, "e", "a\nc", "a\nc\nd\n");
+    apply_lines(&r, "f", Side::Unstaged, &["+d"], false, true);
+    assert_eq!(in_work_tree(&r), "a\nc\n");
+    // (and a last line added without one keeps being without)
+    let r = repo_with(&sb, "f", "a\nc", "a\nc2\nd");
+    apply_lines(&r, "f", Side::Unstaged, &["+d"], true, false);
+    assert_eq!(in_index(&r), "a\nc\nd");
+    // a new last line without a newline, a line after it kept: still
+    // lines of their own
+    let r = repo_with(&sb, "g", "a\nb\nc\n", "a\nB\nd");
+    apply_lines(&r, "f", Side::Unstaged, &["-b", "+B", "+d"], true, false);
+    assert_eq!(in_index(&r), "a\nB\nd\nc\n");
+}
+
+/// Lines go where they are in the file, whatever of the file's other
+/// changes is left out: before them (which moves them), or beside them.
+#[test]
+fn lines_land_where_they_are_whatever_is_left_out() {
+    let sb = Sandbox::new();
+    let x = |n: usize| "x\n".repeat(n);
+    // five lines added early and left out; one added later, among lines
+    // all alike, staged
+    let now = format!("{}{}{}added\n{}", x(5), "y\n".repeat(5), x(35), x(20));
+    let r = repo_with(&sb, "a", &x(60), &now);
+    apply_lines(&r, "f", Side::Unstaged, &["+added"], true, false);
+    assert_eq!(in_index(&r), format!("{}added\n{}", x(40), x(20)));
+    // one added early and kept; a line removed later, put back
+    let committed = format!("{}gone\n{}", x(40), x(20));
+    let now = format!("{}added\n{}{}", x(5), x(35), x(20));
+    let r = repo_with(&sb, "b", &committed, &now);
+    apply_lines(&r, "f", Side::Unstaged, &["-gone"], false, true);
+    assert_eq!(
+        in_work_tree(&r),
+        format!("{}added\n{}gone\n{}", x(5), x(35), x(20))
+    );
+    // two taken at once: the later one goes by where the earlier leaves
+    // it, staged (five lines further down) and undone (one line back up)
+    let both = format!("{}{}{}added\n{}", x(5), "y\n".repeat(5), x(35), x(20));
+    let r = repo_with(&sb, "c", &x(60), &both);
+    let picks = ["+y", "+y", "+y", "+y", "+y", "+added"];
+    apply_lines(&r, "f", Side::Unstaged, &picks, true, false);
+    assert_eq!(in_index(&r), both);
+    let r = repo_with(&sb, "c2", &committed, &now);
+    apply_lines(&r, "f", Side::Unstaged, &["+added", "-gone"], false, true);
+    assert_eq!(in_work_tree(&r), committed);
+    // one of two lines replaced side by side: the new line where the old
+    // one was
+    let now = lines(6).replace("line 3\nline 4\n", "line three\nline four\n");
+    let r = repo_with(&sb, "d", &lines(6), &now);
+    apply_lines(
+        &r,
+        "f",
+        Side::Unstaged,
+        &["-line 3", "+line three"],
+        true,
+        false,
+    );
+    assert_eq!(in_index(&r), lines(6).replace("line 3\n", "line three\n"));
+    // and the other one's undone in the work tree
+    apply_lines(
+        &r,
+        "f",
+        Side::Unstaged,
+        &["-line 4", "+line four"],
+        false,
+        true,
+    );
+    assert_eq!(
+        in_work_tree(&r),
+        lines(6).replace("line 3\n", "line three\n")
+    );
+}
+
+/// A file kept with CRLF line endings: its lines are staged with them.
+#[test]
+fn lines_of_a_file_with_crlf_endings_keep_them() {
+    let sb = Sandbox::new();
+    let r = repo_with(&sb, "r", "a\r\nb\r\nc\r\n", "a\r\nB\r\nc\r\nd\r\n");
+    apply_lines(&r, "f", Side::Unstaged, &["+d"], true, false);
+    assert_eq!(in_index(&r), "a\r\nb\r\nc\r\nd\r\n");
+    apply_lines(&r, "f", Side::Unstaged, &["-b", "+B"], false, true);
+    assert_eq!(in_work_tree(&r), "a\r\nb\r\nc\r\nd\r\n");
+}
