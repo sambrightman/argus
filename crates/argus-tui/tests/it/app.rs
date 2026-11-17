@@ -5248,14 +5248,18 @@ fn marked_lines_are_staged_together() {
 }
 
 /// Marks and a region point into diffs as they were read: a rescan or a
-/// new status of their repo, which reads them again, drops them.
+/// Marks and a region point into diffs as they were read. A rescan or
+/// the repo's status coming back keeps them when the file's diff reads
+/// the same again (nothing changed: a refresh, a fetch done); when it
+/// doesn't, they go, and it's said.
 #[test]
-fn marks_and_a_region_end_when_their_diff_is_read_again() {
+fn marks_and_a_region_last_while_their_diff_reads_the_same() {
     marked_lines_case(Then::Rescan);
     marked_lines_case(Then::Status("dirty"));
+    marked_lines_case(Then::Changed);
 }
 
-/// Inverse: another repo's status leaves them.
+/// Another repo's status leaves them, whatever it brings.
 #[test]
 fn marks_and_a_region_outlive_another_repos_status() {
     marked_lines_case(Then::Status("clean"));
@@ -5265,10 +5269,12 @@ enum Then {
     Stage,
     Rescan,
     Status(&'static str),
+    /// The file changes, then its repo's status comes back.
+    Changed,
 }
 
 fn marked_lines_case(then: Then) {
-    let (_sb, mut app) = setup_with("", |sb| {
+    let (sb, mut app) = setup_with("", |sb| {
         let d = sb.path("dev/dirty");
         let lines: String = (1..=30).map(|i| format!("line {i}\n")).collect();
         write(&d, "f", &lines);
@@ -5303,7 +5309,22 @@ fn marked_lines_case(then: Then) {
                 entries,
                 truncated: vec![],
             });
+            assert!(app.marked_lines.len() == 2 && app.region.is_some());
+            return;
+        }
+        Then::Changed => {
+            app.on_key(ctrl(' '));
+            let d = sb.path("dev/dirty");
+            let text = std::fs::read_to_string(d.join("f")).unwrap();
+            write(&d, "f", &text.replace("line 10\n", "line ten\n"));
+            let p = app.ws.entries.iter().find(|e| e.path == d).unwrap();
+            let (path, st) = (p.path.clone(), p.status().unwrap().clone());
+            app.on_msg(Msg::Status(path, Box::new(Ok(st))));
             assert!(app.marked_lines.is_empty() && app.region.is_none());
+            assert_eq!(
+                app.message.as_ref().unwrap().0,
+                "2 marked lines of f went with its changes (and the region)"
+            );
             return;
         }
         Then::Status(name) => {
@@ -5317,9 +5338,9 @@ fn marked_lines_case(then: Then) {
                 .unwrap();
             let (path, st) = (p.path.clone(), p.status().unwrap().clone());
             app.on_msg(Msg::Status(path, Box::new(Ok(st))));
-            assert_eq!(
-                (app.marked_lines.is_empty(), app.region.is_none()),
-                (name == "dirty", name == "dirty")
+            assert!(
+                app.marked_lines.len() == 2 && app.region.is_some(),
+                "{name}"
             );
             return;
         }
@@ -5947,6 +5968,20 @@ fn what_is_marked_twice_over_counts_once() {
         app.message.as_ref().unwrap().0,
         "its folder is marked: unmark that to mark files in it"
     );
+    assert_eq!(marks_of(&mut app, &["build/", "build/a", "build/b"]), "MMM");
+    // a file in it that's deleted takes its mark with it
+    app.cursor = folder;
+    app.on_key(key(' '));
+    app.cursor = folder + 1;
+    app.on_key(key(' '));
+    let d = app.current().unwrap().path.clone();
+    assert_eq!(app.marked_files[&d].len(), 1);
+    std::fs::remove_file(d.join("build/a")).unwrap();
+    app.rebuild();
+    assert!(app.marked_files.is_empty(), "{:?}", app.marked_files);
+    write(&d, "build/a", "a\n");
+    app.cursor = folder;
+    app.on_key(key(' '));
     assert_eq!(marks_of(&mut app, &["build/", "build/a", "build/b"]), "MMM");
     // a file in it marked first, then the folder: one thing to delete
     app.cursor = folder;
@@ -7047,8 +7082,8 @@ fn marking_a_diff_line_moves_down() {
     assert_eq!(app.marked_lines.len(), 1);
 }
 
-/// A repo's line marks go when its status (so its diff) changes; other
-/// repos' stay.
+/// A repo's line marks go when its status comes back and their file's
+/// diff has changed; other repos' stay.
 #[test]
 fn line_marks_go_with_their_repos_status() {
     let (sb, mut app) = setup_with("", |sb| {
@@ -7068,6 +7103,8 @@ fn line_marks_go_with_their_repos_status() {
     }
     assert_eq!(app.marked_lines.len(), 2);
     let dirty = sb.path("dev/dirty");
+    let text = std::fs::read_to_string(dirty.join("f")).unwrap();
+    write(&dirty, "f", &text.replace("line 10\n", "line ten\n"));
     refreshed(&mut app, &dirty);
     let left: Vec<_> = app.marked_lines.iter().map(|k| k.0.clone()).collect();
     assert_eq!(left, [sb.path("dev/clean")]);

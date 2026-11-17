@@ -1086,7 +1086,12 @@ impl App {
             let changed = ws.get(repo).and_then(|e| e.status()).map(|s| &s.changes);
             files.retain(|(section, f)| {
                 let change = changed.and_then(|c| c.entry(f));
-                change.is_some_and(|c| section.code(c).is_some())
+                // (a file in an untracked folder is listed as the folder:
+                // it's there while it's on disk)
+                let there = |c: &argus_core::status::FileChange| {
+                    c.path == *f || repo.join(f).symlink_metadata().is_ok()
+                };
+                change.is_some_and(|c| section.code(c).is_some() && there(c))
             });
             !files.is_empty()
         });
@@ -3438,6 +3443,50 @@ impl App {
         files.is_some_and(|m| m.iter().any(|(s, f)| *s == section && within(f, file)))
     }
 
+    /// The diffs read for the repos `of` are forgotten, to be read again
+    /// as they're shown. Marked lines and a region point into a diff as it
+    /// was read, by hunk and line: those of a file whose diff reads the
+    /// same again are kept with it (a refresh that found nothing new);
+    /// the others go, and what went is returned to be said.
+    fn reread_diffs(&mut self, of: impl Fn(&PathBuf) -> bool) -> Option<String> {
+        type Key = (PathBuf, String, Side);
+        let mut pointed: BTreeSet<Key> = BTreeSet::new();
+        let lines = self.marked_lines.iter().filter(|k| of(&k.0));
+        pointed.extend(lines.map(|k| (k.0.clone(), k.1.clone(), k.2)));
+        let region = self.region.as_ref().filter(|r| of(&r.repo));
+        pointed.extend(region.map(|r| (r.repo.clone(), r.file.clone(), r.side)));
+        let same = |key: &Key| {
+            let now = diff::file_diff(&key.0, &key.1, key.2).map_err(|e| e.to_string());
+            self.diffs.get(key) == Some(&now)
+        };
+        let kept: BTreeSet<Key> = pointed.into_iter().filter(same).collect();
+        let key = |repo: &PathBuf, file: &String, side: Side| (repo.clone(), file.clone(), side);
+        self.diffs.retain(|k, _| !of(&k.0) || kept.contains(k));
+        let gone = |k: &MarkedLine| of(&k.0) && !kept.contains(&key(&k.0, &k.1, k.2));
+        let lost: Vec<&MarkedLine> = self.marked_lines.iter().filter(|k| gone(k)).collect();
+        let mut files: Vec<&str> = lost.iter().map(|k| k.1.as_str()).collect();
+        files.dedup();
+        let region = self.region.as_ref();
+        let region =
+            region.is_some_and(|r| of(&r.repo) && !kept.contains(&key(&r.repo, &r.file, r.side)));
+        let said = match (lost.len(), region) {
+            (0, false) => None,
+            (0, true) => Some("the region went with its file's changes".to_string()),
+            (n, region) => Some(format!(
+                "{n} marked {} of {} went with {} changes{}",
+                plural(n, "line", "lines"),
+                files.join(", "),
+                if files.len() == 1 { "its" } else { "their" },
+                if region { " (and the region)" } else { "" },
+            )),
+        };
+        self.marked_lines.retain(|k| !gone(k));
+        if region {
+            self.region = None;
+        }
+        said
+    }
+
     /// The lines that are marked: those marked one by one, and those of a
     /// region while there is one (but for a file marked whole, which has
     /// them already). The one place that says so, for what's drawn as
@@ -4967,15 +5016,7 @@ impl App {
     fn statuses(&mut self, batch: Vec<(PathBuf, Result<RepoStatus, String>)>) -> Vec<Effect> {
         let paths: Vec<PathBuf> = batch.iter().map(|(p, _)| p.clone()).collect();
         self.ws.update_statuses(batch);
-        self.diffs.retain(|k, _| !paths.contains(&k.0));
-        self.marked_lines.retain(|k| !paths.contains(&k.0));
-        if self
-            .region
-            .as_ref()
-            .is_some_and(|r| paths.contains(&r.repo))
-        {
-            self.region = None;
-        }
+        let went = self.reread_diffs(|repo| paths.contains(repo));
         self.unfold_cache.retain(|k, _| !paths.contains(&k.0));
         for path in &paths {
             self.forget_gone(path);
@@ -4985,6 +5026,9 @@ impl App {
         for path in &paths {
             fx.extend(self.continue_chain(path));
         }
+        if let Some(went) = went {
+            self.info(went);
+        }
         fx
     }
 
@@ -4992,10 +5036,8 @@ impl App {
         match m {
             Msg::Scanned { entries, truncated } => {
                 self.scanning = false;
-                self.diffs.clear();
+                let went = self.reread_diffs(|_| true);
                 self.unfold_cache.clear();
-                self.marked_lines.clear();
-                self.region = None;
                 self.ws.entries = entries;
                 self.ws.truncated = truncated;
                 self.ws.resolve_flags();
@@ -5007,6 +5049,7 @@ impl App {
                 }];
                 parts.extend(self.notices.iter().cloned());
                 parts.extend(self.ws.truncation_warning());
+                parts.extend(went);
                 self.info(parts.join(" · "));
                 self.rebuild();
             }
