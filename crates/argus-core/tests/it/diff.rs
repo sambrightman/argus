@@ -879,3 +879,43 @@ fn lines_of_a_file_with_crlf_endings_keep_them() {
     apply_lines(&r, "f", Side::Unstaged, &["-b", "+B"], false, true);
     assert_eq!(in_work_tree(&r), "a\r\nb\r\nc\r\nd\r\n");
 }
+
+/// What a patch of part of a diff says in its hunks' headers: the lines
+/// it has on each side, and for a later hunk where the earlier one's
+/// removals (not only its additions) leave it.
+#[test]
+fn a_patch_of_lines_counts_what_it_holds() {
+    let sb = Sandbox::new();
+    let x = |n: usize| "x\n".repeat(n);
+    // two lines removed early, one added later among lines all alike
+    let committed = format!("{}gone 1\ngone 2\n{}", x(5), x(55));
+    let now = format!("{}{}added\n{}", x(5), x(35), x(20));
+    let r = repo_with(&sb, "a", &committed, &now);
+    let h = hunks(&r, "f", Side::Unstaged);
+    let picked = |h: &argus_core::diff::Hunk| -> Vec<usize> {
+        let changed = |l: &argus_core::diff::Line| l.kind != LineKind::Context;
+        let lines = h.lines.iter().enumerate();
+        lines
+            .filter(|(_, l)| changed(l))
+            .map(|(at, _)| at)
+            .collect()
+    };
+    let (first, second) = (picked(&h[0]), picked(&h[1]));
+    // only one of the removed lines: three unchanged each side of it,
+    // the other removed line among them
+    let patch = argus_core::diff::patch_hunks("f", &[(&h[0], Some(&first[..1]))], false);
+    assert!(patch.contains("\n@@ -3,8 +3,7 @@\n"), "{patch}");
+    // both hunks: the second two lines up from where the file has it
+    let parts = [(&h[0], Some(&first[..])), (&h[1], Some(&second[..]))];
+    let patch = argus_core::diff::patch_hunks("f", &parts, false);
+    assert!(patch.contains("\n@@ -40,6 +38,7 @@\n"), "{patch}");
+    apply_lines(
+        &r,
+        "f",
+        Side::Unstaged,
+        &["-gone 1", "-gone 2", "+added"],
+        true,
+        false,
+    );
+    assert_eq!(in_index(&r), now);
+}
