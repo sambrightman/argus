@@ -6939,6 +6939,60 @@ fn a_tag_of_your_own_is_set_from_the_tag_menu_and_shown() {
     );
 }
 
+/// The legend shows pull's icon in the pull tag's colour, wherever that
+/// tag stands among them.
+#[test]
+fn the_legend_shows_pull_in_its_tags_colour() {
+    use argus_core::badges::Role;
+    let c = Config::parse("[tags.work]\n").unwrap();
+    let tags = c.tag_icons();
+    let at = tags.iter().position(|(n, _)| n == "pull").unwrap();
+    assert_ne!(at, 0, "not the first, which a wrong lookup would give");
+    let icons = argus_core::icons::UNICODE;
+    let legend = ui::legend(&icons, &tags);
+    let pulled = legend.iter().find(|l| l.2.starts_with("pulled by"));
+    assert_eq!(pulled.unwrap().1, Role::Tag(at));
+}
+
+/// K on marked lines and files says what goes of each kind, and only of
+/// the kinds there are.
+#[test]
+fn discarding_marked_lines_and_files_says_which_kinds() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        two_hunks(sb);
+        write(&sb.path("dev/dirty"), "README", "changed again\n");
+        write(&sb.path("dev/dirty"), "new", "a\n");
+    });
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+added");
+    app.on_key(key(' '));
+    app.cursor = shown_row(&app, "+line three");
+    app.on_key(key(' '));
+    let asked = |app: &mut App, file: &str| {
+        to_file(app, file);
+        app.on_key(key(' '));
+        app.on_key(key('K'));
+        let screen = render(app, 140, 40);
+        app.on_key(key('n'));
+        to_file(app, file);
+        app.on_key(key(' '));
+        let line = screen
+            .lines()
+            .find(|l| l.contains("Discard"))
+            .unwrap_or_default();
+        line.trim().to_string()
+    };
+    assert_eq!(
+        asked(&mut app, "README"),
+        "Discard 2 marked lines and unstaged changes to 1 file? They're lost. (y/n)"
+    );
+    assert_eq!(
+        asked(&mut app, "new"),
+        "Discard 2 marked lines and delete 1 untracked? They're lost. (y/n)"
+    );
+}
+
 /// A squash-merged branch shows as merged that way, and deleting it says
 /// its commits go (it's forced).
 #[test]

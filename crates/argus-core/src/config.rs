@@ -608,7 +608,7 @@ impl Layers {
             })?;
         let bases = take_extend(&mut layer, path)?;
         moved_keys(&layer, Some(path))?;
-        renamed_keys(&mut layer, Some(path))?;
+        renamed_keys(&layer, Some(path))?;
         chain.push(real);
         let dir = path.parent().unwrap_or(Path::new("."));
         for inc in &bases {
@@ -809,34 +809,24 @@ fn renamed_color(key: &str) -> Option<String> {
     }
 }
 
-/// Names from before tags were tags, read as the new ones: `[marks]`
-/// (0.2.0's `[tags]`) and the `mark`, `mark.<name>` colours. A file with
-/// both names for one thing is an error, not a guess.
-fn renamed_keys(layer: &mut toml::Table, file: Option<&Path>) -> Result<(), ConfigError> {
-    if let Some(marks) = layer.remove("marks") {
-        if layer.contains_key("tags") {
-            return Err(moved_error(file, "marks", "[tags]"));
-        }
-        layer.insert("tags".into(), marks);
+/// Names from before tags were tags, said plainly: `[marks]` (0.2.0's
+/// `[tags]`) and the `mark`, `mark.<name>` colours.
+fn renamed_keys(layer: &toml::Table, file: Option<&Path>) -> Result<(), ConfigError> {
+    if layer.contains_key("marks") {
+        return Err(moved_error(file, "marks", "[tags]"));
     }
     let colors = layer
-        .get_mut("ui")
-        .and_then(|ui| ui.get_mut("colors"))
-        .and_then(|c| c.as_table_mut());
-    if let Some(colors) = colors {
-        let old: Vec<(String, String)> = colors
-            .keys()
-            .filter_map(|k| Some((k.clone(), renamed_color(k)?)))
-            .collect();
-        for (key, to) in old {
-            if colors.contains_key(&to) {
-                return Err(moved_error(file, &format!("[ui] colors` `{key}"), &to));
-            }
-            let value = colors.remove(&key).expect("just listed");
-            colors.insert(to, value);
-        }
+        .get("ui")
+        .and_then(|ui| ui.get("colors"))
+        .and_then(|c| c.as_table());
+    let old = colors
+        .into_iter()
+        .flat_map(|c| c.keys())
+        .find_map(|k| Some((k, renamed_color(k)?)));
+    match old {
+        Some((key, to)) => Err(moved_error(file, &format!("[ui] colors` `{key}"), &to)),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// A TOML or type error in plain words: Rust's type names (`usize`,
@@ -881,7 +871,7 @@ impl Config {
         let mut layer: toml::Table = toml::from_str(s)?;
         let extend = take_extend(&mut layer, Path::new("config"))?;
         moved_keys(&layer, None)?;
-        renamed_keys(&mut layer, None)?;
+        renamed_keys(&layer, None)?;
         let mut layers = Layers::defaults();
         layers.merge(layer)?;
         let mut c: Config = toml::Value::Table(layers.table).try_into()?;
@@ -1344,34 +1334,27 @@ mod tests {
     }
 
     /// Tags were `[marks]` in 0.2.0, their colours `mark` and
-    /// `mark.<name>`: read as the new names.
+    /// `mark.<name>`: said, not guessed at.
     #[test]
-    fn marks_from_before_they_were_tags_are_read() {
-        let c = Config::parse(
-            "marks.pull.repos = ['a/b']\n[marks.work]\nkey = 'w'\n[ui.colors]\n'mark.work' = 'red'\nmark = 'blue'\nmarked = 'green'\n",
-        )
-        .unwrap();
-        assert_eq!(c.tags["pull"].repos, ["a/b"]);
-        assert_eq!(c.tags["work"].key, Some('w'));
+    fn marks_from_before_they_were_tags_are_pointed_to_tags() {
+        let said = |text: &str| Config::parse(text).unwrap_err().to_string();
+        for text in ["marks.pull.repos = ['a/b']", "[marks.work]\nkey = 'w'\n"] {
+            assert_eq!(
+                said(text),
+                "`marks` is now `[tags]`: move its entries there"
+            );
+        }
         assert_eq!(
-            c.ui.colors,
-            BTreeMap::from([
-                ("marked".to_string(), "green".to_string()),
-                ("tag".to_string(), "blue".to_string()),
-                ("tag.work".to_string(), "red".to_string()),
-            ]),
-            "`marked` is the marked rows' colour still"
-        );
-        // inverse: both names in one file isn't guessed at
-        let both = |text: &str| Config::parse(text).unwrap_err().to_string();
-        assert_eq!(
-            both("[marks.work]\n[tags.home]\n"),
-            "`marks` is now `[tags]`: move its entries there"
-        );
-        assert_eq!(
-            both("[ui.colors]\n'mark.work' = 'red'\n'tag.work' = 'blue'\n"),
+            said("[ui.colors]\n'mark.work' = 'red'\n"),
             "`[ui] colors` `mark.work` is now `tag.work`: move its entries there"
         );
+        assert_eq!(
+            said("[ui.colors]\nmark = 'blue'\n"),
+            "`[ui] colors` `mark` is now `tag`: move its entries there"
+        );
+        // inverse: `marked` is the marked rows' colour, and stays
+        let c = Config::parse("[ui.colors]\nmarked = 'green'\ntag = 'blue'\n").unwrap();
+        assert_eq!(c.ui.colors.len(), 2);
     }
 
     #[test]

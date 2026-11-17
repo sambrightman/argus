@@ -49,5 +49,10 @@ deferred.
 - **The partly marked icon (`│`) isn't checked in the fonts** beyond
   being a glyph all of them have; whether it reads as "less than `▌`"
   in each is for the glyph review above.
-- **`e` (edit a patch) goes by marked lines only:** a file marked whole
-  isn't opened as its hunks.
+- **Stashing a file marked whole takes both its sides,** as `git stash
+  push -- file` does: marked under unstaged, its staged changes go into
+  the stash too. `s` `u` `K` take it only where it's marked.
+- **`M` in a repo's details marks every file in every section,** which
+  no one of `s` `u` `K` then takes when files are staged and unstaged
+  (each refuses the other's). It suits stashing and unmarking; marking
+  one section's files is `M`'s missing half.

@@ -258,7 +258,18 @@ Two findings:
   diff. A hunk or line toggled under a file marked whole turns the
   file's mark into its lines' first. Lines are known by hunk and place
   in it, as the diff was read: they go when the repo's status is read
-  again. Actions take both sets together: lines as patches, files whole.
+  again. Actions take both sets together: lines as patches, files whole,
+  each only where it's marked (a file marked under staged is `u`'s to
+  take; `s` and `K` refuse it, as they refuse staged lines).
+* **A patch of part of a diff** (`diff::patch_hunks`) has to say more
+  than the diff does. Each hunk gives its place on the side the patch is
+  applied to as the diff has it, and on the other side where this
+  patch's own earlier hunks leave it: git places a hunk by that when its
+  context is found in several places. A line left out beside one taken
+  stays put, the taken one's replacement going where the taken one was.
+  And only a side's last line may lack a newline: one that ends up
+  followed by another is given its newline. Carriage returns are kept
+  (the text shown has none).
 * **No forgetting.** Nothing about a repo is dropped because scans no
   longer find it (an earlier version dropped marks after 30 days; that
   broke the rule that permanent loss needs confirmation). Expired snoozes

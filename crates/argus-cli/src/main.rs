@@ -88,7 +88,7 @@ enum Cmd {
         #[arg(long, value_name = "QUERY")]
         filter: Option<String>,
         /// Only repos with this tag; repeatable (all of them).
-        #[arg(long, alias = "mark", value_name = "TAG", add = tag_completer())]
+        #[arg(long, value_name = "TAG", add = tag_completer())]
         tag: Vec<String>,
         /// Under each repo, what the TUI's details show: where it is, its
         /// issues, the fixes on offer, its branches, changes and stashes.
@@ -142,11 +142,9 @@ enum Cmd {
     /// `[tags]` (favourite, or one of your own), `pull` (pulled by `argus
     /// pull`) or `ignore` (hidden, left out of pulls and bulk actions).
     /// Edits that list in config.
-    #[command(alias = "mark")]
     Tag(TagArgs),
     /// Untag repos, whatever patterns in config say; `--all`: drop the
     /// repos' own entries from every tag and end their snoozes.
-    #[command(alias = "unmark")]
     Untag(UntagArgs),
     /// Hide repos for a while, or with `--issue` just that issue of them.
     Snooze(SnoozeArgs),

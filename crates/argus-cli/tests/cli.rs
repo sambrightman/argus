@@ -1148,38 +1148,23 @@ fn tags_are_written_to_the_config_lists() {
     assert_eq!(clear("acme/clean"), "");
 }
 
-/// Tags were marks in 0.2.0: `argus mark` and `unmark`, `status --mark`
-/// and `[marks]` in config all still work.
+/// Tags were marks in 0.2.0: a config still saying `[marks]` is told what
+/// they're called now.
 #[test]
-fn what_0_2_0_called_marks_still_works() {
+fn a_config_saying_marks_is_pointed_to_tags() {
     let sb = Sandbox::new();
     three(&sb);
     let cfg = sb.path("cfg.toml");
-    std::fs::write(&cfg, "# mine\n[marks.work]\nrepos = ['acme/dirty']\n").unwrap();
-    let run = |args: &[&str]| {
-        let o = argus(&sb)
-            .arg("--config")
-            .arg(&cfg)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(o.status.success(), "{args:?}: {o:?}");
-        String::from_utf8(o.stdout).unwrap()
-    };
-    run(&["mark", "work", "acme/clean"]);
-    let out = run(&["status", "--all", "--mark", "work"]);
-    assert!(
-        out.contains("acme/clean") && out.contains("acme/dirty") && !out.contains("acme/feature"),
-        "{out}"
-    );
-    run(&["unmark", "work", "acme/dirty"]);
-    assert_eq!(
-        std::fs::read_to_string(&cfg).unwrap(),
-        "# mine\n[tags.work]\nrepos = [\"github.com/acme/clean\"]\n"
-    );
-    // they're not what help offers
-    let help = run(&["--help"]);
-    assert!(help.contains("  tag ") && !help.contains("mark"), "{help}");
+    std::fs::write(&cfg, "[marks.work]\nrepos = ['acme/dirty']\n").unwrap();
+    argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .arg("status")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "`marks` is now `[tags]`: move its entries there",
+        ));
 }
 
 #[test]

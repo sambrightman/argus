@@ -489,31 +489,10 @@ fn docs_highest_first(path: &Path) -> Result<Vec<Doc>, EditError> {
         if docs.iter().any(|d| same_dir(&d.path, &f)) {
             continue; // extended twice: its last merge is what counts
         }
-        let (text, mut doc) = load(&f)?;
-        rename_marks(&mut doc);
+        let (text, doc) = load(&f)?;
         docs.push(Doc { path: f, text, doc });
     }
     Ok(docs)
-}
-
-/// `[marks]`, as tags were in 0.2.0 (and are still read), renamed to
-/// `[tags]` where it stands, so an edit finds one name and a file that's
-/// written anyway is brought up to date. (Both in one file doesn't load.)
-fn rename_marks(doc: &mut toml_edit::DocumentMut) {
-    let root = doc.as_table_mut();
-    let order: Vec<String> = root.iter().map(|(k, _)| k.to_string()).collect();
-    let Some((key, marks)) = root.remove_entry("marks") else {
-        return;
-    };
-    let tags = toml_edit::Key::new("tags")
-        .with_leaf_decor(key.leaf_decor().clone())
-        .with_dotted_decor(key.dotted_decor().clone());
-    root.insert_formatted(&tags, marks);
-    let place = |k: &toml_edit::Key| {
-        let was = if k.get() == "tags" { "marks" } else { k.get() };
-        order.iter().position(|o| o == was)
-    };
-    root.sort_values_by(|a, _, b, _| place(a).cmp(&place(b)));
 }
 
 /// The strings in list `key` of `doc` (none if it's absent).
@@ -1255,31 +1234,5 @@ mod tests {
         let c = Config::parse(&std::fs::read_to_string(&p).unwrap()).unwrap();
         assert_eq!(c.tags["pull"].repos, ["acme/*"]);
         assert_eq!(c.max_depth, Config::default().max_depth);
-    }
-
-    /// A file still saying `[marks]` (0.2.0's name for tags) has it renamed
-    /// when a tag is saved to it, where it stands and with its comments;
-    /// a file the change doesn't touch is left as written.
-    #[test]
-    fn a_file_saying_marks_is_renamed_when_a_tag_is_saved_to_it() {
-        let d = tempfile::tempdir().unwrap();
-        let base = d.path().join("base.toml");
-        let base_text = "[marks.home]\nrepos = ['x/y']\n";
-        std::fs::write(&base, base_text).unwrap();
-        let p = d.path().join("config.toml");
-        let text = "extend = ['base.toml']\n# mine\nmarks.favourite.repos = [\"a/x\"] # keep\nmax_depth = 3\n\n# work's\n[marks.work]\nkey = \"w\"\n\n[ui]\ntheme = \"dark\"\n";
-        std::fs::write(&p, text).unwrap();
-        let before = Config::load(&p).unwrap();
-        let mut after = before.clone();
-        after.tags["favourite"].repos.push("c/y".into());
-        update_tag_lists(&p, &before, &after).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&p).unwrap(),
-            "extend = ['base.toml']\n# mine\ntags.favourite.repos = [\"a/x\", \"c/y\"] # keep\nmax_depth = 3\n\n# work's\n[tags.work]\nkey = \"w\"\n\n[ui]\ntheme = \"dark\"\n"
-        );
-        assert_eq!(std::fs::read_to_string(&base).unwrap(), base_text);
-        let c = Config::load(&p).unwrap();
-        assert_eq!(c.tags["favourite"].repos, ["a/x", "c/y"]);
-        assert_eq!(c.tags["home"].repos, ["x/y"]);
     }
 }
