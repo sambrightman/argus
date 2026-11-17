@@ -7002,6 +7002,27 @@ fn marks_show_on_what_holds_them_and_k_says_where() {
     );
 }
 
+/// K on files marked in several repos says so, wherever the cursor is.
+#[test]
+fn discarding_in_several_repos_says_how_many() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        write(&sb.path("dev/dirty"), "new", "a\n");
+        write(&sb.path("dev/clean"), "other", "b\n");
+    });
+    cursor_on_detail(&mut app, "dirty", "path");
+    to_file(&mut app, "new");
+    app.on_key(key(' '));
+    cursor_on_detail(&mut app, "clean", "path");
+    to_file(&mut app, "other");
+    app.on_key(key(' '));
+    app.on_key(key('K'));
+    assert!(
+        render(&mut app, 140, 60).contains("In 2 repos: delete 2 untracked files? They're lost."),
+        "{}",
+        render(&mut app, 140, 60)
+    );
+}
+
 /// The legend shows pull's icon in the pull tag's colour, wherever that
 /// tag stands among them.
 #[test]
