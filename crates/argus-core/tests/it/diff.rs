@@ -919,3 +919,24 @@ fn a_patch_of_lines_counts_what_it_holds() {
     );
     assert_eq!(in_index(&r), now);
 }
+
+/// A file whose name git would quote (a tab in it) is named in a patch as
+/// git names it.
+#[test]
+fn a_patch_names_an_odd_path_as_git_does() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    let name = "tab\tand \"quote\"";
+    std::fs::write(r.join(name), "a\nb\n").unwrap();
+    commit(&r, "odd");
+    std::fs::write(r.join(name), "a\nB\n").unwrap();
+    apply(&r, name, Side::Unstaged, 0, None, true, false);
+    assert_eq!(git(&r, &["show", &format!(":{name}")]), "a\nB\n");
+    // inverse: an ordinary name (spaces, letters beyond ASCII) is written plain
+    let h = hunks(&r, name, Side::Staged);
+    let patch = argus_core::diff::patch("a b/é.txt", &h[0], None, false);
+    assert!(
+        patch.starts_with("diff --git a/a b/é.txt b/a b/é.txt\n--- a/a b/é.txt\n"),
+        "{patch}"
+    );
+}

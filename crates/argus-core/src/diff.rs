@@ -111,7 +111,8 @@ type Written<'a> = (char, &'a Line, bool);
 /// side's last line can lack a newline: one that would end up followed
 /// by another is given its newline.
 pub fn patch_hunks(path: &str, hunks: &[(&Hunk, Option<&[usize]>)], reverse: bool) -> String {
-    let mut out = format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n");
+    let (a, b) = (quoted("a/", path), quoted("b/", path));
+    let mut out = format!("diff --git {a} {b}\n--- {a}\n+++ {b}\n");
     // how far this patch's earlier hunks move the lines after them
     let mut moved: i64 = 0;
     for (hunk, only) in hunks {
@@ -139,6 +140,30 @@ pub fn patch_hunks(path: &str, hunks: &[(&Hunk, Option<&[usize]>)], reverse: boo
             }
         }
     }
+    out
+}
+
+/// `prefix` and `path` as a patch names a file: in double quotes with
+/// C escapes when the path has a control character, a quote or a
+/// backslash in it (as git writes it, and must have it to read it back).
+fn quoted(prefix: &str, path: &str) -> String {
+    let odd = |c: char| c.is_control() || c == '"' || c == '\\';
+    if !path.chars().any(odd) {
+        return format!("{prefix}{path}");
+    }
+    let mut out = format!("\"{prefix}");
+    for c in path.chars() {
+        match c {
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if c.is_control() => out.push_str(&format!("\\{:03o}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
     out
 }
 

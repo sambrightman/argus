@@ -756,6 +756,16 @@ pub fn stash_problem(
     })
 }
 
+/// Whether `file`'s mode in the work tree differs from the index's (made
+/// executable, say): a change no patch of its lines carries.
+pub fn mode_changed(repo: &Path, file: &str) -> bool {
+    let path = format!(":(literal){file}");
+    let raw = git_in(repo, &["diff-files", "--raw", "--", &path]);
+    // `:100644 100755 <id> <id> M\t<path>`
+    let mut modes = raw.output.trim_start_matches(':').split(' ');
+    matches!((modes.next(), modes.next()), (Some(old), Some(new)) if raw.success && old != new)
+}
+
 /// Whether git's staged-only stash would fail to take `file`'s staged
 /// changes out of the work tree. git reverse-applies the HEAD → index patch
 /// (one line of context) to the work tree; this tries that with `--check`,
@@ -984,7 +994,32 @@ fn pop_problem(cwd: &Path, index: usize) -> Option<String> {
         ],
     );
     match o.code {
-        Some(0) => None,
+        // No conflict in what's committed. But git pops onto no file it
+        // would have to rewrite that has changes not yet staged: which
+        // files those are is the merge's result against the index.
+        Some(0) => {
+            let tree = o.output.lines().next().unwrap_or_default();
+            let names = |args: &[&str]| -> Vec<String> {
+                let out = git_in(cwd, args);
+                let lines = out.output.lines().map(str::to_string);
+                lines.filter(|l| out.success && !l.is_empty()).collect()
+            };
+            let rewritten = names(&["diff-index", "--cached", "--name-only", tree]);
+            let unstaged = names(&["diff-files", "--name-only"]);
+            let both: Vec<&str> = rewritten
+                .iter()
+                .filter(|f| unstaged.contains(f))
+                .map(String::as_str)
+                .collect();
+            (!both.is_empty()).then(|| {
+                format!(
+                    "it changes {}, which {} changes of its own not staged: \
+                     commit or stash those first",
+                    both.join(", "),
+                    if both.len() == 1 { "has" } else { "have" }
+                )
+            })
+        }
         Some(1) => {
             let files: Vec<&str> = o.output.lines().skip(1).filter(|l| !l.is_empty()).collect();
             Some(format!("it would conflict in {}", files.join(", ")))

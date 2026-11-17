@@ -555,8 +555,24 @@ fn lines_are_stashed_by_themselves() {
         git(&r, &["rev-parse", "stash@{0}^2^{tree}"]),
         git(&r, &["write-tree"])
     );
-    // popped (onto the file without changes of its own: git pops onto no
-    // other, as after its own `stash -p`), they're back
+    assert_eq!(
+        git(&r, &["log", "-1", "--format=%s", "stash@{0}^2"]).trim(),
+        format!(
+            "index on main: {} files",
+            git(&r, &["rev-parse", "--short", "HEAD"]).trim()
+        )
+    );
+    // git pops onto no file with changes of its own (as after its own
+    // `stash -p`): said before trying, the stash kept
+    let pop = ops::run(&r, &Op::StashPop);
+    assert!(!pop.success, "{}", pop.output);
+    assert_eq!(
+        pop.output,
+        "not popping: it changes f, which has changes of its own not staged: \
+         commit or stash those first"
+    );
+    assert_eq!(git(&r, &["stash", "list"]).lines().count(), 1);
+    // without them, they're back
     git(&r, &["checkout", "-q", "--", "f"]);
     let pop = ops::run(&r, &Op::StashPop);
     assert!(pop.success, "{}", pop.output);
@@ -686,4 +702,76 @@ fn a_stash_whose_index_no_longer_applies_is_popped_without_it() {
         "{}",
         pop.output
     );
+}
+
+/// A stash of lines on a detached HEAD, and in a linked worktree (whose
+/// index is elsewhere): made as git would, nothing left behind.
+#[test]
+fn lines_are_stashed_off_a_branch_and_in_a_linked_worktree() {
+    let sb = Sandbox::new();
+    let (r, stage, discard) = lines_to_stash(&sb);
+    git(&r, &["checkout", "-q", "--detach"]);
+    let op = |stage: String, discard: String| Op::StashLines {
+        message: "m".into(),
+        stage,
+        discard,
+        lines: 3,
+    };
+    let out = ops::run(&r, &op(stage, discard));
+    assert!(out.success, "{}", out.output);
+    assert_eq!(out.output, "On (no branch): m");
+    // a linked worktree of another repo
+    let other = Sandbox::new();
+    let (main, ..) = lines_to_stash(&other);
+    git(&main, &["stash", "-q"]);
+    let wt = other.path("wt");
+    git(
+        &main,
+        &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "side"],
+    );
+    let lines = std::fs::read_to_string(wt.join("f")).unwrap();
+    let changed = lines
+        .replace("line 3\n", "line three\n")
+        .replace("line 4\n", "line four\n")
+        .replace("line 28\n", "line 28\nadded\n");
+    write(&wt, "f", &changed);
+    let (stage, discard) = lines_patches(&wt);
+    let out = ops::run(&wt, &op(stage, discard));
+    assert!(out.success, "{}", out.output);
+    assert_eq!(out.output, "On side: m");
+    let text = std::fs::read_to_string(wt.join("f")).unwrap();
+    assert!(
+        text.contains("line 3\nline four\n") && !text.contains("added"),
+        "{text}"
+    );
+    let left = walk(&main.join(".git"));
+    assert!(!left.iter().any(|n| n.contains("argus")), "{left:?}");
+}
+
+/// Every file name under `dir`.
+fn walk(dir: &Path) -> Vec<String> {
+    let mut names = vec![];
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        names.push(e.file_name().to_string_lossy().into_owned());
+        if e.path().is_dir() {
+            names.extend(walk(&e.path()));
+        }
+    }
+    names
+}
+
+/// A mode change is told from a change of content.
+#[test]
+fn a_files_mode_change_is_seen() {
+    use std::os::unix::fs::PermissionsExt;
+    let sb = Sandbox::new();
+    let r = dirty(&sb);
+    assert!(!ops::mode_changed(&r, "README"), "content only");
+    assert!(
+        !ops::mode_changed(&r, "staged"),
+        "unchanged in the work tree"
+    );
+    let mode = std::fs::Permissions::from_mode(0o755);
+    std::fs::set_permissions(r.join("README"), mode).unwrap();
+    assert!(ops::mode_changed(&r, "README"));
 }
