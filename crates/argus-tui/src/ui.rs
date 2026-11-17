@@ -15,7 +15,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Marked, Mode, Prompt, Row, Target};
+use crate::app::{App, Marked, Mode, Prompt, Row};
 use crate::details::Expand;
 use crate::menu::MenuId;
 use crate::refine;
@@ -298,7 +298,6 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) -> Vec<LinkAt> 
         .min(30);
 
     let refined = refined_rows(app, app.scroll..app.scroll + height);
-    let region: std::collections::BTreeSet<_> = app.region_lines().into_iter().collect();
     let mut lines = vec![];
     let mut links = vec![];
     for (row_idx, row) in app.rows.iter().enumerate().skip(app.scroll).take(height) {
@@ -309,24 +308,8 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) -> Vec<LinkAt> 
                 // two in from the name: past the marker, flags and a space
                 let indent = "  ".repeat(app.ws.depth(*repo)) + &" ".repeat(flags_w + 4);
                 // what the row is of the changes, and how much of that is
-                // marked (a region's lines count as they will be)
+                // marked
                 let marked = match app.target(row_idx) {
-                    Some(Target::Hunk {
-                        repo,
-                        section,
-                        file,
-                        hunk,
-                        at: Some(at),
-                    }) if region.contains(&(
-                        repo.clone(),
-                        file.clone(),
-                        section.side(),
-                        hunk,
-                        at,
-                    )) =>
-                    {
-                        Marked::Wholly
-                    }
                     Some(target) => app.marked(&target),
                     // (the uncommitted issue unfolds into the changes: all
                     // of them, as the repo's own row has it)

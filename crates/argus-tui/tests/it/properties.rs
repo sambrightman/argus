@@ -267,7 +267,6 @@ proptest! {
             app.on_key(k);
         }
         prop_assume!(matches!(app.mode, Mode::Normal));
-        prop_assume!(app.region_lines().is_empty());
         let shown = |app: &App, repo: &std::path::Path, file: &str, section: Section, whole: bool| {
             let rows = (0..app.rows.len()).filter_map(|n| app.target(n));
             let mut own = rows.filter(|t| matches!(t, Target::File { repo: r, section: s, file: f }

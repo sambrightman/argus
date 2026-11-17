@@ -5968,6 +5968,44 @@ fn what_is_marked_twice_over_counts_once() {
     );
 }
 
+/// A region's lines are marked while it lasts, for every key that takes
+/// what's marked: stashing them is offered and takes them, with what
+/// else is marked, and the region is over.
+#[test]
+fn a_regions_lines_are_stashed_as_marked_ones_are() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        two_hunks(sb);
+        write(&sb.path("dev/dirty"), "new", "a\n");
+    });
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "-line 3");
+    app.on_key(ctrl(' '));
+    app.on_key(key('j'));
+    assert!(app.marked_lines.is_empty() && app.region.is_some());
+    assert_eq!(
+        marks_of(&mut app, &["M f", "@@ -1,6", "+line three"]),
+        "pMM"
+    );
+    app.on_key(key('z'));
+    assert!(
+        menu_items(&app).contains(&"m stash marked*".to_string()),
+        "{:?}",
+        menu_items(&app)
+    );
+    match job_ops(&app.on_key(key('m'))).as_slice() {
+        [
+            Op::StashLines {
+                stage, lines: 2, ..
+            },
+        ] => {
+            assert!(stage.contains("-line 3\n+line three\n"), "{stage}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(app.region.is_none() && app.marked_lines.is_empty());
+}
+
 /// Stashing a marked file takes it only where it's marked. A stash by
 /// path takes all of a file, so one listed under staged and unstaged goes
 /// that way when marked in both; marked under unstaged alone, its

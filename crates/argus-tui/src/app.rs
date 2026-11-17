@@ -3003,7 +3003,7 @@ impl App {
         menu.items.retain(|it| match it.action {
             Action::Stash(StashKind::Staged) => staged,
             Action::Stash(StashKind::MarkedFiles) => {
-                !self.marked_files.is_empty() || !self.marked_lines.is_empty()
+                !self.marked_files.is_empty() || !self.lines().is_empty()
             }
             Action::PopStash | Action::DropStash => stashes,
             _ => true,
@@ -3438,20 +3438,29 @@ impl App {
         files.is_some_and(|m| m.iter().any(|(s, f)| *s == section && within(f, file)))
     }
 
-    /// A region ends: its lines are kept as marks, but for those of a
-    /// file marked whole, which has them already.
-    fn keep_region(&mut self) {
-        let lines = self.region_lines();
-        self.region = None;
+    /// The lines that are marked: those marked one by one, and those of a
+    /// region while there is one (but for a file marked whole, which has
+    /// them already). The one place that says so, for what's drawn as
+    /// marked and for every key that takes what's marked.
+    pub fn lines(&self) -> std::borrow::Cow<'_, BTreeSet<MarkedLine>> {
+        if self.region.is_none() {
+            return std::borrow::Cow::Borrowed(&self.marked_lines);
+        }
         let section = |side: Side| match side {
             Side::Unstaged => Section::Unstaged,
             Side::Staged => Section::Staged,
         };
-        let new = lines
-            .into_iter()
-            .filter(|k| !self.file_marked(&k.0, section(k.2), &k.1));
-        let new: Vec<MarkedLine> = new.collect();
-        self.marked_lines.extend(new);
+        let region = self.region_lines().into_iter();
+        let region = region.filter(|k| !self.file_marked(&k.0, section(k.2), &k.1));
+        let mut lines = self.marked_lines.clone();
+        lines.extend(region);
+        std::borrow::Cow::Owned(lines)
+    }
+
+    /// A region ends: its lines are kept as marks.
+    fn keep_region(&mut self) {
+        self.marked_lines = self.lines().into_owned();
+        self.region = None;
     }
 
     /// How much of `file` as `section` lists it is marked, or with `hunk`
@@ -3477,7 +3486,8 @@ impl App {
         }
         let side = section.side();
         let within = |h: usize| hunk.is_none_or(|of| of == h);
-        let marked = self.marked_lines.iter();
+        let lines = self.lines();
+        let marked = lines.iter();
         let marked = marked
             .filter(|k| k.0 == repo && k.1 == file && k.2 == side && within(k.3))
             .count();
@@ -3513,7 +3523,8 @@ impl App {
     pub fn marked_in(&self, path: Option<&Path>) -> (usize, usize) {
         let within = |repo: &PathBuf| path.is_none_or(|p| repo.starts_with(p));
         let files = self.marked_files.iter().filter(|(repo, _)| within(repo));
-        let lines = self.marked_lines.iter().filter(|k| within(&k.0));
+        let lines = self.lines();
+        let lines = lines.iter().filter(|k| within(&k.0));
         (files.map(|(_, f)| f.len()).sum(), lines.count())
     }
 
@@ -3542,9 +3553,10 @@ impl App {
     }
 
     /// The repos with something marked in their details.
-    pub fn repos_with_marks(&self) -> BTreeSet<&PathBuf> {
-        let lines = self.marked_lines.iter().map(|k| &k.0);
-        self.marked_files.keys().chain(lines).collect()
+    pub fn repos_with_marks(&self) -> BTreeSet<PathBuf> {
+        let lines = self.lines();
+        let lines = lines.iter().map(|k| &k.0);
+        self.marked_files.keys().chain(lines).cloned().collect()
     }
 
     /// Where `repos` are, when that's not just the repo the cursor is in:
@@ -3643,7 +3655,7 @@ impl App {
                 at: Some(at),
             } => {
                 let key = (repo.clone(), file.clone(), section.side(), *hunk, *at);
-                match self.marked_lines.contains(&key) || self.file_marked(repo, *section, file) {
+                match self.lines().contains(&key) || self.file_marked(repo, *section, file) {
                     true => Marked::Wholly,
                     false => Marked::No,
                 }
@@ -3764,7 +3776,8 @@ impl App {
     /// place that says so: each thing with where it's listed, so nothing
     /// is taken by its other side.
     pub fn taken(&self) -> (Vec<Target>, bool) {
-        if self.marked_files.is_empty() && self.marked_lines.is_empty() {
+        let lines = self.lines();
+        if self.marked_files.is_empty() && lines.is_empty() {
             return (self.under_cursor().into_iter().collect(), false);
         }
         let mut taken = vec![];
@@ -3777,7 +3790,7 @@ impl App {
                 });
             }
         }
-        for (repo, file, side, hunk, at) in &self.marked_lines {
+        for (repo, file, side, hunk, at) in lines.iter() {
             taken.push(Target::Hunk {
                 repo: repo.clone(),
                 section: match side {
@@ -3896,7 +3909,6 @@ impl App {
     /// built from the diff as it was read), files whole. Discarding asks
     /// first, once, saying what goes.
     fn take(&mut self, verb: HunkVerb) -> Vec<Effect> {
-        self.keep_region();
         let (targets, marked) = self.taken();
         if targets.is_empty() {
             self.info(FILE_HINT);
@@ -3906,6 +3918,8 @@ impl App {
             self.info(why);
             return vec![];
         }
+        // (taken: a region is over, its lines marks to unmark when done)
+        self.keep_region();
         let (index, reverse, word) = match verb {
             HunkVerb::Stage => (true, false, "stage"),
             HunkVerb::Unstage => (true, true, "unstage"),
@@ -4439,7 +4453,7 @@ impl App {
     /// A stash of `kind`, now or (the message switch on) once its message
     /// has been asked for.
     fn stash_action(&mut self, kind: StashKind) -> Vec<Effect> {
-        let marked = !self.marked_files.is_empty() || !self.marked_lines.is_empty();
+        let marked = !self.marked_files.is_empty() || !self.lines().is_empty();
         if kind == StashKind::MarkedFiles && !marked {
             self.info("mark files in the details view first (Tab, then space on a file)");
             return vec![];
@@ -4462,6 +4476,8 @@ impl App {
             }
             StashKind::MarkedFiles => match self.marked_stashes() {
                 Ok((by_lines, by_path)) => {
+                    // (taken: a region is over, its lines marks)
+                    self.keep_region();
                     lines = by_lines;
                     by_path
                 }
