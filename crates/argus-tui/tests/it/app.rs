@@ -4790,6 +4790,13 @@ fn staging_a_nested_repo_explains_itself() {
         app.message.as_ref().unwrap().0,
         "that's not staged: s stages it"
     );
+    // nor is it K's to delete (git wouldn't): said, nothing asked
+    assert!(app.act(Action::DiscardFiles).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "nested is a repo of its own: K doesn't delete it from here"
+    );
 }
 
 /// `t o` tags the selected repo's owner as a whole, with the same keys.
@@ -5570,9 +5577,13 @@ fn a_file_is_marked_in_its_section_and_an_untracked_one_whole() {
     );
     assert!(app.marked_lines.is_empty());
     assert!(marked(&mut app).contains(&new));
+    // (another row of its diff leaves it marked: its own row unmarks it)
     app.cursor = shown_row(&app, "+a");
     app.on_key(key(' '));
-    assert!(app.marked_files.is_empty(), "and unmarked from any");
+    assert_eq!(app.marked_files[&dirty].len(), 1);
+    app.cursor = new;
+    app.on_key(key(' '));
+    assert!(app.marked_files.is_empty());
 }
 
 /// A file's mark goes when the file leaves the section it was marked in.
@@ -7408,6 +7419,168 @@ fn the_stashes_heading_is_plain_while_the_issue_is_snoozed() {
     app.act(Action::Snooze);
     app.on_key(code(KeyCode::Enter));
     assert_eq!(role(&mut app), Some(argus_core::badges::Role::Dim));
+}
+
+/// `i` is for the untracked files marked, else the one the cursor is on
+/// (any row of it), else all the repo's: never all of them from a row
+/// that's some other file's, or because something else is marked.
+#[test]
+fn gitignore_takes_the_marked_untracked_files_or_the_cursors() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        diff_fixture(sb);
+        write(&sb.path("dev/dirty"), "new2", "x\n");
+    });
+    let offered = |app: &mut App| {
+        app.on_key(key('i'));
+        let title = match &app.mode {
+            Mode::Menu { menu, .. } => menu.title.clone(),
+            _ => app.message.as_ref().unwrap().0.clone(),
+        };
+        app.on_key(code(KeyCode::Esc));
+        title
+    };
+    let none = "no untracked file selected: put the cursor on one in the details, or mark some";
+    // any row of an untracked file: that file
+    to_file(&mut app, "new");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+b");
+    assert_eq!(offered(&mut app), "Gitignore · 1 untracked file(s)");
+    app.cursor += 1; // the blank line after its diff
+    assert_eq!(offered(&mut app), "Gitignore · 1 untracked file(s)");
+    // a tracked file's rows: none
+    to_file(&mut app, "README");
+    assert_eq!(offered(&mut app), none);
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+hello there");
+    assert_eq!(offered(&mut app), none);
+    // a line marked there doesn't make it every file: still the cursor's
+    app.on_key(key(' '));
+    to_file(&mut app, "new");
+    assert_eq!(offered(&mut app), "Gitignore · 1 untracked file(s)");
+    // untracked files marked: those, wherever the cursor is
+    app.on_key(key(' '));
+    to_file(&mut app, "new2");
+    app.on_key(key(' '));
+    to_file(&mut app, "README");
+    assert_eq!(offered(&mut app), "Gitignore · 2 untracked file(s)");
+    // outside the changes, nothing marked: all the repo's
+    app.on_key(ctrl('g'));
+    cursor_on_detail(&mut app, "dirty", "path");
+    assert_eq!(offered(&mut app), "Gitignore · 3 untracked file(s)");
+}
+
+/// Things the keys said or did wrongly at the edges.
+#[test]
+fn the_keys_at_the_edges() {
+    let (sb, mut app) = setup_with("", |sb| {
+        diff_fixture(sb);
+        write(&sb.path("dev/clean"), "README", "changed\n");
+        write(&sb.path("dev/clean"), "other", "x\n");
+    });
+    // a line and a file marked in each of two repos: two repos, not four
+    for (repo, file, line) in [
+        ("dirty", "README", "+hello there"),
+        ("clean", "README", "+changed"),
+    ] {
+        let at = app
+            .rows
+            .iter()
+            .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with(repo)))
+            .unwrap();
+        app.cursor = at;
+        if !matches!(app.rows.get(at + 1), Some(Row::Detail { .. })) {
+            app.on_key(code(KeyCode::Tab));
+        }
+        let rows: Vec<usize> = (at..app.rows.len())
+            .take_while(|n| *n == at || matches!(app.rows[*n], Row::Detail { .. }))
+            .collect();
+        let file_row = rows
+            .iter()
+            .find(|n| {
+                matches!(&app.rows[**n], Row::Detail { line, .. }
+                if line.file.as_deref() == Some(file) && line.diff.is_none()
+                    && line.section == Some(argus_tui::details::Section::Unstaged))
+            })
+            .copied()
+            .unwrap();
+        app.cursor = file_row;
+        app.act(Action::ToggleExpand);
+        let line_row = (file_row..app.rows.len())
+            .find(|n| {
+                matches!(&app.rows[*n], Row::Detail { line: l, .. }
+                if l.diff.is_some() && l.parts.iter().map(|p| p.1.as_str()).collect::<String>().trim_start().starts_with(line))
+            })
+            .unwrap();
+        app.cursor = line_row;
+        app.on_key(key(' '));
+        let untracked = (at + 1..app.rows.len())
+            .find(|n| matches!(&app.rows[*n], Row::Detail { line, .. }
+                if line.section == Some(argus_tui::details::Section::Untracked) && line.file.is_some()))
+            .unwrap();
+        app.cursor = untracked;
+        app.on_key(key(' '));
+    }
+    app.act(Action::Bottom);
+    assert!(!app.on_key(key('s')).is_empty());
+    assert!(
+        app.message.as_ref().unwrap().0.ends_with(" · in 2 repos"),
+        "{:?}",
+        app.message
+    );
+    app.running.clear();
+    app.on_key(ctrl('g'));
+    // e on a file marked whole that has no lines (binary): said
+    let d = sb.path("dev/dirty");
+    git(&d, &["add", "bin"]);
+    git(&d, &["commit", "-q", "-m", "bin"]);
+    std::fs::write(d.join("bin"), [0u8, 1, 2, 3, 159]).unwrap();
+    app.ws.refresh(&d);
+    app.rebuild();
+    cursor_on_detail(&mut app, "dirty", "path");
+    to_file(&mut app, "bin");
+    app.on_key(key(' '));
+    assert!(app.on_key(key('e')).is_empty());
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "bin has no lines to edit (it isn't text)"
+    );
+    assert!(app.editing.is_none());
+    app.on_key(ctrl('g'));
+    // space down an untracked file's diff marks it, and doesn't unmark it
+    // again a row later
+    to_file(&mut app, "new");
+    app.act(Action::ToggleExpand);
+    app.cursor += 1;
+    for _ in 0..3 {
+        app.on_key(key(' '));
+        assert_eq!(app.marked_files[&d].len(), 1);
+    }
+    // (its own row unmarks it)
+    to_file(&mut app, "new");
+    app.on_key(key(' '));
+    assert!(app.marked_files.is_empty());
+}
+
+/// `e` on marks in another repo says so in the patch it opens.
+#[test]
+fn an_edit_elsewhere_says_where_in_the_patch() {
+    let (_sb, mut app) = setup_with("", two_hunks);
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+added");
+    app.on_key(key(' '));
+    let here = std::fs::read_to_string(editing_file(&app.on_key(key('e')))).unwrap();
+    assert!(!here.contains("# In "), "{here}");
+    app.on_msg(Msg::Suspended(Err("no".into())));
+    app.cursor = shown_row(&app, "+added");
+    app.on_key(key(' '));
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("clean")))
+        .unwrap();
+    let there = std::fs::read_to_string(editing_file(&app.on_key(key('e')))).unwrap();
+    assert!(there.contains("\n# In acme/dirty.\n"), "{there}");
 }
 
 /// The legend shows pull's icon in the pull tag's colour, wherever that

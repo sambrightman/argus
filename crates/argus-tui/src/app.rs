@@ -1516,14 +1516,22 @@ impl App {
             ToggleMark => {
                 let in_changes = matches!(self.rows.get(self.cursor),
                     Some(Row::Detail { line, .. }) if line.section.is_some());
-                if let Some(target) = self.target(self.cursor) {
+                // (every row of an untracked file's diff is the file: going
+                // down it marks the file, and only its own row unmarks it)
+                let in_diff = matches!(self.rows.get(self.cursor),
+                    Some(Row::Detail { line, .. }) if line.diff.is_some());
+                let stays = |t: &Target| {
+                    in_diff && matches!(t, Target::File { .. }) && self.marked(t) != Marked::No
+                };
+                if let Some(target) = self.target(self.cursor).filter(|t| !stays(t)) {
                     self.toggle(target);
                 }
                 if in_changes {
                     // (a row with nothing of its own to mark, an unchanged
                     // line say, is only stepped over)
                     self.cursor = (self.cursor + 1).min(self.rows.len().saturating_sub(1));
-                } else if let Some(p) = self.current_path() {
+                } else if let Some(p) = self.listed_path() {
+                    // (the repo listed: one nested in it has no row to mark)
                     if !self.marked.remove(&p) {
                         self.marked.insert(p);
                     }
@@ -1741,6 +1749,8 @@ impl App {
                 for p in &gone {
                     self.ws.forget(p);
                     self.marked.remove(p);
+                    self.marked_files.remove(p);
+                    self.marked_lines.retain(|k| k.0 != *p);
                 }
                 self.rebuild();
                 let what = match gone.as_slice() {
@@ -2251,10 +2261,30 @@ impl App {
     /// The gitignore menu for the untracked files marked, or under the
     /// cursor (tracked ones left out: rules don't apply to them).
     fn open_gitignore_menu(&mut self) -> Vec<Effect> {
-        let files = self.taken_files();
-        if files.is_empty() {
-            return self.open_gitignore_menu_for_repos();
-        }
+        // the untracked files marked; else the file whose row (any of its
+        // rows) the cursor is on; else, outside the changes, all of them
+        let marked: Vec<(usize, Vec<String>)> = self
+            .marked_files
+            .iter()
+            .filter_map(|(repo, files)| {
+                let untracked = files.iter().filter(|(s, _)| *s == Section::Untracked);
+                let files: Vec<String> = untracked.map(|(_, f)| f.clone()).collect();
+                Some((self.ws.index_of(repo)?, files)).filter(|(_, f)| !f.is_empty())
+            })
+            .collect();
+        let files = match (marked.is_empty(), self.rows.get(self.cursor)) {
+            (false, _) => marked,
+            (true, Some(Row::Detail { repo, line })) if line.section.is_some() => {
+                match (&line.file, Section::heads(line)) {
+                    (Some(file), _) => vec![(*repo, vec![file.clone()])],
+                    (None, Some(Section::Untracked)) => {
+                        return self.open_gitignore_menu_for_repos();
+                    }
+                    _ => vec![(*repo, vec![])],
+                }
+            }
+            (true, _) => return self.open_gitignore_menu_for_repos(),
+        };
         let targets: Vec<(PathBuf, Vec<String>)> = files
             .into_iter()
             .filter_map(|(i, files)| {
@@ -4041,8 +4071,18 @@ impl App {
             let e = &self.ws.entries[*i];
             let Some(s) = e.status() else { continue };
             // (what staging leaves out, to say why when that's everything)
-            nested.extend(ops::nested_repos_in(s, names).into_iter().cloned());
-            file_jobs.extend(plan(s, names).into_iter().map(|op| (*i, op)));
+            let inside: Vec<String> = ops::nested_repos_in(s, names)
+                .into_iter()
+                .cloned()
+                .collect();
+            // (nor does discarding delete one: git wouldn't)
+            let names: Vec<String> = names
+                .iter()
+                .filter(|n| verb != HunkVerb::Discard || !inside.contains(n))
+                .cloned()
+                .collect();
+            nested.extend(inside);
+            file_jobs.extend(plan(s, &names).into_iter().map(|op| (*i, op)));
         }
         if verb != HunkVerb::Discard {
             let mut jobs: Vec<Job> = ops
@@ -4062,6 +4102,7 @@ impl App {
                 return vec![];
             }
             let mut repos: Vec<PathBuf> = jobs.iter().map(|j| j.path.clone()).collect();
+            repos.sort();
             repos.dedup();
             let fx = self.start_jobs(jobs);
             self.unmark_lines_started(&fx);
@@ -4097,7 +4138,12 @@ impl App {
         let delete_only = changed.is_empty() && !untracked.is_empty();
         let question = match (patched, &hunk, files_question) {
             (0, _, None) => {
-                self.info("nothing unstaged to discard (u unstages what's staged)");
+                match nested.first() {
+                    Some(one) => self.info(format!(
+                        "{one} is a repo of its own: K doesn't delete it from here"
+                    )),
+                    None => self.info("nothing unstaged to discard (u unstages what's staged)"),
+                }
                 return vec![];
             }
             (0, _, Some(files)) if delete_only => format!("Delete {files}"),
@@ -4259,8 +4305,11 @@ impl App {
                     file,
                 } if marked => {
                     let hunks = match self.text_diff(&repo, &file, section.side()) {
-                        Some(hunks) => hunks.len(),
-                        None => 0,
+                        Some(hunks) if !hunks.is_empty() => hunks.len(),
+                        _ => {
+                            self.info(format!("{file} has no lines to edit (it isn't text)"));
+                            return vec![];
+                        }
                     };
                     let key = (repo, file, section.side());
                     chosen
@@ -4302,7 +4351,11 @@ impl App {
         // a new file, the user's alone: never one somebody else put there
         // (a shared temp directory), nor through a link. A name taken (one
         // left by an argus that had this process's number) is passed over.
-        let text = patch + edit_instructions(reverse);
+        // (what's marked is taken wherever the cursor is: said, when it's
+        // not in this repo)
+        let elsewhere = self.elsewhere(&[repo.as_path()]);
+        let elsewhere = elsewhere.map_or_else(String::new, |name| format!("# In {name}.\n"));
+        let text = patch + edit_instructions(reverse) + &elsewhere;
         let create = |n: usize| {
             use std::io::Write;
             use std::os::unix::fs::OpenOptionsExt;
@@ -4790,13 +4843,17 @@ impl App {
         for (i, paths) in targets {
             let e = &self.ws.entries[i];
             let Some(s) = e.status() else { continue };
-            match ops::stash_problem(&e.path, s, self.stash.untracked, staged, &paths) {
+            // (an untracked file that's marked is asked for: the switch is
+            // for what isn't named)
+            let named = |p: &String| s.changes.entry(p).is_some_and(|c| c.untracked());
+            let untracked = self.stash.untracked || paths.iter().any(named);
+            match ops::stash_problem(&e.path, s, untracked, staged, &paths) {
                 Some(why) if why == ops::NOTHING_TO_STASH => continue,
                 Some(why) => refused.push(format!("{}: {why}", e.display_name())),
                 None => {
                     let op = Op::Stash {
                         message: message(&default_message),
-                        untracked: self.stash.untracked,
+                        untracked,
                         keep_index: self.stash.keep_index,
                         staged,
                         paths,
