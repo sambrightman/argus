@@ -932,6 +932,16 @@ fn a_patch_names_an_odd_path_as_git_does() {
     std::fs::write(r.join(name), "a\nB\n").unwrap();
     apply(&r, name, Side::Unstaged, 0, None, true, false);
     assert_eq!(git(&r, &["show", &format!(":{name}")]), "a\nB\n");
+    // each kind of character that calls for it, and the rest as they are
+    let h = hunks(&r, name, Side::Staged);
+    let named = |path: &str| {
+        let patch = argus_core::diff::patch(path, &h[0], None, false);
+        patch.lines().nth(1).unwrap().to_string()
+    };
+    assert_eq!(named("tab\tx é"), r#"--- "a/tab\tx é""#);
+    assert_eq!(named(r#"q"x"#), r#"--- "a/q\"x""#);
+    assert_eq!(named(r"b\x"), r#"--- "a/b\\x""#);
+    assert_eq!(named("bell\u{7}x"), r#"--- "a/bell\007x""#);
     // inverse: an ordinary name (spaces, letters beyond ASCII) is written plain
     let h = hunks(&r, name, Side::Staged);
     let patch = argus_core::diff::patch("a b/é.txt", &h[0], None, false);

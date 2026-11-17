@@ -1002,7 +1002,7 @@ fn pop_problem(cwd: &Path, index: usize) -> Option<String> {
             let names = |args: &[&str]| -> Vec<String> {
                 let out = git_in(cwd, args);
                 let lines = out.output.lines().map(str::to_string);
-                lines.filter(|l| out.success && !l.is_empty()).collect()
+                lines.filter(|_| out.success).collect()
             };
             let rewritten = names(&["diff-index", "--cached", "--name-only", tree]);
             let unstaged = names(&["diff-files", "--name-only"]);
