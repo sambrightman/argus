@@ -919,7 +919,28 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
         // a directory holding a nested repo: its files only
         return git(&cwd, &without_nested(&cwd, op.args()), started);
     }
-    git(&cwd, &op.args(), started)
+    let out = git(&cwd, &op.args(), started);
+    // A stash made with something staged holds that as its index, which
+    // no longer applies once the index has moved on. git says to pop
+    // without it (nothing is changed by the failed try), so that's done:
+    // what the stash had staged comes back unstaged.
+    if matches!(op, Op::StashPop | Op::StashPopAt { .. })
+        && !out.success
+        && out.output.contains("Try without --index")
+    {
+        let plain: Vec<String> = op.args().into_iter().filter(|a| a != "--index").collect();
+        let popped = git(&cwd, &plain, started);
+        if popped.success {
+            let note = "(popped without its index, which no longer applies: \
+                        what it had staged is back unstaged)";
+            return OpOutcome {
+                output: format!("{}\n{note}", popped.output),
+                ..popped
+            };
+        }
+        return popped;
+    }
+    out
 }
 
 /// `args` (ending in pathspecs) leaving out the repos nested in the work
@@ -1159,15 +1180,18 @@ fn stash_lines(
     started: Instant,
 ) -> OpOutcome {
     let not = |why: &str| refused(format!("not stashed: {why}"), started);
+    // (what git prints, or why it failed)
     let run = |args: &[&str]| {
         let out = git_in(cwd, args);
-        out.success.then(|| out.output.trim().to_string())
+        let said = out.output.trim().to_string();
+        if out.success { Ok(said) } else { Err(said) }
     };
-    let Some(head) = run(&["rev-parse", "-q", "--verify", "HEAD^{commit}"]) else {
+    let Ok(head) = run(&["rev-parse", "-q", "--verify", "HEAD^{commit}"]) else {
         return not("no commit yet to stash against");
     };
-    let Some(index) = run(&["rev-parse", "--git-path", "index"]) else {
-        return not("no index");
+    let index = match run(&["rev-parse", "--git-path", "index"]) {
+        Ok(index) => index,
+        Err(why) => return not(&why),
     };
     let index = cwd.join(index);
     let scratch = Scratch(index.with_file_name(format!("argus-index.{}", std::process::id())));
@@ -1198,16 +1222,18 @@ fn stash_lines(
         .envs(crate::isolation::git_env().iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .output();
-    let with_lines = with_lines
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let with_lines = match with_lines {
+        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()),
+        Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Err(e) => Err(format!("failed to run git: {e}")),
+    };
     let branch = run(&["symbolic-ref", "--short", "-q", "HEAD"]);
-    let branch = branch.unwrap_or_else(|| "(no branch)".into());
+    let branch = branch.unwrap_or_else(|_| "(no branch)".into());
     let title = run(&["log", "-1", "--format=%h %s", "HEAD"]).unwrap_or_default();
     let on_index = format!("index on {branch}: {title}");
     let on_branch = format!("On {branch}: {message}");
-    // (an index with conflicts in it has no tree to write)
+    // (an index with conflicts in it has no tree to write, a locked one
+    // can't be read for one, no identity makes no commit: git says which)
     let stash = with_lines.and_then(|with_lines| {
         let as_is = run(&["write-tree"])?;
         let base = run(&["commit-tree", &as_is, "-p", &head, "-m", &on_index])?;
@@ -1219,8 +1245,9 @@ fn stash_lines(
         ]
         .concat())
     });
-    let Some(stash) = stash else {
-        return not("git couldn't make the stash's commits (conflicts in the index?)");
+    let stash = match stash {
+        Ok(stash) => stash,
+        Err(why) => return not(&format!("git couldn't make the stash's commits\n{why}")),
     };
     let stored = git_in(cwd, &["stash", "store", "-m", &on_branch, &stash]);
     if !stored.success {

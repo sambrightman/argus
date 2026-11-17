@@ -465,7 +465,6 @@ fn no_stash_before_the_first_commit() {
 /// stage and that discard line 3's change and the added line, leaving
 /// line 4's.
 fn lines_to_stash(sb: &Sandbox) -> (std::path::PathBuf, String, String) {
-    use argus_core::diff::{self, FileDiff, LineKind, Side};
     let r = sb.init("r");
     let lines: String = (1..=30).map(|i| format!("line {i}\n")).collect();
     write(&r, "f", &lines);
@@ -479,7 +478,14 @@ fn lines_to_stash(sb: &Sandbox) -> (std::path::PathBuf, String, String) {
         .replace("line 4\n", "line four\n")
         .replace("line 28\n", "line 28\nadded\n");
     write(&r, "f", &changed);
-    let Ok(FileDiff::Text(hunks)) = diff::file_diff(&r, "f", Side::Unstaged) else {
+    let (stage, discard) = lines_patches(&r);
+    (r, stage, discard)
+}
+
+/// The patches for [`lines_to_stash`]'s repo, from its diff as it is.
+fn lines_patches(r: &Path) -> (String, String) {
+    use argus_core::diff::{self, FileDiff, LineKind, Side};
+    let Ok(FileDiff::Text(hunks)) = diff::file_diff(r, "f", Side::Unstaged) else {
         panic!("f's diff");
     };
     assert_eq!(hunks.len(), 2);
@@ -500,7 +506,6 @@ fn lines_to_stash(sb: &Sandbox) -> (std::path::PathBuf, String, String) {
         (&hunks[1], Some(&second[..])),
     ];
     (
-        r,
         diff::patch_hunks("f", &parts, false),
         diff::patch_hunks("f", &parts, true),
     )
@@ -523,6 +528,7 @@ fn lines_are_stashed_by_themselves() {
     assert_eq!(op.label(), "stash 3 lines");
     let out = ops::run(&r, &op);
     assert!(out.success, "{}", out.output);
+    assert_eq!(out.output, "On main: some lines");
     let text = std::fs::read_to_string(r.join("f")).unwrap();
     assert!(
         text.contains("line 3\nline four\n") && !text.contains("added"),
@@ -609,6 +615,22 @@ fn a_stash_of_lines_that_fails_changes_nothing() {
         out.output
     );
     nothing_changed(&r);
+    // git's own reason is passed on: here, the index locked
+    std::fs::write(r.join(".git/index.lock"), "").unwrap();
+    let op = Op::StashLines {
+        message: "m".into(),
+        stage: lines_patches(&r).0,
+        discard: lines_patches(&r).1,
+        lines: 3,
+    };
+    let out = ops::run(&r, &op);
+    assert!(
+        !out.success && out.output.contains("not stashed") && out.output.contains("index.lock"),
+        "{}",
+        out.output
+    );
+    std::fs::remove_file(r.join(".git/index.lock")).unwrap();
+    nothing_changed(&r);
     // no commit to stash against
     let fresh = sb.path("fresh");
     std::fs::create_dir_all(&fresh).unwrap();
@@ -618,5 +640,50 @@ fn a_stash_of_lines_that_fails_changes_nothing() {
         !out.success && out.output.contains("no commit yet"),
         "{}",
         out.output
+    );
+}
+
+/// A stash of lines made with something staged holds that too. Once the
+/// index has moved on, git can't pop it with its index; it's popped
+/// without, as git suggests, and that's said.
+#[test]
+fn a_stash_whose_index_no_longer_applies_is_popped_without_it() {
+    let sb = Sandbox::new();
+    let (r, stage, discard) = lines_to_stash(&sb);
+    let op = Op::StashLines {
+        message: "m".into(),
+        stage,
+        discard,
+        lines: 3,
+    };
+    assert!(ops::run(&r, &op).success);
+    git(&r, &["checkout", "-q", "--", "f"]);
+    write(&r, "h", "h\n");
+    git(&r, &["add", "h"]);
+    let pop = ops::run(&r, &Op::StashPop);
+    assert!(pop.success, "{}", pop.output);
+    assert!(pop.output.contains("without its index"), "{}", pop.output);
+    assert!(
+        std::fs::read_to_string(r.join("f"))
+            .unwrap()
+            .contains("added")
+    );
+    assert_eq!(git(&r, &["stash", "list"]), "");
+    // inverse: one that pops with its index says nothing of the kind
+    let other = Sandbox::new();
+    let (r, stage, discard) = lines_to_stash(&other);
+    let op = Op::StashLines {
+        message: "m".into(),
+        stage,
+        discard,
+        lines: 3,
+    };
+    assert!(ops::run(&r, &op).success);
+    git(&r, &["checkout", "-q", "--", "f"]);
+    let pop = ops::run(&r, &Op::StashPop);
+    assert!(
+        pop.success && !pop.output.contains("without its index"),
+        "{}",
+        pop.output
     );
 }

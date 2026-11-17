@@ -1520,7 +1520,11 @@ impl App {
                         .and_then(|d| d.line.as_ref())
                         .is_some_and(|l| l.kind == argus_core::diff::LineKind::Context);
                     let part = d.and_then(|d| Some((d.hunk?, d.at)));
-                    if !unchanged {
+                    // (nor is the blank line after a diff)
+                    let blank = line.id.last() == Some(&Seg::Blank);
+                    if self.in_marked_folder(&path, section, &file) {
+                        self.info("its folder is marked: unmark that to mark files in it");
+                    } else if !unchanged && !blank {
                         self.toggle_marked(path, section, file, part);
                     }
                     self.cursor = (self.cursor + 1).min(self.rows.len().saturating_sub(1));
@@ -1575,9 +1579,12 @@ impl App {
             ToggleRegion => {
                 if self.region.is_some() {
                     // ended: its lines kept as marks
-                    let lines = self.region_lines();
-                    self.marked_lines.extend(lines);
-                    self.region = None;
+                    self.keep_region();
+                } else if let Some(Row::Detail { line, .. }) = self.rows.get(self.cursor)
+                    && line.diff.is_some()
+                    && line.section == Some(Section::Untracked)
+                {
+                    self.info("an untracked file is marked whole: space marks it");
                 } else if let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor)
                     && let (Some(f), Some(d)) = (&line.file, line.diff.as_deref())
                     && let Some(root) = self.listed_path()
@@ -2083,7 +2090,7 @@ impl App {
             }
             Snooze if let Some((key, issue, ignored)) = self.issue_under_cursor() => {
                 if ignored {
-                    self.info("that issue is ignored: m i stops ignoring it");
+                    self.info("that issue is ignored: t i stops ignoring it");
                 } else {
                     self.mode = Mode::Input {
                         prompt: Prompt::SnoozeIssue(key, issue),
@@ -3506,7 +3513,9 @@ impl App {
         let names = |files: &BTreeSet<(Section, String)>| {
             let mut names: Vec<String> = vec![];
             for (_, f) in files {
-                if !names.contains(f) {
+                // (once, and not besides a marked folder it's in)
+                let in_folder = files.iter().any(|(_, folder)| within(folder, f));
+                if !names.contains(f) && !in_folder {
                     names.push(f.clone());
                 }
             }
@@ -3516,6 +3525,16 @@ impl App {
             .iter()
             .filter_map(|(repo, files)| Some((self.ws.index_of(repo)?, names(files))))
             .collect()
+    }
+
+    /// `file`'s diff on `side` when it's text, read if it hasn't been.
+    fn text_diff(&mut self, repo: &Path, file: &str, side: Side) -> Option<&Vec<diff::Hunk>> {
+        let key = (repo.to_path_buf(), file.to_string(), side);
+        let read = || diff::file_diff(repo, file, side).map_err(|e| e.to_string());
+        match self.diffs.entry(key).or_insert_with(read) {
+            Ok(FileDiff::Text(hunks)) => Some(hunks),
+            _ => None,
+        }
     }
 
     /// The lines of `file`'s diff that are added or removed, as (hunk,
@@ -3534,10 +3553,54 @@ impl App {
         Some(lines)
     }
 
-    /// Whether `file` is marked whole where `section` lists it.
+    /// Whether `file` is marked whole where `section` lists it: itself, or
+    /// (untracked) the folder it's in.
     pub fn file_marked(&self, repo: &Path, section: Section, file: &str) -> bool {
         let files = self.marked_files.get(repo);
         files.is_some_and(|m| m.iter().any(|(s, f)| *s == section && f == file))
+            || self.in_marked_folder(repo, section, file)
+    }
+
+    /// Whether `file` is in an untracked folder that's marked (`build/`,
+    /// listed as one path and unfolding into what's in it).
+    fn in_marked_folder(&self, repo: &Path, section: Section, file: &str) -> bool {
+        let files = self.marked_files.get(repo);
+        files.is_some_and(|m| m.iter().any(|(s, f)| *s == section && within(f, file)))
+    }
+
+    /// A region ends: its lines are kept as marks, but for those of a
+    /// file marked whole, which has them already.
+    fn keep_region(&mut self) {
+        let lines = self.region_lines();
+        self.region = None;
+        let section = |side: Side| match side {
+            Side::Unstaged => Section::Unstaged,
+            Side::Staged => Section::Staged,
+        };
+        let new = lines
+            .into_iter()
+            .filter(|k| !self.file_marked(&k.0, section(k.2), &k.1));
+        let new: Vec<MarkedLine> = new.collect();
+        self.marked_lines.extend(new);
+    }
+
+    /// Why `verb` isn't for the files marked whole, if it isn't for one of
+    /// them: each is taken where it's marked, never by its other side.
+    fn marked_files_problem(&self, verb: HunkVerb) -> Option<&'static str> {
+        let mut sections = self.marked_files.values().flatten().map(|(s, _)| *s);
+        let staged = |s: Section| s == Section::Staged;
+        match verb {
+            HunkVerb::Stage => sections
+                .any(staged)
+                .then_some("some marked files are staged already: unmark them (space) first"),
+            HunkVerb::Unstage => sections
+                .any(|s| !staged(s))
+                .then_some("some marked files aren't staged: unmark them (space) first"),
+            HunkVerb::Discard => sections.any(staged).then_some(
+                "some marked files are staged (u unstages them, then K discards them): \
+                 unmark them (space) first",
+            ),
+        }
     }
 
     /// How much of `file` as `section` lists it is marked, or with `hunk`
@@ -3646,10 +3709,10 @@ impl App {
 
     /// Why `verb` isn't for the file or section under the cursor, if it
     /// isn't: staging what's staged, unstaging or discarding the wrong
-    /// side. Marked files are taken as they are.
+    /// side; or with files marked, why it isn't for one of those.
     fn wrong_section(&self, verb: HunkVerb) -> Option<&'static str> {
         if !self.marked_files.is_empty() {
-            return None;
+            return self.marked_files_problem(verb);
         }
         let Some(Row::Detail { line, .. }) = self.rows.get(self.cursor) else {
             return None;
@@ -3693,11 +3756,7 @@ impl App {
     /// file, which is staged or discarded whole).
     fn hunk_op(&mut self, verb: HunkVerb) -> Option<Vec<Effect>> {
         use argus_core::diff::{self, FileDiff, Side};
-        if self.region.is_some() {
-            let lines = self.region_lines();
-            self.marked_lines.extend(lines);
-            self.region = None;
-        }
+        self.keep_region();
         if !self.marked_lines.is_empty() {
             return Some(self.marked_lines_op(verb));
         }
@@ -3826,11 +3885,7 @@ impl App {
             self.info("the edited patch is still being applied");
             return vec![];
         }
-        if self.region.is_some() {
-            let lines = self.region_lines();
-            self.marked_lines.extend(lines);
-            self.region = None;
-        }
+        self.keep_region();
         // by repo, file and side: hunk -> its chosen lines (all if None)
         type Chosen = BTreeMap<(PathBuf, String, Side), BTreeMap<usize, Option<Vec<usize>>>>;
         let mut chosen: Chosen = BTreeMap::new();
@@ -3841,6 +3896,26 @@ impl App {
                 .entry(*h)
                 .or_insert_with(|| Some(vec![]));
             lines.get_or_insert_default().push(*at);
+        }
+        // files marked whole: all their hunks (an untracked one is said
+        // below to have no patch)
+        let whole: Vec<(PathBuf, Section, String)> = self
+            .marked_files
+            .iter()
+            .flat_map(|(repo, files)| {
+                files
+                    .iter()
+                    .map(move |(s, f)| (repo.clone(), *s, f.clone()))
+            })
+            .collect();
+        for (repo, section, file) in whole {
+            let key = (repo.clone(), file.clone(), section.side());
+            let hunks = match self.text_diff(&repo, &file, section.side()) {
+                Some(hunks) => hunks.len(),
+                None => 0,
+            };
+            let all = (0..hunks).map(|h| (h, None));
+            chosen.entry(key).or_default().extend(all);
         }
         if chosen.is_empty()
             && let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor)
@@ -4009,6 +4084,10 @@ impl App {
             });
             return vec![];
         }
+        if let Some(why) = self.marked_files_problem(verb) {
+            self.info(why);
+            return vec![];
+        }
         // by repo and file: hunk -> its marked lines
         let mut by: BTreeMap<(PathBuf, String), BTreeMap<usize, Vec<usize>>> = BTreeMap::new();
         for (repo, file, _, h, at) in &self.marked_lines {
@@ -4097,12 +4176,23 @@ impl App {
             };
             return vec![];
         }
-        self.marked_lines.clear();
         let jobs = ops
             .into_iter()
             .filter_map(|(p, op)| self.job(&p, op))
             .collect();
-        self.start_jobs(jobs)
+        let fx = self.start_jobs(jobs);
+        self.unmark_lines_started(&fx);
+        fx
+    }
+
+    /// The marked lines of the repos jobs were started in are acted on,
+    /// so unmarked; those of a repo too busy to start in stay.
+    fn unmark_lines_started(&mut self, fx: &[Effect]) {
+        let started = |path: &PathBuf| {
+            fx.iter()
+                .any(|e| matches!(e, Effect::Jobs(jobs) if jobs.iter().any(|j| j.path == *path)))
+        };
+        self.marked_lines.retain(|k| !started(&k.0));
     }
 
     fn file_op(&mut self, plan: fn(&RepoStatus, &[String]) -> Vec<Op>, verb: &str) -> Vec<Effect> {
@@ -4289,14 +4379,17 @@ impl App {
         for (repo, mut chosen) in by {
             let whole = self.marked_files.get(&repo).cloned().unwrap_or_default();
             for (section, file) in whole {
-                let key = (repo.clone(), file.clone(), Side::Unstaged);
+                // (lines to take, in a file that's there to take them from)
+                let gone = self
+                    .ws
+                    .get(&repo)
+                    .and_then(Entry::status)
+                    .is_some_and(|s| s.changes.entry(&file).is_some_and(|c| c.worktree == 'D'));
                 let text = section == Section::Unstaged
-                    && matches!(
-                        self.diffs.entry(key).or_insert_with(|| {
-                            diff::file_diff(&repo, &file, Side::Unstaged).map_err(|e| e.to_string())
-                        }),
-                        Ok(FileDiff::Text(_))
-                    );
+                    && !gone
+                    && self
+                        .text_diff(&repo, &file, Side::Unstaged)
+                        .is_some_and(|hunks| !hunks.is_empty());
                 if !text {
                     return Err(format!(
                         "{file} is marked whole and lines of other files are too: \
@@ -4429,7 +4522,6 @@ impl App {
             }
             jobs.extend(self.job(&path, op));
         }
-        let by_lines: Vec<PathBuf> = jobs.iter().map(|j| j.path.clone()).collect();
         let mut refused = vec![];
         for (i, paths) in targets {
             let e = &self.ws.entries[i];
@@ -4462,8 +4554,9 @@ impl App {
             self.info("nothing to stash");
             return vec![];
         }
-        self.marked_lines.retain(|k| !by_lines.contains(&k.0));
-        self.start_jobs(jobs)
+        let fx = self.start_jobs(jobs);
+        self.unmark_lines_started(&fx);
+        fx
     }
 
     /// Start `jobs`, except in repos already running something (said so).
@@ -4842,7 +4935,7 @@ impl App {
                     // the clone may be the only copy left: hiding it is
                     // all that's offered
                     let hint = match o.state {
-                        pull::OrphanState::Gone => " (m I ignores it)",
+                        pull::OrphanState::Gone => " (t I ignores it)",
                         _ => "",
                     };
                     let label = format!("orphan: {}{hint}", o.describe());
@@ -4925,6 +5018,11 @@ struct CommitPick {
     name: String,
     purpose: Pick,
     commits: Vec<argus_core::history::CommitLine>,
+}
+
+/// Whether `file` is in the untracked folder `folder` (`build/`).
+fn within(folder: &str, file: &str) -> bool {
+    folder.ends_with('/') && file != folder && file.starts_with(folder)
 }
 
 /// How much of a file, or of a hunk of its diff, is marked.

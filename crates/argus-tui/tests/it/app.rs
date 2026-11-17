@@ -2024,7 +2024,7 @@ fn discarding_always_asks() {
         }]
     );
     app.running.clear();
-    // marked, with nothing unstaged: nothing to discard, and nothing asked
+    // marked where it's staged: not K's to take, and nothing asked
     let d = app.current().unwrap().path.clone();
     git(&d, &["add", "README", "both"]);
     app.ws.refresh(&d);
@@ -2038,7 +2038,7 @@ fn discarding_always_asks() {
             .as_ref()
             .unwrap()
             .0
-            .contains("nothing unstaged to discard")
+            .contains("some marked files are staged")
     );
 }
 
@@ -5633,6 +5633,215 @@ fn marked_files_and_marked_lines_are_acted_on_together() {
     );
 }
 
+/// A file marked where the key doesn't apply (staged for `s` or `K`, not
+/// staged for `u`) isn't taken by its other side: it's said, and nothing
+/// is done.
+#[test]
+fn a_file_marked_where_the_key_does_not_apply_is_refused() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    let said = |app: &App| app.message.as_ref().unwrap().0.clone();
+    to_staged(&mut app, "both");
+    app.on_key(key(' '));
+    assert!(app.on_key(key('s')).is_empty());
+    assert_eq!(
+        said(&app),
+        "some marked files are staged already: unmark them (space) first"
+    );
+    assert!(app.on_key(key('K')).is_empty());
+    assert!(matches!(app.mode, Mode::Normal), "nothing asked");
+    assert_eq!(
+        said(&app),
+        "some marked files are staged (u unstages them, then K discards them): unmark them (space) first"
+    );
+    // with a line marked too: the same, and the line isn't taken either
+    to_file(&mut app, "README");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+hello there");
+    app.on_key(key(' '));
+    assert!(app.on_key(key('s')).is_empty());
+    assert!(said(&app).starts_with("some marked files are staged already"));
+    assert!(app.on_key(key('K')).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
+    assert_eq!(app.marked_lines.len(), 1, "kept");
+    app.cursor = shown_row(&app, "+hello there");
+    app.on_key(key(' '));
+    // inverse: u is the key for it
+    assert_eq!(
+        job_ops(&app.on_key(key('u'))),
+        [Op::Restore {
+            staged: true,
+            worktree: false,
+            from_head: false,
+            paths: paths(&["both"])
+        }]
+    );
+    app.running.clear();
+    app.on_key(key('U'));
+    // marked under unstaged: not for u, and s and K are the keys for it
+    to_file(&mut app, "both");
+    app.on_key(key(' '));
+    assert!(app.on_key(key('u')).is_empty());
+    assert_eq!(
+        said(&app),
+        "some marked files aren't staged: unmark them (space) first"
+    );
+    assert_eq!(
+        job_ops(&app.on_key(key('s'))),
+        [Op::AddTracked {
+            paths: paths(&["both"])
+        }]
+    );
+    app.running.clear();
+    app.on_key(key('K'));
+    assert!(render(&mut app, 100, 30).contains("Discard unstaged changes to both?"));
+}
+
+/// The blank line after a diff is nothing to mark: space only moves on.
+#[test]
+fn space_on_the_blank_line_after_a_diff_marks_nothing() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "README");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+hello there");
+    app.on_key(key(' '));
+    let blank = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Detail { line, .. } if line.id.last() == Some(&Seg::Blank)))
+        .expect("a blank line after the diff");
+    app.cursor = blank;
+    app.on_key(key(' '));
+    assert_eq!(app.marked_lines.len(), 1);
+    assert!(app.marked_files.is_empty() && app.marked.is_empty());
+    assert_eq!(app.cursor, blank + 1);
+}
+
+/// An untracked file is marked whole, so no region starts in its diff.
+#[test]
+fn no_region_starts_in_an_untracked_file() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "new");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+a");
+    app.on_key(ctrl(' '));
+    assert!(app.region.is_none());
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "an untracked file is marked whole: space marks it"
+    );
+    // inverse: one starts in a changed file's
+    to_file(&mut app, "README");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+hello there");
+    app.on_key(ctrl(' '));
+    assert!(app.region.is_some());
+}
+
+/// Marks stay when what was asked for them doesn't start (the repo busy).
+#[test]
+fn marks_stay_when_nothing_starts() {
+    let (_sb, mut app) = setup_with("", two_hunks);
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+added");
+    app.on_key(key(' '));
+    let dirty = app.current().unwrap().path.clone();
+    app.running.insert(dirty, "busy".into());
+    assert!(app.on_key(key('s')).is_empty());
+    assert_eq!(app.marked_lines.len(), 1);
+    app.on_key(key('z'));
+    assert!(app.on_key(key('m')).is_empty());
+    assert_eq!(app.marked_lines.len(), 1);
+    // inverse: started, they go
+    app.running.clear();
+    assert!(!app.on_key(key('s')).is_empty());
+    assert!(app.marked_lines.is_empty());
+}
+
+/// `e` opens a file marked whole as its hunks, with any marked lines.
+#[test]
+fn a_file_marked_whole_is_edited_as_its_hunks() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        two_hunks(sb);
+        write(&sb.path("dev/dirty"), "README", "changed again\n");
+    });
+    to_file(&mut app, "f");
+    app.on_key(key(' '));
+    to_file(&mut app, "README");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+changed again");
+    app.on_key(key(' '));
+    app.act(Action::Top);
+    let file = editing_file(&app.on_key(key('e')));
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        text.contains("+line three") && text.contains("+added") && text.contains("-line 3"),
+        "{text}"
+    );
+    assert!(
+        text.contains("+changed again") && !text.contains("-changed"),
+        "{text}"
+    );
+}
+
+/// What's marked twice over is one thing to act on: a region's lines in
+/// a file marked whole, a file in a folder marked whole.
+#[test]
+fn what_is_marked_twice_over_counts_once() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        two_hunks(sb);
+        write(&sb.path("dev/dirty"), "build/a", "a\n");
+        write(&sb.path("dev/dirty"), "build/b", "b\n");
+    });
+    to_file(&mut app, "f");
+    let file = app.cursor;
+    app.act(Action::ToggleExpand);
+    app.on_key(key(' '));
+    app.cursor = shown_row(&app, "-line 3");
+    app.on_key(ctrl(' '));
+    app.on_key(key('j'));
+    app.on_key(ctrl(' '));
+    assert!(app.marked_lines.is_empty() && app.region.is_none());
+    app.on_key(key('K'));
+    assert!(
+        render(&mut app, 100, 40).contains("Discard unstaged changes to f? They're lost."),
+        "{}",
+        render(&mut app, 100, 40)
+    );
+    app.on_key(key('n'));
+    app.cursor = file;
+    app.on_key(key(' '));
+    assert!(app.marked_files.is_empty());
+    // a folder marked: its files show it, and aren't marked besides
+    to_file(&mut app, "build/");
+    let folder = app.cursor;
+    app.on_key(key(' '));
+    app.cursor = folder;
+    app.act(Action::ToggleExpand);
+    assert_eq!(marks_of(&mut app, &["build/", "build/a", "build/b"]), "MMM");
+    app.cursor = folder + 1;
+    app.on_key(key(' '));
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "its folder is marked: unmark that to mark files in it"
+    );
+    assert_eq!(marks_of(&mut app, &["build/", "build/a", "build/b"]), "MMM");
+    // a file in it marked first, then the folder: one thing to delete
+    app.cursor = folder;
+    app.on_key(key(' '));
+    app.cursor = folder + 1;
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &["build/", "build/a", "build/b"]), "-M-");
+    app.cursor = folder;
+    app.on_key(key(' '));
+    app.on_key(key('K'));
+    assert!(
+        render(&mut app, 100, 40).contains("Delete untracked build/? It's lost."),
+        "{}",
+        render(&mut app, 100, 40)
+    );
+}
+
 /// `z m` with lines marked stashes those lines by themselves; a file
 /// marked whole beside them goes as its lines. What can't go that way (an
 /// untracked file, staged lines) is said, and nothing stashed.
@@ -5759,19 +5968,13 @@ fn mark_all_and_unmark_all_go_by_where_the_cursor_is() {
         ])
     );
     assert!(app.marked.is_empty(), "no repo is");
-    // (a file marked in two sections is one file to act on)
-    assert_eq!(
-        job_ops(&app.on_key(key('s'))),
-        [
-            Op::AddTracked {
-                paths: paths(&["README", "both"])
-            },
-            Op::Add {
-                paths: paths(&["bin", "new"])
-            }
-        ]
+    // (which no one key takes: each file where it's marked)
+    assert!(app.on_key(key('s')).is_empty());
+    assert!(
+        app.message.as_ref().unwrap().0.contains("staged already"),
+        "{:?}",
+        app.message
     );
-    app.running.clear();
     // lines marked one by one give way to their files
     app.on_key(key('U'));
     to_file(&mut app, "README");
@@ -6377,13 +6580,13 @@ fn an_issue_is_snoozed_from_its_line() {
     let line: String = line.parts.iter().map(|p| p.1.as_str()).collect();
     assert!(line.ends_with("(snoozed, 3d left)"), "{line}");
 
-    // m u on its line
+    // t u on its line
     app.cursor = issue_row(&app, "dirty");
     app.act(Action::Unsnooze);
     assert!(app.ws.state.snoozed_issues.is_empty());
     assert!(!app.current().unwrap().issues.is_empty());
 
-    // m u on the repo: its issues' snoozes too
+    // t u on the repo: its issues' snoozes too
     app.cursor = issue_row(&app, "dirty");
     app.act(Action::Snooze);
     app.on_key(code(KeyCode::Enter));
@@ -7619,7 +7822,7 @@ fn a_pull_says_what_became_of_orphans_and_asks_before_following_a_rename() {
     assert!(
         logged.contains(&(
             "acme/feature".into(),
-            "orphan: gone from the forge, or out of reach (m I ignores it)".into()
+            "orphan: gone from the forge, or out of reach (t I ignores it)".into()
         )),
         "{logged:?}"
     );
