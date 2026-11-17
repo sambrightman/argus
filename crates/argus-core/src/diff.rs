@@ -83,6 +83,10 @@ pub enum FileDiff {
     /// The hunks of a side converted to text for comparing (the file's
     /// `diff.<driver>.textconv` program): for reading, not for applying.
     Converted(Vec<Hunk>),
+    /// The hunks of a file with bytes that aren't UTF-8, shown as near as
+    /// text can: for reading, not for applying (a patch of them would
+    /// write the stand-in characters).
+    Inexact(Vec<Hunk>),
     Binary,
     /// An external diff program is configured for the file (`diff=…`).
     External,
@@ -144,10 +148,10 @@ pub fn patch_hunks(path: &str, hunks: &[(&Hunk, Option<&[usize]>)], reverse: boo
 }
 
 /// `prefix` and `path` as a patch names a file: in double quotes with
-/// C escapes when the path has a control character, a quote or a
-/// backslash in it (as git writes it, and must have it to read it back).
+/// C escapes when the path has an ASCII control character, a quote or
+/// a backslash in it (as git writes it, and must have it to read it back).
 fn quoted(prefix: &str, path: &str) -> String {
-    let odd = |c: char| c.is_control() || c == '"' || c == '\\';
+    let odd = |c: char| c.is_ascii_control() || c == '"' || c == '\\';
     if !path.chars().any(odd) {
         return format!("{prefix}{path}");
     }
@@ -159,7 +163,7 @@ fn quoted(prefix: &str, path: &str) -> String {
             '\r' => out.push_str("\\r"),
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
-            c if c.is_control() => out.push_str(&format!("\\{:03o}", c as u32)),
+            c if c.is_ascii_control() => out.push_str(&format!("\\{:03o}", c as u32)),
             c => out.push(c),
         }
     }
@@ -356,19 +360,28 @@ fn blob_diff(
     // last newline changes its last line
     let input = blob::InternedInput::new(outcome.old.intern_source(), outcome.new.intern_source());
     let diff = blob::diff_with_slider_heuristics(algorithm, &input);
-    let hunks =
-        UnifiedDiff::new(&diff, &input, Collect(vec![]), ContextSize::symmetrical(3)).consume()?;
-    Ok(if converted {
-        FileDiff::Converted(hunks)
-    } else {
-        FileDiff::Text(hunks)
+    let collect = Collect {
+        hunks: vec![],
+        exact: true,
+    };
+    let (hunks, exact) =
+        UnifiedDiff::new(&diff, &input, collect, ContextSize::symmetrical(3)).consume()?;
+    Ok(match (converted, exact) {
+        (true, _) => FileDiff::Converted(hunks),
+        (false, true) => FileDiff::Text(hunks),
+        (false, false) => FileDiff::Inexact(hunks),
     })
 }
 
-struct Collect(Vec<Hunk>);
+/// The hunks, and whether their lines are the file's own, byte for byte
+/// (every one valid UTF-8).
+struct Collect {
+    hunks: Vec<Hunk>,
+    exact: bool,
+}
 
 impl ConsumeHunk for Collect {
-    type Out = Vec<Hunk>;
+    type Out = (Vec<Hunk>, bool);
 
     fn consume_hunk(
         &mut self,
@@ -378,20 +391,27 @@ impl ConsumeHunk for Collect {
         let lines = lines
             .iter()
             .map(|(k, bytes)| {
-                let text = String::from_utf8_lossy(bytes);
+                // the ending is a newline, with the carriage return before
+                // it if there's one: any others are the line's own
+                let body = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+                let (body, cr) = match body.strip_suffix(b"\r") {
+                    Some(body) => (body, true),
+                    None => (body, false),
+                };
+                self.exact &= std::str::from_utf8(body).is_ok();
                 Line {
                     kind: match k {
                         DiffLineKind::Context => LineKind::Context,
                         DiffLineKind::Add => LineKind::Add,
                         DiffLineKind::Remove => LineKind::Remove,
                     },
-                    text: text.trim_end_matches(['\n', '\r']).to_string(),
+                    text: String::from_utf8_lossy(body).into_owned(),
                     no_newline: !bytes.ends_with(b"\n"),
-                    cr: bytes.strip_suffix(b"\n").unwrap_or(bytes).ends_with(b"\r"),
+                    cr,
                 }
             })
             .collect();
-        self.0.push(Hunk {
+        self.hunks.push(Hunk {
             old_start: h.before_hunk_start,
             old_len: h.before_hunk_len,
             new_start: h.after_hunk_start,
@@ -402,6 +422,6 @@ impl ConsumeHunk for Collect {
     }
 
     fn finish(self) -> Self::Out {
-        self.0
+        (self.hunks, self.exact)
     }
 }

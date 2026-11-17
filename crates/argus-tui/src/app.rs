@@ -409,14 +409,22 @@ fn diff_lines(
         Ok(FileDiff::Binary) => return vec![note(Role::Dim, "binary file")],
         Ok(FileDiff::External) => return vec![note(Role::Dim, "external diff configured")],
         Ok(FileDiff::Text(hunks)) => (hunks, false),
-        Ok(FileDiff::Converted(hunks)) => (hunks, true),
+        Ok(FileDiff::Converted(hunks) | FileDiff::Inexact(hunks)) => (hunks, true),
     };
     if hunks.is_empty() {
         return vec![note(Role::Dim, "no change in content")];
     }
     let mut v = vec![];
     if whole {
-        v.push(note(Role::Dim, converted));
+        let inexact = "not all UTF-8 text, shown as near as can be: staged or discarded as a \
+                       whole file";
+        v.push(note(
+            Role::Dim,
+            match d {
+                Ok(FileDiff::Inexact(_)) => inexact,
+                _ => converted,
+            },
+        ));
     }
     let at = Seg::hunks(hunks);
     for (h, hunk) in hunks.iter().enumerate() {

@@ -15,7 +15,7 @@ fn st(r: &Path) -> RepoStatus {
 /// The diff as `git diff` would print its body: hunk headers, then lines
 /// prefixed with ` `, `-` or `+`.
 fn text(d: &FileDiff) -> Vec<String> {
-    let (FileDiff::Text(hunks) | FileDiff::Converted(hunks)) = d else {
+    let (FileDiff::Text(hunks) | FileDiff::Converted(hunks) | FileDiff::Inexact(hunks)) = d else {
         panic!("not text: {d:?}")
     };
     let mut v = vec![];
@@ -942,6 +942,8 @@ fn a_patch_names_an_odd_path_as_git_does() {
     assert_eq!(named(r#"q"x"#), r#"--- "a/q\"x""#);
     assert_eq!(named(r"b\x"), r#"--- "a/b\\x""#);
     assert_eq!(named("bell\u{7}x"), r#"--- "a/bell\007x""#);
+    // (a control character beyond ASCII is bytes git reads as they are)
+    assert_eq!(named("nel\u{85}x"), "--- a/nel\u{85}x");
     // inverse: an ordinary name (spaces, letters beyond ASCII) is written plain
     let h = hunks(&r, name, Side::Staged);
     let patch = argus_core::diff::patch("a b/é.txt", &h[0], None, false);
@@ -949,4 +951,37 @@ fn a_patch_names_an_odd_path_as_git_does() {
         patch.starts_with("diff --git a/a b/é.txt b/a b/é.txt\n--- a/a b/é.txt\n"),
         "{patch}"
     );
+}
+
+/// Lines that can't be given back exactly aren't offered one by one: a
+/// file with bytes that aren't UTF-8 is read (near enough to show), and
+/// said to be inexact, so it's staged or discarded whole.
+#[test]
+fn a_file_that_is_not_utf8_is_read_as_inexact() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    std::fs::write(r.join("f"), b"x\n").unwrap();
+    commit(&r, "f");
+    std::fs::write(r.join("f"), b"x\ncaf\xe9\n").unwrap();
+    let d = file_diff(&r, "f", Side::Unstaged).unwrap();
+    let FileDiff::Inexact(hunks) = &d else {
+        panic!("{d:?}");
+    };
+    assert_eq!(hunks[0].lines[1].text, "caf\u{fffd}");
+    // inverse: valid UTF-8 beyond ASCII is text
+    std::fs::write(r.join("f"), "x\ncaf\u{e9}\n").unwrap();
+    assert!(matches!(
+        file_diff(&r, "f", Side::Unstaged).unwrap(),
+        FileDiff::Text(_)
+    ));
+}
+
+/// A line's own carriage returns are its text: only the one that's part
+/// of a CRLF ending is the ending.
+#[test]
+fn a_line_ending_in_several_carriage_returns_keeps_them() {
+    let sb = Sandbox::new();
+    let r = repo_with(&sb, "r", "x\n", "x\na\r\r\n");
+    apply_lines(&r, "f", Side::Unstaged, &["+a\r"], true, false);
+    assert_eq!(in_index(&r), "x\na\r\r\n");
 }
