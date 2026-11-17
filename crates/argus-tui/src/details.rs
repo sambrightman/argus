@@ -477,7 +477,8 @@ pub fn details(
     }
     if !s.tags.is_empty() {
         v.push(info(
-            "tags",
+            // (git's, on this commit: not the repo's tags in argus)
+            "git tags",
             vec![styled(Role::Detached, s.tags.join(", "))],
         ));
     }
@@ -770,7 +771,8 @@ pub fn details(
             _ => format!("{}, {ignored} ignored", s.stashes.len()),
         };
         // (in their colour while any of them counts as an issue)
-        let role = match ignored == s.stashes.len() {
+        let snoozed = e.snoozed_issues.iter().any(|i| i.name() == "stashes");
+        let role = match ignored == s.stashes.len() || snoozed {
             true => Role::Dim,
             false => Role::Stash,
         };

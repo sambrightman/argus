@@ -793,7 +793,7 @@ rendering is snapshot-tested via `TestBackend`.
   (`[ui] attention_only = true`); the header says how many repos there are
   in all and that `a` shows them.
 * **`sync` is now `pull`** (command, `pull` list and `[[track]] pull`,
-  `tag --pull`, the `pull` icon): it pulls, and clones new repos of
+  `mark --pull`, the `pull` icon): it pulls, and clones new repos of
   tracked owners, but never pushes, which "sync" suggested. Cloning stays
   part of it (`--no-clone` to skip), so one command serves cron. Old names
   are errors, except the state file's `last_sync`, read as `last_pull`.

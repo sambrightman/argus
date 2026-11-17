@@ -16,6 +16,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Marked, Mode, Prompt, Row, Target};
+use crate::details::Expand;
 use crate::menu::MenuId;
 use crate::refine;
 use crate::theme::{Theme, Ui};
@@ -327,6 +328,11 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) -> Vec<LinkAt> 
                         Marked::Wholly
                     }
                     Some(target) => app.marked(&target),
+                    // (the uncommitted issue unfolds into the changes: all
+                    // of them, as the repo's own row has it)
+                    None if line.expand == Some(Expand::Changes) => {
+                        app.repo_marked(&app.ws.entries[*repo].path)
+                    }
                     None => Marked::No,
                 };
                 let icon = match marked {

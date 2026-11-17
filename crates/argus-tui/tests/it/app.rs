@@ -888,7 +888,7 @@ fn details_show_the_commit_and_its_tags() {
         .iter()
         .position(|t| *t == format!("commit    {}", id.trim()))
         .unwrap_or_else(|| panic!("full commit id on its own: {texts:?}"));
-    assert_eq!(texts[at + 1], "tags      release, v1.0", "{texts:?}");
+    assert_eq!(texts[at + 1], "git tags  release, v1.0", "{texts:?}");
     // inverse: no tags, just the commit
     let (sb, mut app) = setup("");
     app.act(Action::Bottom);
@@ -1099,7 +1099,7 @@ fn demo_renders_in_every_theme_and_icon_set() {
         out.contains("demo/tagged") && out.contains("@release-1.0 (& 1 more)"),
         "{out}"
     );
-    assert!(out.contains("tags      release-1.0, v1.0"), "{out}");
+    assert!(out.contains("git tags  release-1.0, v1.0"), "{out}");
     for theme in argus_tui::theme::BUILTIN {
         for icons in argus_core::icons::SETS {
             let (t, warnings) = Theme::build(theme, &Default::default());
@@ -5625,10 +5625,12 @@ fn marked_files_and_marked_lines_are_acted_on_together() {
             "delete untracked new"
         ]
     );
-    // (the marks go when the repo's status says what's left)
-    assert_eq!(app.marked_lines.len(), 1);
+    // (confirmed and started: the lines are unmarked, as when staged)
+    assert!(app.marked_lines.is_empty());
     app.running.clear();
     // s: the line, then the files
+    app.cursor = shown_row(&app, "+added");
+    app.on_key(key(' '));
     let fx = app.on_key(key('s'));
     let ops = job_ops(&fx);
     assert_eq!(what(&ops)[0], "stage 1 line of f");
@@ -7188,6 +7190,67 @@ fn discarding_in_several_repos_says_how_many() {
         "{}",
         render(&mut app, 140, 60)
     );
+}
+
+/// The uncommitted issue's line, which unfolds into the changes, shows
+/// what's marked of them as the repo's own row does.
+#[test]
+fn the_uncommitted_issues_line_shows_what_is_marked() {
+    let (_sb, mut app) = setup_with("", |sb| write(&sb.path("dev/dirty"), "new", "a\n"));
+    to_file(&mut app, "README");
+    let issue = ["issue     2 uncommitted path(s)"];
+    assert_eq!(marks_of(&mut app, &issue), "-");
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &issue), "p");
+    to_file(&mut app, "new");
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &issue), "M");
+    // inverse: another line of the details shows nothing
+    assert_eq!(marks_of(&mut app, &["fix       stash"]), "-");
+}
+
+/// `M` marks the repos listed but for hidden ones shown (`H`), as every
+/// "all" leaves those out; `U` unmarks whatever is listed.
+#[test]
+fn mark_all_leaves_hidden_repos_out() {
+    let (_sb, mut app) = setup("tags.ignore.repos = ['acme/feature']");
+    app.on_key(key('H'));
+    assert_eq!(names(&app).len(), 3);
+    app.on_key(key('M'));
+    assert_eq!(app.marked.len(), 2);
+    assert!(!app.marked.iter().any(|p| p.ends_with("feature")));
+    // one marked by hand is unmarked with the rest
+    app.act(Action::Bottom);
+    while !app.current().unwrap().path.ends_with("feature") {
+        app.act(Action::Up);
+    }
+    app.on_key(key(' '));
+    assert_eq!(app.marked.len(), 3);
+    app.on_key(key('U'));
+    assert!(app.marked.is_empty());
+}
+
+/// The stashes heading is in the stash colour while they count as an
+/// issue: not once that issue is snoozed.
+#[test]
+fn the_stashes_heading_is_plain_while_the_issue_is_snoozed() {
+    let (_sb, mut app) = setup_with("[tags.ignore.issues]\nstashes = []", |sb| {
+        let r = sb.path("dev/clean");
+        write(&r, "README", "x\n");
+        git(&r, &["stash", "push", "-q", "-m", "s"]);
+    });
+    let role = |app: &mut App| {
+        cursor_on_detail(app, "clean", "stashes");
+        let Row::Detail { line, .. } = &app.rows[app.cursor] else {
+            panic!("the heading");
+        };
+        line.parts[0].0
+    };
+    assert_eq!(role(&mut app), Some(argus_core::badges::Role::Stash));
+    app.cursor = issue_row(&app, "stashes");
+    app.act(Action::Snooze);
+    app.on_key(code(KeyCode::Enter));
+    assert_eq!(role(&mut app), Some(argus_core::badges::Role::Dim));
 }
 
 /// The legend shows pull's icon in the pull tag's colour, wherever that

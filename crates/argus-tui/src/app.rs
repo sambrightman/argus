@@ -1526,7 +1526,8 @@ impl App {
                 }
             }
             MarkAll => {
-                let listed = self.visible_repos();
+                // (hidden ones shown are left out, as of every "all")
+                let listed = self.bulk_repos();
                 let paths = listed.into_iter().map(|i| self.ws.entries[i].path.clone());
                 self.marked.extend(paths);
             }
@@ -3138,6 +3139,8 @@ impl App {
                     true => vec![],
                     false => self.start_jobs(jobs),
                 };
+                // (marked lines a discard took are acted on, as when staged)
+                self.unmark_lines_started(&fx);
                 if !later.is_empty() {
                     self.add_note(&format!(
                         "{} to follow once its repo's job is done",
