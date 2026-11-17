@@ -43,12 +43,15 @@ deferred.
 ## Known gaps
 
 - **A stash of marked lines takes unstaged text changes only.** With
-  lines marked, `z m` refuses a file marked whole that's untracked,
-  listed under staged, or not text, and refuses staged lines; they'd
-  need the stash's tree built file by file.
+  lines marked (or a file marked under unstaged alone that's staged
+  too), `z m` refuses a file marked whole that's untracked, listed
+  under staged, deleted, not text or with its mode changed, and refuses
+  staged lines; they'd need the stash's tree built file by file.
+- **If the lines can't be taken out after the stash is stored and
+  something else pushed a stash in that instant,** argus leaves its own
+  (it won't drop a stash that isn't the one it made) while saying "not
+  stashed". No test reaches it: it needs another git process at that
+  moment.
 - **The partly marked icon (`│`) isn't checked in the fonts** beyond
   being a glyph all of them have; whether it reads as "less than `▌`"
   in each is for the glyph review above.
-- **Stashing a file marked whole takes both its sides,** as `git stash
-  push -- file` does: marked under unstaged, its staged changes go into
-  the stash too. `s` `u` `K` take it only where it's marked.

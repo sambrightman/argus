@@ -8,7 +8,7 @@ use argus_core::diff::LineKind;
 use argus_core::ops::Op;
 use argus_core::testkit::{Sandbox, commit, git, write};
 use argus_core::{State, Workspace};
-use argus_tui::app::{App, Effect, Marked, Mode, Target};
+use argus_tui::app::{App, Effect, Marked, Mode, Row, Target};
 use argus_tui::details::Section;
 use argus_tui::refine::refine;
 use argus_tui::theme::Theme;
@@ -172,11 +172,17 @@ fn shows(
             return false;
         }
         match at {
-            // with nothing marked: the row under the cursor is it, or its
-            // section's heading
-            Some(at) => app
-                .target(at)
-                .is_some_and(|t| is(&t, section, false) || is(&t, section, true)),
+            // with nothing marked: the row under the cursor is its (the
+            // file's own, or one of its diff, an unchanged line too), or
+            // its section's heading
+            Some(at) => match &app.rows[at] {
+                Row::Detail { repo: r, line } => {
+                    let heading = Section::heads(line) == Some(section);
+                    let its = line.file.as_deref() == Some(file) && line.section == Some(section);
+                    app.ws.entries[*r].path == repo && (heading || its)
+                }
+                Row::Repo(_) => false,
+            },
             None => {
                 let own: Vec<bool> = rows()
                     .filter(|(_, t)| matches!(t, Target::File { .. }) && is(t, section, false))
@@ -245,6 +251,77 @@ proptest! {
                 if marked { "doesn't show as marked there" } else { "the cursor isn't on" },
                 before.iter().flatten().collect::<Vec<_>>(),
             );
+        }
+    }
+
+    /// Stashing what's marked takes only what shows as marked: a file by
+    /// its path (which takes all its changes) only when it's marked
+    /// everywhere it's listed, lines only of files with marks under
+    /// unstaged.
+    #[test]
+    fn stashing_marked_takes_only_what_shows_as_marked(
+        keys in prop::collection::vec(marking_key(), 0..40),
+    ) {
+        let mut app = App::new(workspace().clone());
+        for k in keys {
+            app.on_key(k);
+        }
+        prop_assume!(matches!(app.mode, Mode::Normal));
+        prop_assume!(app.region_lines().is_empty());
+        let shown = |app: &App, repo: &std::path::Path, file: &str, section: Section, whole: bool| {
+            let rows = (0..app.rows.len()).filter_map(|n| app.target(n));
+            let mut own = rows.filter(|t| matches!(t, Target::File { repo: r, section: s, file: f }
+                if r == repo && *s == section && f == file));
+            match own.next() {
+                Some(t) if whole => app.marked(&t) == Marked::Wholly,
+                Some(t) => app.marked(&t) != Marked::No,
+                // (folded away: something of the repo's is marked, at least)
+                None => app.marked_in(Some(repo)) != (0, 0),
+            }
+        };
+        let mut by_path = vec![];
+        let mut by_lines = vec![];
+        for e in &app.ws.entries {
+            let Some(status) = e.status() else { continue };
+            for f in &status.changes.files {
+                let listed: Vec<Section> = Section::ALL
+                    .into_iter()
+                    .filter(|s| s.files(status).contains(&f.path))
+                    .collect();
+                if listed.iter().all(|s| shown(&app, &e.path, &f.path, *s, true)) {
+                    by_path.push((e.path.clone(), f.path.clone()));
+                }
+                if shown(&app, &e.path, &f.path, Section::Unstaged, false) {
+                    by_lines.push((e.path.clone(), f.path.clone()));
+                }
+            }
+        }
+        app.on_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+        let fx = app.on_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        for e in &fx {
+            let Effect::Jobs(jobs) = e else { continue };
+            for j in jobs {
+                match &j.op {
+                    Op::Stash { paths, .. } => {
+                        prop_assert!(!paths.is_empty(), "a stash of everything in {}", j.path.display());
+                        for p in paths {
+                            prop_assert!(
+                                by_path.contains(&(j.path.clone(), p.clone())),
+                                "{p} stashed by its path, though not marked everywhere it's listed"
+                            );
+                        }
+                    }
+                    Op::StashLines { stage, .. } => {
+                        for p in stage.lines().filter_map(|l| l.strip_prefix("+++ b/")) {
+                            prop_assert!(
+                                by_lines.contains(&(j.path.clone(), p.to_string())),
+                                "lines of {p} stashed, though nothing of it shows marked under unstaged"
+                            );
+                        }
+                    }
+                    other => prop_assert!(false, "not a stash: {other:?}"),
+                }
+            }
         }
     }
 

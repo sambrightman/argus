@@ -5798,6 +5798,26 @@ fn a_row_standing_for_its_file_shows_the_files_mark() {
     assert!(shown(note - 1) && shown(note), "{screen}");
 }
 
+/// An unchanged line of a hunk is nothing to mark, but it's in its hunk:
+/// `s` there takes the hunk, as on any of its lines.
+#[test]
+fn s_on_an_unchanged_line_takes_its_hunk() {
+    let (_sb, mut app) = setup_with("", two_hunks);
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, " line 29");
+    match job_ops(&app.on_key(key('s'))).as_slice() {
+        [Op::Apply { what, patch, .. }] => {
+            assert_eq!(what, "stage a hunk of f");
+            assert!(
+                patch.contains("+added") && !patch.contains("three"),
+                "{patch}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 /// The blank line after a diff is nothing to mark: space only moves on.
 #[test]
 fn space_on_the_blank_line_after_a_diff_marks_nothing() {
@@ -5948,6 +5968,68 @@ fn what_is_marked_twice_over_counts_once() {
     );
 }
 
+/// Stashing a marked file takes it only where it's marked. A stash by
+/// path takes all of a file, so one listed under staged and unstaged goes
+/// that way when marked in both; marked under unstaged alone, its
+/// unstaged lines are stashed by themselves; under staged alone, it's
+/// said what to do.
+#[test]
+fn a_file_is_stashed_where_it_is_marked() {
+    let (sb, mut app) = setup_with("", diff_fixture);
+    let stash_marked = |app: &mut App| {
+        app.on_key(key('z'));
+        app.on_key(key('m'))
+    };
+    // under unstaged alone: those lines, what's staged left staged
+    to_file(&mut app, "both");
+    app.on_key(key(' '));
+    match job_ops(&stash_marked(&mut app)).as_slice() {
+        [
+            Op::StashLines {
+                stage, lines: 2, ..
+            },
+        ] => {
+            assert!(stage.contains("-two\n+three\n"), "{stage}");
+        }
+        other => panic!("{other:?}"),
+    }
+    app.running.clear();
+    // under staged too: the file, by its path
+    to_staged(&mut app, "both");
+    app.on_key(key(' '));
+    let fx = stash_marked(&mut app);
+    let jobs = stash_jobs(&app, &fx);
+    assert!(
+        jobs.len() == 1 && stash_op(true, false, false, &["both"])(&jobs[0].1),
+        "{jobs:?}"
+    );
+    app.running.clear();
+    // under staged alone: not taken by its other side
+    to_file(&mut app, "both");
+    app.on_key(key(' '));
+    assert!(stash_marked(&mut app).is_empty());
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "not stashing: both is listed under unstaged too, and stashing a file takes all its \
+         changes: mark it there as well (or z g stashes what's staged)"
+    );
+    app.on_key(ctrl('g'));
+    // a file whose mode changed too can't go as lines
+    use std::os::unix::fs::PermissionsExt;
+    let d = sb.path("dev/dirty");
+    std::fs::set_permissions(d.join("both"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    to_file(&mut app, "both");
+    app.on_key(key(' '));
+    assert!(stash_marked(&mut app).is_empty());
+    assert!(
+        app.message.as_ref().unwrap().0.starts_with(
+            "not stashing: both can't go in a stash of lines, which takes unstaged changes to text"
+        ),
+        "{:?}",
+        app.message
+    );
+}
+
 /// `z m` with lines marked stashes those lines by themselves; a file
 /// marked whole beside them goes as its lines. What can't go that way (an
 /// untracked file, staged lines) is said, and nothing stashed.
@@ -6020,8 +6102,8 @@ fn marked_lines_can_be_stashed() {
     assert!(stash_marked(&mut app).is_empty());
     assert_eq!(
         app.message.as_ref().unwrap().0,
-        "not stashing: new is marked whole and lines of other files are too: \
-         a stash of lines takes changed text files (unmark one or the other)"
+        "not stashing: new can't go in a stash of lines, which takes unstaged changes \
+         to text (not a file untracked, staged, deleted, or its mode): unmark it, or the lines"
     );
     assert_eq!(app.marked_lines.len(), 1, "kept");
     app.on_key(ctrl('g'));

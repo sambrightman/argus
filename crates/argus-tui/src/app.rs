@@ -3397,24 +3397,6 @@ impl App {
         self.start_jobs(jobs)
     }
 
-    /// The files marked whole, by repo index: each once, wherever it's
-    /// marked.
-    fn marked_file_names(&self) -> Vec<(usize, Vec<String>)> {
-        let names = |files: &BTreeSet<(Section, String)>| {
-            let mut names: Vec<String> = vec![];
-            for (_, f) in files {
-                if !names.contains(f) {
-                    names.push(f.clone());
-                }
-            }
-            names
-        };
-        self.marked_files
-            .iter()
-            .filter_map(|(repo, files)| Some((self.ws.index_of(repo)?, names(files))))
-            .collect()
-    }
-
     /// `file`'s diff on `side` when it's text, read if it hasn't been.
     fn text_diff(&mut self, repo: &Path, file: &str, side: Side) -> Option<&Vec<diff::Hunk>> {
         let key = (repo.to_path_buf(), file.to_string(), side);
@@ -3783,23 +3765,7 @@ impl App {
     /// is taken by its other side.
     pub fn taken(&self) -> (Vec<Target>, bool) {
         if self.marked_files.is_empty() && self.marked_lines.is_empty() {
-            let at = self.target(self.cursor).map(|t| match t {
-                Target::Hunk {
-                    repo,
-                    section,
-                    file,
-                    hunk,
-                    ..
-                } => Target::Hunk {
-                    repo,
-                    section,
-                    file,
-                    hunk,
-                    at: None,
-                },
-                other => other,
-            });
-            return (at.into_iter().collect(), false);
+            return (self.under_cursor().into_iter().collect(), false);
         }
         let mut taken = vec![];
         for (repo, files) in &self.marked_files {
@@ -3824,6 +3790,38 @@ impl App {
             });
         }
         (taken, true)
+    }
+
+    /// What the cursor is on, to act on with nothing marked: its row's
+    /// target, a line standing for its hunk (an unchanged one too, which
+    /// is nothing to mark but is in its hunk).
+    fn under_cursor(&self) -> Option<Target> {
+        let hunk = |repo, section, file, hunk| Target::Hunk {
+            repo,
+            section,
+            file,
+            hunk,
+            at: None,
+        };
+        match self.target(self.cursor) {
+            Some(Target::Hunk {
+                repo,
+                section,
+                file,
+                hunk: h,
+                ..
+            }) => Some(hunk(repo, section, file, h)),
+            Some(other) => Some(other),
+            None => {
+                let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor) else {
+                    return None;
+                };
+                let section = line.section.filter(|s| *s != Section::Untracked)?;
+                let h = line.diff.as_deref()?.hunk?;
+                let repo = self.ws.entries[*repo].path.clone();
+                Some(hunk(repo, section, line.file.clone()?, h))
+            }
+        }
     }
 
     /// The files of what's [taken](Self::taken), by repo index: a
@@ -4160,44 +4158,55 @@ impl App {
         // by repo, file and side: hunk -> its chosen lines (all if None)
         type Chosen = BTreeMap<(PathBuf, String, Side), BTreeMap<usize, Option<Vec<usize>>>>;
         let mut chosen: Chosen = BTreeMap::new();
-        for (repo, file, side, h, at) in &self.marked_lines {
-            let lines = chosen
-                .entry((repo.clone(), file.clone(), *side))
-                .or_default()
-                .entry(*h)
-                .or_insert_with(|| Some(vec![]));
-            lines.get_or_insert_default().push(*at);
-        }
-        // files marked whole: all their hunks (an untracked one is said
-        // below to have no patch)
-        let whole: Vec<(PathBuf, Section, String)> = self
-            .marked_files
-            .iter()
-            .flat_map(|(repo, files)| {
-                files
-                    .iter()
-                    .map(move |(s, f)| (repo.clone(), *s, f.clone()))
-            })
-            .collect();
-        for (repo, section, file) in whole {
-            let key = (repo.clone(), file.clone(), section.side());
-            let hunks = match self.text_diff(&repo, &file, section.side()) {
-                Some(hunks) => hunks.len(),
-                None => 0,
-            };
-            let all = (0..hunks).map(|h| (h, None));
-            chosen.entry(key).or_default().extend(all);
-        }
-        if chosen.is_empty()
-            && let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor)
-            && let (Some(d), Some(file)) = (line.diff.as_deref(), line.file.clone())
-            && let Some(h) = d.hunk
-        {
-            let path = self.ws.entries[*repo].path.clone();
-            chosen
-                .entry((path, file, d.side))
-                .or_default()
-                .insert(h, None);
+        // what's marked (a file marked whole: all its hunks; an untracked
+        // one is said below to have no patch), else the hunk the cursor
+        // is in
+        let (taken, marked) = self.taken();
+        for target in taken {
+            match target {
+                Target::Hunk {
+                    repo,
+                    section,
+                    file,
+                    hunk,
+                    at,
+                } => {
+                    let hunks = chosen.entry((repo, file, section.side())).or_default();
+                    match at {
+                        None => drop(hunks.insert(hunk, None)),
+                        Some(at) => {
+                            let lines = hunks.entry(hunk).or_insert_with(|| Some(vec![]));
+                            lines.get_or_insert_default().push(at);
+                        }
+                    }
+                }
+                Target::File {
+                    section: Section::Untracked,
+                    file,
+                    ..
+                } => {
+                    self.info(format!(
+                        "{file} is untracked: no patch to edit, s stages it whole"
+                    ));
+                    return vec![];
+                }
+                Target::File {
+                    repo,
+                    section,
+                    file,
+                } if marked => {
+                    let hunks = match self.text_diff(&repo, &file, section.side()) {
+                        Some(hunks) => hunks.len(),
+                        None => 0,
+                    };
+                    let key = (repo, file, section.side());
+                    chosen
+                        .entry(key)
+                        .or_default()
+                        .extend((0..hunks).map(|h| (h, None)));
+                }
+                Target::File { .. } | Target::Section { .. } => {}
+            }
         }
         let Some((repo, _, side)) = chosen.keys().next().cloned() else {
             self.info("e edits a hunk or lines of a file's diff (Tab on a file shows it)");
@@ -4209,19 +4218,6 @@ impl App {
         }
         if chosen.keys().any(|k| k.0 != repo) {
             self.info("the marked lines are in several repos: edit one repo's at a time");
-            return vec![];
-        }
-        let untracked = |file: &str| {
-            self.ws
-                .get(&repo)
-                .and_then(Entry::status)
-                .and_then(|s| s.changes.entry(file))
-                .is_some_and(|c| c.index == '?')
-        };
-        if let Some((_, file, _)) = chosen.keys().find(|k| untracked(&k.1)) {
-            self.info(format!(
-                "{file} is untracked: no patch to edit, s stages it whole"
-            ));
             return vec![];
         }
         let reverse = side == Side::Staged;
@@ -4464,16 +4460,10 @@ impl App {
             StashKind::All | StashKind::Staged => {
                 self.selected().into_iter().map(|i| (i, vec![])).collect()
             }
-            StashKind::MarkedFiles => match self.marked_lines_stashes() {
-                Ok(by_lines) => {
-                    // (a repo with lines marked: its files went with them)
-                    let mut files = self.marked_file_names();
-                    files.retain(|(i, _)| {
-                        let path = &self.ws.entries[*i].path;
-                        by_lines.iter().all(|(repo, _)| repo != path)
-                    });
+            StashKind::MarkedFiles => match self.marked_stashes() {
+                Ok((by_lines, by_path)) => {
                     lines = by_lines;
-                    files
+                    by_path
                 }
                 Err(why) => {
                     self.error(format!("not stashing: {why}"));
@@ -4494,53 +4484,124 @@ impl App {
         fx
     }
 
-    /// For each repo with lines marked, what stashes them (its message to
-    /// come): the lines, and with them those of its files marked whole.
-    /// An error says what can't go that way: staged lines, or a file
-    /// marked whole whose lines there's no taking (untracked, staged, not
-    /// text).
-    fn marked_lines_stashes(&mut self) -> Result<Vec<(PathBuf, Op)>, String> {
-        if self.marked_lines.iter().any(|k| k.2 != Side::Unstaged) {
-            return Err("some marked lines are staged (z g stashes what's staged): \
-                 unmark them (space) first"
-                .into());
+    /// What stashes the marks, by repo: with lines marked, a stash of
+    /// lines (its message to come), else of the marked files by their
+    /// paths. Everything goes only where it's marked. A stash by path
+    /// takes all of a file, so a file listed twice has to be marked twice
+    /// for that; marked under unstaged only, its unstaged lines are
+    /// stashed by themselves. An error says what can't go either way.
+    #[allow(clippy::type_complexity)]
+    fn marked_stashes(
+        &mut self,
+    ) -> Result<(Vec<(PathBuf, Op)>, Vec<(usize, Vec<String>)>), String> {
+        let (taken, _) = self.taken();
+        // by repo: file -> where it's marked whole; file -> hunk -> lines
+        type Lines = BTreeMap<String, BTreeMap<usize, Vec<usize>>>;
+        let mut whole: BTreeMap<PathBuf, BTreeMap<String, Vec<Section>>> = BTreeMap::new();
+        let mut lines: BTreeMap<PathBuf, Lines> = BTreeMap::new();
+        for target in taken {
+            match target {
+                Target::File {
+                    repo,
+                    section,
+                    file,
+                } => whole
+                    .entry(repo)
+                    .or_default()
+                    .entry(file)
+                    .or_default()
+                    .push(section),
+                Target::Hunk { section, .. } if section != Section::Unstaged => {
+                    return Err("some marked lines are staged (z g stashes what's staged): \
+                         unmark them (space) first"
+                        .into());
+                }
+                Target::Hunk {
+                    repo,
+                    file,
+                    hunk,
+                    at: Some(at),
+                    ..
+                } => {
+                    let hunks = lines.entry(repo).or_default().entry(file).or_default();
+                    hunks.entry(hunk).or_default().push(at);
+                }
+                Target::Hunk { .. } | Target::Section { .. } => {}
+            }
         }
-        // by repo, then file: hunk -> its marked lines
-        type Chosen = BTreeMap<String, BTreeMap<usize, Vec<usize>>>;
-        let mut by: BTreeMap<PathBuf, Chosen> = BTreeMap::new();
-        for (repo, file, _, h, at) in &self.marked_lines {
-            let hunks = by.entry(repo.clone()).or_default();
-            let lines = hunks.entry(file.clone()).or_default();
-            lines.entry(*h).or_default().push(*at);
-        }
-        let mut out = vec![];
-        for (repo, mut chosen) in by {
-            let whole = self.marked_files.get(&repo).cloned().unwrap_or_default();
-            for (section, file) in whole {
-                // (lines to take, in a file that's there to take them from)
-                let gone = self
-                    .ws
-                    .get(&repo)
-                    .and_then(Entry::status)
-                    .is_some_and(|s| s.changes.entry(&file).is_some_and(|c| c.worktree == 'D'));
-                let text = section == Section::Unstaged
-                    && !gone
+        let repos: BTreeSet<PathBuf> = whole.keys().chain(lines.keys()).cloned().collect();
+        let (mut by_lines, mut by_path) = (vec![], vec![]);
+        for repo in repos {
+            let files = whole.remove(&repo).unwrap_or_default();
+            let mut chosen = lines.remove(&repo).unwrap_or_default();
+            // where each is listed, to tell one marked everywhere it is
+            // (stashed by its path) from one marked on one side
+            let status = self.ws.get(&repo).and_then(Entry::status);
+            let listed = |file: &str| -> Vec<Section> {
+                let change = status.and_then(|s| s.changes.entry(file));
+                let lists = |s: &Section| change.is_some_and(|c| s.code(c).is_some());
+                Section::ALL.into_iter().filter(lists).collect()
+            };
+            let gone = |file: &str| {
+                let change = status.and_then(|s| s.changes.entry(file));
+                change.is_some_and(|c| c.worktree == 'D')
+            };
+            let mut paths: Vec<String> = vec![];
+            let mut unstaged: Vec<String> = vec![];
+            for (file, marked) in &files {
+                let listed = listed(file);
+                if listed.iter().all(|s| marked.contains(s)) {
+                    paths.push(file.clone());
+                } else if marked == &[Section::Unstaged] {
+                    unstaged.push(file.clone());
+                } else {
+                    return Err(format!(
+                        "{file} is listed {} too, and stashing a file takes all its changes: \
+                         mark it there as well (or z g stashes what's staged)",
+                        match listed.iter().find(|s| !marked.contains(s)) {
+                            Some(Section::Staged) => "under staged",
+                            Some(Section::Untracked) => "under untracked",
+                            _ => "under unstaged",
+                        }
+                    ));
+                }
+            }
+            if chosen.is_empty() && unstaged.is_empty() {
+                if let Some(i) = self.ws.index_of(&repo) {
+                    by_path.push((i, paths));
+                }
+                continue;
+            }
+            // a stash of lines: the marked ones, and all those of the
+            // files marked whole, which have to be text lines to take
+            let takable: Vec<(String, bool)> = paths
+                .iter()
+                .chain(&unstaged)
+                .map(|file| {
+                    let lines_only = listed(file) == [Section::Unstaged] || unstaged.contains(file);
+                    (file.clone(), lines_only && !gone(file))
+                })
+                .collect();
+            for (file, takable) in &takable {
+                let text = *takable
+                    && !ops::mode_changed(&repo, file)
                     && self
-                        .text_diff(&repo, &file, Side::Unstaged)
+                        .text_diff(&repo, file, Side::Unstaged)
                         .is_some_and(|hunks| !hunks.is_empty());
                 if !text {
                     return Err(format!(
-                        "{file} is marked whole and lines of other files are too: \
-                         a stash of lines takes changed text files (unmark one or the other)"
+                        "{file} can't go in a stash of lines, which takes unstaged changes \
+                         to text (not a file untracked, staged, deleted, or its mode): \
+                         unmark it, or the lines"
                     ));
                 }
-                let all = self.changed_lines(&repo, &file, Side::Unstaged);
-                let hunks = chosen.entry(file).or_default();
+                let all = self.changed_lines(&repo, file, Side::Unstaged);
+                let hunks = chosen.entry(file.clone()).or_default();
                 for (h, at) in all.unwrap_or_default() {
                     hunks.entry(h).or_default().push(at);
                 }
             }
-            let (mut stage, mut discard, mut lines) = (String::new(), String::new(), 0);
+            let (mut stage, mut discard, mut n) = (String::new(), String::new(), 0);
             for (file, hunks) in &chosen {
                 let key = (repo.clone(), file.clone(), Side::Unstaged);
                 let Some(Ok(FileDiff::Text(all))) = self.diffs.get(&key) else {
@@ -4552,17 +4613,17 @@ impl App {
                     .collect();
                 stage.push_str(&diff::patch_hunks(file, &parts, false));
                 discard.push_str(&diff::patch_hunks(file, &parts, true));
-                lines += hunks.values().map(Vec::len).sum::<usize>();
+                n += hunks.values().map(Vec::len).sum::<usize>();
             }
             let op = Op::StashLines {
                 message: String::new(),
                 stage,
                 discard,
-                lines,
+                lines: n,
             };
-            out.push((repo, op));
+            by_lines.push((repo, op));
         }
-        Ok(out)
+        Ok((by_lines, by_path))
     }
 
     /// Pop or drop a stash: the one under the cursor, else the repo's
