@@ -1512,24 +1512,14 @@ impl App {
                 self.rebuild();
             }
             ToggleMark => {
-                if let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor)
-                    && let (Some(file), Some(section)) = (line.file.clone(), line.section)
-                {
-                    // a file of the changes, or in its diff: a hunk's own
-                    // line, or a line (an unchanged one is nothing to mark)
-                    let path = self.ws.entries[*repo].path.clone();
-                    let d = line.diff.as_deref();
-                    let unchanged = d
-                        .and_then(|d| d.line.as_ref())
-                        .is_some_and(|l| l.kind == argus_core::diff::LineKind::Context);
-                    let part = d.and_then(|d| Some((d.hunk?, d.at)));
-                    // (nor is the blank line after a diff)
-                    let blank = line.id.last() == Some(&Seg::Blank);
-                    if self.in_marked_folder(&path, section, &file) {
-                        self.info("its folder is marked: unmark that to mark files in it");
-                    } else if !unchanged && !blank {
-                        self.toggle_marked(path, section, file, part);
-                    }
+                let in_changes = matches!(self.rows.get(self.cursor),
+                    Some(Row::Detail { line, .. }) if line.section.is_some());
+                if let Some(target) = self.target(self.cursor) {
+                    self.toggle(target);
+                }
+                if in_changes {
+                    // (a row with nothing of its own to mark, an unchanged
+                    // line say, is only stepped over)
                     self.cursor = (self.cursor + 1).min(self.rows.len().saturating_sub(1));
                 } else if let Some(p) = self.current_path() {
                     if !self.marked.remove(&p) {
@@ -3681,6 +3671,128 @@ impl App {
         )
     }
 
+    /// What row `n` is of a repo's changes, to mark or to act on: the one
+    /// place that says so, for drawing its mark, for space and for the
+    /// keys that take what's under the cursor. `None` for a row that's
+    /// nothing by itself: one outside the changes, an unchanged line, the
+    /// blank line after a diff.
+    pub fn target(&self, n: usize) -> Option<Target> {
+        let Some(Row::Detail { repo, line }) = self.rows.get(n) else {
+            return None;
+        };
+        let repo = self.ws.entries[*repo].path.clone();
+        let section = line.section?;
+        let Some(file) = line.file.clone() else {
+            return Section::heads(line).map(|section| Target::Section { repo, section });
+        };
+        if line.id.last() == Some(&Seg::Blank) {
+            return None;
+        }
+        let d = line.diff.as_deref();
+        let unchanged = |l: &diff::Line| l.kind == diff::LineKind::Context;
+        Some(match d.map(|d| (d.hunk, d.at, &d.line)) {
+            Some((_, _, Some(l))) if unchanged(l) => return None,
+            // (an untracked file's lines aren't staged by themselves; a
+            // row of a diff that isn't text stands for its file)
+            Some((Some(hunk), at, _)) if section != Section::Untracked => Target::Hunk {
+                repo,
+                section,
+                file,
+                hunk,
+                at,
+            },
+            _ => Target::File {
+                repo,
+                section,
+                file,
+            },
+        })
+    }
+
+    /// How much of `target` is marked: what its row shows.
+    pub fn marked(&self, target: &Target) -> Marked {
+        match target {
+            Target::Section { repo, section } => self.section_marked(repo, *section),
+            Target::File {
+                repo,
+                section,
+                file,
+            } => self.marked_of(repo, *section, file, None),
+            Target::Hunk {
+                repo,
+                section,
+                file,
+                hunk,
+                at: None,
+            } => self.marked_of(repo, *section, file, Some(*hunk)),
+            Target::Hunk {
+                repo,
+                section,
+                file,
+                hunk,
+                at: Some(at),
+            } => {
+                let key = (repo.clone(), file.clone(), section.side(), *hunk, *at);
+                match self.marked_lines.contains(&key) || self.file_marked(repo, *section, file) {
+                    true => Marked::Wholly,
+                    false => Marked::No,
+                }
+            }
+        }
+    }
+
+    /// Space on `target`: marked, wholly or partly, it's unmarked; not
+    /// marked, it's marked, all of it.
+    fn toggle(&mut self, target: Target) {
+        match target {
+            Target::Section { repo, section } => {
+                let was = self.section_marked(&repo, section);
+                let files = self.ws.get(&repo).and_then(Entry::status);
+                let files = files.map(|s| section.files(s)).unwrap_or_default();
+                if let Some(marked) = self.marked_files.get_mut(&repo) {
+                    marked.retain(|(s, _)| *s != section);
+                }
+                let side = section.side();
+                if section != Section::Untracked {
+                    self.marked_lines.retain(|k| !(k.0 == repo && k.2 == side));
+                }
+                if was == Marked::No {
+                    let marked = self.marked_files.entry(repo.clone()).or_default();
+                    marked.extend(files.into_iter().map(|f| (section, f)));
+                }
+                if self.marked_files.get(&repo).is_some_and(BTreeSet::is_empty) {
+                    self.marked_files.remove(&repo);
+                }
+            }
+            Target::File {
+                repo,
+                section,
+                file,
+            } => self.toggle_in_file(repo, section, file, None),
+            Target::Hunk {
+                repo,
+                section,
+                file,
+                hunk,
+                at,
+            } => self.toggle_in_file(repo, section, file, Some((hunk, at))),
+        }
+    }
+
+    fn toggle_in_file(
+        &mut self,
+        repo: PathBuf,
+        section: Section,
+        file: String,
+        part: Option<(usize, Option<usize>)>,
+    ) {
+        if self.in_marked_folder(&repo, section, &file) {
+            self.info("its folder is marked: unmark that to mark files in it");
+        } else {
+            self.toggle_marked(repo, section, file, part);
+        }
+    }
+
     /// Space on a file of the changes (`part` none), on a hunk's own line
     /// (its number) or on a line of one (and the line's): what's wholly or
     /// partly marked is unmarked, what isn't marked is marked. A hunk or
@@ -3694,8 +3806,6 @@ impl App {
         part: Option<(usize, Option<usize>)>,
     ) {
         let side = section.side();
-        // (an untracked file's lines aren't staged by themselves)
-        let part = part.filter(|_| section != Section::Untracked);
         let was = self.marked_of(&repo, section, &file, part.map(|(h, _)| h));
         let all = self.changed_lines(&repo, &file, side).unwrap_or_default();
         let whole = self.file_marked(&repo, section, &file);
@@ -5079,6 +5189,29 @@ struct CommitPick {
 /// Whether `file` is in the untracked folder `folder` (`build/`).
 fn within(folder: &str, file: &str) -> bool {
     folder.ends_with('/') && file != folder && file.starts_with(folder)
+}
+
+/// What a row of a repo's changes is (see [`App::target`]): where it's
+/// listed is part of what it is, so a file under staged and the same file
+/// under unstaged are two things.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    /// A section's heading: the files it lists.
+    Section { repo: PathBuf, section: Section },
+    File {
+        repo: PathBuf,
+        section: Section,
+        file: String,
+    },
+    /// A hunk of a file's diff (its own line), or with `at` one added or
+    /// removed line of it.
+    Hunk {
+        repo: PathBuf,
+        section: Section,
+        file: String,
+        hunk: usize,
+        at: Option<usize>,
+    },
 }
 
 /// How much of a file, or of a hunk of its diff, is marked.

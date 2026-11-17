@@ -15,7 +15,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Marked, Mode, Prompt, Row};
+use crate::app::{App, Marked, Mode, Prompt, Row, Target};
 use crate::menu::MenuId;
 use crate::refine;
 use crate::theme::{Theme, Ui};
@@ -301,23 +301,27 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) -> Vec<LinkAt> 
             Row::Detail { repo, line } => {
                 // two in from the name: past the marker, flags and a space
                 let indent = "  ".repeat(app.ws.depth(*repo)) + &" ".repeat(flags_w + 4);
-                let path = &app.ws.entries[*repo].path;
-                // a file of the changes, a hunk of its diff, or a line of one
-                let marked = match (&line.file, line.section, line.diff.as_deref()) {
-                    (Some(f), Some(section), None) => app.marked_of(path, section, f, None),
-                    (None, Some(section), None) => app.section_marked(path, section),
-                    (Some(f), Some(section), Some(d)) => match (d.hunk, d.at, &d.line) {
-                        (Some(h), None, _) => app.marked_of(path, section, f, Some(h)),
-                        (Some(h), Some(at), Some(l)) if l.kind != LineKind::Context => {
-                            let key = (path.clone(), f.clone(), d.side, h, at);
-                            let marked = app.marked_lines.contains(&key)
-                                || region.contains(&key)
-                                || app.file_marked(path, section, f);
-                            if marked { Marked::Wholly } else { Marked::No }
-                        }
-                        _ => Marked::No,
-                    },
-                    _ => Marked::No,
+                // what the row is of the changes, and how much of that is
+                // marked (a region's lines count as they will be)
+                let marked = match app.target(row_idx) {
+                    Some(Target::Hunk {
+                        repo,
+                        section,
+                        file,
+                        hunk,
+                        at: Some(at),
+                    }) if region.contains(&(
+                        repo.clone(),
+                        file.clone(),
+                        section.side(),
+                        hunk,
+                        at,
+                    )) =>
+                    {
+                        Marked::Wholly
+                    }
+                    Some(target) => app.marked(&target),
+                    None => Marked::No,
                 };
                 let icon = match marked {
                     Marked::Wholly => Some(&v.icons.marked),

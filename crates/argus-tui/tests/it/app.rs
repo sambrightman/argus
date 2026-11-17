@@ -5698,6 +5698,74 @@ fn a_file_marked_where_the_key_does_not_apply_is_refused() {
     assert!(render(&mut app, 100, 30).contains("Discard unstaged changes to both?"));
 }
 
+/// Space on a section's heading marks its files: all of them when none
+/// is, none when some or all are. It's not the repo that's marked.
+#[test]
+fn space_on_a_sections_heading_marks_its_files() {
+    use argus_tui::details::Section;
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "README");
+    let dirty = app.current().unwrap().path.clone();
+    let rows = ["untracked (2)", "unstaged (2)", "M README", "staged (1)"];
+    to_section(&mut app, Section::Unstaged);
+    let heading = app.cursor;
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "-MM-");
+    assert_eq!(app.cursor, heading + 1, "moves on, into it");
+    assert!(app.marked.is_empty(), "the repo isn't marked");
+    assert_eq!(
+        app.marked_files[&dirty],
+        [
+            (Section::Unstaged, "README".to_string()),
+            (Section::Unstaged, "both".to_string())
+        ]
+        .into()
+    );
+    // wholly marked: unmarked
+    app.cursor = heading;
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "----");
+    assert!(app.marked_files.is_empty());
+    // partly (a line of one of its files): unmarked, lines and all
+    to_file(&mut app, "both");
+    app.on_key(key(' '));
+    to_file(&mut app, "README");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+hello there");
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "-pp-");
+    app.cursor = heading;
+    app.on_key(key(' '));
+    assert_eq!(marks_of(&mut app, &rows), "----");
+    assert!(app.marked_files.is_empty() && app.marked_lines.is_empty());
+    // what's marked that way is what s takes
+    app.cursor = heading;
+    app.on_key(key(' '));
+    app.act(Action::Top);
+    assert_eq!(
+        job_ops(&app.on_key(key('s'))),
+        [Op::AddTracked {
+            paths: paths(&["README", "both"])
+        }]
+    );
+}
+
+/// A row that stands for its file (a binary file's note) shows the file's
+/// mark, as space there sets it.
+#[test]
+fn a_row_standing_for_its_file_shows_the_files_mark() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    to_file(&mut app, "bin");
+    app.act(Action::ToggleExpand);
+    app.cursor += 1;
+    let note = app.cursor;
+    app.on_key(key(' '));
+    let top = app.scroll;
+    let screen = render(&mut app, 100, 60);
+    let shown = |row: usize| screen.lines().nth(row - top + 1).unwrap().contains('▌');
+    assert!(shown(note - 1) && shown(note), "{screen}");
+}
+
 /// The blank line after a diff is nothing to mark: space only moves on.
 #[test]
 fn space_on_the_blank_line_after_a_diff_marks_nothing() {
