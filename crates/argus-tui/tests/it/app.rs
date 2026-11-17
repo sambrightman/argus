@@ -5337,6 +5337,9 @@ fn marked_lines_case(then: Then) {
         Then::Status(name) => {
             app.on_key(ctrl(' '));
             assert!(app.region.is_some());
+            // (folded away, so nothing reads its diff again by showing it)
+            to_file(&mut app, "f");
+            app.act(Action::ToggleExpand);
             let p = app
                 .ws
                 .entries
@@ -5349,6 +5352,8 @@ fn marked_lines_case(then: Then) {
                 app.marked_lines.len() == 2 && app.region.is_some(),
                 "{name}"
             );
+            // (and are still good for something: their diff is at hand)
+            assert_eq!(job_ops(&app.on_key(key('s'))).len(), 1, "{name}");
             return;
         }
     }
@@ -6050,6 +6055,64 @@ fn a_regions_lines_are_stashed_as_marked_ones_are() {
         other => panic!("{other:?}"),
     }
     assert!(app.region.is_none() && app.marked_lines.is_empty());
+}
+
+/// A pop git can't make with the stash's index ("Try without --index")
+/// isn't made without it unasked: argus asks, saying what that loses,
+/// and yes pops that stash without.
+#[test]
+fn a_pop_without_the_stashs_index_is_asked_for() {
+    let (sb, mut app) = setup_with("", |sb| {
+        let r = sb.path("dev/clean");
+        write(&r, "README", "x\n");
+        git(&r, &["stash", "push", "-q", "-m", "s"]);
+    });
+    let clean = sb.path("dev/clean");
+    let id = git(&clean, &["rev-parse", "stash@{0}"]).trim().to_string();
+    let failed = |op: Op, output: &str| Msg::JobFinished {
+        path: clean.clone(),
+        op,
+        label: "pop stash".into(),
+        outcome: argus_core::ops::OpOutcome {
+            success: false,
+            code: Some(1),
+            output: output.into(),
+            duration: std::time::Duration::ZERO,
+        },
+    };
+    let said = "error: conflicts in index. Try without --index.";
+    app.on_msg(failed(Op::StashPop, said));
+    assert!(
+        render(&mut app, 160, 30).contains(
+            "Pop without what the stash had staged (git can't restore it here)? Anything staged, \
+             then changed again before stashing, is lost. (y/n)"
+        ),
+        "{}",
+        render(&mut app, 160, 30)
+    );
+    let fx = app.on_key(key('y'));
+    assert_eq!(
+        job_ops(&fx),
+        [Op::StashPopPlain {
+            index: 0,
+            id: id.clone()
+        }]
+    );
+    app.running.clear();
+    // from a stash picked by its place: that one
+    let picked = Op::StashPopAt {
+        index: 0,
+        id: id.clone(),
+    };
+    app.on_msg(failed(picked, said));
+    assert!(matches!(app.mode, Mode::Confirm { .. }));
+    assert!(app.on_key(key('n')).is_empty(), "no leaves it");
+    // inverse: any other failure of a pop asks nothing
+    app.on_msg(failed(Op::StashPop, "error: something else"));
+    assert!(matches!(app.mode, Mode::Normal));
+    // nor does the plain pop failing ask again
+    app.on_msg(failed(Op::StashPopPlain { index: 0, id }, said));
+    assert!(matches!(app.mode, Mode::Normal));
 }
 
 /// Stashing a marked file takes it only where it's marked. A stash by
@@ -6916,9 +6979,22 @@ fn a_repo_deleted_outside_argus_is_seen_then_dropped() {
     assert!(items.iter().any(|i| i.starts_with("g drop")), "{items:?}");
     assert!(items.iter().any(|i| i.starts_with("G rescan")), "{items:?}");
     app.mode = Mode::Normal;
-    // drop: gone from the list
+    // drop: gone from the list, and what was marked in it (only that)
+    use argus_core::diff::Side;
+    let other = sb.path("dev/dirty");
+    for repo in [&clean, &other] {
+        app.marked_lines
+            .insert((repo.clone(), "README".into(), Side::Unstaged, 0, 0));
+        let file = (argus_tui::details::Section::Unstaged, "README".to_string());
+        app.marked_files.insert(repo.clone(), [file].into());
+    }
     app.act(Action::DropGone);
     assert!(app.ws.index_of(&clean).is_none());
+    let lines: Vec<_> = app.marked_lines.iter().map(|k| k.0.clone()).collect();
+    let files: Vec<_> = app.marked_files.keys().cloned().collect();
+    assert_eq!((lines, files), (vec![other.clone()], vec![other]));
+    app.marked_lines.clear();
+    app.marked_files.clear();
 
     // or the second refresh
     let dirty = sb.path("dev/dirty");
@@ -7463,8 +7539,14 @@ fn gitignore_takes_the_marked_untracked_files_or_the_cursors() {
     app.on_key(key(' '));
     to_file(&mut app, "README");
     assert_eq!(offered(&mut app), "Gitignore · 2 untracked file(s)");
-    // outside the changes, nothing marked: all the repo's
+    // the untracked section's own line: all it lists
     app.on_key(ctrl('g'));
+    to_section(&mut app, argus_tui::details::Section::Untracked);
+    assert_eq!(offered(&mut app), "Gitignore · 3 untracked file(s)");
+    // (another section's: none)
+    to_section(&mut app, argus_tui::details::Section::Unstaged);
+    assert_eq!(offered(&mut app), none);
+    // outside the changes, nothing marked: all the repo's
     cursor_on_detail(&mut app, "dirty", "path");
     assert_eq!(offered(&mut app), "Gitignore · 3 untracked file(s)");
 }
@@ -7559,6 +7641,53 @@ fn the_keys_at_the_edges() {
     to_file(&mut app, "new");
     app.on_key(key(' '));
     assert!(app.marked_files.is_empty());
+}
+
+/// A file that isn't all UTF-8 says so and is taken whole; a deleted
+/// file keeps its mark though it's not on disk; a file with only its mode
+/// changed has no lines for `e`.
+#[test]
+fn files_without_lines_to_take_one_by_one() {
+    use std::os::unix::fs::PermissionsExt;
+    let (sb, mut app) = setup_with("", |sb| {
+        let d = sb.path("dev/dirty");
+        std::fs::write(d.join("latin"), b"caf\xe9\n").unwrap();
+        write(&d, "gone", "g\n");
+        write(&d, "mode", "m\n");
+        commit(&d, "files");
+        std::fs::write(d.join("latin"), b"caf\xe9\nth\xe9\n").unwrap();
+        std::fs::remove_file(d.join("gone")).unwrap();
+        std::fs::set_permissions(d.join("mode"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    });
+    let d = sb.path("dev/dirty");
+    to_file(&mut app, "latin");
+    app.act(Action::ToggleExpand);
+    let t = trimmed(&app);
+    let note = "not all UTF-8 text, shown as near as can be: staged or discarded as a whole file";
+    assert!(t.iter().any(|l| l == note), "{t:?}");
+    // (a line of it is the file)
+    app.cursor = shown_row(&app, "+th");
+    assert_eq!(
+        job_ops(&app.on_key(key('s'))),
+        [Op::AddTracked {
+            paths: paths(&["latin"])
+        }]
+    );
+    app.running.clear();
+    // a deleted file's mark stays while it's listed
+    to_file(&mut app, "gone");
+    app.on_key(key(' '));
+    app.rebuild();
+    assert_eq!(app.marked_files[&d].len(), 1);
+    app.on_key(ctrl('g'));
+    // only its mode changed: marked, e has no lines to edit
+    to_file(&mut app, "mode");
+    app.on_key(key(' '));
+    assert!(app.on_key(key('e')).is_empty());
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "mode has no lines to edit (it isn't text)"
+    );
 }
 
 /// `e` on marks in another repo says so in the patch it opens.

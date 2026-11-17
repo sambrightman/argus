@@ -563,13 +563,19 @@ fn lines_are_stashed_by_themselves() {
         )
     );
     // git pops onto no file with changes of its own (as after its own
-    // `stash -p`): said before trying, the stash kept
+    // `stash -p`): its refusal is passed on with what to do, the stash kept
     let pop = ops::run(&r, &Op::StashPop);
     assert!(!pop.success, "{}", pop.output);
-    assert_eq!(
-        pop.output,
-        "not popping: it changes f, which has changes of its own not staged: \
-         commit or stash those first"
+    assert!(
+        pop.output.contains("would be overwritten"),
+        "{}",
+        pop.output
+    );
+    assert!(
+        pop.output
+            .ends_with("(commit or stash those files' other changes first)"),
+        "{}",
+        pop.output
     );
     assert_eq!(git(&r, &["stash", "list"]).lines().count(), 1);
     // without them, they're back
@@ -659,11 +665,12 @@ fn a_stash_of_lines_that_fails_changes_nothing() {
     );
 }
 
-/// A stash of lines made with something staged holds that too. Once the
-/// index has moved on, git can't pop it with its index; it's popped
-/// without, as git suggests, and that's said.
+/// A stash made with something staged holds that as its index, which
+/// git can't restore once the index has moved on. The pop fails with
+/// git's word for it and nothing changed; popping without the index is a
+/// thing of its own, to be asked for.
 #[test]
-fn a_stash_whose_index_no_longer_applies_is_popped_without_it() {
+fn a_stash_whose_index_no_longer_applies_pops_without_it_when_asked() {
     let sb = Sandbox::new();
     let (r, stage, discard) = lines_to_stash(&sb);
     let op = Op::StashLines {
@@ -673,35 +680,138 @@ fn a_stash_whose_index_no_longer_applies_is_popped_without_it() {
         lines: 3,
     };
     assert!(ops::run(&r, &op).success);
+    let id = git(&r, &["rev-parse", "stash@{0}"]).trim().to_string();
     git(&r, &["checkout", "-q", "--", "f"]);
     write(&r, "h", "h\n");
     git(&r, &["add", "h"]);
+    let before = changes(&r);
     let pop = ops::run(&r, &Op::StashPop);
+    assert!(
+        !pop.success && pop.output.contains("Try without --index"),
+        "{}",
+        pop.output
+    );
+    assert_eq!(changes(&r), before, "nothing changed");
+    assert_eq!(git(&r, &["stash", "list"]).lines().count(), 1);
+    // asked for: only that stash, as it was
+    let plain = |id: &str| Op::StashPopPlain {
+        index: 0,
+        id: id.to_string(),
+    };
+    assert_eq!(plain(&id).label(), "pop stash@{0} without its index");
+    let other = ops::run(&r, &plain("0000000000000000000000000000000000000000"));
+    assert!(
+        !other.success && other.output.contains("isn't the stash it was"),
+        "{}",
+        other.output
+    );
+    let pop = ops::run(&r, &plain(&id));
     assert!(pop.success, "{}", pop.output);
-    assert!(pop.output.contains("without its index"), "{}", pop.output);
     assert!(
         std::fs::read_to_string(r.join("f"))
             .unwrap()
             .contains("added")
     );
     assert_eq!(git(&r, &["stash", "list"]), "");
-    // inverse: one that pops with its index says nothing of the kind
-    let other = Sandbox::new();
-    let (r, stage, discard) = lines_to_stash(&other);
-    let op = Op::StashLines {
-        message: "m".into(),
-        stage,
-        discard,
-        lines: 3,
+}
+
+/// The check before a pop is against what's staged, as the pop is: a
+/// stash that conflicts with a staged change is refused before anything
+/// is touched, and one that doesn't is popped, whatever else is staged
+/// or changed.
+#[test]
+fn the_check_before_a_pop_goes_by_what_is_staged() {
+    let sb = Sandbox::new();
+    let numbered: String = (1..=10).map(|i| format!("{i}\n")).collect();
+    let repo = |name: &str| {
+        let r = sb.init(name);
+        write(&r, "f", &numbered);
+        write(&r, "g", "g\n");
+        git(&r, &["add", "f", "g"]);
+        git(&r, &["commit", "-q", "-m", "files"]);
+        r
     };
-    assert!(ops::run(&r, &op).success);
-    git(&r, &["checkout", "-q", "--", "f"]);
+    // a staged change that the stash's conflicts with
+    let r = repo("conflict");
+    write(&r, "f", &numbered.replacen("1\n", "ONE\n", 1));
+    git(&r, &["stash", "-q"]);
+    write(&r, "f", &numbered.replacen("1\n", "UNO\n", 1));
+    git(&r, &["add", "f"]);
     let pop = ops::run(&r, &Op::StashPop);
+    assert!(!pop.success, "{}", pop.output);
+    assert_eq!(pop.output, "not popping: it would conflict in f");
+    assert_eq!(changes(&r), ["M  f"], "nothing touched");
     assert!(
-        pop.success && !pop.output.contains("without its index"),
-        "{}",
-        pop.output
+        !std::fs::read_to_string(r.join("f"))
+            .unwrap()
+            .contains("<<<<")
     );
+    // inverse: another file partly staged is no reason to refuse
+    let r = repo("other");
+    write(&r, "f", &numbered.replacen("1\n", "ONE\n", 1));
+    git(&r, &["stash", "-q"]);
+    write(&r, "g", "g\nG1\n");
+    git(&r, &["add", "g"]);
+    write(&r, "g", "g\nG1\nG2\n");
+    let pop = ops::run(&r, &Op::StashPop);
+    assert!(pop.success, "{}", pop.output);
+    assert_eq!(changes(&r), [" M f", "MM g"]);
+    // nor a file the stash deletes that's deleted already
+    let r = repo("deleted");
+    std::fs::remove_file(r.join("g")).unwrap();
+    git(&r, &["stash", "-q"]);
+    std::fs::remove_file(r.join("g")).unwrap();
+    let pop = ops::run(&r, &Op::StashPop);
+    assert!(pop.success, "{}", pop.output);
+    // nor a file argus just rewrote the same (stashing all its lines)
+    use argus_core::diff::{self, FileDiff, Side};
+    let r = repo("same");
+    write(&r, "g", "g\nmore\n");
+    let Ok(FileDiff::Text(hunks)) = diff::file_diff(&r, "g", Side::Unstaged) else {
+        panic!("g's diff");
+    };
+    let parts = [(&hunks[0], None)];
+    let all = Op::StashLines {
+        message: "m".into(),
+        stage: diff::patch_hunks("g", &parts, false),
+        discard: diff::patch_hunks("g", &parts, true),
+        lines: 1,
+    };
+    assert!(ops::run(&r, &all).success);
+    let pop = ops::run(&r, &Op::StashPop);
+    assert!(pop.success, "{}", pop.output);
+    assert_eq!(changes(&r), [" M g"]);
+}
+
+/// A stash holding an untracked file that's there again can't be popped
+/// whole (git restores the rest, then stops): said before trying. And
+/// with no stash there's nothing to check.
+#[test]
+fn a_pop_that_cannot_be_whole_is_refused_first() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "f", "f\n");
+    git(&r, &["add", "f"]);
+    git(&r, &["commit", "-q", "-m", "f"]);
+    let none = ops::run(&r, &Op::StashPop);
+    assert!(!none.success, "{}", none.output);
+    assert_eq!(none.output, "not popping: there's no stash@{0}");
+    write(&r, "f", "f2\n");
+    write(&r, "u", "u\n");
+    git(&r, &["stash", "-q", "-u"]);
+    write(&r, "u", "another\n");
+    let pop = ops::run(&r, &Op::StashPop);
+    assert!(!pop.success, "{}", pop.output);
+    assert_eq!(
+        pop.output,
+        "not popping: it holds the untracked u, which is there again: move it away first"
+    );
+    assert_eq!(changes(&r), ["?? u"], "nothing touched");
+    // inverse: out of the way, it pops
+    std::fs::remove_file(r.join("u")).unwrap();
+    let pop = ops::run(&r, &Op::StashPop);
+    assert!(pop.success, "{}", pop.output);
+    assert_eq!(changes(&r), [" M f", "?? u"]);
 }
 
 /// A stash of lines on a detached HEAD, and in a linked worktree (whose

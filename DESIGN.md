@@ -273,6 +273,16 @@ Two findings:
   so they show on each repo's row and in the title, and what's taken
   outside the cursor's repo is said. A marked repo is a different
   thing (a target for repo actions), drawn differently.
+* **Popping a stash** leaves to git what git refuses cleanly, and
+  checks first only what it would make a mess of: a conflict (a trial
+  merge of the stash onto what's staged, which is what the pop merges
+  onto, not onto HEAD) and an untracked file the stash holds that's
+  there again. An earlier version also predicted git's "would be
+  overwritten" refusal and retried by itself without `--index`; both
+  second-guessed git and got it wrong (refusing pops git would make,
+  and turning a clean refusal into a conflict). Without `--index` is a
+  separate operation (`StashPopPlain`) that's asked for: it can lose
+  what was staged and then changed again.
 * **A patch of part of a diff** (`diff::patch_hunks`) has to say more
   than the diff does. Each hunk gives its place on the side the patch is
   applied to as the diff has it, and on the other side where this

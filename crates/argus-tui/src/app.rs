@@ -5158,6 +5158,28 @@ impl App {
                 if !outcome.success {
                     self.error(format!("{label} failed ($ for log)"));
                 }
+                // a pop git couldn't make with the stash's index: without
+                // it is another thing (it can lose what was staged, then
+                // changed again), so it's asked
+                let stash = match &op {
+                    Op::StashPopAt { index, id } => Some((*index, Some(id.clone()))),
+                    Op::StashPop => {
+                        let ids = self.ws.get(&path).and_then(Entry::status);
+                        Some((0, ids.and_then(|s| s.stash_ids.first().cloned())))
+                    }
+                    _ => None,
+                };
+                if let Some((index, Some(id))) = stash
+                    && !outcome.success
+                    && outcome.output.contains("Try without --index")
+                {
+                    self.ask_when_free(
+                        "Pop without what the stash had staged (git can't restore it here)? \
+                         Anything staged, then changed again before stashing, is lost."
+                            .into(),
+                        Confirmed::Ops(vec![(path.clone(), Op::StashPopPlain { index, id })]),
+                    );
+                }
                 if let Op::Apply { .. } = op
                     && let Some(e) = self.editing.as_mut()
                     && e.applying

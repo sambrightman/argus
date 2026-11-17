@@ -91,6 +91,15 @@ pub enum Op {
         index: usize,
         id: String,
     },
+    /// `git stash pop` of `stash@{index}` (if it's still the stash `id`)
+    /// without `--index`: what the stash had staged comes back unstaged,
+    /// and anything staged and then changed again before stashing isn't
+    /// brought back at all. For when git can't restore the stash's index
+    /// (it says to try without): callers ask first.
+    StashPopPlain {
+        index: usize,
+        id: String,
+    },
     /// `git stash drop`, only if `stash@{index}` is still the stash `id`.
     /// Permanently destructive: callers confirm first.
     StashDrop {
@@ -298,6 +307,7 @@ impl Op {
             Op::StashPopAt { index, .. } => {
                 v(&["stash", "pop", "--index", &format!("stash@{{{index}}}")])
             }
+            Op::StashPopPlain { index, .. } => v(&["stash", "pop", &format!("stash@{{{index}}}")]),
             Op::StashDrop { index, .. } => {
                 vec!["stash".into(), "drop".into(), format!("stash@{{{index}}}")]
             }
@@ -456,6 +466,7 @@ impl Op {
             ),
             Op::StashPop => "pop stash".into(),
             Op::StashPopAt { index, .. } => format!("pop stash@{{{index}}}"),
+            Op::StashPopPlain { index, .. } => format!("pop stash@{{{index}}} without its index"),
             Op::StashDrop { index, .. } => format!("drop stash@{{{index}}}"),
             Op::CreateBranch { name } => format!("create branch {name}"),
             Op::AddRemote { name, url } => format!("add remote {name} {url}"),
@@ -871,7 +882,7 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
                 return refused(format!("not popping: {why}"), started);
             }
         }
-        Op::StashPopAt { index, id } => {
+        Op::StashPopAt { index, id } | Op::StashPopPlain { index, id } => {
             if !is_stash(&cwd, *index, id) {
                 return refused(
                     format!(
@@ -930,25 +941,18 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
         return git(&cwd, &without_nested(&cwd, op.args()), started);
     }
     let out = git(&cwd, &op.args(), started);
-    // A stash made with something staged holds that as its index, which
-    // no longer applies once the index has moved on. git says to pop
-    // without it (nothing is changed by the failed try), so that's done:
-    // what the stash had staged comes back unstaged.
-    if matches!(op, Op::StashPop | Op::StashPopAt { .. })
-        && !out.success
-        && out.output.contains("Try without --index")
-    {
-        let plain: Vec<String> = op.args().into_iter().filter(|a| a != "--index").collect();
-        let popped = git(&cwd, &plain, started);
-        if popped.success {
-            let note = "(popped without its index, which no longer applies: \
-                        what it had staged is back unstaged)";
-            return OpOutcome {
-                output: format!("{}\n{note}", popped.output),
-                ..popped
-            };
-        }
-        return popped;
+    // git pops onto no file that has changes of its own: its refusal, and
+    // what to do about it
+    let pop = matches!(
+        op,
+        Op::StashPop | Op::StashPopAt { .. } | Op::StashPopPlain { .. }
+    );
+    if pop && !out.success && out.output.contains("would be overwritten") {
+        let note = "(commit or stash those files' other changes first)";
+        return OpOutcome {
+            output: format!("{}\n{note}", out.output),
+            ..out
+        };
     }
     out
 }
@@ -977,11 +981,26 @@ fn is_stash(cwd: &Path, index: usize, id: &str) -> bool {
     at.success && at.output.trim() == id
 }
 
-/// Why popping `stash@{index}` would stop with conflicts, if it would: a trial
-/// merge (`git merge-tree`) of the stash into HEAD, changing nothing. Their
-/// merge base is the commit the stash was made on, as for `git stash pop`.
+/// Why popping `stash@{index}` would leave a mess, if it would: git
+/// stops a pop it can't make without changing anything, but for two
+/// cases, found here first. A conflict: the pop merges the stash onto
+/// what's staged (not onto HEAD), so that's what a trial merge is run
+/// against. And an untracked file the stash holds that's there again:
+/// git restores everything else, then stops at it.
 fn pop_problem(cwd: &Path, index: usize) -> Option<String> {
     let stash = format!("stash@{{{index}}}");
+    let run = |args: &[&str]| {
+        let out = git_in(cwd, args);
+        out.success.then(|| out.output.trim().to_string())
+    };
+    if run(&["rev-parse", "-q", "--verify", &stash]).is_none() {
+        return Some(format!("there's no {stash}"));
+    }
+    // (an index with conflicts in it has no tree: nothing pops onto that)
+    let Some(staged) = run(&["write-tree"]) else {
+        return Some("the index has conflicts in it: resolve those first".into());
+    };
+    let base = format!("{stash}^1");
     let o = git_in(
         cwd,
         &[
@@ -989,46 +1008,40 @@ fn pop_problem(cwd: &Path, index: usize) -> Option<String> {
             "--write-tree",
             "--name-only",
             "--no-messages",
-            "HEAD",
+            "--merge-base",
+            &base,
+            &staged,
             &stash,
         ],
     );
+    let files: Vec<&str> = o.output.lines().skip(1).filter(|l| !l.is_empty()).collect();
     match o.code {
-        // No conflict in what's committed. But git pops onto no file it
-        // would have to rewrite that has changes not yet staged: which
-        // files those are is the merge's result against the index.
-        Some(0) => {
-            let tree = o.output.lines().next().unwrap_or_default();
-            let names = |args: &[&str]| -> Vec<String> {
-                let out = git_in(cwd, args);
-                let lines = out.output.lines().map(str::to_string);
-                lines.filter(|_| out.success).collect()
-            };
-            let rewritten = names(&["diff-index", "--cached", "--name-only", tree]);
-            let unstaged = names(&["diff-files", "--name-only"]);
-            let both: Vec<&str> = rewritten
-                .iter()
-                .filter(|f| unstaged.contains(f))
-                .map(String::as_str)
-                .collect();
-            (!both.is_empty()).then(|| {
-                format!(
-                    "it changes {}, which {} changes of its own not staged: \
-                     commit or stash those first",
-                    both.join(", "),
-                    if both.len() == 1 { "has" } else { "have" }
-                )
-            })
+        Some(0) => {}
+        Some(1) if !files.is_empty() => {
+            return Some(format!("it would conflict in {}", files.join(", ")));
         }
-        Some(1) => {
-            let files: Vec<&str> = o.output.lines().skip(1).filter(|l| !l.is_empty()).collect();
-            Some(format!("it would conflict in {}", files.join(", ")))
+        _ => {
+            return Some(format!(
+                "can't check it for conflicts: {}",
+                o.output.lines().next().unwrap_or("git failed")
+            ));
         }
-        _ => Some(format!(
-            "can't check it for conflicts: {}",
-            o.output.lines().next().unwrap_or("git failed")
-        )),
     }
+    // (its third parent, when it has one, holds what was untracked)
+    let untracked = format!("{stash}^3");
+    let held = run(&["ls-tree", "-r", "--name-only", "-z", &untracked]).unwrap_or_default();
+    let there: Vec<&str> = held
+        .split('\0')
+        .filter(|f| !f.is_empty() && cwd.join(f).symlink_metadata().is_ok())
+        .collect();
+    (!there.is_empty()).then(|| {
+        format!(
+            "it holds the untracked {}, which {} there again: move {} away first",
+            there.join(", "),
+            if there.len() == 1 { "is" } else { "are" },
+            if there.len() == 1 { "it" } else { "them" },
+        )
+    })
 }
 
 fn in_progress(dir: &Path) -> Option<InProgress> {
