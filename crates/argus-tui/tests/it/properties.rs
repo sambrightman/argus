@@ -5,9 +5,11 @@ use std::sync::OnceLock;
 
 use argus_core::config::Config;
 use argus_core::diff::LineKind;
+use argus_core::ops::Op;
 use argus_core::testkit::{Sandbox, commit, git, write};
 use argus_core::{State, Workspace};
-use argus_tui::app::{App, Mode};
+use argus_tui::app::{App, Effect, Marked, Mode, Target};
+use argus_tui::details::Section;
 use argus_tui::refine::refine;
 use argus_tui::theme::Theme;
 use argus_tui::ui;
@@ -41,6 +43,13 @@ fn workspace() -> &'static Workspace {
         write(&b, "staged", "s\n");
         git(&b, &["add", "staged"]);
         write(&b, "new", "x\ny\n");
+        // (one file staged and changed again: listed twice, a side each)
+        write(&b, "both", "one\n");
+        git(&b, &["add", "both"]);
+        git(&b, &["commit", "-q", "-m", "both"]);
+        write(&b, "both", "two\n");
+        git(&b, &["add", "both"]);
+        write(&b, "both", "three\n");
         // every repo has files, so the last row can be a file's line
         write(&sb.path("dev/a"), "untracked", "u\n");
         write(&sb.path("dev/c"), "README", "changed\n");
@@ -83,7 +92,162 @@ fn key() -> impl Strategy<Value = KeyEvent> {
     ]
 }
 
+/// Keys that move about the details, fold and unfold them, and mark:
+/// rows, regions, all the repos, and their undoing.
+fn marking_key() -> impl Strategy<Value = KeyEvent> {
+    let plain = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
+    prop_oneof![
+        6 => prop::sample::select(vec![KeyCode::Tab, KeyCode::Char(' '), KeyCode::Down, KeyCode::Down])
+            .prop_map(plain),
+        2 => prop::sample::select(vec![
+            KeyCode::Up,
+            KeyCode::End,
+            KeyCode::Home,
+            KeyCode::Char('n'),
+            KeyCode::Char('p'),
+            KeyCode::Char('M'),
+            KeyCode::Char('U'),
+        ])
+        .prop_map(plain),
+        1 => prop::sample::select(vec![' ', 'g'])
+            .prop_map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)),
+    ]
+}
+
+/// The files `fx`'s jobs would change, by repo.
+fn touched(fx: &[Effect]) -> Vec<(std::path::PathBuf, String)> {
+    let mut out = vec![];
+    for e in fx {
+        let Effect::Jobs(jobs) = e else { continue };
+        for j in jobs {
+            let files: Vec<String> = match &j.op {
+                Op::Add { paths }
+                | Op::AddTracked { paths }
+                | Op::Clean { paths }
+                | Op::Restore { paths, .. }
+                | Op::Remove { paths, .. } => paths.clone(),
+                Op::Apply { patch, .. } => {
+                    let named = patch.lines().filter_map(|l| l.strip_prefix("+++ b/"));
+                    named.map(str::to_string).collect()
+                }
+                other => panic!("not a file operation: {other:?}"),
+            };
+            out.extend(files.into_iter().map(|f| (j.path.clone(), f)));
+        }
+    }
+    out
+}
+
+/// Whether `file` of `repo` shows as marked (or with `at`, is what that
+/// row is or holds) in one of `sections`: by its own row when it has one,
+/// else by its section's heading, else (all folded away) by the repo's.
+fn shows(
+    app: &App,
+    repo: &std::path::Path,
+    file: &str,
+    sections: &[Section],
+    at: Option<usize>,
+) -> bool {
+    let rows = || (0..app.rows.len()).filter_map(|n| Some((n, app.target(n)?)));
+    let is = |t: &Target, section: Section, whole: bool| match t {
+        Target::File {
+            repo: r,
+            section: s,
+            file: f,
+        } => !whole && r == repo && *s == section && f == file,
+        Target::Hunk {
+            repo: r,
+            section: s,
+            file: f,
+            ..
+        } => !whole && at.is_some() && r == repo && *s == section && f == file,
+        Target::Section {
+            repo: r,
+            section: s,
+        } => whole && r == repo && *s == section,
+    };
+    sections.iter().any(|&section| {
+        let listed = app.ws.get(repo).and_then(|e| e.status());
+        if !listed.is_some_and(|s| section.files(s).iter().any(|f| f == file)) {
+            return false;
+        }
+        match at {
+            // with nothing marked: the row under the cursor is it, or its
+            // section's heading
+            Some(at) => app
+                .target(at)
+                .is_some_and(|t| is(&t, section, false) || is(&t, section, true)),
+            None => {
+                let own: Vec<bool> = rows()
+                    .filter(|(_, t)| matches!(t, Target::File { .. }) && is(t, section, false))
+                    .map(|(_, t)| app.marked(&t) != Marked::No)
+                    .collect();
+                let heading: Vec<bool> = rows()
+                    .filter(|(_, t)| is(t, section, true))
+                    .map(|(_, t)| app.marked(&t) != Marked::No)
+                    .collect();
+                match (own.is_empty(), heading.is_empty()) {
+                    (false, _) => own.iter().all(|m| *m),
+                    (true, false) => heading.iter().all(|m| *m),
+                    (true, true) => app.marked_in(Some(repo)) != (0, 0),
+                }
+            }
+        }
+    })
+}
+
 proptest! {
+    /// Whatever is marked, and wherever the cursor is, `s`, `u` and `K`
+    /// change only files that show as marked on the side the key is for;
+    /// with nothing marked, only what the cursor is on. Nothing is taken
+    /// by its other side, nor from where nothing shows it.
+    #[test]
+    fn the_keys_take_only_what_shows_as_theirs(
+        keys in prop::collection::vec(marking_key(), 0..40),
+        verb in prop::sample::select(vec!['s', 'u', 'K']),
+    ) {
+        let mut app = App::new(workspace().clone());
+        for k in keys {
+            app.on_key(k);
+        }
+        prop_assume!(matches!(app.mode, Mode::Normal));
+        // (a region's lines become marks as the key is pressed)
+        let region = app.region_lines();
+        let marked = app.marked_in(None) != (0, 0) || !region.is_empty();
+        let cursor = app.cursor;
+        let before: Vec<Option<Target>> = (0..app.rows.len()).map(|n| app.target(n)).collect();
+        let sections: &[Section] = match verb {
+            'u' => &[Section::Staged],
+            _ => &[Section::Untracked, Section::Unstaged],
+        };
+        // what shows as the key's to take, before it's pressed (which
+        // unmarks the lines it takes)
+        let mut theirs = vec![];
+        for e in &app.ws.entries {
+            let files = e.status().map(|s| s.changes.files.clone()).unwrap_or_default();
+            for f in files {
+                if shows(&app, &e.path, &f.path, sections, (!marked).then_some(cursor)) {
+                    theirs.push((e.path.clone(), f.path));
+                }
+            }
+        }
+        let mut fx = app.on_key(KeyEvent::new(KeyCode::Char(verb), KeyModifiers::NONE));
+        if matches!(app.mode, Mode::Confirm { .. }) {
+            fx = app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        }
+        for (repo, file) in touched(&fx) {
+            let in_region = region.iter().any(|k| k.0 == repo && k.1 == file);
+            let shown = in_region || theirs.contains(&(repo.clone(), file.clone()));
+            prop_assert!(
+                shown,
+                "{verb} changes {file} in {}, which {}: rows {:?}",
+                repo.display(),
+                if marked { "doesn't show as marked there" } else { "the cursor isn't on" },
+                before.iter().flatten().collect::<Vec<_>>(),
+            );
+        }
+    }
+
     /// Refining only marks words: each line's text is kept exactly, and
     /// context lines are never marked.
     #[test]

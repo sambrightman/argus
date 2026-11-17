@@ -261,6 +261,18 @@ Two findings:
   again. Actions take both sets together: lines as patches, files whole,
   each only where it's marked (a file marked under staged is `u`'s to
   take; `s` and `K` refuse it, as they refuse staged lines).
+  One place says what a row is (`App::target`: a section, a file where
+  it's listed, a hunk, a line), one how much of that is marked
+  (`App::marked`, which the screen draws), and one what the keys take
+  (`App::taken`: the marks, or with none the cursor's target). `take`
+  checks each against the key before planning anything. Before that the
+  keys read the marks in five places and one dropped the section, so `K`
+  on a file marked under staged discarded its unstaged changes; a
+  property test now holds that the keys change only what shows as
+  theirs. Marks in details reach across repos (the keys take them all),
+  so they show on each repo's row and in the title, and what's taken
+  outside the cursor's repo is said. A marked repo is a different
+  thing (a target for repo actions), drawn differently.
 * **A patch of part of a diff** (`diff::patch_hunks`) has to say more
   than the diff does. Each hunk gives its place on the side the patch is
   applied to as the diff has it, and on the other side where this

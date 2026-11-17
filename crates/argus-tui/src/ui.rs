@@ -206,7 +206,8 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) -> Vec<LinkAt> 
             s.push_str(&format!(" · filter: {}", app.filter));
         }
         if !app.marked.is_empty() {
-            s.push_str(&format!(" · {} marked", app.marked.len()));
+            let n = app.marked.len();
+            s.push_str(&format!(" · {n} {} marked", plural(n, "repo", "repos")));
         }
         // (which a folded repo's own row can only hint at)
         let (files, lines) = app.marked_in(None);
@@ -217,6 +218,11 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) -> Vec<LinkAt> 
             .collect();
         if !counted.is_empty() {
             s.push_str(&format!(" · marked in details: {}", counted.join(", ")));
+            // (the keys take them all, wherever the cursor is)
+            let repos = app.repos_with_marks().len();
+            if repos > 1 {
+                s.push_str(&format!(" in {repos} repos"));
+            }
         }
         if app.scanning {
             s.push_str(&format!(" · scanning {}", v.icons.spin(v.tick)));
@@ -437,25 +443,31 @@ fn repo_line<'a>(
     let e = &app.ws.entries[i];
     let mut spans: Vec<Span> = vec![];
     let marked = app.marked.contains(&e.path);
+    // first what's marked in its details (seen here even when they're
+    // folded): all its changes, or some
     spans.push(if app.running.contains_key(&e.path) {
         Span::styled(v.icons.spin(v.tick).to_string(), t.ui(Ui::Running))
-    } else if marked {
-        Span::styled(v.icons.marked.to_string(), t.ui(Ui::Marked))
-    } else if app.marked_in(Some(&e.path)) != (0, 0) {
-        // something in its details is: seen here even when they're folded
-        Span::styled(v.icons.partly_marked.to_string(), t.ui(Ui::Marked))
     } else {
-        Span::raw(" ")
+        match app.repo_marked(&e.path) {
+            Marked::Wholly => Span::styled(v.icons.marked.to_string(), t.ui(Ui::Marked)),
+            Marked::Partly => Span::styled(v.icons.partly_marked.to_string(), t.ui(Ui::Marked)),
+            Marked::No => Span::raw(" "),
+        }
     });
-    // flags, then a space, in a column as wide as the most of them
+    // flags, in a column as wide as the most of them; then the repo's own
+    // mark, before its name
     let tags = app.ws.config.tag_icons();
     let flags = badges::flags(e, &v.icons, &tags);
     for b in &flags {
         spans.push(Span::styled(b.text.clone(), t.role(b.role)));
     }
     spans.push(Span::raw(
-        " ".repeat(flags_w + 1 - flags_width(e, &v.icons, &tags)),
+        " ".repeat(flags_w - flags_width(e, &v.icons, &tags)),
     ));
+    spans.push(match marked {
+        true => Span::styled(v.icons.marked_repo.to_string(), t.ui(Ui::MarkedRepo)),
+        false => Span::raw(" "),
+    });
 
     let depth = app.ws.depth(i);
     let tree = match e.kind {
@@ -470,7 +482,7 @@ fn repo_line<'a>(
         name_style = t.role(argus_core::badges::Role::Hidden);
     }
     if marked {
-        name_style = name_style.patch(t.ui(Ui::Marked));
+        name_style = name_style.patch(t.ui(Ui::MarkedRepo));
     }
     let pad = name_w.saturating_sub(UnicodeWidthStr::width(name.as_str()));
     spans.push(Span::styled(name, name_style));
@@ -875,11 +887,16 @@ pub fn legend<'a>(i: &'a Icons, tags: &'a [(String, String)]) -> Vec<(&'a str, R
         (&i.worktree, Role::Dim, "linked worktree"),
         (&i.submodule, Role::Dim, "submodule"),
         (i.spin(0), Role::Dim, "job running"),
-        (&i.marked, Role::Dim, "marked for a batch action"),
+        (&i.marked, Role::Dim, "marked, in a repo's details"),
         (
             &i.partly_marked,
             Role::Dim,
-            "a file or hunk with some of its lines marked",
+            "partly marked: some lines of a file or hunk, some of a repo's changes",
+        ),
+        (
+            &i.marked_repo,
+            Role::Dim,
+            "a repo marked for a batch action",
         ),
         (&i.ok, Role::Ahead, "job or fix succeeded"),
         (&i.failed, Role::Error, "job or fix failed"),

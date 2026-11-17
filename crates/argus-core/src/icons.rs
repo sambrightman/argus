@@ -46,6 +46,9 @@ pub struct Icons {
     pub marked: Cow<'static, str>,
     /// A file or hunk with some of its lines marked (one cell).
     pub partly_marked: Cow<'static, str>,
+    /// A repo marked for a batch action, before its name (one cell):
+    /// apart from what's marked in its details.
+    pub marked_repo: Cow<'static, str>,
     /// A job or fix that succeeded.
     pub ok: Cow<'static, str>,
     /// A job or fix that failed.
@@ -115,6 +118,7 @@ icon_names!(
     spinner,
     marked,
     partly_marked,
+    marked_repo,
     ok,
     failed,
     celebrate,
@@ -185,6 +189,7 @@ pub const UNICODE: Icons = Icons {
     spinner: s("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
     marked: s("▌"),
     partly_marked: s("│"),
+    marked_repo: s("•"),
     ok: s("✓"),
     failed: s("✗"),
     celebrate: s("🎉"),
@@ -224,6 +229,7 @@ pub const NERD: Icons = Icons {
     spinner: s("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
     marked: s("▌"),
     partly_marked: s("│"),
+    marked_repo: s("•"),
     ok: s("\u{eab2} "),     // cod-check
     failed: s("\u{ea76} "), // cod-close
     celebrate: s("🎉"),
@@ -272,6 +278,7 @@ pub const ASCII: Icons = Icons {
     spinner: s("|/-\\"),
     marked: s(">"),
     partly_marked: s("-"),
+    marked_repo: s("#"),
     ok: s("ok"),
     failed: s("FAILED"),
     celebrate: s(""),

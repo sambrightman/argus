@@ -3551,24 +3551,60 @@ impl App {
         (files.map(|(_, f)| f.len()).sum(), lines.count())
     }
 
-    /// For a question about marked files or lines: which repo they're in,
-    /// when it isn't the one the cursor is in (`In acme/app: `), and the
-    /// question's first letter to go with it.
-    fn asked_where(&self, repos: &[&Path], question: String) -> String {
-        let here = self.current_path();
-        let elsewhere: Vec<&&Path> = repos
+    /// How much of the changes of the repo at `path` (and of the repos
+    /// nested in it) is marked in details: every file of every section,
+    /// or something.
+    pub fn repo_marked(&self, path: &Path) -> Marked {
+        if self.marked_in(Some(path)) == (0, 0) {
+            return Marked::No;
+        }
+        let status = self.ws.get(path).and_then(Entry::status);
+        let lists = |s: &Section| status.is_some_and(|st| !s.files(st).is_empty());
+        // (a section with no files says nothing either way)
+        let whole = Section::ALL
             .iter()
-            .filter(|p| here.as_deref() != Some(**p))
-            .collect();
+            .filter(|s| lists(s))
+            .all(|s| self.section_marked(path, *s) == Marked::Wholly);
+        let marks = self.repos_with_marks();
+        let nested = marks
+            .iter()
+            .any(|repo| *repo != path && repo.starts_with(path));
+        match whole && !nested {
+            true => Marked::Wholly,
+            false => Marked::Partly,
+        }
+    }
+
+    /// The repos with something marked in their details.
+    pub fn repos_with_marks(&self) -> BTreeSet<&PathBuf> {
+        let lines = self.marked_lines.iter().map(|k| &k.0);
+        self.marked_files.keys().chain(lines).collect()
+    }
+
+    /// Where `repos` are, when that's not just the repo the cursor is in:
+    /// the one's name, or how many. What's marked in details is taken from
+    /// every repo, so what's taken elsewhere is said.
+    fn elsewhere(&self, repos: &[&Path]) -> Option<String> {
+        let here = self.current_path();
         let name = |p: &Path| {
             self.ws
                 .get(p)
                 .map_or_else(String::new, |e| e.display_name())
         };
-        let whereabouts = match elsewhere.as_slice() {
-            [] => return question,
-            [one] if repos.len() == 1 => name(one),
-            _ => format!("{} repos", repos.len()),
+        match repos {
+            [] => None,
+            [one] if here.as_deref() == Some(*one) => None,
+            [one] => Some(name(one)),
+            many => Some(format!("{} repos", many.len())),
+        }
+    }
+
+    /// For a question about marked files or lines: which repo they're in,
+    /// when it isn't the one the cursor is in (`In acme/app: `), and the
+    /// question's first letter to go with it.
+    fn asked_where(&self, repos: &[&Path], question: String) -> String {
+        let Some(whereabouts) = self.elsewhere(repos) else {
+            return question;
         };
         let mut letters = question.chars();
         let first = letters.next().map(|c| c.to_lowercase().to_string());
@@ -3984,8 +4020,11 @@ impl App {
                 }
                 return vec![];
             }
+            let mut repos: Vec<PathBuf> = jobs.iter().map(|j| j.path.clone()).collect();
+            repos.dedup();
             let fx = self.start_jobs(jobs);
             self.unmark_lines_started(&fx);
+            self.note_elsewhere(&repos);
             return fx;
         }
         // what it would do, to say exactly that: unstaged changes dropped,
@@ -4058,6 +4097,15 @@ impl App {
         };
         self.mode = Mode::Confirm { question, then };
         vec![]
+    }
+
+    /// Add to the status line where jobs were started, when that's not
+    /// just the repo the cursor is in.
+    fn note_elsewhere(&mut self, repos: &[PathBuf]) {
+        let repos: Vec<&Path> = repos.iter().map(PathBuf::as_path).collect();
+        if let Some(whereabouts) = self.elsewhere(&repos) {
+            self.add_note(&format!(" · in {whereabouts}"));
+        }
     }
 
     /// A job running a file operation in the repo at index `i`.
@@ -4476,7 +4524,17 @@ impl App {
                 }
             },
         };
-        self.stash_jobs(targets, kind == StashKind::Staged, message, lines)
+        let fx = self.stash_jobs(targets, kind == StashKind::Staged, message, lines);
+        if kind == StashKind::MarkedFiles {
+            let jobs = fx.iter().filter_map(|e| match e {
+                Effect::Jobs(jobs) => Some(jobs.iter().map(|j| j.path.clone())),
+                _ => None,
+            });
+            let mut repos: Vec<PathBuf> = jobs.flatten().collect();
+            repos.dedup();
+            self.note_elsewhere(&repos);
+        }
+        fx
     }
 
     /// For each repo with lines marked, what stashes them (its message to

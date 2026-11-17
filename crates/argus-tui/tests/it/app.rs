@@ -1026,7 +1026,9 @@ fn help_has_a_legend_of_every_icon() {
         ("$", "stashes"),
         ("≠", "conflicts"),
         ("⠋", "job running"),
-        ("▌", "marked for a batch action"),
+        ("▌", "marked, in a repo's details"),
+        ("│", "partly marked"),
+        ("•", "a repo marked for a batch action"),
         ("✓", "job or fix succeeded"),
         ("✗", "job or fix failed"),
     ] {
@@ -1063,7 +1065,7 @@ fn ascii_icons_render_without_other_symbols() {
         let other: String = out.chars().filter(|&c| !allowed(c)).collect();
         assert!(other.is_empty(), "{other}\n{out}");
     }
-    assert!(main.contains(">"), "marked row: {main}");
+    assert!(main.contains("#demo/"), "marked repo: {main}");
     assert!(
         main.contains("^"),
         "ahead, in badges and branch details: {main}"
@@ -1074,7 +1076,7 @@ fn ascii_icons_render_without_other_symbols() {
     app.ws.config.ui.icons = "unicode".into();
     app.rebuild();
     let main = render(&mut app, 120, 300);
-    assert!(main.contains('▌') && main.contains('↑'), "{main}");
+    assert!(main.contains('•') && main.contains('↑'), "{main}");
 }
 
 #[test]
@@ -7052,13 +7054,28 @@ fn marks_show_on_what_holds_them_and_k_says_where() {
         app.act(Action::ToggleExpand);
     }
     assert_eq!(marks_of(&mut app, &["acme/dirty", "acme/clean"]), "p-");
-    // a marked repo shows that, whatever is marked in it
+    // a marked repo shows that its own way, before its name, beside what's
+    // marked in it
+    let repo_mark = |app: &mut App, name: &str| {
+        let screen = render(app, 140, 60);
+        screen.lines().any(|l| l.contains(&format!("•{name}")))
+    };
+    assert!(!repo_mark(&mut app, "acme/dirty"));
     app.on_key(key(' '));
-    assert_eq!(marks_of(&mut app, &["acme/dirty"]), "M");
+    assert!(repo_mark(&mut app, "acme/dirty") && !repo_mark(&mut app, "acme/clean"));
+    assert_eq!(marks_of(&mut app, &["acme/dirty"]), "p");
+    assert!(title(&mut app).contains(" · 1 repo marked · marked in details: 1 file"));
     app.act(Action::Top);
     app.on_key(key(' '));
-    // K with the cursor in another repo says where the files are
+    // s with the cursor in another repo says where it staged
     cursor_on_detail(&mut app, "clean", "path");
+    assert!(!app.on_key(key('s')).is_empty());
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "running 1 job(s)… · in acme/dirty"
+    );
+    app.running.clear();
+    // and K where the files are
     app.on_key(key('K'));
     assert!(
         render(&mut app, 140, 60)
@@ -7073,6 +7090,9 @@ fn marks_show_on_what_holds_them_and_k_says_where() {
     assert!(
         render(&mut app, 140, 60).contains(" Discard unstaged changes to README? They're lost.")
     );
+    app.on_key(key('n'));
+    assert!(!app.on_key(key('s')).is_empty());
+    assert_eq!(app.message.as_ref().unwrap().0, "running 1 job(s)…");
 }
 
 /// K on files marked in several repos says so, wherever the cursor is.
@@ -7088,6 +7108,20 @@ fn discarding_in_several_repos_says_how_many() {
     cursor_on_detail(&mut app, "clean", "path");
     to_file(&mut app, "other");
     app.on_key(key(' '));
+    // all of one repo's changes, some of the other's; and the title says
+    // they're in two
+    assert_eq!(marks_of(&mut app, &["acme/dirty", "acme/clean"]), "pM");
+    let title = render(&mut app, 140, 60)
+        .lines()
+        .next()
+        .unwrap()
+        .to_string();
+    assert!(
+        title
+            .trim_end()
+            .ends_with("marked in details: 2 files in 2 repos"),
+        "{title}"
+    );
     app.on_key(key('K'));
     assert!(
         render(&mut app, 140, 60).contains("In 2 repos: delete 2 untracked files? They're lost."),

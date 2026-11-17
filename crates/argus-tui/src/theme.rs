@@ -12,6 +12,8 @@ use ratatui::style::{Color, Modifier, Style};
 pub enum Ui {
     Selection,
     Marked,
+    /// A repo marked for a batch action: its name, and the mark before it.
+    MarkedRepo,
     Header,
     Border,
     Dim,
@@ -57,6 +59,7 @@ const ROLE_NAMES: &[(Role, &str)] = &[
 const UI_NAMES: &[(Ui, &str)] = &[
     (Ui::Selection, "selection"),
     (Ui::Marked, "marked"),
+    (Ui::MarkedRepo, "marked_repo"),
     (Ui::Header, "header"),
     (Ui::Border, "border"),
     (Ui::Dim, "ui-dim"),
@@ -199,6 +202,7 @@ impl Theme {
                 ("diff-hunk", fg(Rgb(0x7a, 0xa2, 0xf7))),
                 ("selection", Style::new().bg(Rgb(0x28, 0x34, 0x57))),
                 ("marked", fg(Rgb(0xe0, 0xaf, 0x68)).add_modifier(b)),
+                ("marked_repo", fg(Rgb(0x7d, 0xcf, 0xff)).add_modifier(b)),
                 ("header", fg(Rgb(0x7a, 0xa2, 0xf7)).add_modifier(b)),
                 ("border", fg(Rgb(0x3b, 0x42, 0x61))),
                 ("ui-dim", fg(Rgb(0x56, 0x5f, 0x89))),
@@ -240,6 +244,7 @@ impl Theme {
                 ("diff-hunk", fg(Rgb(0x1e, 0x50, 0xa0))),
                 ("selection", Style::new().bg(Rgb(0xdd, 0xe4, 0xf0))),
                 ("marked", fg(Rgb(0x8f, 0x5e, 0x15)).add_modifier(b)),
+                ("marked_repo", fg(Rgb(0x0f, 0x4b, 0x6e)).add_modifier(b)),
                 ("header", fg(Rgb(0x1e, 0x50, 0xa0)).add_modifier(b)),
                 ("border", fg(Rgb(0xc0, 0xc0, 0xc8))),
                 ("ui-dim", fg(Rgb(0x9a, 0x9a, 0x9a))),
@@ -279,6 +284,10 @@ impl Theme {
                 ("diff-hunk", Style::new().add_modifier(Modifier::UNDERLINED)),
                 ("selection", Style::new().add_modifier(Modifier::REVERSED)),
                 ("marked", Style::new().add_modifier(b)),
+                (
+                    "marked_repo",
+                    Style::new().add_modifier(b | Modifier::UNDERLINED),
+                ),
                 ("header", Style::new().add_modifier(b)),
                 ("ui-dim", Style::new().add_modifier(d)),
                 ("key", Style::new().add_modifier(b)),
@@ -314,6 +323,7 @@ impl Theme {
                     ("diff-hunk", fg(Cyan)),
                     ("selection", Style::new().add_modifier(Modifier::REVERSED)),
                     ("marked", fg(Yellow).add_modifier(b)),
+                    ("marked_repo", fg(Cyan).add_modifier(b)),
                     ("header", fg(Blue).add_modifier(b)),
                     ("border", fg(DarkGray)),
                     ("ui-dim", fg(DarkGray)),
