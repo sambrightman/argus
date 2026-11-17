@@ -2780,11 +2780,14 @@ fn paging_and_home_end_move_by_the_page_and_to_the_ends() {
 }
 
 #[test]
-fn ctrl_keys_quit_refresh_and_clear_marks() {
+fn ctrl_keys_quit_refresh_and_leave_repo_marks() {
     let (_sb, mut app) = setup("");
     assert!(matches!(app.on_key(ctrl('l')).as_slice(), [Effect::Refresh(p)] if p.len() == 3));
+    // (C-g is for what's marked in details: a marked repo stays, U's)
     app.on_key(key(' '));
     app.on_key(ctrl('g'));
+    assert_eq!(app.marked.len(), 1);
+    app.on_key(key('U'));
     assert!(app.marked.is_empty());
     assert_eq!(app.on_key(ctrl('c')), vec![Effect::SaveState, Effect::Quit]);
 }
@@ -6045,8 +6048,8 @@ fn marked_lines_can_be_stashed() {
 
 /// `M` marks the repos listed (a filter's, say) and `U` unmarks them,
 /// wherever the cursor is; neither touches what's marked in details.
-/// `C-g` and Esc cancel that (and a region), in every repo; with none,
-/// they unmark the repos.
+/// `C-g` and Esc cancel that (and a region), in every repo, and never
+/// the repos' marks.
 #[test]
 fn m_and_u_are_for_repos_and_c_g_for_what_is_marked_in_details() {
     let (_sb, mut app) = setup_with("", diff_fixture);
@@ -6094,14 +6097,14 @@ fn m_and_u_are_for_repos_and_c_g_for_what_is_marked_in_details() {
     app.on_key(ctrl('g'));
     assert!(app.marked_files.is_empty() && app.marked_lines.is_empty() && app.region.is_none());
     assert_eq!(app.marked.len(), 2);
-    // with nothing of that left, the repos; Esc does as C-g
+    // Esc does as C-g; neither ever unmarks the repos, which is U's
     to_file(&mut app, "README");
     app.on_key(key(' '));
     app.on_key(code(KeyCode::Esc));
     assert!(app.marked_files.is_empty());
-    assert_eq!(app.marked.len(), 2);
     app.on_key(code(KeyCode::Esc));
-    assert!(app.marked.is_empty());
+    app.on_key(ctrl('g'));
+    assert_eq!(app.marked.len(), 2);
 }
 
 /// `C-space` starts a region in a diff: the added and removed lines

@@ -771,7 +771,7 @@ pub fn help_lines() -> Vec<(String, String)> {
         ("M U", "mark / unmark all the repos listed"),
         (
             "C-g Esc",
-            "end a region and unmark what's marked in details; then the repos (Esc: a filter first)",
+            "end a region and unmark what's marked in details (Esc: a filter first)",
         ),
         (
             "s u K",

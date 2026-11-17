@@ -60,8 +60,7 @@ pub enum Action {
     ToggleMark,
     /// Mark the repos listed.
     MarkAll,
-    /// End a region and unmark the files and lines marked in details; with
-    /// none of those, [`Action::UnmarkAll`].
+    /// End a region and unmark the files and lines marked in details.
     Cancel,
     /// Start a region of diff lines at the cursor (`C-space`), or end it,
     /// keeping its lines as marks.
@@ -1537,17 +1536,11 @@ impl App {
                 }
             }
             Cancel => {
-                // a region and what's marked in the details, wherever; with
-                // none of those, the marked repos
-                let contents = self.region.is_some()
-                    || !self.marked_files.is_empty()
-                    || !self.marked_lines.is_empty();
+                // a region and what's marked in the details, wherever (the
+                // repos marked are U's to unmark)
                 self.region = None;
                 self.marked_files.clear();
                 self.marked_lines.clear();
-                if !contents {
-                    return self.act(UnmarkAll);
-                }
             }
             ToggleRegion => {
                 if self.region.is_some() {
