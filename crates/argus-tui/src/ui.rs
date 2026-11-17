@@ -752,13 +752,10 @@ pub fn help_lines() -> Vec<(String, String)> {
             "Space",
             "mark a repo; in the details a file, a hunk or a line (actions take the marked, else current)",
         ),
+        ("M U", "mark / unmark all the repos listed"),
         (
-            "M",
-            "mark all: the repos listed, or in a repo's details its files",
-        ),
-        (
-            "U Esc C-g",
-            "unmark all, likewise (Esc clears a filter first)",
+            "C-g Esc",
+            "end a region and unmark what's marked in details; then the repos (Esc: a filter first)",
         ),
         (
             "s u K",

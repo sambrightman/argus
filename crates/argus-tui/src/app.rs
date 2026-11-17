@@ -58,12 +58,15 @@ pub enum Action {
     ExpandAll,
     CollapseAll,
     ToggleMark,
-    /// Mark all there is where the cursor is: the repos listed, or in a
-    /// repo's details its changed files.
+    /// Mark the repos listed.
     MarkAll,
+    /// End a region and unmark the files and lines marked in details; with
+    /// none of those, [`Action::UnmarkAll`].
+    Cancel,
     /// Start a region of diff lines at the cursor (`C-space`), or end it,
     /// keeping its lines as marks.
     ToggleRegion,
+    /// Unmark the repos listed.
     UnmarkAll,
     OpenMenu(MenuId),
     StartFilter,
@@ -1361,7 +1364,7 @@ impl App {
                 if !self.filter.is_empty() {
                     ClearFilter
                 } else {
-                    UnmarkAll
+                    Cancel
                 }
             }
             // C-space (C-@; some terminals send NUL)
@@ -1374,7 +1377,7 @@ impl App {
                 'd' => PageDown,
                 'u' => PageUp,
                 's' => StartFilter,
-                'g' => UnmarkAll,
+                'g' => Cancel,
                 'c' => Quit,
                 'l' => Refresh,
                 _ => return None,
@@ -1535,45 +1538,27 @@ impl App {
                     self.act(NextRepo);
                 }
             }
-            MarkAll => match self.rows.get(self.cursor) {
-                // in a repo's details: its files, each where it's listed
-                Some(Row::Detail { repo, .. }) => {
-                    let e = &self.ws.entries[*repo];
-                    let files: BTreeSet<(Section, String)> = Section::ALL
-                        .into_iter()
-                        .flat_map(|section| {
-                            let files = e.status().map(|s| section.files(s));
-                            files
-                                .unwrap_or_default()
-                                .into_iter()
-                                .map(move |f| (section, f))
-                        })
-                        .collect();
-                    // (lines marked one by one give way to their files)
-                    self.marked_lines.retain(|k| k.0 != e.path);
-                    if !files.is_empty() {
-                        self.marked_files.insert(e.path.clone(), files);
-                    }
-                }
-                _ => {
-                    let listed = self.visible_repos();
-                    let paths = listed.into_iter().map(|i| self.ws.entries[i].path.clone());
-                    self.marked.extend(paths);
-                }
-            },
+            MarkAll => {
+                let listed = self.visible_repos();
+                let paths = listed.into_iter().map(|i| self.ws.entries[i].path.clone());
+                self.marked.extend(paths);
+            }
             UnmarkAll => {
+                for i in self.visible_repos() {
+                    self.marked.remove(&self.ws.entries[i].path);
+                }
+            }
+            Cancel => {
+                // a region and what's marked in the details, wherever; with
+                // none of those, the marked repos
+                let contents = self.region.is_some()
+                    || !self.marked_files.is_empty()
+                    || !self.marked_lines.is_empty();
                 self.region = None;
-                match self.rows.get(self.cursor) {
-                    Some(Row::Detail { repo, .. }) => {
-                        let path = &self.ws.entries[*repo].path;
-                        self.marked_files.remove(path);
-                        self.marked_lines.retain(|k| k.0 != *path);
-                    }
-                    _ => {
-                        for i in self.visible_repos() {
-                            self.marked.remove(&self.ws.entries[i].path);
-                        }
-                    }
+                self.marked_files.clear();
+                self.marked_lines.clear();
+                if !contents {
+                    return self.act(UnmarkAll);
                 }
             }
             ToggleRegion => {

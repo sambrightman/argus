@@ -52,7 +52,3 @@ deferred.
 - **Stashing a file marked whole takes both its sides,** as `git stash
   push -- file` does: marked under unstaged, its staged changes go into
   the stash too. `s` `u` `K` take it only where it's marked.
-- **`M` in a repo's details marks every file in every section,** which
-  no one of `s` `u` `K` then takes when files are staged and unstaged
-  (each refuses the other's). It suits stashing and unmarking; marking
-  one section's files is `M`'s missing half.

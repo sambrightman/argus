@@ -5678,7 +5678,7 @@ fn a_file_marked_where_the_key_does_not_apply_is_refused() {
         }]
     );
     app.running.clear();
-    app.on_key(key('U'));
+    app.on_key(ctrl('g'));
     // marked under unstaged: not for u, and s and K are the keys for it
     to_file(&mut app, "both");
     app.on_key(key(' '));
@@ -5924,7 +5924,7 @@ fn marked_lines_can_be_stashed() {
          a stash of lines takes changed text files (unmark one or the other)"
     );
     assert_eq!(app.marked_lines.len(), 1, "kept");
-    app.on_key(key('U'));
+    app.on_key(ctrl('g'));
     // nor lines that are staged
     let d = app.current().unwrap().path.clone();
     git(&d, &["add", "f"]);
@@ -5948,87 +5948,65 @@ fn marked_lines_can_be_stashed() {
     );
 }
 
-/// `M` marks all there is where the cursor is, `U` unmarks it: among the
-/// repos, those listed (a filter's, say); in a repo's details, its files.
-/// Neither touches the other's marks.
+/// `M` marks the repos listed (a filter's, say) and `U` unmarks them,
+/// wherever the cursor is; neither touches what's marked in details.
+/// `C-g` and Esc cancel that (and a region), in every repo; with none,
+/// they unmark the repos.
 #[test]
-fn mark_all_and_unmark_all_go_by_where_the_cursor_is() {
-    use argus_tui::details::Section;
+fn m_and_u_are_for_repos_and_c_g_for_what_is_marked_in_details() {
     let (_sb, mut app) = setup_with("", diff_fixture);
     assert_eq!(names(&app).len(), 3);
-    // in the details: the repo's files, each where it's listed
     to_file(&mut app, "README");
     let dirty = app.current().unwrap().path.clone();
-    app.on_key(key('M'));
-    let files = |list: &[(Section, &str)]| -> std::collections::BTreeSet<(Section, String)> {
-        list.iter().map(|(s, f)| (*s, f.to_string())).collect()
-    };
-    assert_eq!(
-        app.marked_files[&dirty],
-        files(&[
-            (Section::Untracked, "bin"),
-            (Section::Untracked, "new"),
-            (Section::Unstaged, "README"),
-            (Section::Unstaged, "both"),
-            (Section::Staged, "both"),
-        ])
-    );
-    assert!(app.marked.is_empty(), "no repo is");
-    // (which no one key takes: each file where it's marked)
-    assert!(app.on_key(key('s')).is_empty());
-    assert!(
-        app.message.as_ref().unwrap().0.contains("staged already"),
-        "{:?}",
-        app.message
-    );
-    // lines marked one by one give way to their files
-    app.on_key(key('U'));
+    app.on_key(key(' '));
     to_file(&mut app, "README");
     app.act(Action::ToggleExpand);
     app.cursor = shown_row(&app, "+hello there");
-    app.on_key(key(' '));
-    assert_eq!(app.marked_lines.len(), 1);
+    // in the details too, M is the repos
     app.on_key(key('M'));
-    assert!(app.marked_lines.is_empty());
-    assert_eq!(app.marked_files[&dirty].len(), 5);
-    // among the repos: those listed
+    assert_eq!(app.marked.len(), 3);
+    assert_eq!(app.marked_files[&dirty].len(), 1, "the file's mark stays");
+    app.on_key(key('U'));
+    assert!(app.marked.is_empty());
+    assert_eq!(app.marked_files[&dirty].len(), 1);
+    // those listed: within a filter, the ones it leaves
     app.act(Action::Top);
-    for c in "/dty".chars() {
-        app.on_key(key(c));
-    }
-    app.on_key(code(KeyCode::Enter));
+    let filter = |app: &mut App| {
+        for c in "/dty".chars() {
+            app.on_key(key(c));
+        }
+        app.on_key(code(KeyCode::Enter));
+    };
+    filter(&mut app);
     assert_eq!(names(&app), ["acme/dirty"]);
     app.on_key(key('M'));
     assert_eq!(app.marked, [dirty.clone()].into());
     app.on_key(code(KeyCode::Esc)); // the filter
     app.on_key(key('M'));
     assert_eq!(app.marked.len(), 3);
-    assert_eq!(app.marked_files[&dirty].len(), 5, "the files' marks stay");
-    // U among the repos unmarks those listed, and not the files
-    for c in "/dty".chars() {
-        app.on_key(key(c));
-    }
-    app.on_key(code(KeyCode::Enter));
+    filter(&mut app);
     app.on_key(key('U'));
     assert!(app.marked.len() == 2 && !app.marked.contains(&dirty));
     app.on_key(code(KeyCode::Esc));
-    app.on_key(key('U'));
-    assert!(app.marked.is_empty());
-    assert_eq!(app.marked_files[&dirty].len(), 5);
-    // U in the details unmarks its files and lines, and not the repos
-    app.on_key(key('M'));
+    // C-g: what's marked in details (from anywhere), a region too; the
+    // repos stay
+    to_file(&mut app, "README");
     app.cursor = shown_row(&app, "+hello there");
     app.on_key(key(' '));
-    assert_eq!(app.marked_lines.len(), 1);
-    app.on_key(key('U'));
-    assert!(app.marked_files.is_empty() && app.marked_lines.is_empty());
-    assert_eq!(app.marked.len(), 3);
-    // Esc as U
+    app.on_key(ctrl(' '));
+    assert!(app.region.is_some() && app.marked_lines.len() == 1);
+    app.act(Action::Bottom);
+    app.on_key(ctrl('g'));
+    assert!(app.marked_files.is_empty() && app.marked_lines.is_empty() && app.region.is_none());
+    assert_eq!(app.marked.len(), 2);
+    // with nothing of that left, the repos; Esc does as C-g
     to_file(&mut app, "README");
     app.on_key(key(' '));
     app.on_key(code(KeyCode::Esc));
     assert!(app.marked_files.is_empty());
-    assert_eq!(app.marked.len(), 3);
+    assert_eq!(app.marked.len(), 2);
+    app.on_key(code(KeyCode::Esc));
+    assert!(app.marked.is_empty());
 }
 
 /// `C-space` starts a region in a diff: the added and removed lines
@@ -6972,7 +6950,7 @@ fn marks_show_on_what_holds_them_and_k_says_where() {
     assert_eq!(marks_of(&mut app, &rows), "p-M-");
     assert!(title(&mut app).contains("marked in details: 2 files"));
     // lines count too, and a file in a folder marks the folder partly
-    app.on_key(key('U'));
+    app.on_key(ctrl('g'));
     to_file(&mut app, "README");
     app.act(Action::ToggleExpand);
     app.cursor = shown_row(&app, "+hello there");
@@ -6993,7 +6971,7 @@ fn marks_show_on_what_holds_them_and_k_says_where() {
     );
     assert!(title(&mut app).contains("marked in details: 1 file, 1 line"));
     // folded away, the repo's row still shows there are some
-    app.on_key(key('U'));
+    app.on_key(ctrl('g'));
     to_file(&mut app, "README");
     app.on_key(key(' '));
     app.act(Action::Top);
