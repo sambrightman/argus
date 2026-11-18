@@ -269,9 +269,12 @@ Two findings:
   keys read the marks in five places and one dropped the section, so `K`
   on a file marked under staged discarded its unstaged changes; a
   property test now holds that the keys change only what shows as
-  theirs. Marks in details reach across repos (the keys take them all),
-  so they show on each repo's row and in the title, and what's taken
-  outside the cursor's repo is said. A marked repo is a different
+  theirs. Marks in details reach across repos, so they show on each
+  repo's row and in the title. A key pressed with marks in a repo the
+  cursor isn't in asks which is meant (the key again: this repo alone,
+  its marks or with none the cursor's row; `A`: all that's marked),
+  since taking another repo's marks from here unasked was the surprise
+  left; and what's taken outside the cursor's repo is said. A marked repo is a different
   thing (a target for repo actions), drawn differently.
 * **Popping a stash** leaves to git what git refuses cleanly, and
   checks first only what it would make a mess of: a conflict (a trial
@@ -803,7 +806,7 @@ rendering is snapshot-tested via `TestBackend`.
   (`[ui] attention_only = true`); the header says how many repos there are
   in all and that `a` shows them.
 * **`sync` is now `pull`** (command, `pull` list and `[[track]] pull`,
-  `mark --pull`, the `pull` icon): it pulls, and clones new repos of
+  `mark --pull` as it was then, `argus tag pull` now; the `pull` icon): it pulls, and clones new repos of
   tracked owners, but never pushes, which "sync" suggested. Cloning stays
   part of it (`--no-clone` to skip), so one command serves cron. Old names
   are errors, except the state file's `last_sync`, read as `last_pull`.

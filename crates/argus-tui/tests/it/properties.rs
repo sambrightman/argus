@@ -217,7 +217,7 @@ type Taken = (Vec<PatchLine>, BTreeSet<(std::path::PathBuf, String)>);
 /// patches and the files to go whole, or `None` when something marked is
 /// on the wrong side for it (nothing is to happen then). Worked out from
 /// what each row is and shows, not from what the keys read.
-fn expected(app: &App, verb: char) -> Option<Taken> {
+fn expected(app: &App, verb: char, all: bool) -> Option<Taken> {
     let right = |s: Section| (s == Section::Staged) == (verb == 'u');
     let detail = |n: usize| match &app.rows[n] {
         Row::Detail { repo, line } => Some((app.ws.entries[*repo].path.clone(), line)),
@@ -238,9 +238,26 @@ fn expected(app: &App, verb: char) -> Option<Taken> {
     };
     let rows = 0..app.rows.len();
     let (mut lines, mut files) = (vec![], BTreeSet::new());
-    if app.marked_in(None) != (0, 0) {
+    // With marks in a repo the cursor isn't in, it's asked which: all of
+    // them, or this repo alone (its marks, else the cursor's row).
+    let here = match &app.rows[app.cursor] {
+        Row::Repo(i) | Row::Detail { repo: i, .. } => app.ws.entries[*i].path.clone(),
+    };
+    let asked = app.repos_with_marks().iter().any(|r| *r != here);
+    let within = |repo: &std::path::PathBuf| all || !asked || *repo == here;
+    let marked = match asked && !all {
+        true => app.repos_with_marks().contains(&here),
+        false => app.marked_in(None) != (0, 0),
+    };
+    if marked {
         for n in rows {
-            match app.target(n) {
+            let target = app.target(n).filter(|t| {
+                let (Target::Section { repo, .. }
+                | Target::File { repo, .. }
+                | Target::Hunk { repo, .. }) = t;
+                within(repo)
+            });
+            match target {
                 Some(Target::File {
                     repo,
                     section,
@@ -362,11 +379,17 @@ proptest! {
         region in prop::option::weighted(0.3, (any::<prop::sample::Index>(), 0..6usize)),
         cursor in any::<prop::sample::Index>(),
         verb in prop::sample::select(vec!['s', 'u', 'K']),
+        all in any::<bool>(),
     ) {
         let mut app = arranged(&unfold, &toggle, region, cursor);
-        let want = expected(&app, verb);
+        let want = expected(&app, verb, all);
         let at = format!("{:?}", app.target(app.cursor));
         let mut fx = app.on_key(KeyEvent::new(KeyCode::Char(verb), KeyModifiers::NONE));
+        // (asked which marks: all of them, or this repo's)
+        if matches!(app.mode, Mode::Menu { .. }) {
+            let answer = if all { 'A' } else { verb };
+            fx = app.on_key(KeyEvent::new(KeyCode::Char(answer), KeyModifiers::NONE));
+        }
         if matches!(app.mode, Mode::Confirm { .. }) {
             fx = app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         }

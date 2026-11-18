@@ -26,6 +26,9 @@ pub enum MenuId {
     PickCommit,
     /// The Tag menu's tags for the selected repo's owner as a whole.
     Owner,
+    /// Which marks a key is for, asked when some are in a repo the cursor
+    /// isn't in: built when opened.
+    Across,
 }
 
 pub struct Item {
@@ -91,6 +94,8 @@ impl MenuId {
             MenuId::Reset => 'X',
             MenuId::PickCommit => 'X',
             MenuId::Owner => 't',
+            // (opened by s, u or K: no key of its own)
+            MenuId::Across => ' ',
         }
     }
 
@@ -296,6 +301,7 @@ impl MenuId {
             ),
             MenuId::Ignore => ("Ignore issues", vec![]),
             MenuId::Gitignore => ("Gitignore", vec![]),
+            MenuId::Across => ("Marked", vec![]),
             MenuId::Reset => (
                 "Reset",
                 vec![

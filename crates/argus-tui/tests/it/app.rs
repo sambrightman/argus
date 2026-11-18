@@ -1975,7 +1975,7 @@ fn discarding_always_asks() {
     app.on_key(key('K'));
     // (saying what goes: the untracked one is deleted)
     assert!(render(&mut app, 120, 30).contains(
-        "Discard unstaged changes to 1 file and delete 1 untracked? They're lost. (y/n)"
+        "Discard unstaged changes to 1 marked file and delete 1 marked untracked? They're lost. (y/n)"
     ));
     let fx = app.on_key(key('y'));
     assert_eq!(
@@ -5693,6 +5693,8 @@ fn a_file_marked_where_the_key_does_not_apply_is_refused() {
     let said = |app: &App| app.message.as_ref().unwrap().0.clone();
     to_staged(&mut app, "both");
     app.on_key(key(' '));
+    // (space moved on, out of the repo: back into it)
+    to_staged(&mut app, "both");
     assert!(app.on_key(key('s')).is_empty());
     assert_eq!(
         said(&app),
@@ -7345,7 +7347,8 @@ fn marks_show_on_what_holds_them_and_k_says_where() {
     app.on_key(key(' '));
     // s with the cursor in another repo says where it staged
     cursor_on_detail(&mut app, "clean", "path");
-    assert!(!app.on_key(key('s')).is_empty());
+    app.on_key(key('s'));
+    assert!(!app.on_key(key('A')).is_empty());
     assert_eq!(
         app.message.as_ref().unwrap().0,
         "running 1 job(s)… · in acme/dirty"
@@ -7383,6 +7386,7 @@ fn marks_show_on_what_holds_them_and_k_says_where() {
     cursor_on_detail(&mut app, "clean", "path");
     // and K where the files are
     app.on_key(key('K'));
+    app.on_key(key('A'));
     assert!(
         render(&mut app, 140, 60)
             .contains("In acme/dirty: discard unstaged changes to README? They're lost. (y/n)"),
@@ -7428,9 +7432,12 @@ fn discarding_in_several_repos_says_how_many() {
             .ends_with("marked in details: 2 files in 2 repos"),
         "{title}"
     );
+    // (marks beyond the cursor's repo: asked which, and A is all of them)
     app.on_key(key('K'));
+    app.on_key(key('A'));
     assert!(
-        render(&mut app, 140, 60).contains("In 2 repos: delete 2 untracked files? They're lost."),
+        render(&mut app, 140, 60)
+            .contains("In 2 repos: delete 2 marked untracked files? They're lost."),
         "{}",
         render(&mut app, 140, 60)
     );
@@ -7603,7 +7610,8 @@ fn the_keys_at_the_edges() {
         app.on_key(key(' '));
     }
     app.act(Action::Bottom);
-    assert!(!app.on_key(key('s')).is_empty());
+    app.on_key(key('s'));
+    assert!(!app.on_key(key('A')).is_empty());
     assert!(
         app.message.as_ref().unwrap().0.ends_with(" · in 2 repos"),
         "{:?}",
@@ -7710,6 +7718,188 @@ fn an_edit_elsewhere_says_where_in_the_patch() {
         .unwrap();
     let there = std::fs::read_to_string(editing_file(&app.on_key(key('e')))).unwrap();
     assert!(there.contains("\n# In acme/dirty.\n"), "{there}");
+}
+
+/// With something marked in a repo other than the cursor's, `s`, `u` and
+/// `K` ask which is meant: the key again for this repo only (what's
+/// marked in it, or with nothing marked here what the cursor is on), `A`
+/// for what's marked in all of them. With marks in the cursor's repo
+/// alone, nothing is asked.
+#[test]
+fn marks_beyond_the_cursors_repo_ask_which_is_meant() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        write(&sb.path("dev/dirty"), "new", "a\n");
+        write(&sb.path("dev/clean"), "README", "changed\n");
+        write(&sb.path("dev/clean"), "other", "b\n");
+    });
+    // (a row of `repo`'s changes: its file's own line)
+    let file_in = |app: &mut App, repo: &str, file: &str| {
+        let top = app
+            .rows
+            .iter()
+            .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with(repo)))
+            .unwrap();
+        app.cursor = top;
+        if !matches!(app.rows.get(top + 1), Some(Row::Detail { .. })) {
+            app.on_key(code(KeyCode::Tab));
+        }
+        app.cursor = (top + 1..app.rows.len())
+            .find(|n| {
+                matches!(&app.rows[*n], Row::Detail { line, .. }
+                if line.file.as_deref() == Some(file) && line.diff.is_none())
+            })
+            .unwrap();
+    };
+    let menu = |app: &App| match &app.mode {
+        Mode::Menu { menu, .. } => Some((menu.title.clone(), menu_items(app))),
+        _ => None,
+    };
+    // marked in the cursor's repo alone: taken, nothing asked
+    file_in(&mut app, "dirty", "README");
+    app.on_key(key(' '));
+    file_in(&mut app, "dirty", "new");
+    assert_eq!(
+        job_ops(&app.on_key(key('s'))),
+        [Op::AddTracked {
+            paths: paths(&["README"])
+        }]
+    );
+    app.running.clear();
+    // from another repo: asked
+    file_in(&mut app, "clean", "other");
+    assert!(app.on_key(key('s')).is_empty());
+    assert_eq!(
+        menu(&app).unwrap(),
+        (
+            "Stage · something is marked in acme/dirty".to_string(),
+            vec![
+                "s here in acme/clean only: what the cursor is on".to_string(),
+                "A all that's marked (in acme/dirty)".to_string(),
+            ]
+        )
+    );
+    // the key again: this repo, the cursor's file (nothing's marked here)
+    let fx = app.on_key(key('s'));
+    assert_eq!(
+        job_ops(&fx),
+        [Op::Add {
+            paths: paths(&["other"])
+        }]
+    );
+    assert_eq!(app.message.as_ref().unwrap().0, "running 1 job(s)…");
+    assert_eq!(app.marked_in(None), (1, 0), "the other repo's mark stays");
+    app.running.clear();
+    // A: what's marked, wherever
+    app.on_key(key('s'));
+    let fx = app.on_key(key('A'));
+    assert_eq!(
+        job_ops(&fx),
+        [Op::AddTracked {
+            paths: paths(&["README"])
+        }]
+    );
+    assert!(
+        app.message
+            .as_ref()
+            .unwrap()
+            .0
+            .ends_with(" · in acme/dirty")
+    );
+    app.running.clear();
+    // Esc: neither
+    app.on_key(key('K'));
+    assert!(menu(&app).unwrap().0.starts_with("Discard · "));
+    assert!(app.on_key(code(KeyCode::Esc)).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
+    // K asks which, then asks as it always does, about just that
+    app.on_key(key('K'));
+    app.on_key(key('K'));
+    assert!(render(&mut app, 140, 60).contains(" Delete untracked other? It's lost. (y/n)"));
+    app.on_key(key('n'));
+    app.on_key(key('K'));
+    app.on_key(key('A'));
+    assert!(
+        render(&mut app, 140, 60)
+            .contains("In acme/dirty: discard unstaged changes to README? They're lost. (y/n)")
+    );
+    app.on_key(key('n'));
+    // marked here too: the key again is for this repo's marks, not the
+    // cursor's row
+    file_in(&mut app, "clean", "README");
+    app.on_key(key(' '));
+    file_in(&mut app, "clean", "other");
+    app.on_key(key('s'));
+    assert_eq!(
+        menu(&app).unwrap().1,
+        [
+            "s here in acme/clean only: what's marked in it",
+            "A all that's marked (in 2 repos)"
+        ]
+    );
+    assert_eq!(
+        job_ops(&app.on_key(key('s'))),
+        [Op::AddTracked {
+            paths: paths(&["README"])
+        }]
+    );
+    // u, with nothing here that's staged: this repo's refusal, said
+    app.running.clear();
+    app.on_key(key('u'));
+    assert!(app.on_key(key('u')).is_empty());
+    assert_eq!(
+        app.message.as_ref().unwrap().0,
+        "some marked files aren't staged: unmark them (space) first"
+    );
+}
+
+/// K on several marked files says they're the marked ones.
+#[test]
+fn discarding_marked_files_says_they_are_the_marked_ones() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        diff_fixture(sb);
+        write(&sb.path("dev/dirty"), "new2", "x\n");
+    });
+    let asked = |app: &mut App| {
+        app.on_key(key('K'));
+        let screen = render(app, 140, 40);
+        app.on_key(key('n'));
+        let line = screen
+            .lines()
+            .find(|l| l.contains("(y/n)"))
+            .unwrap_or_default();
+        line.trim().to_string()
+    };
+    for file in ["README", "both"] {
+        to_file(&mut app, file);
+        app.on_key(key(' '));
+    }
+    assert_eq!(
+        asked(&mut app),
+        "Discard unstaged changes to 2 marked files? They're lost. (y/n)"
+    );
+    for file in ["new", "new2"] {
+        to_file(&mut app, file);
+        app.on_key(key(' '));
+    }
+    assert_eq!(
+        asked(&mut app),
+        "Discard unstaged changes to 2 marked files and delete 2 marked untracked? They're lost. (y/n)"
+    );
+    for file in ["README", "both"] {
+        to_file(&mut app, file);
+        app.on_key(key(' '));
+    }
+    assert_eq!(
+        asked(&mut app),
+        "Delete 2 marked untracked files? They're lost. (y/n)"
+    );
+    // inverse: a section's files, nothing marked, aren't called that
+    app.on_key(ctrl('g'));
+    to_section(&mut app, argus_tui::details::Section::Untracked);
+    assert_eq!(
+        asked(&mut app),
+        "Delete 3 untracked files? They're lost. (y/n)"
+    );
 }
 
 /// The legend shows pull's icon in the pull tag's colour, wherever that

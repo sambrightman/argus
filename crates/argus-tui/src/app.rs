@@ -62,6 +62,11 @@ pub enum Action {
     MarkAll,
     /// End a region and unmark the files and lines marked in details.
     Cancel,
+    /// Stage, unstage or discard in the cursor's repo alone (what's marked
+    /// in it, else what the cursor is on), or what's marked in every repo:
+    /// the answers when the key is pressed with marks in another repo.
+    TakeHere(HunkVerb),
+    TakeAll(HunkVerb),
     /// Start a region of diff lines at the cursor (`C-space`), or end it,
     /// keeping its lines as marks.
     ToggleRegion,
@@ -1663,10 +1668,12 @@ impl App {
                 return self.start_jobs(jobs);
             }
             Stash(kind) => return self.stash_action(kind),
-            StageFiles => return self.take(HunkVerb::Stage),
-            UnstageFiles => return self.take(HunkVerb::Unstage),
+            StageFiles => return self.take_or_ask(HunkVerb::Stage),
+            UnstageFiles => return self.take_or_ask(HunkVerb::Unstage),
             EditPatch => return self.edit_patch(),
-            DiscardFiles => return self.take(HunkVerb::Discard),
+            DiscardFiles => return self.take_or_ask(HunkVerb::Discard),
+            TakeHere(verb) => return self.take(verb, self.current_path()),
+            TakeAll(verb) => return self.take(verb, None),
             OpenMenu(m) => {
                 let mut menu = m.menu();
                 self.add_tags(&mut menu);
@@ -3863,12 +3870,21 @@ impl App {
     /// place that says so: each thing with where it's listed, so nothing
     /// is taken by its other side.
     pub fn taken(&self) -> (Vec<Target>, bool) {
+        self.taken_in(None)
+    }
+
+    /// [`Self::taken`], or with `only` what's taken in that repo alone:
+    /// what's marked in it, and with nothing marked in it what the cursor
+    /// is on.
+    fn taken_in(&self, only: Option<&Path>) -> (Vec<Target>, bool) {
         let lines = self.lines();
-        if self.marked_files.is_empty() && lines.is_empty() {
+        let within = |repo: &PathBuf| only.is_none_or(|o| repo == o);
+        let marked = self.marked_files.keys().any(within) || lines.iter().any(|k| within(&k.0));
+        if !marked {
             return (self.under_cursor().into_iter().collect(), false);
         }
         let mut taken = vec![];
-        for (repo, files) in &self.marked_files {
+        for (repo, files) in self.marked_files.iter().filter(|(r, _)| within(r)) {
             for (section, file) in files {
                 taken.push(Target::File {
                     repo: repo.clone(),
@@ -3877,7 +3893,7 @@ impl App {
                 });
             }
         }
-        for (repo, file, side, hunk, at) in lines.iter() {
+        for (repo, file, side, hunk, at) in lines.iter().filter(|k| within(&k.0)) {
             taken.push(Target::Hunk {
                 repo: repo.clone(),
                 section: match side {
@@ -3924,11 +3940,11 @@ impl App {
         }
     }
 
-    /// The files of what's [taken](Self::taken), by repo index: a
-    /// section's are those it lists.
-    fn taken_files(&self) -> Vec<(usize, Vec<String>)> {
+    /// The files of what's `taken`, by repo index: a section's are those
+    /// it lists.
+    fn files_of(&self, taken: Vec<Target>) -> Vec<(usize, Vec<String>)> {
         let mut by: Vec<(usize, Vec<String>)> = vec![];
-        for target in self.taken().0 {
+        for target in taken {
             let (repo, files) = match target {
                 Target::Section { repo, section } => {
                     let s = self.ws.get(&repo).and_then(Entry::status);
@@ -3995,8 +4011,61 @@ impl App {
     /// where it is. Lines and hunks go as patches (one per file and side,
     /// built from the diff as it was read), files whole. Discarding asks
     /// first, once, saying what goes.
-    fn take(&mut self, verb: HunkVerb) -> Vec<Effect> {
-        let (targets, marked) = self.taken();
+    /// `s`, `u` or `K` as pressed. What's marked in details is marked
+    /// across repos, and the key would take it all, wherever the cursor
+    /// is: with some of it in a repo the cursor isn't in, it's asked
+    /// which is meant.
+    fn take_or_ask(&mut self, verb: HunkVerb) -> Vec<Effect> {
+        let here = self.current_path();
+        let marks = self.repos_with_marks();
+        let elsewhere: Vec<&PathBuf> = marks.iter().filter(|r| here.as_ref() != Some(*r)).collect();
+        let Some(here) = here.filter(|_| !elsewhere.is_empty()) else {
+            return self.take(verb, None);
+        };
+        let name = |p: &Path| {
+            self.ws
+                .get(p)
+                .map_or_else(String::new, |e| e.display_name())
+        };
+        let (key, word) = match verb {
+            HunkVerb::Stage => ('s', "Stage"),
+            HunkVerb::Unstage => ('u', "Unstage"),
+            HunkVerb::Discard => ('K', "Discard"),
+        };
+        let whereabouts = match elsewhere.as_slice() {
+            [one] => name(one),
+            many => format!("{} other repos", many.len()),
+        };
+        let all = match marks.len() {
+            1 => format!("in {whereabouts}"),
+            n => format!("in {n} repos"),
+        };
+        let this = match marks.contains(&here) {
+            true => "what's marked in it",
+            false => "what the cursor is on",
+        };
+        let menu = Menu {
+            id: MenuId::Across,
+            title: format!("{word} · something is marked in {whereabouts}"),
+            items: vec![
+                menu::item(
+                    key,
+                    format!("here in {} only: {this}", name(&here)),
+                    Action::TakeHere(verb),
+                ),
+                menu::item(
+                    'A',
+                    format!("all that's marked ({all})"),
+                    Action::TakeAll(verb),
+                ),
+            ],
+        };
+        self.mode = Mode::Menu { menu, cursor: 0 };
+        vec![]
+    }
+
+    fn take(&mut self, verb: HunkVerb, only: Option<PathBuf>) -> Vec<Effect> {
+        let (targets, marked) = self.taken_in(only.as_deref());
         if targets.is_empty() {
             self.info(FILE_HINT);
             return vec![];
@@ -4066,7 +4135,7 @@ impl App {
             ));
         }
         // then the files, whole
-        let files = self.taken_files();
+        let files = self.files_of(targets);
         let plan = match verb {
             HunkVerb::Stage => ops::stage_ops,
             HunkVerb::Unstage => ops::unstage_ops,
@@ -4127,17 +4196,28 @@ impl App {
                 _ => {}
             }
         }
+        // (files taken by their marks are said to be: the cursor may be on
+        // something else, a section of more files say)
+        let of_marks = if marked && patched == 0 {
+            "marked "
+        } else {
+            ""
+        };
         let files_question = match (changed.as_slice(), untracked.as_slice()) {
             ([], []) => None,
             ([one], []) => Some(format!("unstaged changes to {one}? They're lost.")),
             ([], [one]) => Some(format!("untracked {one}? It's lost.")),
             (c, []) => Some(format!(
-                "unstaged changes to {} files? They're lost.",
+                "unstaged changes to {} {of_marks}files? They're lost.",
                 c.len()
             )),
-            ([], u) => Some(format!("{} untracked files? They're lost.", u.len())),
+            ([], u) => Some(format!(
+                "{} {of_marks}untracked files? They're lost.",
+                u.len()
+            )),
             (c, u) => Some(format!(
-                "unstaged changes to {} {} and delete {} untracked? They're lost.",
+                "unstaged changes to {} {of_marks}{} and delete {} {of_marks}untracked? \
+                 They're lost.",
                 c.len(),
                 plural(c.len(), "file", "files"),
                 u.len()
@@ -5512,8 +5592,8 @@ pub struct RegionStart {
 }
 
 /// What `s`/`u`/`K` do to a hunk or line.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum HunkVerb {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HunkVerb {
     Stage,
     Unstage,
     Discard,
