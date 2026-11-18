@@ -252,7 +252,8 @@ fn expected(app: &App, verb: char, all: bool) -> Option<Taken> {
     if marked {
         for n in rows {
             let target = app.target(n).filter(|t| {
-                let (Target::Section { repo, .. }
+                let (Target::Repo { repo }
+                | Target::Section { repo, .. }
                 | Target::File { repo, .. }
                 | Target::Hunk { repo, .. }) = t;
                 within(repo)
@@ -294,9 +295,21 @@ fn expected(app: &App, verb: char, all: bool) -> Option<Taken> {
         lines.dedup();
         return Some((lines, files));
     }
-    // nothing marked: what the cursor's row is, or is in
-    let (repo, line) = detail(app.cursor)?.clone();
-    let section = line.section?;
+    // nothing marked: what the cursor's row is, or is in. The repo's own
+    // row, and a row of its details that's none of its changes: all the
+    // repo lists on the key's side.
+    let everything = |repo: &std::path::PathBuf| {
+        let status = app.ws.get(repo).and_then(|e| e.status());
+        let sections = Section::ALL.into_iter().filter(|s| right(*s));
+        let listed = sections.flat_map(|s| status.map(|st| s.files(st)).unwrap_or_default());
+        listed.map(|f| (repo.clone(), f)).collect::<BTreeSet<_>>()
+    };
+    let Some((repo, line)) = detail(app.cursor) else {
+        return Some((lines, everything(&here)));
+    };
+    let Some(section) = line.section else {
+        return Some((lines, everything(&repo)));
+    };
     let blank = line.id.last() == Some(&Seg::Blank);
     if let Some(section) = Section::heads(line) {
         if !right(section) {
@@ -423,7 +436,11 @@ proptest! {
         };
         let unstaged = 1;
         app.on_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
-        let fx = app.on_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        let mut fx = app.on_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        // (asked which repos' marks: all of them)
+        if matches!(&app.mode, Mode::Menu { menu, .. } if menu.items.iter().any(|i| i.key == 'A')) {
+            fx = app.on_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE));
+        }
         let (mut by_path, mut by_line): (BTreeSet<(std::path::PathBuf, String)>, Vec<PatchLine>) =
             (BTreeSet::new(), vec![]);
         let mut stashed = false;

@@ -271,8 +271,9 @@ Two findings:
   property test now holds that the keys change only what shows as
   theirs. Marks in details reach across repos, so they show on each
   repo's row and in the title. A key pressed with marks in a repo the
-  cursor isn't in asks which is meant (the key again: this repo alone,
-  its marks or with none the cursor's row; `A`: all that's marked),
+  cursor isn't in asks which is meant (the key again: this repo, its
+  marks or with none the cursor's row; `A`: all repos), stashing and
+  gitignore too,
   since taking another repo's marks from here unasked was the surprise
   left; and what's taken outside the cursor's repo is said. A marked repo is a different
   thing (a target for repo actions), drawn differently.

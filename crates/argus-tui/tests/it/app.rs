@@ -1782,14 +1782,12 @@ fn stage_and_unstage_the_file_under_the_cursor() {
         write(&d, "added", "x\n");
         git(&d, &["add", "added"]);
     });
-    // not on a file: a hint, nothing run
+    // on the repo's own row, its details folded away: the whole repo,
+    // asked about first
     let fx = app.on_key(key('s'));
     assert!(fx.is_empty());
-    assert!(
-        app.message.as_ref().unwrap().0.contains("file"),
-        "{:?}",
-        app.message
-    );
+    assert!(matches!(app.mode, Mode::Confirm { .. }));
+    assert!(app.on_key(key('n')).is_empty());
     to_file(&mut app, "README");
     let fx = app.on_key(key('s'));
     assert_eq!(
@@ -6146,6 +6144,7 @@ fn a_file_is_stashed_where_it_is_marked() {
     // under staged too: the file, by its path
     to_staged(&mut app, "both");
     app.on_key(key(' '));
+    to_staged(&mut app, "both");
     let fx = stash_marked(&mut app);
     let jobs = stash_jobs(&app, &fx);
     assert!(
@@ -7356,7 +7355,8 @@ fn marks_show_on_what_holds_them_and_k_says_where() {
     app.running.clear();
     // so does stashing them; stashing a repo says no such thing
     app.on_key(key('z'));
-    assert!(!app.on_key(key('m')).is_empty());
+    app.on_key(key('m'));
+    assert!(!app.on_key(key('A')).is_empty());
     assert!(
         app.message
             .as_ref()
@@ -7771,11 +7771,8 @@ fn marks_beyond_the_cursors_repo_ask_which_is_meant() {
     assert_eq!(
         menu(&app).unwrap(),
         (
-            "Stage · something is marked in acme/dirty".to_string(),
-            vec![
-                "s here in acme/clean only: what the cursor is on".to_string(),
-                "A all that's marked (in acme/dirty)".to_string(),
-            ]
+            "Stage · marked repos: acme/dirty".to_string(),
+            vec!["s this repo".to_string(), "A all repos".to_string()]
         )
     );
     // the key again: this repo, the cursor's file (nothing's marked here)
@@ -7830,11 +7827,11 @@ fn marks_beyond_the_cursors_repo_ask_which_is_meant() {
     file_in(&mut app, "clean", "other");
     app.on_key(key('s'));
     assert_eq!(
-        menu(&app).unwrap().1,
-        [
-            "s here in acme/clean only: what's marked in it",
-            "A all that's marked (in 2 repos)"
-        ]
+        menu(&app).unwrap(),
+        (
+            "Stage · marked repos: acme/clean, acme/dirty".to_string(),
+            vec!["s this repo".to_string(), "A all repos".to_string()]
+        )
     );
     assert_eq!(
         job_ops(&app.on_key(key('s'))),
@@ -7850,6 +7847,185 @@ fn marks_beyond_the_cursors_repo_ask_which_is_meant() {
         app.message.as_ref().unwrap().0,
         "some marked files aren't staged: unmark them (space) first"
     );
+}
+
+/// On a repo's own row, or a row of its details that's nothing to stage
+/// by itself, `s`, `u` and `K` take the whole repo: at once when its
+/// details are shown, after asking when they're folded away (`K` always
+/// asks). What's marked in it still comes first.
+#[test]
+fn the_keys_on_a_repos_row_take_the_whole_repo() {
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    let all = [
+        Op::AddTracked {
+            paths: paths(&["README", "both"]),
+        },
+        Op::Add {
+            paths: paths(&["bin", "new"]),
+        },
+    ];
+    let staged = [Op::Restore {
+        staged: true,
+        worktree: false,
+        from_head: false,
+        paths: paths(&["both"]),
+    }];
+    let asked = |app: &mut App| {
+        let screen = render(app, 140, 40);
+        let line = screen
+            .lines()
+            .find(|l| l.contains("(y/n)"))
+            .unwrap_or_default();
+        line.trim().to_string()
+    };
+    // a row of the details that's none of the changes
+    cursor_on_detail(&mut app, "dirty", "path");
+    assert_eq!(job_ops(&app.on_key(key('s'))), all);
+    app.running.clear();
+    assert_eq!(job_ops(&app.on_key(key('u'))), staged);
+    app.running.clear();
+    assert!(app.on_key(key('K')).is_empty());
+    assert_eq!(
+        asked(&mut app),
+        "Everything in acme/dirty: discard unstaged changes to 2 files and delete 2 untracked? They're lost. (y/n)"
+    );
+    app.on_key(key('n'));
+    // the repo's own row, its details shown
+    app.act(Action::Top);
+    assert_eq!(names(&app)[0], "acme/dirty");
+    assert_eq!(job_ops(&app.on_key(key('s'))), all);
+    app.running.clear();
+    // what's marked in it comes first
+    to_file(&mut app, "README");
+    app.on_key(key(' '));
+    app.act(Action::Top);
+    assert_eq!(
+        job_ops(&app.on_key(key('s'))),
+        [Op::AddTracked {
+            paths: paths(&["README"])
+        }]
+    );
+    app.running.clear();
+    app.on_key(ctrl('g'));
+    // folded away: asked first
+    app.act(Action::ToggleExpand);
+    assert!(!matches!(app.rows.get(1), Some(Row::Detail { .. })));
+    assert!(app.on_key(key('s')).is_empty());
+    assert_eq!(
+        asked(&mut app),
+        "Stage everything in acme/dirty (4 files)? (y/n)"
+    );
+    assert!(app.on_key(key('n')).is_empty());
+    app.on_key(key('s'));
+    assert_eq!(job_ops(&app.on_key(key('y'))), all);
+    app.running.clear();
+    assert!(app.on_key(key('u')).is_empty());
+    assert_eq!(
+        asked(&mut app),
+        "Unstage everything in acme/dirty (1 file)? (y/n)"
+    );
+    assert_eq!(job_ops(&app.on_key(key('y'))), staged);
+    app.running.clear();
+    // a repo with nothing to take says so
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("clean")))
+        .unwrap();
+    assert!(app.on_key(key('s')).is_empty());
+    assert_eq!(app.message.as_ref().unwrap().0, "nothing to stage");
+    assert!(app.on_key(key('K')).is_empty());
+    assert!(matches!(app.mode, Mode::Normal));
+}
+
+/// Stashing what's marked and gitignore ask the same as `s`, `u` and `K`
+/// when something is marked in a repo the cursor isn't in.
+#[test]
+fn stash_and_gitignore_ask_which_repos_marks_too() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        write(&sb.path("dev/dirty"), "new", "a\n");
+        write(&sb.path("dev/clean"), "other", "b\n");
+    });
+    let file_in = |app: &mut App, repo: &str, file: &str| {
+        let top = app
+            .rows
+            .iter()
+            .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with(repo)))
+            .unwrap();
+        app.cursor = top;
+        if !matches!(app.rows.get(top + 1), Some(Row::Detail { .. })) {
+            app.on_key(code(KeyCode::Tab));
+        }
+        app.cursor = (top + 1..app.rows.len())
+            .find(|n| {
+                matches!(&app.rows[*n], Row::Detail { line, .. }
+                if line.file.as_deref() == Some(file) && line.diff.is_none())
+            })
+            .unwrap();
+    };
+    let menu = |app: &App| match &app.mode {
+        Mode::Menu { menu, .. } => (menu.title.clone(), menu_items(app)),
+        _ => panic!("no menu: {:?}", app.message),
+    };
+    file_in(&mut app, "dirty", "new");
+    app.on_key(key(' '));
+    file_in(&mut app, "clean", "other");
+    // gitignore: this repo is the cursor's file, all is what's marked
+    app.on_key(key('i'));
+    assert_eq!(
+        menu(&app),
+        (
+            "Gitignore · marked repos: acme/dirty".to_string(),
+            vec!["i this repo".to_string(), "A all repos".to_string()]
+        )
+    );
+    app.on_key(key('i'));
+    assert!(menu(&app).1[0].contains("/other"), "{:?}", menu(&app));
+    app.on_key(code(KeyCode::Esc));
+    app.on_key(key('i'));
+    app.on_key(key('A'));
+    assert!(menu(&app).1[0].contains("/new"), "{:?}", menu(&app));
+    app.on_key(code(KeyCode::Esc));
+    // stash marked: nothing's marked here, so all is the only answer
+    app.on_key(key('z'));
+    app.on_key(key('m'));
+    assert_eq!(
+        menu(&app),
+        (
+            "Stash · marked repos: acme/dirty".to_string(),
+            vec!["A all repos".to_string()]
+        )
+    );
+    let fx = app.on_key(key('A'));
+    let jobs = stash_jobs(&app, &fx);
+    assert!(
+        jobs.len() == 1
+            && jobs[0].0 == "acme/dirty"
+            && stash_op(true, false, false, &["new"])(&jobs[0].1),
+        "{jobs:?}"
+    );
+    app.running.clear();
+    // marked here too: this repo's
+    app.on_key(key(' '));
+    file_in(&mut app, "clean", "other");
+    app.on_key(key('z'));
+    app.on_key(key('m'));
+    assert_eq!(menu(&app).1, ["m this repo", "A all repos"]);
+    let fx = app.on_key(key('m'));
+    let jobs = stash_jobs(&app, &fx);
+    assert!(
+        jobs.len() == 1
+            && jobs[0].0 == "acme/clean"
+            && stash_op(true, false, false, &["other"])(&jobs[0].1),
+        "{jobs:?}"
+    );
+    // inverse: marks in the cursor's repo alone ask nothing
+    app.running.clear();
+    file_in(&mut app, "dirty", "new");
+    app.on_key(key(' '));
+    file_in(&mut app, "clean", "other");
+    app.on_key(key('z'));
+    assert!(!app.on_key(key('m')).is_empty());
 }
 
 /// K on several marked files says they're the marked ones.

@@ -67,6 +67,11 @@ pub enum Action {
     /// the answers when the key is pressed with marks in another repo.
     TakeHere(HunkVerb),
     TakeAll(HunkVerb),
+    /// Stash what's marked in every repo, and the gitignore menu for the
+    /// untracked files marked in every repo or (`false`) for the cursor's
+    /// repo alone: the answers to the same question.
+    StashAll,
+    GitignoreIn(bool),
     /// Start a region of diff lines at the cursor (`C-space`), or end it,
     /// keeping its lines as marks.
     ToggleRegion,
@@ -494,6 +499,8 @@ pub enum StashKind {
     Staged,
     /// The files marked in the details view.
     MarkedFiles,
+    /// Those marked in the cursor's repo alone.
+    MarkedHere,
 }
 
 /// Menu switches, kept for the session (starting from config).
@@ -1674,6 +1681,8 @@ impl App {
             DiscardFiles => return self.take_or_ask(HunkVerb::Discard),
             TakeHere(verb) => return self.take(verb, self.current_path()),
             TakeAll(verb) => return self.take(verb, None),
+            StashAll => return self.stash_asked(StashKind::MarkedFiles),
+            GitignoreIn(all) => return self.gitignore_menu_in(all),
             OpenMenu(m) => {
                 let mut menu = m.menu();
                 self.add_tags(&mut menu);
@@ -2276,11 +2285,33 @@ impl App {
     /// The gitignore menu for the untracked files marked, or under the
     /// cursor (tracked ones left out: rules don't apply to them).
     fn open_gitignore_menu(&mut self) -> Vec<Effect> {
+        // (untracked files marked in a repo the cursor isn't in: which?)
+        let untracked = |files: &BTreeSet<(Section, String)>| {
+            files.iter().any(|(s, _)| *s == Section::Untracked)
+        };
+        let here = self.current_path();
+        let elsewhere = self.marked_files.iter();
+        let mut elsewhere =
+            elsewhere.filter(|(repo, files)| here.as_ref() != Some(*repo) && untracked(files));
+        if elsewhere.next().is_some() {
+            let this = Some(('i', Action::GitignoreIn(false)));
+            if self.asks_which("Gitignore", this, Action::GitignoreIn(true)) {
+                return vec![];
+            }
+        }
+        self.gitignore_menu_in(true)
+    }
+
+    /// The gitignore menu for what's marked in every repo (`all`) or in
+    /// the cursor's alone, else for what the cursor is on.
+    fn gitignore_menu_in(&mut self, all: bool) -> Vec<Effect> {
         // the untracked files marked; else the file whose row (any of its
         // rows) the cursor is on; else, outside the changes, all of them
+        let here = self.current_path();
         let marked: Vec<(usize, Vec<String>)> = self
             .marked_files
             .iter()
+            .filter(|(repo, _)| all || here.as_ref() == Some(*repo))
             .filter_map(|(repo, files)| {
                 let untracked = files.iter().filter(|(s, _)| *s == Section::Untracked);
                 let files: Vec<String> = untracked.map(|(_, f)| f.clone()).collect();
@@ -3728,6 +3759,7 @@ impl App {
     /// How much of `target` is marked: what its row shows.
     pub fn marked(&self, target: &Target) -> Marked {
         match target {
+            Target::Repo { repo } => self.repo_marked(repo),
             Target::Section { repo, section } => self.section_marked(repo, *section),
             Target::File {
                 repo,
@@ -3761,6 +3793,8 @@ impl App {
     /// marked, it's marked, all of it.
     fn toggle(&mut self, target: Target) {
         match target {
+            // (not a row's target: see [`Self::target`])
+            Target::Repo { .. } => {}
             Target::Section { repo, section } => {
                 let was = self.section_marked(&repo, section);
                 let files = self.ws.get(&repo).and_then(Entry::status);
@@ -3910,7 +3944,9 @@ impl App {
 
     /// What the cursor is on, to act on with nothing marked: its row's
     /// target, a line standing for its hunk (an unchanged one too, which
-    /// is nothing to mark but is in its hunk).
+    /// is nothing to mark but is in its hunk); on the repo's own row or a
+    /// row of its details that's none of its changes, the repo. Nothing on
+    /// the blank line after a diff.
     fn under_cursor(&self) -> Option<Target> {
         let hunk = |repo, section, file, hunk| Target::Hunk {
             repo,
@@ -3926,15 +3962,20 @@ impl App {
                 file,
                 hunk: h,
                 ..
-            }) => Some(hunk(repo, section, file, h)),
-            Some(other) => Some(other),
-            None => {
-                let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor) else {
-                    return None;
-                };
-                let section = line.section.filter(|s| *s != Section::Untracked)?;
+            }) => return Some(hunk(repo, section, file, h)),
+            Some(other) => return Some(other),
+            None => {}
+        }
+        let (repo, line) = match self.rows.get(self.cursor)? {
+            Row::Repo(i) => (*i, None),
+            Row::Detail { repo, line } => (*repo, Some(line)),
+        };
+        let repo = self.ws.entries[repo].path.clone();
+        match line.and_then(|l| Some((l, l.section?))) {
+            None => Some(Target::Repo { repo }),
+            Some((line, section)) => {
+                let section = Some(section).filter(|s| *s != Section::Untracked)?;
                 let h = line.diff.as_deref()?.hunk?;
-                let repo = self.ws.entries[*repo].path.clone();
                 Some(hunk(repo, section, line.file.clone()?, h))
             }
         }
@@ -3942,13 +3983,28 @@ impl App {
 
     /// The files of what's `taken`, by repo index: a section's are those
     /// it lists.
-    fn files_of(&self, taken: Vec<Target>) -> Vec<(usize, Vec<String>)> {
+    fn files_of(&self, taken: Vec<Target>, verb: HunkVerb) -> Vec<(usize, Vec<String>)> {
         let mut by: Vec<(usize, Vec<String>)> = vec![];
+        let listed = |repo: &Path, sections: &[Section]| -> Vec<String> {
+            let s = self.ws.get(repo).and_then(Entry::status);
+            let files = sections
+                .iter()
+                .flat_map(|section| s.map(|s| section.files(s)));
+            files.flatten().collect()
+        };
         for target in taken {
             let (repo, files) = match target {
+                // (a repo: what it lists on the side the key is for)
+                Target::Repo { repo } => {
+                    let sections: &[Section] = match verb {
+                        HunkVerb::Unstage => &[Section::Staged],
+                        _ => &[Section::Unstaged, Section::Untracked],
+                    };
+                    let files = listed(&repo, sections);
+                    (repo, files)
+                }
                 Target::Section { repo, section } => {
-                    let s = self.ws.get(&repo).and_then(Entry::status);
-                    let files = s.map(|s| section.files(s)).unwrap_or_default();
+                    let files = listed(&repo, &[section]);
                     (repo, files)
                 }
                 Target::File { repo, file, .. } => (repo, vec![file]),
@@ -3978,7 +4034,11 @@ impl App {
         let wrong = |t: &&Target| {
             let (Target::Section { section, .. }
             | Target::File { section, .. }
-            | Target::Hunk { section, .. }) = t;
+            | Target::Hunk { section, .. }) = t
+            else {
+                // (a repo: what it has on the key's side, whichever that is)
+                return false;
+            };
             (*section == Section::Staged) != (verb == HunkVerb::Unstage)
         };
         let wrong: Vec<&Target> = targets.iter().filter(wrong).collect();
@@ -4011,57 +4071,48 @@ impl App {
     /// where it is. Lines and hunks go as patches (one per file and side,
     /// built from the diff as it was read), files whole. Discarding asks
     /// first, once, saying what goes.
-    /// `s`, `u` or `K` as pressed. What's marked in details is marked
-    /// across repos, and the key would take it all, wherever the cursor
-    /// is: with some of it in a repo the cursor isn't in, it's asked
-    /// which is meant.
-    fn take_or_ask(&mut self, verb: HunkVerb) -> Vec<Effect> {
+    /// Whether something is marked in a repo the cursor isn't in, and so
+    /// which marks a key is for has to be asked: opens the menu for it if
+    /// so. `this` is the key's own letter, for the cursor's repo alone
+    /// (left out when that has nothing for it), `A` for all repos.
+    fn asks_which(&mut self, word: &str, this: Option<(char, Action)>, all: Action) -> bool {
         let here = self.current_path();
         let marks = self.repos_with_marks();
-        let elsewhere: Vec<&PathBuf> = marks.iter().filter(|r| here.as_ref() != Some(*r)).collect();
-        let Some(here) = here.filter(|_| !elsewhere.is_empty()) else {
-            return self.take(verb, None);
-        };
-        let name = |p: &Path| {
+        if !marks.iter().any(|r| here.as_ref() != Some(r)) {
+            return false;
+        }
+        let name = |p: &PathBuf| {
             self.ws
                 .get(p)
                 .map_or_else(String::new, |e| e.display_name())
         };
+        let names: Vec<String> = marks.iter().map(name).collect();
+        let mut items = vec![];
+        items.extend(this.map(|(key, action)| menu::item(key, "this repo", action)));
+        items.push(menu::item('A', "all repos", all));
+        let menu = Menu {
+            id: MenuId::Across,
+            title: format!("{word} · marked repos: {}", names.join(", ")),
+            items,
+        };
+        self.mode = Mode::Menu { menu, cursor: 0 };
+        true
+    }
+
+    /// `s`, `u` or `K` as pressed. What's marked in details is marked
+    /// across repos: with some of it in a repo the cursor isn't in, it's
+    /// asked which is meant.
+    fn take_or_ask(&mut self, verb: HunkVerb) -> Vec<Effect> {
         let (key, word) = match verb {
             HunkVerb::Stage => ('s', "Stage"),
             HunkVerb::Unstage => ('u', "Unstage"),
             HunkVerb::Discard => ('K', "Discard"),
         };
-        let whereabouts = match elsewhere.as_slice() {
-            [one] => name(one),
-            many => format!("{} other repos", many.len()),
-        };
-        let all = match marks.len() {
-            1 => format!("in {whereabouts}"),
-            n => format!("in {n} repos"),
-        };
-        let this = match marks.contains(&here) {
-            true => "what's marked in it",
-            false => "what the cursor is on",
-        };
-        let menu = Menu {
-            id: MenuId::Across,
-            title: format!("{word} · something is marked in {whereabouts}"),
-            items: vec![
-                menu::item(
-                    key,
-                    format!("here in {} only: {this}", name(&here)),
-                    Action::TakeHere(verb),
-                ),
-                menu::item(
-                    'A',
-                    format!("all that's marked ({all})"),
-                    Action::TakeAll(verb),
-                ),
-            ],
-        };
-        self.mode = Mode::Menu { menu, cursor: 0 };
-        vec![]
+        let this = Some((key, Action::TakeHere(verb)));
+        match self.asks_which(word, this, Action::TakeAll(verb)) {
+            true => vec![],
+            false => self.take(verb, None),
+        }
     }
 
     fn take(&mut self, verb: HunkVerb, only: Option<PathBuf>) -> Vec<Effect> {
@@ -4135,7 +4186,15 @@ impl App {
             ));
         }
         // then the files, whole
-        let files = self.files_of(targets);
+        // (a whole repo, taken from its own row with its details folded
+        // away, is asked about first: nothing shows what "everything" is)
+        let whole = match targets.as_slice() {
+            [Target::Repo { repo }] => Some(repo.clone()),
+            _ => None,
+        };
+        let folded = matches!(self.rows.get(self.cursor), Some(Row::Repo(_)))
+            && !matches!(self.rows.get(self.cursor + 1), Some(Row::Detail { .. }));
+        let files = self.files_of(targets, verb);
         let plan = match verb {
             HunkVerb::Stage => ops::stage_ops,
             HunkVerb::Unstage => ops::unstage_ops,
@@ -4176,6 +4235,24 @@ impl App {
                     )),
                     None => self.info(format!("nothing to {word}")),
                 }
+                return vec![];
+            }
+            if let Some(repo) = whole.filter(|_| folded) {
+                let name = self
+                    .ws
+                    .get(&repo)
+                    .map_or_else(String::new, |e| e.display_name());
+                let n: usize = files.iter().map(|(_, f)| f.len()).sum();
+                let question = format!(
+                    "{} everything in {name} ({n} {})?",
+                    capitalised(word),
+                    plural(n, "file", "files")
+                );
+                let ops = jobs.into_iter().map(|j| (j.path, j.op)).collect();
+                self.mode = Mode::Confirm {
+                    question,
+                    then: Confirmed::Ops(ops),
+                };
                 return vec![];
             }
             let mut repos: Vec<PathBuf> = jobs.iter().map(|j| j.path.clone()).collect();
@@ -4260,7 +4337,22 @@ impl App {
         repos.sort();
         repos.dedup();
         let repos: Vec<&Path> = repos.iter().map(PathBuf::as_path).collect();
-        let question = self.asked_where(&repos, question);
+        let question = match &whole {
+            Some(repo) => {
+                let name = self
+                    .ws
+                    .get(repo)
+                    .map_or_else(String::new, |e| e.display_name());
+                let mut letters = question.chars();
+                let first = letters.next().map(|c| c.to_lowercase().to_string());
+                format!(
+                    "Everything in {name}: {}{}",
+                    first.unwrap_or_default(),
+                    letters.as_str()
+                )
+            }
+            None => self.asked_where(&repos, question),
+        };
         ops.extend(file_jobs.into_iter().map(|(i, op)| (path(i), op)));
         let then = Confirmed::Ops(ops);
         self.mode = Mode::Confirm { question, then };
@@ -4405,7 +4497,7 @@ impl App {
                         .or_default()
                         .extend((0..hunks).map(|h| (h, None)));
                 }
-                Target::File { .. } | Target::Section { .. } => {}
+                Target::File { .. } | Target::Section { .. } | Target::Repo { .. } => {}
             }
         }
         let Some((repo, _, side)) = chosen.keys().next().cloned() else {
@@ -4648,6 +4740,21 @@ impl App {
             self.info("mark files in the details view first (Tab, then space on a file)");
             return vec![];
         }
+        // (marks in a repo the cursor isn't in: which are meant?)
+        if kind == StashKind::MarkedFiles {
+            let here = self.current_path();
+            let here = here.filter(|p| self.repos_with_marks().contains(p));
+            let this = here.map(|_| ('m', Action::Stash(StashKind::MarkedHere)));
+            if self.asks_which("Stash", this, Action::StashAll) {
+                return vec![];
+            }
+        }
+        self.stash_asked(kind)
+    }
+
+    /// A stash of `kind`, its marks' repos settled: now or (the message
+    /// switch on) once its message has been asked for.
+    fn stash_asked(&mut self, kind: StashKind) -> Vec<Effect> {
         if !self.stash.message {
             return self.stash_now(kind, None);
         }
@@ -4664,18 +4771,20 @@ impl App {
             StashKind::All | StashKind::Staged => {
                 self.selected().into_iter().map(|i| (i, vec![])).collect()
             }
-            StashKind::MarkedFiles => match self.marked_stashes() {
-                Ok((by_lines, by_path)) => {
-                    // (taken: a region is over, its lines marks)
-                    self.keep_region();
-                    lines = by_lines;
-                    by_path
+            StashKind::MarkedFiles | StashKind::MarkedHere => {
+                match self.marked_stashes(kind == StashKind::MarkedHere) {
+                    Ok((by_lines, by_path)) => {
+                        // (taken: a region is over, its lines marks)
+                        self.keep_region();
+                        lines = by_lines;
+                        by_path
+                    }
+                    Err(why) => {
+                        self.error(format!("not stashing: {why}"));
+                        return vec![];
+                    }
                 }
-                Err(why) => {
-                    self.error(format!("not stashing: {why}"));
-                    return vec![];
-                }
-            },
+            }
         };
         let fx = self.stash_jobs(targets, kind == StashKind::Staged, message, lines);
         if kind == StashKind::MarkedFiles {
@@ -4699,8 +4808,12 @@ impl App {
     #[allow(clippy::type_complexity)]
     fn marked_stashes(
         &mut self,
+        here: bool,
     ) -> Result<(Vec<(PathBuf, Op)>, Vec<(usize, Vec<String>)>), String> {
-        let (taken, _) = self.taken();
+        // (`here`: what's marked in the cursor's repo alone)
+        let only = self.current_path().filter(|_| here);
+        let (taken, marked) = self.taken_in(only.as_deref());
+        let taken = if marked { taken } else { vec![] };
         // by repo: file -> where it's marked whole; file -> hunk -> lines
         type Lines = BTreeMap<String, BTreeMap<usize, Vec<usize>>>;
         let mut whole: BTreeMap<PathBuf, BTreeMap<String, Vec<Section>>> = BTreeMap::new();
@@ -4732,7 +4845,7 @@ impl App {
                     let hunks = lines.entry(repo).or_default().entry(file).or_default();
                     hunks.entry(hunk).or_default().push(at);
                 }
-                Target::Hunk { .. } | Target::Section { .. } => {}
+                Target::Hunk { .. } | Target::Section { .. } | Target::Repo { .. } => {}
             }
         }
         let repos: BTreeSet<PathBuf> = whole.keys().chain(lines.keys()).cloned().collect();
@@ -5455,6 +5568,10 @@ fn within(folder: &str, file: &str) -> bool {
 /// under unstaged are two things.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
+    /// A repo itself: everything of its changes a key is for. What the
+    /// cursor is on when it's on the repo's own row, or on a row of its
+    /// details that's none of its changes; never a row to mark.
+    Repo { repo: PathBuf },
     /// A section's heading: the files it lists.
     Section { repo: PathBuf, section: Section },
     File {

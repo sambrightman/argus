@@ -765,7 +765,7 @@ pub fn help_lines() -> Vec<(String, String)> {
         ),
         (
             "s u K",
-            "stage / unstage / discard files (marked, else current; discard asks)",
+            "stage / unstage / discard: what's marked, else the file, hunk, section or repo the cursor is on (discard asks)",
         ),
         (
             "C-space",
