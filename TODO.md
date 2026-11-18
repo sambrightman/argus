@@ -27,6 +27,26 @@ deferred.
   setting): detect it and swap those icons. Today `demo --glyphs` marks
   them with `*`.
 
+- **`s`, `u` and `K` for the marked repos.** Fixes, pull and the rest
+  apply to every marked repo (else the cursor's); these three take one
+  repo, having had no meaning for a whole repo until lately. Proposed:
+  - *When:* the cursor on a repo's own row, or a row of its details
+    with no binding of its own, and some repo marked. On a file, hunk or
+    section nothing changes.
+  - *What:* for each marked repo, as for one today: what's marked in
+    its details if anything is, else everything on the key's side.
+  - *Always asked,* being more than one repo: "Stage everything in 3
+    marked repos (12 files)?", and for `K` what goes, as now.
+  - *The which-repo menu* stays for files or lines marked in a repo
+    outside the set being taken, so no mark is taken or passed over
+    unseen.
+
+  To settle first: whether marks inside a marked repo narrow it
+  (suggested) or a marked repo is always the whole of it; whether the
+  cursor's own repo is in when it isn't marked (every other action says
+  no); and the menu's title, "marked repos", which means repos with
+  marks in their details and would read as the marked repos too.
+
 ## Next steps
 
 - **More from the forge:** the details show GitHub's open issue and pull
