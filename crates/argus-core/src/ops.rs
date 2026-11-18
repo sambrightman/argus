@@ -877,24 +877,9 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
                 duration: started.elapsed(),
             };
         }
-        Op::StashPop => {
-            if let Some(why) = pop_problem(&cwd, 0) {
-                return refused(format!("not popping: {why}"), started);
-            }
-        }
-        Op::StashPopAt { index, id } | Op::StashPopPlain { index, id } => {
-            if !is_stash(&cwd, *index, id) {
-                return refused(
-                    format!(
-                        "not popping: stash@{{{index}}} isn't the stash it was (refresh and try again)"
-                    ),
-                    started,
-                );
-            }
-            if let Some(why) = pop_problem(&cwd, *index) {
-                return refused(format!("not popping: {why}"), started);
-            }
-        }
+        Op::StashPop => return pop(&cwd, 0, None, true, started),
+        Op::StashPopAt { index, id } => return pop(&cwd, *index, Some(id), true, started),
+        Op::StashPopPlain { index, id } => return pop(&cwd, *index, Some(id), false, started),
         Op::DeleteBranch {
             branch,
             force_at: Some(seen),
@@ -940,21 +925,7 @@ pub fn run(dir: &Path, op: &Op) -> OpOutcome {
         // a directory holding a nested repo: its files only
         return git(&cwd, &without_nested(&cwd, op.args()), started);
     }
-    let out = git(&cwd, &op.args(), started);
-    // git pops onto no file that has changes of its own: its refusal, and
-    // what to do about it
-    let pop = matches!(
-        op,
-        Op::StashPop | Op::StashPopAt { .. } | Op::StashPopPlain { .. }
-    );
-    if pop && !out.success && out.output.contains("would be overwritten") {
-        let note = "(commit or stash those files' other changes first)";
-        return OpOutcome {
-            output: format!("{}\n{note}", out.output),
-            ..out
-        };
-    }
-    out
+    git(&cwd, &op.args(), started)
 }
 
 /// `args` (ending in pathspecs) leaving out the repos nested in the work
@@ -981,29 +952,59 @@ fn is_stash(cwd: &Path, index: usize, id: &str) -> bool {
     at.success && at.output.trim() == id
 }
 
-/// Why popping `stash@{index}` would leave a mess, if it would: git
-/// stops a pop it can't make without changing anything, but for two
-/// cases, found here first. A conflict: the pop merges the stash onto
-/// what's staged (not onto HEAD), so that's what a trial merge is run
-/// against. And an untracked file the stash holds that's there again:
-/// git restores everything else, then stops at it.
-fn pop_problem(cwd: &Path, index: usize) -> Option<String> {
+/// How a refused pop's output starts when the files could be restored
+/// but not the staging: what the stash had staged and what's staged now
+/// change the same lines differently. The files alone can still be
+/// popped ([`Op::StashPopPlain`]), which callers ask about.
+pub const POP_STAGING_CONFLICTS: &str =
+    "not popping: what it had staged conflicts with what's staged now";
+
+/// Pop `stash@{index}` (if it's still the stash `id`, when one is given).
+///
+/// Not `git stash pop --index`: to restore what the stash had staged,
+/// that resets the index to HEAD before merging the files, so with
+/// anything staged the merge finds every staged file in its way, fails,
+/// and leaves the index reset: what was staged is unstaged, and a
+/// version staged and then changed again is gone. The same steps work in
+/// another order, which is this:
+///
+/// 1. A trial merge of the stash's files onto what's staged (what the
+///    real one merges onto): a conflict is refused here, nothing touched.
+/// 2. The untracked files it holds must have nothing in their way, or
+///    git restores the rest and stops at them.
+/// 3. With `staging`, the staging to end with: a merge of what the stash
+///    had staged with what's staged now. If those conflict there's none
+///    to restore both ([`POP_STAGING_CONFLICTS`]).
+/// 4. The files, by git's own merge, which leaves the index alone and
+///    refuses (nothing changed) if a file it would rewrite has changes
+///    of its own.
+/// 5. The index set to 3's, and the stash dropped.
+fn pop(cwd: &Path, index: usize, id: Option<&str>, staging: bool, started: Instant) -> OpOutcome {
     let stash = format!("stash@{{{index}}}");
+    let not = |why: &str| refused(format!("not popping: {why}"), started);
+    // (what git prints, or why it failed)
     let run = |args: &[&str]| {
         let out = git_in(cwd, args);
-        out.success.then(|| out.output.trim().to_string())
+        let said = out.output.trim().to_string();
+        if out.success { Ok(said) } else { Err(said) }
     };
-    if run(&["rev-parse", "-q", "--verify", &stash]).is_none() {
-        return Some(format!("there's no {stash}"));
+    let Ok(is) = run(&["rev-parse", "-q", "--verify", &stash]) else {
+        return not(&format!("there's no {stash}"));
+    };
+    if id.is_some_and(|id| id != is) {
+        return not(&format!(
+            "{stash} isn't the stash it was (refresh and try again)"
+        ));
     }
-    // (an index with conflicts in it has no tree: nothing pops onto that)
-    let Some(staged) = run(&["write-tree"]) else {
-        return Some("the index has conflicts in it: resolve those first".into());
+    // (an index with conflicts in it has no tree, a locked one can't be
+    // read for one: git says which)
+    let staged = match run(&["write-tree"]) {
+        Ok(tree) => tree,
+        Err(why) => return not(&why),
     };
     let base = format!("{stash}^1");
-    let o = git_in(
-        cwd,
-        &[
+    let merged = |theirs: &str| {
+        let args = [
             "merge-tree",
             "--write-tree",
             "--name-only",
@@ -1011,35 +1012,118 @@ fn pop_problem(cwd: &Path, index: usize) -> Option<String> {
             "--merge-base",
             &base,
             &staged,
-            &stash,
-        ],
-    );
-    let files: Vec<&str> = o.output.lines().skip(1).filter(|l| !l.is_empty()).collect();
-    match o.code {
-        Some(0) => {}
-        Some(1) => return Some(format!("it would conflict in {}", files.join(", "))),
-        _ => {
-            return Some(format!(
-                "can't check it for conflicts: {}",
-                o.output.lines().next().unwrap_or("git failed")
-            ));
+            theirs,
+        ];
+        let o = git_in(cwd, &args);
+        let mut lines = o.output.lines();
+        let tree = lines.next().unwrap_or_default().to_string();
+        let files: Vec<&str> = lines.filter(|l| !l.is_empty()).collect();
+        match o.code {
+            Some(0) => Ok(tree),
+            Some(1) => Err(Some(files.join(", "))),
+            _ => Err(None),
         }
+    };
+    let unchecked = || not("can't check it for conflicts (git 2.40 or later is needed for that)");
+    match merged(&stash) {
+        Ok(_) => {}
+        Err(Some(files)) => return not(&format!("it would conflict in {files}")),
+        Err(None) => return unchecked(),
     }
-    // (its third parent, when it has one, holds what was untracked)
-    let untracked = format!("{stash}^3");
-    let held = run(&["ls-tree", "-r", "--name-only", "-z", &untracked]).unwrap_or_default();
+    // (its third parent, when it has one, holds what was untracked: each
+    // needs its place free, and its folders to be folders)
+    let held = Command::new("git")
+        .current_dir(cwd)
+        .args(["ls-tree", "-r", "--name-only", "-z", &format!("{stash}^3")])
+        .envs(crate::isolation::git_env().iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    let held = held.map(|o| o.stdout).unwrap_or_default();
+    let in_the_way = |file: &&str| {
+        let path = Path::new(file);
+        let taken = cwd.join(path).symlink_metadata().is_ok();
+        let folders = path
+            .ancestors()
+            .skip(1)
+            .filter(|a| !a.as_os_str().is_empty());
+        let blocked = |a: &Path| {
+            let is = cwd.join(a).symlink_metadata();
+            is.is_ok_and(|m| !m.is_dir())
+        };
+        taken || folders.into_iter().any(blocked)
+    };
+    let held = String::from_utf8_lossy(&held);
     let there: Vec<&str> = held
         .split('\0')
-        .filter(|f| !f.is_empty() && cwd.join(f).symlink_metadata().is_ok())
+        .filter(|f| !f.is_empty())
+        .filter(in_the_way)
         .collect();
-    (!there.is_empty()).then(|| {
-        format!(
-            "it holds the untracked {}, which {} there again: move {} away first",
+    if !there.is_empty() {
+        return not(&format!(
+            "it holds the untracked {}, which {} in the way: move {} away first",
             there.join(", "),
             if there.len() == 1 { "is" } else { "are" },
             if there.len() == 1 { "it" } else { "them" },
-        )
-    })
+        ));
+    }
+    // the staging to end with, when the stash has any of its own
+    let had_staged = format!("{stash}^2");
+    let trees = (
+        run(&["rev-parse", &format!("{base}^{{tree}}")]),
+        run(&["rev-parse", &format!("{had_staged}^{{tree}}")]),
+    );
+    let restores = matches!(&trees, (Ok(b), Ok(i)) if staging && i != b && *i != staged);
+    let to_stage = match restores.then(|| merged(&had_staged)) {
+        None => None,
+        Some(Ok(tree)) => Some(tree),
+        Some(Err(Some(files))) => {
+            return refused(format!("{POP_STAGING_CONFLICTS}: {files}"), started);
+        }
+        Some(Err(None)) => return unchecked(),
+    };
+    // (`--no-index` said: the user's `stash.index` mustn't make this the
+    // pop that resets)
+    let applied = git_in(cwd, &["stash", "apply", "--no-index", "--quiet", &stash]);
+    if !applied.success {
+        // git pops onto no file that has changes of its own
+        let own = "Your local changes to the following files would be overwritten";
+        let note = match applied.output.contains(own) {
+            true => "\n(commit or stash those files' other changes first)",
+            false => "",
+        };
+        return OpOutcome {
+            output: format!("{}{note}", applied.output),
+            duration: started.elapsed(),
+            ..applied
+        };
+    }
+    if let Some(tree) = to_stage {
+        let set = git_in(cwd, &["read-tree", "--reset", &tree]);
+        if !set.success {
+            return refused(
+                format!(
+                    "its files are back, but what it had staged isn't staged again \
+                     (the stash is kept):\n{}",
+                    set.output
+                ),
+                started,
+            );
+        }
+    }
+    // (still the one that was applied: nothing else ran here meanwhile)
+    let dropped = match is_stash(cwd, index, &is) {
+        true => git_in(cwd, &["stash", "drop", "--quiet", &stash]),
+        false => refused(format!("{stash} moved: it's applied, and kept"), started),
+    };
+    OpOutcome {
+        output: match dropped.success {
+            true => format!("popped {stash}"),
+            false => dropped.output.clone(),
+        },
+        duration: started.elapsed(),
+        ..dropped
+    }
 }
 
 fn in_progress(dir: &Path) -> Option<InProgress> {

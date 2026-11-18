@@ -277,16 +277,29 @@ Two findings:
   since taking another repo's marks from here unasked was the surprise
   left; and what's taken outside the cursor's repo is said. A marked repo is a different
   thing (a target for repo actions), drawn differently.
-* **Popping a stash** leaves to git what git refuses cleanly, and
-  checks first only what it would make a mess of: a conflict (a trial
-  merge of the stash onto what's staged, which is what the pop merges
-  onto, not onto HEAD) and an untracked file the stash holds that's
-  there again. An earlier version also predicted git's "would be
-  overwritten" refusal and retried by itself without `--index`; both
-  second-guessed git and got it wrong (refusing pops git would make,
-  and turning a clean refusal into a conflict). Without `--index` is a
-  separate operation (`StashPopPlain`) that's asked for: it can lose
-  what was staged and then changed again.
+* **Popping a stash** isn't `git stash pop --index`. To restore what
+  the stash had staged, git applies that to the index, saves the result
+  as a tree, resets the index to HEAD, merges the stash's files, and
+  only then loads the saved tree. With anything staged, the reset makes
+  every staged file look like a local change in the merge's way: the
+  merge refuses, and the index is left reset ("Index was not
+  unstashed"). What was staged is unstaged, and a version staged and
+  then changed again is gone. It has been so since the first `git
+  stash` (2007), which refused a work tree that didn't match the index
+  and so rarely met it. The same steps work in another order
+  (`ops::pop`): a trial merge of the stash's files onto what's staged
+  (`git merge-tree`; a conflict is refused, nothing touched); a check
+  that the untracked files it holds have nothing in their way; the
+  staging to end with, as a merge of what the stash had staged with
+  what's staged now; the files, by `git stash apply --no-index`, which
+  leaves the index alone and refuses cleanly when a file it would
+  rewrite has changes of its own; then the index set to the merged
+  staging (`read-tree --reset`), and the stash dropped. When the two
+  stagings conflict there's none to restore both: the pop says so and
+  popping the files alone (`StashPopPlain`) is asked for, since what
+  the stash had staged and then changed again isn't brought back. Needs
+  git 2.40 (`merge-tree --merge-base`). `--no-index` is always said:
+  the user's `stash.index` would otherwise make it the pop that resets.
 * **A patch of part of a diff** (`diff::patch_hunks`) has to say more
   than the diff does. Each hunk gives its place on the side the patch is
   applied to as the diff has it, and on the other side where this

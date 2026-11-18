@@ -6057,9 +6057,9 @@ fn a_regions_lines_are_stashed_as_marked_ones_are() {
     assert!(app.region.is_none() && app.marked_lines.is_empty());
 }
 
-/// A pop git can't make with the stash's index ("Try without --index")
-/// isn't made without it unasked: argus asks, saying what that loses,
-/// and yes pops that stash without.
+/// A pop whose staging can't be restored (it conflicts with what's
+/// staged now) isn't made without it unasked: argus asks, saying what
+/// that loses, and yes pops that stash's files alone.
 #[test]
 fn a_pop_without_the_stashs_index_is_asked_for() {
     let (sb, mut app) = setup_with("", |sb| {
@@ -6080,12 +6080,13 @@ fn a_pop_without_the_stashs_index_is_asked_for() {
             duration: std::time::Duration::ZERO,
         },
     };
-    let said = "error: conflicts in index. Try without --index.";
+    let said = format!("{}: README", argus_core::ops::POP_STAGING_CONFLICTS);
+    let said = said.as_str();
     app.on_msg(failed(Op::StashPop, said));
     assert!(
         render(&mut app, 160, 30).contains(
-            "Pop without what the stash had staged (git can't restore it here)? Anything staged, \
-             then changed again before stashing, is lost. (y/n)"
+            "Pop without what the stash had staged (it conflicts with what's staged now)? Anything \
+             staged, then changed again before stashing, is lost. (y/n)"
         ),
         "{}",
         render(&mut app, 160, 30)
@@ -7944,6 +7945,7 @@ fn the_keys_on_a_repos_row_take_the_whole_repo() {
 fn stash_and_gitignore_ask_which_repos_marks_too() {
     let (_sb, mut app) = setup_with("", |sb| {
         write(&sb.path("dev/dirty"), "new", "a\n");
+        write(&sb.path("dev/feature"), "extra", "c\n");
         write(&sb.path("dev/clean"), "other", "b\n");
     });
     let file_in = |app: &mut App, repo: &str, file: &str| {
@@ -8035,7 +8037,15 @@ fn stash_and_gitignore_ask_which_repos_marks_too() {
     file_in(&mut app, "clean", "other");
     app.on_key(key('i'));
     assert_eq!(menu(&app).0, "Gitignore · 1 untracked file(s)");
-    assert!(menu(&app).1[0].contains("/other"), "{:?}", menu(&app));
+    app.on_key(code(KeyCode::Esc));
+    // and its title names only the repos with marks that are
+    file_in(&mut app, "feature", "extra");
+    app.on_key(key(' '));
+    file_in(&mut app, "clean", "other");
+    app.on_key(key('i'));
+    assert_eq!(menu(&app).0, "Gitignore · marked repos: acme/feature");
+    app.on_key(key('A'));
+    assert!(menu(&app).1[0].contains("/extra"), "{:?}", menu(&app));
 }
 
 /// K on several marked files says they're the marked ones.
@@ -8085,6 +8095,115 @@ fn discarding_marked_files_says_they_are_the_marked_ones() {
     assert_eq!(
         asked(&mut app),
         "Delete 3 untracked files? They're lost. (y/n)"
+    );
+}
+
+/// What's marked goes with a repo that a rescan no longer lists; and
+/// "this repo", with no repo under the cursor, is nothing.
+#[test]
+fn marks_go_with_a_repo_no_longer_listed() {
+    let (sb, mut app) = setup_with("", |sb| {
+        two_hunks(sb);
+        write(&sb.path("dev/dirty"), "new", "a\n");
+    });
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+added");
+    app.on_key(key(' '));
+    to_file(&mut app, "new");
+    app.on_key(key(' '));
+    app.cursor = shown_row(&app, "+line three");
+    app.on_key(ctrl(' '));
+    assert!(app.region.is_some());
+    app.cursor = shown_row(&app, "+added");
+    assert_eq!(app.marked_in(None).0, 1);
+    // "this repo" with nothing listed under the cursor
+    for c in "/zzzz".chars() {
+        app.on_key(key(c));
+    }
+    app.on_key(code(KeyCode::Enter));
+    assert!(names(&app).is_empty());
+    app.on_key(key('s'));
+    assert!(matches!(app.mode, Mode::Menu { .. }));
+    assert!(app.on_key(key('s')).is_empty());
+    app.on_key(code(KeyCode::Esc));
+    // rescanned without that repo
+    let dirty = sb.path("dev/dirty");
+    let entries: Vec<_> = app
+        .ws
+        .entries
+        .iter()
+        .filter(|e| e.path != dirty)
+        .cloned()
+        .collect();
+    app.on_msg(Msg::Scanned {
+        entries,
+        truncated: vec![],
+    });
+    assert_eq!(app.marked_in(None), (0, 0));
+    assert!(app.repos_with_marks().is_empty() && app.region.is_none());
+    cursor_on_detail(&mut app, "clean", "path");
+    app.on_key(key('K'));
+    assert!(matches!(app.mode, Mode::Normal), "nothing to ask about");
+}
+
+/// A marked untracked file is stashed whatever the untracked switch says
+/// (that's for what isn't named); `e` refused leaves a region as it was;
+/// and marks lost to a change are said beside a failure, not over it.
+#[test]
+fn more_keys_at_the_edges() {
+    let (sb, mut app) = setup_with("[stash]\nuntracked = false\n", |sb| {
+        two_hunks(sb);
+        write(&sb.path("dev/dirty"), "new", "a\n");
+    });
+    to_file(&mut app, "new");
+    app.on_key(key(' '));
+    to_file(&mut app, "new");
+    app.on_key(key('z'));
+    let fx = app.on_key(key('m'));
+    let jobs = stash_jobs(&app, &fx);
+    assert!(
+        jobs.len() == 1 && stash_op(true, false, false, &["new"])(&jobs[0].1),
+        "{jobs:?}"
+    );
+    app.running.clear();
+    app.on_key(ctrl('g'));
+    // inverse: nothing named, the switch decides
+    app.act(Action::Top);
+    app.on_key(key('z'));
+    let fx = app.on_key(key('z'));
+    let jobs = stash_jobs(&app, &fx);
+    assert!(
+        jobs.len() == 1 && stash_op(false, false, false, &[])(&jobs[0].1),
+        "{jobs:?}"
+    );
+    app.running.clear();
+    // e refused (an untracked file marked too): the region stays
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    app.cursor = shown_row(&app, "+added");
+    app.on_key(ctrl(' '));
+    to_file(&mut app, "new");
+    app.on_key(key(' '));
+    app.cursor = shown_row(&app, "+added");
+    assert!(app.on_key(key('e')).is_empty());
+    assert!(app.message.as_ref().unwrap().0.contains("untracked"));
+    assert!(app.region.is_some(), "refused: nothing taken");
+    app.on_key(ctrl('g'));
+    // marks lost to a change, said beside what failed
+    app.cursor = shown_row(&app, "+added");
+    app.on_key(key(' '));
+    app.report_error("push failed");
+    let d = sb.path("dev/dirty");
+    let text = std::fs::read_to_string(d.join("f")).unwrap();
+    write(&d, "f", &text.replace("line 10\n", "line ten\n"));
+    refreshed(&mut app, &d);
+    assert_eq!(
+        app.message.as_ref().unwrap(),
+        &(
+            "push failed · 1 marked line of f went with its changes".to_string(),
+            true
+        )
     );
 }
 

@@ -1679,7 +1679,11 @@ impl App {
             UnstageFiles => return self.take_or_ask(HunkVerb::Unstage),
             EditPatch => return self.edit_patch(),
             DiscardFiles => return self.take_or_ask(HunkVerb::Discard),
-            TakeHere(verb) => return self.take(verb, self.current_path()),
+            // (with no repo under the cursor there's no "this repo")
+            TakeHere(verb) => match self.current_path() {
+                Some(here) => return self.take(verb, Some(here)),
+                None => self.info(FILE_HINT),
+            },
             TakeAll(verb) => return self.take(verb, None),
             StashAll => return self.stash_asked(StashKind::MarkedFiles),
             GitignoreIn(all) => return self.gitignore_menu_in(all),
@@ -2289,17 +2293,17 @@ impl App {
         let untracked = |files: &BTreeSet<(Section, String)>| {
             files.iter().any(|(s, _)| *s == Section::Untracked)
         };
-        let here = self.current_path();
-        let elsewhere = self.marked_files.iter();
-        let mut elsewhere =
-            elsewhere.filter(|(repo, files)| here.as_ref() != Some(*repo) && untracked(files));
-        if elsewhere.next().is_some() {
-            let this = Some(('i', Action::GitignoreIn(false)));
-            if self.asks_which("Gitignore", this, Action::GitignoreIn(true)) {
-                return vec![];
-            }
+        // (only those are marks to it: its repos are the ones with some)
+        let marks = self
+            .marked_files
+            .iter()
+            .filter(|(_, files)| untracked(files));
+        let marks: BTreeSet<PathBuf> = marks.map(|(repo, _)| repo.clone()).collect();
+        let this = Some(('i', Action::GitignoreIn(false)));
+        match self.asks_which("Gitignore", marks, this, Action::GitignoreIn(true)) {
+            true => vec![],
+            false => self.gitignore_menu_in(true),
         }
-        self.gitignore_menu_in(true)
     }
 
     /// The gitignore menu for what's marked in every repo (`all`) or in
@@ -3541,6 +3545,7 @@ impl App {
         let gone = |k: &MarkedLine| of(&k.0) && !kept.contains(&key(&k.0, &k.1, k.2));
         let lost: Vec<&MarkedLine> = self.marked_lines.iter().filter(|k| gone(k)).collect();
         let mut files: Vec<&str> = lost.iter().map(|k| k.1.as_str()).collect();
+        files.sort_unstable();
         files.dedup();
         let region = self.region.as_ref();
         let region =
@@ -4071,13 +4076,18 @@ impl App {
     /// where it is. Lines and hunks go as patches (one per file and side,
     /// built from the diff as it was read), files whole. Discarding asks
     /// first, once, saying what goes.
-    /// Whether something is marked in a repo the cursor isn't in, and so
-    /// which marks a key is for has to be asked: opens the menu for it if
-    /// so. `this` is the key's own letter, for the cursor's repo alone
+    /// Whether something is marked (in the repos `marks`, those with marks
+    /// the key is for) in a repo the cursor isn't in, and so which marks
+    /// are meant has to be asked: opens the menu for it if so. `this` is the key's own letter, for the cursor's repo alone
     /// (left out when that has nothing for it), `A` for all repos.
-    fn asks_which(&mut self, word: &str, this: Option<(char, Action)>, all: Action) -> bool {
+    fn asks_which(
+        &mut self,
+        word: &str,
+        marks: BTreeSet<PathBuf>,
+        this: Option<(char, Action)>,
+        all: Action,
+    ) -> bool {
         let here = self.current_path();
-        let marks = self.repos_with_marks();
         if !marks.iter().any(|r| here.as_ref() != Some(r)) {
             return false;
         }
@@ -4109,7 +4119,8 @@ impl App {
             HunkVerb::Discard => ('K', "Discard"),
         };
         let this = Some((key, Action::TakeHere(verb)));
-        match self.asks_which(word, this, Action::TakeAll(verb)) {
+        let marks = self.repos_with_marks();
+        match self.asks_which(word, marks, this, Action::TakeAll(verb)) {
             true => vec![],
             false => self.take(verb, None),
         }
@@ -4443,7 +4454,6 @@ impl App {
             self.info("the edited patch is still being applied");
             return vec![];
         }
-        self.keep_region();
         // by repo, file and side: hunk -> its chosen lines (all if None)
         type Chosen = BTreeMap<(PathBuf, String, Side), BTreeMap<usize, Option<Vec<usize>>>>;
         let mut chosen: Chosen = BTreeMap::new();
@@ -4527,6 +4537,8 @@ impl App {
             patch.push_str(&diff::patch_hunks(file, &parts, reverse));
             files.push(file.clone());
         }
+        // (taken: a region is over, and the marks with it)
+        self.region = None;
         self.marked_lines.clear();
         // a new file, the user's alone: never one somebody else put there
         // (a shared temp directory), nor through a link. A name taken (one
@@ -4745,7 +4757,8 @@ impl App {
             let here = self.current_path();
             let here = here.filter(|p| self.repos_with_marks().contains(p));
             let this = here.map(|_| ('m', Action::Stash(StashKind::MarkedHere)));
-            if self.asks_which("Stash", this, Action::StashAll) {
+            let marks = self.repos_with_marks();
+            if self.asks_which("Stash", marks, this, Action::StashAll) {
                 return vec![];
             }
         }
@@ -5285,7 +5298,11 @@ impl App {
             fx.extend(self.continue_chain(path));
         }
         if let Some(went) = went {
-            self.info(went);
+            // (said beside a failure, not over it)
+            match &self.message {
+                Some((_, true)) => self.add_note(&format!(" · {went}")),
+                _ => self.info(went),
+            }
         }
         fx
     }
@@ -5305,6 +5322,15 @@ impl App {
                     0 => format!("{n} {}", plural(n, "repo", "repos")),
                     h => format!("{n} {}, {h} hidden", plural(n, "repo", "repos")),
                 }];
+                // (what's marked in a repo no longer listed goes with it; the
+                // rows are the old ones still, so nothing here reads them)
+                let listed = |repo: &PathBuf| self.ws.index_of(repo).is_some();
+                self.marked_files.retain(|repo, _| listed(repo));
+                self.marked_lines.retain(|k| listed(&k.0));
+                self.diffs.retain(|k, _| listed(&k.0));
+                if self.region.as_ref().is_some_and(|r| !listed(&r.repo)) {
+                    self.region = None;
+                }
                 parts.extend(self.notices.iter().cloned());
                 parts.extend(self.ws.truncation_warning());
                 parts.extend(went);
@@ -5351,9 +5377,10 @@ impl App {
                 if !outcome.success {
                     self.error(format!("{label} failed ($ for log)"));
                 }
-                // a pop git couldn't make with the stash's index: without
-                // it is another thing (it can lose what was staged, then
-                // changed again), so it's asked
+                // a pop whose files could be restored but not its staging,
+                // which conflicts with what's staged now: the files alone
+                // is another thing (what the stash had staged, then
+                // changed again, isn't brought back), so it's asked
                 let stash = match &op {
                     Op::StashPopAt { index, id } => Some((*index, Some(id.clone()))),
                     Op::StashPop => {
@@ -5364,11 +5391,11 @@ impl App {
                 };
                 if let Some((index, Some(id))) = stash
                     && !outcome.success
-                    && outcome.output.contains("Try without --index")
+                    && outcome.output.starts_with(ops::POP_STAGING_CONFLICTS)
                 {
                     self.ask_when_free(
-                        "Pop without what the stash had staged (git can't restore it here)? \
-                         Anything staged, then changed again before stashing, is lost."
+                        "Pop without what the stash had staged (it conflicts with what's \
+                         staged now)? Anything staged, then changed again before stashing, is lost."
                             .into(),
                         Confirmed::Ops(vec![(path.clone(), Op::StashPopPlain { index, id })]),
                     );
