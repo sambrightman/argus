@@ -8026,6 +8026,16 @@ fn stash_and_gitignore_ask_which_repos_marks_too() {
     file_in(&mut app, "clean", "other");
     app.on_key(key('z'));
     assert!(!app.on_key(key('m')).is_empty());
+    app.running.clear();
+    // nor does gitignore ask about another repo's marks that aren't
+    // untracked files: they're nothing to it
+    app.on_key(ctrl('g'));
+    file_in(&mut app, "dirty", "README");
+    app.on_key(key(' '));
+    file_in(&mut app, "clean", "other");
+    app.on_key(key('i'));
+    assert_eq!(menu(&app).0, "Gitignore · 1 untracked file(s)");
+    assert!(menu(&app).1[0].contains("/other"), "{:?}", menu(&app));
 }
 
 /// K on several marked files says they're the marked ones.
