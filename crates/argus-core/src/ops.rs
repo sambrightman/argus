@@ -1094,7 +1094,6 @@ fn pop(cwd: &Path, index: usize, id: Option<&str>, staging: bool, started: Insta
         };
         return OpOutcome {
             output: format!("{}{note}", applied.output),
-            duration: started.elapsed(),
             ..applied
         };
     }
@@ -1121,7 +1120,6 @@ fn pop(cwd: &Path, index: usize, id: Option<&str>, staging: bool, started: Insta
             true => format!("popped {stash}"),
             false => dropped.output.clone(),
         },
-        duration: started.elapsed(),
         ..dropped
     }
 }

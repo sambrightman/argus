@@ -708,6 +708,7 @@ fn a_pop_restores_staging_beside_what_is_staged_now() {
     let pop = |r: &Path| {
         let out = ops::run(r, &Op::StashPop);
         assert!(out.success, "{}", out.output);
+        assert_eq!(out.output, "popped stash@{0}");
         assert_eq!(git(r, &["stash", "list"]), "", "dropped");
     };
     // a new file staged, then edited again: both versions kept
