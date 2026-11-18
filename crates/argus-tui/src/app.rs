@@ -1198,6 +1198,32 @@ impl App {
     /// Ask `question` once nothing else is being asked, typed or chosen:
     /// at once from a key, but a question from the background (a forge's
     /// answer, a job's end) never replaces what the user is in.
+    /// A pop (from the Stash menu or a fix) whose files could be restored
+    /// but not its staging, which conflicts with what's staged now:
+    /// popping the files alone is another thing (what the stash had
+    /// staged, then changed again, isn't brought back), so it's asked.
+    fn ask_to_pop_plain(&mut self, path: &Path, op: &Op, outcome: &OpOutcome) {
+        let stash = match op {
+            Op::StashPopAt { index, id } => Some((*index, Some(id.clone()))),
+            Op::StashPop => {
+                let ids = self.ws.get(path).and_then(Entry::status);
+                Some((0, ids.and_then(|s| s.stash_ids.first().cloned())))
+            }
+            _ => None,
+        };
+        if let Some((index, Some(id))) = stash
+            && !outcome.success
+            && outcome.output.starts_with(ops::POP_STAGING_CONFLICTS)
+        {
+            self.ask_when_free(
+                "Pop without what the stash had staged (it conflicts with what's \
+                 staged now)? Anything staged, then changed again before stashing, is lost."
+                    .into(),
+                Confirmed::Ops(vec![(path.to_path_buf(), Op::StashPopPlain { index, id })]),
+            );
+        }
+    }
+
     fn ask_when_free(&mut self, question: String, then: Confirmed) {
         self.waiting.push_back((question, then));
         self.show_waiting();
@@ -5377,29 +5403,7 @@ impl App {
                 if !outcome.success {
                     self.error(format!("{label} failed ($ for log)"));
                 }
-                // a pop whose files could be restored but not its staging,
-                // which conflicts with what's staged now: the files alone
-                // is another thing (what the stash had staged, then
-                // changed again, isn't brought back), so it's asked
-                let stash = match &op {
-                    Op::StashPopAt { index, id } => Some((*index, Some(id.clone()))),
-                    Op::StashPop => {
-                        let ids = self.ws.get(&path).and_then(Entry::status);
-                        Some((0, ids.and_then(|s| s.stash_ids.first().cloned())))
-                    }
-                    _ => None,
-                };
-                if let Some((index, Some(id))) = stash
-                    && !outcome.success
-                    && outcome.output.starts_with(ops::POP_STAGING_CONFLICTS)
-                {
-                    self.ask_when_free(
-                        "Pop without what the stash had staged (it conflicts with what's \
-                         staged now)? Anything staged, then changed again before stashing, is lost."
-                            .into(),
-                        Confirmed::Ops(vec![(path.clone(), Op::StashPopPlain { index, id })]),
-                    );
-                }
+                self.ask_to_pop_plain(&path, &op, &outcome);
                 if let Op::Apply { .. } = op
                     && let Some(e) = self.editing.as_mut()
                     && e.applying
@@ -5453,6 +5457,7 @@ impl App {
                     Ok(list) => {
                         if let Some(a) = list {
                             let ok = a.outcome.success;
+                            self.ask_to_pop_plain(&path, &a.fix.op, &a.outcome);
                             self.push_log(&path, a.fix.op.label(), ok, a.outcome.output);
                             if let Some(chain) = self.chains.get_mut(&path).filter(|_| ok) {
                                 chain.done.push(a.fix.clone());

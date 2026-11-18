@@ -6112,7 +6112,39 @@ fn a_pop_without_the_stashs_index_is_asked_for() {
     app.on_msg(failed(Op::StashPop, "error: something else"));
     assert!(matches!(app.mode, Mode::Normal));
     // nor does the plain pop failing ask again
-    app.on_msg(failed(Op::StashPopPlain { index: 0, id }, said));
+    app.on_msg(failed(
+        Op::StashPopPlain {
+            index: 0,
+            id: id.clone(),
+        },
+        said,
+    ));
+    assert!(matches!(app.mode, Mode::Normal));
+    // a pop the Fix menu ran asks the same
+    let fix = |output: &str| Msg::FixDone {
+        path: clean.clone(),
+        applied: Ok(Some(argus_core::fix::Applied {
+            fix: argus_core::fix::Fix {
+                kind: argus_core::fix::FixKind::StashPop,
+                op: Op::StashPop,
+                reason: String::new(),
+                blocked: None,
+            },
+            outcome: argus_core::ops::OpOutcome {
+                success: false,
+                code: Some(1),
+                output: output.into(),
+                duration: std::time::Duration::ZERO,
+            },
+        })),
+    };
+    app.on_msg(fix(said));
+    assert!(matches!(app.mode, Mode::Confirm { .. }));
+    let fx = app.on_key(key('y'));
+    assert_eq!(job_ops(&fx), [Op::StashPopPlain { index: 0, id }]);
+    app.running.clear();
+    // (and not for a fix's pop that failed some other way)
+    app.on_msg(fix("error: something else"));
     assert!(matches!(app.mode, Mode::Normal));
 }
 
