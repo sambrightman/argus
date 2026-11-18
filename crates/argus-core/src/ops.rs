@@ -1017,9 +1017,7 @@ fn pop_problem(cwd: &Path, index: usize) -> Option<String> {
     let files: Vec<&str> = o.output.lines().skip(1).filter(|l| !l.is_empty()).collect();
     match o.code {
         Some(0) => {}
-        Some(1) if !files.is_empty() => {
-            return Some(format!("it would conflict in {}", files.join(", ")));
-        }
+        Some(1) => return Some(format!("it would conflict in {}", files.join(", "))),
         _ => {
             return Some(format!(
                 "can't check it for conflicts: {}",

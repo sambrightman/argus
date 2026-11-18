@@ -691,6 +691,8 @@ fn a_stash_whose_index_no_longer_applies_pops_without_it_when_asked() {
         "{}",
         pop.output
     );
+    // (what to do about a file's own changes is said of that refusal only)
+    assert!(!pop.output.contains("commit or stash"), "{}", pop.output);
     assert_eq!(changes(&r), before, "nothing changed");
     assert_eq!(git(&r, &["stash", "list"]).lines().count(), 1);
     // asked for: only that stash, as it was
@@ -707,6 +709,7 @@ fn a_stash_whose_index_no_longer_applies_pops_without_it_when_asked() {
     );
     let pop = ops::run(&r, &plain(&id));
     assert!(pop.success, "{}", pop.output);
+    assert!(!pop.output.contains("commit or stash"), "{}", pop.output);
     assert!(
         std::fs::read_to_string(r.join("f"))
             .unwrap()

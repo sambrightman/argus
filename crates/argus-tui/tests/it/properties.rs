@@ -105,122 +105,13 @@ fn key() -> impl Strategy<Value = KeyEvent> {
     ]
 }
 
-/// Keys that move about the details, fold and unfold them, and mark:
-/// rows, regions, all the repos, and their undoing.
-fn marking_key() -> impl Strategy<Value = KeyEvent> {
-    let plain = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
-    prop_oneof![
-        6 => prop::sample::select(vec![KeyCode::Tab, KeyCode::Char(' '), KeyCode::Down, KeyCode::Down])
-            .prop_map(plain),
-        2 => prop::sample::select(vec![
-            KeyCode::Up,
-            KeyCode::End,
-            KeyCode::Home,
-            KeyCode::Char('n'),
-            KeyCode::Char('p'),
-            KeyCode::Char('M'),
-            KeyCode::Char('U'),
-        ])
-        .prop_map(plain),
-        1 => prop::sample::select(vec![' ', 'g'])
-            .prop_map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)),
-    ]
-}
-
-/// The files `fx`'s jobs would change, by repo.
-fn touched(fx: &[Effect]) -> Vec<(std::path::PathBuf, String)> {
-    let mut out = vec![];
-    for e in fx {
-        let Effect::Jobs(jobs) = e else { continue };
-        for j in jobs {
-            let files: Vec<String> = match &j.op {
-                Op::Add { paths }
-                | Op::AddTracked { paths }
-                | Op::Clean { paths }
-                | Op::Restore { paths, .. }
-                | Op::Remove { paths, .. } => paths.clone(),
-                Op::Apply { patch, .. } => {
-                    let named = patch.lines().filter_map(|l| l.strip_prefix("+++ b/"));
-                    named.map(str::to_string).collect()
-                }
-                other => panic!("not a file operation: {other:?}"),
-            };
-            out.extend(files.into_iter().map(|f| (j.path.clone(), f)));
-        }
-    }
-    out
-}
-
-/// Whether `file` of `repo` shows as marked (or with `at`, is what that
-/// row is or holds) in one of `sections`: by its own row when it has one,
-/// else by its section's heading, else (all folded away) by the repo's.
-fn shows(
-    app: &App,
-    repo: &std::path::Path,
-    file: &str,
-    sections: &[Section],
-    at: Option<usize>,
-) -> bool {
-    let rows = || (0..app.rows.len()).filter_map(|n| Some((n, app.target(n)?)));
-    let is = |t: &Target, section: Section, whole: bool| match t {
-        Target::File {
-            repo: r,
-            section: s,
-            file: f,
-        } => !whole && r == repo && *s == section && f == file,
-        Target::Hunk {
-            repo: r,
-            section: s,
-            file: f,
-            ..
-        } => !whole && at.is_some() && r == repo && *s == section && f == file,
-        Target::Section {
-            repo: r,
-            section: s,
-        } => whole && r == repo && *s == section,
-    };
-    sections.iter().any(|&section| {
-        let listed = app.ws.get(repo).and_then(|e| e.status());
-        if !listed.is_some_and(|s| section.files(s).iter().any(|f| f == file)) {
-            return false;
-        }
-        match at {
-            // with nothing marked: the row under the cursor is its (the
-            // file's own, or one of its diff, an unchanged line too), or
-            // its section's heading
-            Some(at) => match &app.rows[at] {
-                Row::Detail { repo: r, line } => {
-                    let heading = Section::heads(line) == Some(section);
-                    let its = line.file.as_deref() == Some(file) && line.section == Some(section);
-                    app.ws.entries[*r].path == repo && (heading || its)
-                }
-                Row::Repo(_) => false,
-            },
-            None => {
-                let own: Vec<bool> = rows()
-                    .filter(|(_, t)| matches!(t, Target::File { .. }) && is(t, section, false))
-                    .map(|(_, t)| app.marked(&t) != Marked::No)
-                    .collect();
-                let heading: Vec<bool> = rows()
-                    .filter(|(_, t)| is(t, section, true))
-                    .map(|(_, t)| app.marked(&t) != Marked::No)
-                    .collect();
-                match (own.is_empty(), heading.is_empty()) {
-                    (false, _) => own.iter().all(|m| *m),
-                    (true, false) => heading.iter().all(|m| *m),
-                    (true, true) => app.marked_in(Some(repo)) != (0, 0),
-                }
-            }
-        }
-    })
-}
-
 /// A state got to directly, as few runs of keys from the top would: every
 /// repo's details open, some files' diffs unfolded, space pressed on some
 /// rows of the changes, the cursor on any row.
 fn arranged(
     unfold: &[prop::sample::Index],
     toggle: &[prop::sample::Index],
+    region: Option<(prop::sample::Index, usize)>,
     cursor: prop::sample::Index,
 ) -> App {
     let plain = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
@@ -251,8 +142,68 @@ fn arranged(
         app.cursor = targets[pick.index(targets.len())];
         app.on_key(plain(KeyCode::Char(' ')));
     }
-    app.cursor = cursor.index(app.rows.len());
+    // a region: started on a row of some diff, then so many rows down
+    let in_diff: Vec<usize> = (0..app.rows.len())
+        .filter(|&n| matches!(app.target(n), Some(Target::Hunk { .. })))
+        .collect();
+    match region {
+        Some((start, down)) if !in_diff.is_empty() => {
+            app.cursor = in_diff[start.index(in_diff.len())];
+            app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+            for _ in 0..down {
+                app.on_key(plain(KeyCode::Down));
+            }
+            // (the cursor stays where the region ends)
+        }
+        _ => app.cursor = cursor.index(app.rows.len()),
+    }
     app
+}
+
+/// The changed lines whose rows show wholly marked under `section`, and
+/// the files whose own rows do, as the screen has them.
+fn shown_marked(app: &App, section: Section) -> Taken {
+    let (mut lines, mut files) = (vec![], BTreeSet::new());
+    for n in 0..app.rows.len() {
+        let Row::Detail { line, .. } = &app.rows[n] else {
+            continue;
+        };
+        match app.target(n) {
+            Some(t @ Target::File { .. }) if app.marked(&t) == Marked::Wholly => {
+                let Target::File {
+                    repo,
+                    section: s,
+                    file,
+                } = t
+                else {
+                    unreachable!()
+                };
+                if s == section {
+                    files.insert((repo, file));
+                }
+            }
+            Some(t @ Target::Hunk { at: Some(_), .. }) if app.marked(&t) == Marked::Wholly => {
+                let Target::Hunk {
+                    repo,
+                    section: s,
+                    file,
+                    ..
+                } = t
+                else {
+                    unreachable!()
+                };
+                let l = line.diff.as_deref().and_then(|d| d.line.as_ref());
+                let sign = l.map(|l| if l.kind == LineKind::Add { '+' } else { '-' });
+                if let (true, Some(l), Some(sign)) = (s == section, l, sign) {
+                    lines.push((repo, file, sign, l.text.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+    lines.sort();
+    lines.dedup();
+    (lines, files)
 }
 
 /// A changed line of a file's diff, as a patch has it: repo, file, sign,
@@ -408,10 +359,11 @@ proptest! {
     fn the_keys_take_exactly_what_the_rows_show(
         unfold in prop::collection::vec(any::<prop::sample::Index>(), 0..6),
         toggle in prop::collection::vec(any::<prop::sample::Index>(), 0..6),
+        region in prop::option::weighted(0.3, (any::<prop::sample::Index>(), 0..6usize)),
         cursor in any::<prop::sample::Index>(),
         verb in prop::sample::select(vec!['s', 'u', 'K']),
     ) {
-        let mut app = arranged(&unfold, &toggle, cursor);
+        let mut app = arranged(&unfold, &toggle, region, cursor);
         let want = expected(&app, verb);
         let at = format!("{:?}", app.target(app.cursor));
         let mut fx = app.on_key(KeyEvent::new(KeyCode::Char(verb), KeyModifiers::NONE));
@@ -423,130 +375,95 @@ proptest! {
         prop_assert_eq!(&got.0, &want.0, "the lines {} takes, the cursor on {}", verb, at);
         prop_assert_eq!(&got.1, &want.1, "the files {} takes, the cursor on {}", verb, at);
     }
-}
 
-proptest! {
-    /// Whatever is marked, and wherever the cursor is, `s`, `u` and `K`
-    /// change only files that show as marked on the side the key is for;
-    /// with nothing marked, only what the cursor is on. Nothing is taken
-    /// by its other side, nor from where nothing shows it.
+    /// Stashing what's marked, from any state: a file goes by its path
+    /// (which takes all its changes) only if every row of it shows wholly
+    /// marked, and a line only if its row does (or its file's, under
+    /// unstaged). And when anything is stashed, nothing that shows wholly
+    /// marked is left out.
     #[test]
-    fn the_keys_take_only_what_shows_as_theirs(
-        keys in prop::collection::vec(marking_key(), 0..40),
-        verb in prop::sample::select(vec!['s', 'u', 'K']),
+    fn stashing_takes_exactly_what_shows_as_marked(
+        unfold in prop::collection::vec(any::<prop::sample::Index>(), 0..6),
+        toggle in prop::collection::vec(any::<prop::sample::Index>(), 0..6),
+        region in prop::option::weighted(0.3, (any::<prop::sample::Index>(), 0..6usize)),
+        cursor in any::<prop::sample::Index>(),
     ) {
-        let mut app = App::new(workspace().clone());
-        for k in keys {
-            app.on_key(k);
-        }
-        prop_assume!(matches!(app.mode, Mode::Normal));
-        // (a region's lines become marks as the key is pressed)
-        let region = app.region_lines();
-        let marked = app.marked_in(None) != (0, 0) || !region.is_empty();
-        let cursor = app.cursor;
-        let before: Vec<Option<Target>> = (0..app.rows.len()).map(|n| app.target(n)).collect();
-        let sections: &[Section] = match verb {
-            'u' => &[Section::Staged],
-            _ => &[Section::Untracked, Section::Unstaged],
+        let mut app = arranged(&unfold, &toggle, region, cursor);
+        let shown: Vec<Taken> = Section::ALL.iter().map(|s| shown_marked(&app, *s)).collect();
+        let listed = |repo: &std::path::Path, file: &str| -> Vec<usize> {
+            let status = workspace().get(repo).and_then(|e| e.status());
+            let lists = |n: &usize| status.is_some_and(|s| Section::ALL[*n].files(s).iter().any(|f| f == file));
+            (0..3).filter(lists).collect()
         };
-        // what shows as the key's to take, before it's pressed (which
-        // unmarks the lines it takes)
-        let mut theirs = vec![];
-        for e in &app.ws.entries {
-            let files = e.status().map(|s| s.changes.files.clone()).unwrap_or_default();
-            for f in files {
-                if shows(&app, &e.path, &f.path, sections, (!marked).then_some(cursor)) {
-                    theirs.push((e.path.clone(), f.path));
-                }
-            }
-        }
-        let mut fx = app.on_key(KeyEvent::new(KeyCode::Char(verb), KeyModifiers::NONE));
-        if matches!(app.mode, Mode::Confirm { .. }) {
-            fx = app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
-        }
-        for (repo, file) in touched(&fx) {
-            let in_region = region.iter().any(|k| k.0 == repo && k.1 == file);
-            let shown = in_region || theirs.contains(&(repo.clone(), file.clone()));
-            prop_assert!(
-                shown,
-                "{verb} changes {file} in {}, which {}: rows {:?}",
-                repo.display(),
-                if marked { "doesn't show as marked there" } else { "the cursor isn't on" },
-                before.iter().flatten().collect::<Vec<_>>(),
-            );
-        }
-    }
-
-    /// Stashing what's marked takes only what shows as marked: a file by
-    /// its path (which takes all its changes) only when it's marked
-    /// everywhere it's listed, lines only of files with marks under
-    /// unstaged.
-    #[test]
-    fn stashing_marked_takes_only_what_shows_as_marked(
-        keys in prop::collection::vec(marking_key(), 0..40),
-    ) {
-        let mut app = App::new(workspace().clone());
-        for k in keys {
-            app.on_key(k);
-        }
-        prop_assume!(matches!(app.mode, Mode::Normal));
-        let shown = |app: &App, repo: &std::path::Path, file: &str, section: Section, whole: bool| {
-            let rows = (0..app.rows.len()).filter_map(|n| app.target(n));
-            let mut own = rows.filter(|t| matches!(t, Target::File { repo: r, section: s, file: f }
-                if r == repo && *s == section && f == file));
-            match own.next() {
-                Some(t) if whole => app.marked(&t) == Marked::Wholly,
-                Some(t) => app.marked(&t) != Marked::No,
-                // (folded away: something of the repo's is marked, at least)
-                None => app.marked_in(Some(repo)) != (0, 0),
-            }
+        let whole = |repo: &std::path::Path, file: &str, n: usize| {
+            shown[n].1.contains(&(repo.to_path_buf(), file.to_string()))
         };
-        let mut by_path = vec![];
-        let mut by_lines = vec![];
-        for e in &app.ws.entries {
-            let Some(status) = e.status() else { continue };
-            for f in &status.changes.files {
-                let listed: Vec<Section> = Section::ALL
-                    .into_iter()
-                    .filter(|s| s.files(status).contains(&f.path))
-                    .collect();
-                if listed.iter().all(|s| shown(&app, &e.path, &f.path, *s, true)) {
-                    by_path.push((e.path.clone(), f.path.clone()));
-                }
-                if shown(&app, &e.path, &f.path, Section::Unstaged, false) {
-                    by_lines.push((e.path.clone(), f.path.clone()));
-                }
-            }
-        }
+        let unstaged = 1;
         app.on_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
         let fx = app.on_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        let (mut by_path, mut by_line): (BTreeSet<(std::path::PathBuf, String)>, Vec<PatchLine>) =
+            (BTreeSet::new(), vec![]);
+        let mut stashed = false;
         for e in &fx {
             let Effect::Jobs(jobs) = e else { continue };
             for j in jobs {
+                stashed = true;
                 match &j.op {
                     Op::Stash { paths, .. } => {
                         prop_assert!(!paths.is_empty(), "a stash of everything in {}", j.path.display());
-                        for p in paths {
-                            prop_assert!(
-                                by_path.contains(&(j.path.clone(), p.clone())),
-                                "{p} stashed by its path, though not marked everywhere it's listed"
-                            );
-                        }
+                        by_path.extend(paths.iter().map(|p| (j.path.clone(), p.clone())));
                     }
                     Op::StashLines { stage, .. } => {
-                        for p in stage.lines().filter_map(|l| l.strip_prefix("+++ b/")) {
-                            prop_assert!(
-                                by_lines.contains(&(j.path.clone(), p.to_string())),
-                                "lines of {p} stashed, though nothing of it shows marked under unstaged"
-                            );
+                        let mut file = String::new();
+                        for l in stage.lines() {
+                            if let Some(name) = l.strip_prefix("+++ b/") {
+                                file = name.to_string();
+                            } else if !l.starts_with("--- ") {
+                                let sign = l.chars().next().filter(|c| "+-".contains(*c));
+                                by_line.extend(sign.map(|s| (j.path.clone(), file.clone(), s, l[1..].to_string())));
+                            }
                         }
                     }
                     other => prop_assert!(false, "not a stash: {other:?}"),
                 }
             }
         }
+        // nothing but what shows
+        for (repo, file) in &by_path {
+            let rows = listed(repo, file);
+            prop_assert!(
+                !rows.is_empty() && rows.iter().all(|n| whole(repo, file, *n)),
+                "{} stashed by its path, though not marked everywhere it's listed", file
+            );
+        }
+        for l in &by_line {
+            prop_assert!(
+                shown[unstaged].0.contains(l) || whole(&l.0, &l.1, unstaged),
+                "{}{} of {} stashed, though it doesn't show marked under unstaged", l.2, l.3, l.1
+            );
+        }
+        // and all of it, when anything is
+        if stashed {
+            for l in &shown[unstaged].0 {
+                prop_assert!(
+                    by_line.contains(l) || by_path.contains(&(l.0.clone(), l.1.clone())),
+                    "{}{} of {} shows marked and wasn't stashed", l.2, l.3, l.1
+                );
+            }
+            for (n, (_, files)) in shown.iter().enumerate() {
+                for (repo, file) in files {
+                    let lines = by_line.iter().any(|l| l.0 == *repo && l.1 == *file);
+                    prop_assert!(
+                        by_path.contains(&(repo.clone(), file.clone())) || (n == unstaged && lines),
+                        "{} shows marked under {:?} and wasn't stashed", file, Section::ALL[n]
+                    );
+                }
+            }
+        }
     }
+}
 
+proptest! {
     /// Refining only marks words: each line's text is kept exactly, and
     /// context lines are never marked.
     #[test]
