@@ -653,6 +653,9 @@ fn the_message_history_scrolls_back() {
     // inset by a column, as the help is
     let screen = render(&mut app, 80, 20);
     assert!(screen.starts_with(" ╭ messages"), "{screen}");
+    // inverse: v by itself is any other key
+    app.on_key(key('v'));
+    assert!(!matches!(app.mode, Mode::History { .. }));
 }
 
 /// The history and the process log are in the View menu (`v L`, `v $`),
