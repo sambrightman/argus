@@ -354,6 +354,31 @@ fn commit_lists_hide_only_what_could_hold_them() {
     assert_eq!(said, [format!("hiding 2 of {} tips", n + 2)]);
 }
 
+/// A branch's upstream is among the likely tips, named or as HEAD: what
+/// it leaves is newer than every other tip.
+#[test]
+fn a_list_hides_the_branchs_upstream_first() {
+    use argus_core::history::{Range, commits};
+    let sb = Sandbox::new();
+    let r = with_old_branches(&sb);
+    two_more(&r);
+    git(&r, &["push", "-q", "-u", "origin", "feat"]);
+    git(&r, &["push", "-q", "origin", "feat~1:refs/heads/side"]);
+    write_graph(&r);
+    write(&r, "i", "x\n");
+    commit(&r, "i");
+    git(&r, &["fetch", "-q"]);
+    let n = all_remote(&r);
+    for tip in ["HEAD", "feat"] {
+        let range = Range::NotOnRemote { tip: tip.into() };
+        let said = steps("hiding ", || {
+            assert_eq!(commits(&r, &range, 50).unwrap().0.len(), 1)
+        });
+        // origin/feat and origin/main: side, below what they leave, isn't
+        assert_eq!(said, [format!("hiding 2 of {n} tips")], "{tip}");
+    }
+}
+
 /// The remote tips, as many as a list is told of (origin/HEAD among them).
 fn all_remote(r: &Path) -> usize {
     git(
