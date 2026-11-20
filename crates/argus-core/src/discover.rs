@@ -665,20 +665,30 @@ pub fn containing_repo(dir: &Path) -> Option<PathBuf> {
     Some(top)
 }
 
-/// The real path of the nearest work tree at or above `dir`.
+/// The real path of the nearest work tree at or above `dir`, within the
+/// limits git's environment sets.
 fn work_tree_above(dir: &Path) -> Option<PathBuf> {
     use gix::discover::upwards::Options;
+    let ceilings = Options::default().apply_environment().ceiling_dirs;
+    let across = std::env::var_os("GIT_DISCOVERY_ACROSS_FILESYSTEM")
+        .map(gix::config::Boolean::try_from)
+        .and_then(Result::ok)
+        .is_some_and(bool::from);
+    nearest_work_tree(dir, ceilings, across)
+}
+
+/// The real path of the nearest work tree at or above `dir`, not looking
+/// into `ceilings` or above them, nor onto another filesystem unless
+/// `across`.
+fn nearest_work_tree(dir: &Path, ceilings: Vec<PathBuf>, across: bool) -> Option<PathBuf> {
+    use gix::discover::upwards::Options;
     let mut opts = Options {
+        ceiling_dirs: ceilings,
         // as git: ceilings that don't contain `dir` are no error
         match_ceiling_dir_or_error: false,
         ..Options::default()
-    }
-    .apply_environment();
-    if let Some(Ok(b)) =
-        std::env::var_os("GIT_DISCOVERY_ACROSS_FILESYSTEM").map(gix::config::Boolean::try_from)
-    {
-        opts.cross_fs = b.into();
-    }
+    };
+    opts.cross_fs = across;
     let (path, _) = gix::discover::upwards_opts(dir, opts).ok()?;
     let (_, work_tree) = path.into_repository_and_work_tree_directories();
     fs::canonicalize(work_tree?).ok()
@@ -746,6 +756,30 @@ fn is_bare_listing(entries: &[DirEntry]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ceilings stop the search as git's do; one elsewhere is no error.
+    #[test]
+    fn the_nearest_work_tree_is_found_within_the_ceilings() {
+        let t = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(t.path()).unwrap();
+        let repo = mk(&root, "repo");
+        let ok = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let deep = mk(&root, "repo/a/b");
+        let elsewhere = mk(&root, "elsewhere");
+        assert_eq!(nearest_work_tree(&deep, vec![], false), Some(repo.clone()));
+        assert_eq!(
+            nearest_work_tree(&deep, vec![elsewhere], false),
+            Some(repo.clone())
+        );
+        // inverse: a ceiling between stops it
+        assert_eq!(nearest_work_tree(&deep, vec![repo.join("a")], false), None);
+    }
 
     #[test]
     fn only_a_directory_by_that_name_is_listed() {
