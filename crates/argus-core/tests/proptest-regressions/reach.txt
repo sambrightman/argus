@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9f495e14bd17d0d412b8f53719e4ddcec589a3f6422aa6ecd8eb9a1f482a7198 # shrinks to ops = [(0, 1), (3, 1), (0, 0), (0, 0)], graph_at = 0, others = [true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false], likely = [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, true], tip = Index(17074549747859501103)

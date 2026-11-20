@@ -19,6 +19,7 @@ pub mod isolation;
 pub mod ops;
 pub mod paths;
 pub mod pull;
+pub mod reach;
 pub mod rules;
 pub mod runner;
 pub mod state;

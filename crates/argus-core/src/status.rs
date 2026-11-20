@@ -1054,13 +1054,27 @@ fn branches(
         let full = refs.refs[i].name().to_owned();
         let name = full.shorten().to_str_lossy().into_owned();
         let Some(tip) = refs.peel_at(i) else { continue };
+        // remote branches this one's commits are likeliest to be on, and
+        // whether any is known to have them all
+        let mut likely: Vec<gix::ObjectId> = vec![];
+        let mut all_on_remote = false;
+        let mut on_remote = |name: &gix::refs::FullNameRef, at: gix::ObjectId, ahead: usize| {
+            if name.as_bstr().starts_with(b"refs/remotes/") {
+                likely.push(at);
+                all_on_remote |= ahead == 0;
+            }
+        };
         let upstream = match repo.branch_remote_tracking_ref_name(full.as_ref(), Direction::Fetch) {
             Some(Ok(tracking)) => {
                 let short = tracking.shorten().to_str_lossy().into_owned();
                 match refs.peel(&tracking.as_bstr().to_str_lossy()) {
                     Some(up) => Some(Tracking {
                         name: short,
-                        ahead: count_exclusive(repo, tip, up)?,
+                        ahead: {
+                            let ahead = count_exclusive(repo, tip, up)?;
+                            on_remote(tracking.as_ref(), up, ahead);
+                            ahead
+                        },
                         behind: count_exclusive(repo, up, tip)?,
                         gone: false,
                     }),
@@ -1079,7 +1093,11 @@ fn branches(
                 let short = tracking.shorten().to_str_lossy().into_owned();
                 Some(match refs.peel(&tracking.as_bstr().to_str_lossy()) {
                     Some(o) => Tracking {
-                        ahead: count_exclusive(repo, tip, o)?,
+                        ahead: {
+                            let ahead = count_exclusive(repo, tip, o)?;
+                            on_remote(tracking.as_ref(), o, ahead);
+                            ahead
+                        },
                         behind: count_exclusive(repo, o, tip)?,
                         name: short,
                         gone: false,
@@ -1099,22 +1117,30 @@ fn branches(
             None => false,
         };
         let absorbed = !merged && default_tip.is_some_and(|(d, _)| absorbed(repo, tip, d));
+        // merged into the remote's default branch: all on a remote
+        if let Some((d, true)) = default_tip {
+            all_on_remote |= merged;
+            likely.push(d);
+        }
+        // and a remote branch of the same name
+        let same_name = format!("/{name}");
+        likely.extend(
+            refs.prefixed("refs/remotes/")
+                .filter(|&i| {
+                    refs.refs[i]
+                        .name()
+                        .as_bstr()
+                        .ends_with(same_name.as_bytes())
+                })
+                .filter_map(|i| refs.peel_at(i)),
+        );
         let unpushed = if remote_tips.is_empty() {
             None
-        } else if remote_tips.binary_search(&tip).is_ok() {
+        } else if all_on_remote {
             Some(0)
         } else {
-            let walk = repo
-                .rev_walk([tip])
-                .with_hidden(remote_tips.iter().copied())
-                .all()
-                .map_err(err)?;
-            let mut n = 0;
-            for info in walk {
-                info.map_err(err)?;
-                n += 1;
-            }
-            Some(n)
+            let counted = crate::reach::exclusive(repo, tip, &likely, &remote_tips).map_err(err)?;
+            Some(counted.n)
         };
         // absorbed into a remote's default branch: nothing of it is unpushed
         let unpushed = match default_tip {
@@ -1644,16 +1670,13 @@ fn detached_orphans(
     for prefix in ["refs/heads/", "refs/remotes/", "refs/tags/"] {
         tips.extend(refs.prefixed(prefix).filter_map(|i| refs.peel_at(i)));
     }
-    if tips.contains(&head) {
-        return Ok(0); // e.g. a checked-out tag: no walk needed
-    }
-    let walk = repo.rev_walk([head]).with_hidden(tips).all().map_err(err)?;
-    let mut n = 0;
-    for info in walk {
-        info.map_err(err)?;
-        n += 1;
-    }
-    Ok(n)
+    // HEAD is likeliest to have been left on a branch's history
+    let branches: Vec<gix::ObjectId> = refs
+        .prefixed("refs/heads/")
+        .filter_map(|i| refs.peel_at(i))
+        .collect();
+    let counted = crate::reach::exclusive(repo, head, &branches, &tips).map_err(err)?;
+    Ok(counted.n)
 }
 
 /// From the stash's reflog: one line per stash, oldest first, the message
