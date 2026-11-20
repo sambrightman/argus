@@ -658,7 +658,7 @@ fn the_message_history_scrolls_back() {
     assert!(!matches!(app.mode, Mode::History { .. }));
 }
 
-/// The history and the process log are in the View menu (`v L`, `v $`),
+/// The history and the process log are in the View menu (`v m`, `v $`),
 /// not on keys of their own.
 #[test]
 fn the_history_and_process_log_are_in_the_view_menu() {
@@ -679,7 +679,7 @@ fn the_history_and_process_log_are_in_the_view_menu() {
 
 fn open_history(app: &mut App) {
     app.on_key(key('v'));
-    app.on_key(key('L'));
+    app.on_key(key('m'));
 }
 
 #[test]

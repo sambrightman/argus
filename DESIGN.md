@@ -932,7 +932,7 @@ rendering is snapshot-tested via `TestBackend`.
   (`reach::hiding`), giving up past 2000 commits, where a walk that
   stops at the list's end is cheaper. A property test checks the count against
   `git rev-list --count` on random histories.
-* **The message history** (`v L`) keeps what the status line said (the
+* **The message history** (`v m`) keeps what the status line said (the
   same message running twice is kept once), each job's outcome, and
   steps: a status line message is easily overwritten by the next.
 

@@ -70,7 +70,7 @@ struct Cli {
     json: bool,
     /// Say each step taken (scans, each repo's status, every git command,
     /// forge requests…) and how long it took: on stderr, or in the TUI's
-    /// message history (`v L`).
+    /// message history (`v m`).
     #[arg(long, short = 'v', global = true)]
     verbose: bool,
     /// Proceed with permanently destructive operations without asking
