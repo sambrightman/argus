@@ -102,7 +102,9 @@ fn generations_rule_out_tips_that_cant_contain_whats_left() {
         n: 2,
         how: How::Pruned { hidden: 1 },
     };
+    let walks = reach::walks();
     assert_eq!(count(&r, "feat", &["origin/main"], &all), pruned);
+    assert_eq!(reach::walks(), walks + 1, "nothing more to hide: one walk");
     // and written after, with them in it
     reach::forget();
     write_graph(&r);
@@ -227,6 +229,15 @@ fn counts_are_remembered_for_the_same_tip_and_others() {
     assert_eq!(reach::walks(), walks, "no walk");
     // whatever the likely ones: they only make it faster
     assert_eq!(count(&r, "feat", &[], &all).how, How::Remembered);
+    // and beside others remembered since
+    assert_ne!(
+        count(&r, "feat~1", &["origin/main"], &all).how,
+        How::Remembered
+    );
+    assert_eq!(
+        count(&r, "feat", &["origin/main"], &all).how,
+        How::Remembered
+    );
     // inverse: another set of others is counted afresh
     git(&r, &["push", "-q", "origin", "feat~1:refs/heads/side"]);
     git(&r, &["fetch", "-q"]);
