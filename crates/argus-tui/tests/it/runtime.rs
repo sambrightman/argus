@@ -101,6 +101,20 @@ fn path(app: &App, name: &str) -> PathBuf {
 
 /// With `-v`, each step goes to the history: those taken before the TUI
 /// started first, then what the runtime does (here, a refresh).
+/// A theme or icon set picked in the TUI is saved in the config.
+#[test]
+fn ui_choices_are_saved_in_the_config() {
+    let (sb, mut app, mut rt) = setup("");
+    let effects = vec![Effect::SaveUi {
+        key: "theme",
+        value: "mono".into(),
+    }];
+    run(&mut app, &mut rt, effects);
+    let saved = Config::load(&sb.path("config.toml")).unwrap();
+    assert_eq!(saved.ui.theme, "mono");
+    assert_eq!(app.message, None, "no error");
+}
+
 #[test]
 fn verbose_steps_go_to_the_history() {
     use argus_core::trace::Step;

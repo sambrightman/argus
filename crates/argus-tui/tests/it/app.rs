@@ -1207,13 +1207,21 @@ fn opening_details_asks_once_for_a_full_describe() {
 }
 
 #[test]
-fn view_menu_cycles_themes_and_icon_sets_for_this_session() {
+fn view_menu_cycles_themes_and_icon_sets_and_saves_them() {
     let (_sb, mut app) = setup("[ui]\ntheme = 'light'\nicons = 'nerd'");
     let mut themes = vec![];
     for _ in 0..4 {
         app.on_key(key('v'));
-        app.on_key(key('t'));
-        themes.push(app.ws.config.ui.theme.clone());
+        let fx = app.on_key(key('t'));
+        let theme = app.ws.config.ui.theme.clone();
+        assert_eq!(
+            fx,
+            [Effect::SaveUi {
+                key: "theme",
+                value: theme.clone()
+            }]
+        );
+        themes.push(theme);
     }
     assert_eq!(themes, ["mono", "terminal", "dark", "light"]);
     assert!(
@@ -1224,8 +1232,16 @@ fn view_menu_cycles_themes_and_icon_sets_for_this_session() {
     let mut sets = vec![];
     for _ in 0..3 {
         app.on_key(key('v'));
-        app.on_key(key('i'));
-        sets.push(app.ws.config.ui.icons.clone());
+        let fx = app.on_key(key('i'));
+        let icons = app.ws.config.ui.icons.clone();
+        assert_eq!(
+            fx,
+            [Effect::SaveUi {
+                key: "icons",
+                value: icons.clone()
+            }]
+        );
+        sets.push(icons);
     }
     assert_eq!(sets, ["ascii", "unicode", "nerd"]);
     // open details switch too

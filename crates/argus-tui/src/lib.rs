@@ -478,6 +478,21 @@ impl Runtime {
                     app.report_error(err.to_string());
                 }
             }
+            Effect::SaveUi { key, value } => {
+                let path = &self.opts.config_path;
+                let saved = argus_core::trace::timed(
+                    |_| {
+                        format!(
+                            "save [ui] {key} in {}",
+                            argus_core::paths::contract_tilde(path)
+                        )
+                    },
+                    || configfile::set_ui(path, key, &value),
+                );
+                if let Err(err) = saved {
+                    app.report_error(err.to_string());
+                }
+            }
             Effect::SaveState => {
                 let saved = app.ws.save_state(&self.opts.state_path);
                 if let Err(err) = saved {

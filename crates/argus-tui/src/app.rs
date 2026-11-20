@@ -193,9 +193,9 @@ pub enum Action {
     /// Drop the selected repos whose folder is gone from the list (not a
     /// stale worktree: pruning its record does that).
     DropGone,
-    /// Next built-in theme, for this session only.
+    /// Next built-in theme, saved in the config.
     NextTheme,
-    /// Next icon set, for this session only.
+    /// Next icon set, saved in the config.
     NextIcons,
 }
 
@@ -560,6 +560,11 @@ pub enum Effect {
     SaveState,
     /// Write the tag lists' changes since this config to the config file.
     SaveTags(Box<argus_core::Config>),
+    /// Set `[ui] key` in the config file (a theme or icon set picked).
+    SaveUi {
+        key: &'static str,
+        value: String,
+    },
     Quit,
 }
 
@@ -1859,15 +1864,23 @@ impl App {
             NextTheme => {
                 let ui = &mut self.ws.config.ui;
                 ui.theme = next(crate::theme::BUILTIN, &ui.theme).to_string();
-                let msg = format!("theme {} (this session; set [ui] theme to keep)", ui.theme);
-                self.info(msg);
+                let value = ui.theme.clone();
+                self.info(format!("theme {value} (saved as [ui] theme)"));
+                return vec![Effect::SaveUi {
+                    key: "theme",
+                    value,
+                }];
             }
             NextIcons => {
                 let ui = &mut self.ws.config.ui;
                 ui.icons = next(argus_core::icons::SETS, &ui.icons).to_string();
-                let msg = format!("icons {} (this session; set [ui] icons to keep)", ui.icons);
+                let value = ui.icons.clone();
                 self.rebuild();
-                self.info(msg);
+                self.info(format!("icons {value} (saved as [ui] icons)"));
+                return vec![Effect::SaveUi {
+                    key: "icons",
+                    value,
+                }];
             }
             ToggleHidden => {
                 self.view.show_hidden = !self.view.show_hidden;

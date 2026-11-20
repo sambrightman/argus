@@ -544,7 +544,9 @@ Two findings:
 * **`argus demo`** builds sample repos in every state (a test checks the
   list against every issue, kind and flag) in a temp dir, with git
   isolated from the user's config, and opens the TUI with the user's
-  theme and icons. `v t` / `v i` cycle theme and icons for the session.
+  theme and icons. `v t` / `v i` cycle theme and icons, saved in the main config file
+  (`configfile::set_ui`: it applies last, so it wins over files it
+  extends); the demo's config is its own, thrown away with it.
   `--glyphs` prints a test strip instead (no terminal needed): whether a
   fallback glyph overlaps depends on the terminal and OS, so it has to be
   seen, not computed from font tables.

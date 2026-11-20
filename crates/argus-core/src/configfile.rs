@@ -33,6 +33,8 @@ pub enum EditError {
     RootsNotArray { path: PathBuf },
     #[error("{path}: `{key}` must be a list")]
     NotAList { path: PathBuf, key: String },
+    #[error("{path}: `{key}` must be a table")]
+    NotATable { path: PathBuf, key: String },
     #[error("{0}: no such directory")]
     NoSuchDir(PathBuf),
     #[error("{path}: result would not be a valid config: {source}")]
@@ -781,6 +783,20 @@ pub fn remove_roots(path: &Path, dirs: &[PathBuf]) -> Result<RootsRemoved, EditE
     Ok(out)
 }
 
+/// Set `[ui] key` to `value` in the main config file at `path` (created
+/// from the example if needed): it applies last, so whatever the files it
+/// extends say, this takes effect. The rest of the file is as written.
+pub fn set_ui(path: &Path, key: &str, value: &str) -> Result<(), EditError> {
+    ensure_exists(path)?;
+    let (_, mut doc) = load(path)?;
+    let ui = table_mut(&mut doc, &["ui"], true).ok_or_else(|| EditError::NotATable {
+        path: path.into(),
+        key: "ui".into(),
+    })?;
+    ui.insert(key, toml_edit::value(value));
+    save(path, &doc.to_string())
+}
+
 /// Write the `favourite`, `pull` and `ignore` changes from `before` to
 /// `after` into the config at `path` (created from the example if needed)
 /// and the files it extends, leaving the rest of each file as written. An
@@ -1221,6 +1237,69 @@ mod tests {
             "{out}"
         );
         assert_eq!(c.ui.theme, "dark");
+    }
+
+    #[test]
+    fn ui_settings_are_set_in_place() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        let text =
+            "# my config\nroots = [\"~/dev\"]\n\n[ui]\ntheme = \"dark\"\nicons = \"nerd\" # keep\n";
+        std::fs::write(&p, text).unwrap();
+        set_ui(&p, "theme", "light").unwrap();
+        let out = std::fs::read_to_string(&p).unwrap();
+        let c = Config::parse(&out).unwrap();
+        assert_eq!(
+            (c.ui.theme.as_str(), c.ui.icons.as_str()),
+            ("light", "nerd")
+        );
+        assert!(
+            out.starts_with("# my config\nroots = [\"~/dev\"]\n"),
+            "{out}"
+        );
+        assert!(out.contains("icons = \"nerd\" # keep"), "{out}");
+        // dotted keys, and no [ui] at all: set or added beside the rest
+        std::fs::write(&p, "ui.theme = \"dark\"\n").unwrap();
+        set_ui(&p, "theme", "light").unwrap();
+        set_ui(&p, "icons", "ascii").unwrap();
+        let c = Config::parse(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert_eq!(
+            (c.ui.theme.as_str(), c.ui.icons.as_str()),
+            ("light", "ascii")
+        );
+        std::fs::write(&p, "max_depth = 3\n").unwrap();
+        set_ui(&p, "icons", "ascii").unwrap();
+        let c = Config::parse(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert_eq!((c.ui.icons.as_str(), c.max_depth), ("ascii", 3));
+        // inverse: a `ui` that isn't a table is left alone
+        std::fs::write(&p, "ui = 1\n").unwrap();
+        assert!(matches!(
+            set_ui(&p, "icons", "ascii"),
+            Err(EditError::NotATable { .. })
+        ));
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "ui = 1\n");
+    }
+
+    /// The main file applies last: set there, it takes effect whatever a
+    /// file it extends says, and that file isn't touched.
+    #[test]
+    fn ui_settings_go_to_the_main_file_or_a_new_one() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().join("base.toml");
+        let base_text = "[ui]\ntheme = \"dark\"\n";
+        std::fs::write(&base, base_text).unwrap();
+        let p = d.path().join("config.toml");
+        std::fs::write(&p, "extend = [\"base.toml\"]\n").unwrap();
+        set_ui(&p, "theme", "light").unwrap();
+        assert_eq!(Config::load(&p).unwrap().ui.theme, "light");
+        assert_eq!(std::fs::read_to_string(&base).unwrap(), base_text);
+        let p = d.path().join("new/config.toml");
+        set_ui(&p, "theme", "light").unwrap();
+        let c = Config::load(&p).unwrap();
+        assert_eq!(
+            (c.ui.theme.as_str(), c.max_depth),
+            ("light", Config::default().max_depth)
+        );
     }
 
     #[test]
