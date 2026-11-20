@@ -235,6 +235,124 @@ fn counts_are_remembered_for_the_same_tip_and_others() {
     assert_ne!(c.how, How::Remembered);
 }
 
+fn hiding(r: &Path, tip: &str, likely: &[&str], others: &[ObjectId], cap: usize) -> Vec<ObjectId> {
+    let repo = gix::open(r).unwrap();
+    let likely: Vec<ObjectId> = likely.iter().map(|l| id(r, l)).collect();
+    let mut v = reach::hiding(&repo, id(r, tip), &likely, others, cap).unwrap();
+    v.sort();
+    v
+}
+
+/// For a list, the tips to hide: the likely ones and what could hold
+/// what they leave; every one when that can't be told.
+#[test]
+fn a_list_hides_only_the_tips_that_could_hold_its_commits() {
+    let sb = Sandbox::new();
+    let r = with_old_branches(&sb);
+    two_more(&r);
+    git(&r, &["push", "-q", "origin", "feat~1:refs/heads/side"]);
+    git(&r, &["fetch", "-q"]);
+    let all = remote_tips(&r);
+    let mut every = all.clone();
+    every.sort();
+    every.dedup();
+    write_graph(&r);
+    let mut two = vec![id(&r, "origin/main"), id(&r, "origin/side")];
+    two.sort();
+    assert_eq!(hiding(&r, "feat", &["origin/main"], &all, 100), two);
+    // nothing left by the likely ones: they're enough
+    assert_eq!(
+        hiding(&r, "main~1", &["origin/main"], &all, 100),
+        [id(&r, "origin/main")]
+    );
+    // a tip that's one of them: itself
+    assert_eq!(
+        hiding(&r, "origin/old0", &[], &all, 100),
+        [id(&r, "origin/old0")]
+    );
+    // every one likely: every one, with no walk
+    let names: Vec<String> = every.iter().map(ToString::to_string).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let walks = reach::walks();
+    assert_eq!(hiding(&r, "feat", &names, &all, 100), every);
+    assert_eq!(reach::walks(), walks);
+    // inverse: more left than the cap, or no graph: every one
+    assert_eq!(hiding(&r, "feat", &["origin/main"], &all, 1), every);
+    drop_graph(&r);
+    assert_eq!(hiding(&r, "feat", &["origin/main"], &all, 100), every);
+}
+
+/// The steps taken while `f` runs, those starting with `prefix`.
+fn steps(prefix: &'static str, f: impl FnOnce()) -> Vec<String> {
+    use std::sync::{Arc, Mutex};
+    let got: Arc<Mutex<Vec<String>>> = Arc::default();
+    let into = got.clone();
+    argus_core::trace::set_sink(Some(Arc::new(move |s: argus_core::trace::Step| {
+        if s.what.starts_with(prefix) {
+            into.lock().unwrap().push(s.what);
+        }
+    })));
+    f();
+    argus_core::trace::set_sink(None);
+    got.lock().unwrap().clone()
+}
+
+/// The details' lists hide only what could hold their commits, and list
+/// what git lists.
+#[test]
+fn commit_lists_hide_only_what_could_hold_them() {
+    use argus_core::history::{Range, commits};
+    let sb = Sandbox::new();
+    let r = with_old_branches(&sb);
+    two_more(&r);
+    git(&r, &["push", "-q", "origin", "feat~1:refs/heads/side"]);
+    git(&r, &["fetch", "-q"]);
+    write_graph(&r);
+    let ids = |range: &Range| -> Vec<String> {
+        commits(&r, range, 50)
+            .unwrap()
+            .0
+            .into_iter()
+            .map(|c| c.id)
+            .collect()
+    };
+    let rev_list = |args: &[&str]| -> Vec<String> {
+        git(&r, &[&["rev-list"], args].concat())
+            .lines()
+            .map(String::from)
+            .collect()
+    };
+    let not_on_remote = Range::NotOnRemote { tip: "feat".into() };
+    let n = all_remote(&r);
+    let said = steps("hiding ", || {
+        assert_eq!(
+            ids(&not_on_remote),
+            rev_list(&["feat", "--not", "--remotes"])
+        );
+    });
+    // origin/HEAD and origin/main are one tip; side could hold them
+    assert_eq!(said, [format!("hiding 2 of {n} tips")]);
+    // HEAD detached on a commit of its own
+    git(&r, &["switch", "-q", "--detach", "feat"]);
+    write(&r, "k", "x\n");
+    commit(&r, "k");
+    let orphans = rev_list(&["HEAD", "--not", "--branches", "--tags", "--remotes"]);
+    assert_eq!(orphans.len(), 1);
+    let said = steps("hiding ", || assert_eq!(ids(&Range::Orphans), orphans));
+    // the branches, likely; nothing else could hold a commit the graph lacks
+    assert_eq!(said, [format!("hiding 2 of {} tips", n + 2)]);
+}
+
+/// The remote tips, as many as a list is told of (origin/HEAD among them).
+fn all_remote(r: &Path) -> usize {
+    git(
+        r,
+        &["for-each-ref", "--format=%(objectname)", "refs/remotes"],
+    )
+    .lines()
+    .count()
+}
+
 /// A branch with nothing ahead of its upstream, a remote branch, has
 /// nothing unpushed: known without a walk. (Here not merged into the
 /// default branch, which would say so too.)
@@ -376,7 +494,23 @@ proptest! {
         let ids = |v: &[String]| -> Vec<ObjectId> { v.iter().map(|c| ObjectId::from_hex(c.as_bytes()).unwrap()).collect() };
         reach::forget();
         let repo = gix::open(&r).unwrap();
-        let got = exclusive(&repo, ObjectId::from_hex(tip.as_bytes()).unwrap(), &ids(&likely), &ids(&others)).unwrap();
+        let tip_id = ObjectId::from_hex(tip.as_bytes()).unwrap();
+        let got = exclusive(&repo, tip_id, &ids(&likely), &ids(&others)).unwrap();
         prop_assert_eq!(got.n, expected, "{:?}", got);
+        // and hiding the tips a list would leaves the same commits
+        let mut want = vec!["rev-list", tip.as_str(), "--not"];
+        want.extend(others.iter().map(String::as_str));
+        let mut want: Vec<String> = git(&r, &want).lines().map(String::from).collect();
+        let hidden: Vec<String> = reach::hiding(&repo, tip_id, &ids(&likely), &ids(&others), 1000)
+            .unwrap()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let mut have = vec!["rev-list", tip.as_str(), "--not"];
+        have.extend(hidden.iter().map(String::as_str));
+        let mut have: Vec<String> = git(&r, &have).lines().map(String::from).collect();
+        want.sort();
+        have.sort();
+        prop_assert_eq!(have, want);
     }
 }

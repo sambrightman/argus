@@ -98,13 +98,25 @@ fn read_commits(
         }
         Ok(v)
     };
+    // hiding every ref can cost far more than the list: only those that
+    // could hold any of it are hidden (see `reach`)
+    let hiding = |tip, likely: &[gix::ObjectId], others: &[gix::ObjectId]| {
+        let hidden = crate::reach::hiding(&repo, tip, likely, others, PRUNE_CAP)?;
+        crate::trace::note(|| format!("hiding {} of {} tips", hidden.len(), others.len()));
+        Ok::<_, String>(hidden)
+    };
     let (tip, hidden) = match range {
-        Range::NotOnRemote { tip } => (id_of(tip)?, tips(&["refs/remotes/"])?),
+        Range::NotOnRemote { tip: spec } => {
+            let tip = id_of(spec)?;
+            let others = tips(&["refs/remotes/"])?;
+            (tip, hiding(tip, &likely_on_remote(&repo, spec), &others)?)
+        }
         Range::Missing { tip, from } => (id_of(tip)?, vec![id_of(from)?]),
-        Range::Orphans => (
-            id_of("HEAD")?,
-            tips(&["refs/heads/", "refs/remotes/", "refs/tags/"])?,
-        ),
+        Range::Orphans => {
+            let head = id_of("HEAD")?;
+            let others = tips(&["refs/heads/", "refs/remotes/", "refs/tags/"])?;
+            (head, hiding(head, &tips(&["refs/heads/"])?, &others)?)
+        }
         Range::Ancestors { tip } => (id_of(tip)?, vec![]),
     };
     let walk = repo
@@ -122,6 +134,45 @@ fn read_commits(
         v.push(line(&c));
     }
     Ok((v, false))
+}
+
+/// Past this many commits on none of the likely refs, every ref is hidden
+/// in a walk that stops at the list's end, as cheap as working out which
+/// could matter.
+const PRUNE_CAP: usize = 2000;
+
+/// The remote branches `spec`'s commits are likeliest to be on: its
+/// branch's upstream and push branch, and each remote's default branch.
+fn likely_on_remote(repo: &gix::Repository, spec: &str) -> Vec<gix::ObjectId> {
+    let peel = |name: &gix::refs::FullNameRef| {
+        let mut r = repo.find_reference(name).ok()?;
+        Some(r.peel_to_id().ok()?.detach())
+    };
+    let branch = match spec {
+        "HEAD" => repo.head_name().ok().flatten(),
+        _ => repo.find_reference(spec).ok().map(|r| r.name().to_owned()),
+    };
+    let mut v = vec![];
+    if let Some(b) = &branch {
+        use gix::remote::Direction::{Fetch, Push};
+        for dir in [Fetch, Push] {
+            if let Some(Ok(tracking)) = repo.branch_remote_tracking_ref_name(b.as_ref(), dir) {
+                v.extend(peel(tracking.as_ref()));
+            }
+        }
+    }
+    if let Ok(platform) = repo.references()
+        && let Ok(remotes) = platform.prefixed("refs/remotes/")
+    {
+        for mut r in remotes.flatten() {
+            if r.name().as_bstr().ends_with(b"/HEAD")
+                && let Ok(id) = r.peel_to_id()
+            {
+                v.push(id.detach());
+            }
+        }
+    }
+    v
 }
 
 fn line(c: &gix::Commit<'_>) -> CommitLine {

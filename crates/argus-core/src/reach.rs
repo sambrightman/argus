@@ -54,9 +54,7 @@ pub fn exclusive(
     others: &[ObjectId],
 ) -> Result<Counted, String> {
     let done = |n, how| Ok(Counted { n, how });
-    let mut all: Vec<ObjectId> = others.to_vec();
-    all.sort();
-    all.dedup();
+    let all = sorted(others);
     if all.binary_search(&tip).is_ok() {
         return done(0, How::IsAnother);
     }
@@ -64,13 +62,7 @@ pub fn exclusive(
     if let Some(n) = remembered(&key) {
         return done(n, How::Remembered);
     }
-    let mut first: Vec<ObjectId> = likely
-        .iter()
-        .filter(|l| all.binary_search(l).is_ok())
-        .copied()
-        .collect();
-    first.sort();
-    first.dedup();
+    let first = among(likely, &all);
     let left = walk(repo, tip, &first)?;
     let counted = if left.is_empty() {
         Counted {
@@ -107,6 +99,65 @@ pub fn exclusive(
     };
     remember(key, counted.n);
     Ok(counted)
+}
+
+/// Of `others`, the tips a walk from `tip` needs to hide to leave the
+/// same commits as hiding them all: the likely ones, and those that could
+/// contain what they leave (see [`exclusive`]). All of them when more
+/// than `cap` commits are left after hiding the likely ones: finding what
+/// could contain those would cost more than a walk that stops early.
+pub fn hiding(
+    repo: &gix::Repository,
+    tip: ObjectId,
+    likely: &[ObjectId],
+    others: &[ObjectId],
+    cap: usize,
+) -> Result<Vec<ObjectId>, String> {
+    let all = sorted(others);
+    if all.binary_search(&tip).is_ok() {
+        return Ok(vec![tip]);
+    }
+    let first = among(likely, &all);
+    if first.len() == all.len() {
+        return Ok(all);
+    }
+    WALKS.fetch_add(1, Ordering::Relaxed);
+    let walk = repo
+        .rev_walk([tip])
+        .with_hidden(first.iter().copied())
+        .all()
+        .map_err(|e| e.to_string())?;
+    let mut left = vec![];
+    for info in walk {
+        if left.len() == cap {
+            return Ok(all);
+        }
+        left.push(info.map_err(|e| e.to_string())?.id);
+    }
+    if left.is_empty() {
+        return Ok(first);
+    }
+    Ok(match could_contain(repo, &left, &all, &first) {
+        Some(more) => first.into_iter().chain(more).collect(),
+        None => all,
+    })
+}
+
+fn sorted(tips: &[ObjectId]) -> Vec<ObjectId> {
+    let mut v = tips.to_vec();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// The `likely` tips that are among `all` (sorted), sorted.
+fn among(likely: &[ObjectId], all: &[ObjectId]) -> Vec<ObjectId> {
+    let v: Vec<ObjectId> = likely
+        .iter()
+        .filter(|l| all.binary_search(l).is_ok())
+        .copied()
+        .collect();
+    sorted(&v)
 }
 
 /// The commits reachable from `tip` and from none of `hidden`.

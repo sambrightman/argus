@@ -927,7 +927,10 @@ rendering is snapshot-tested via `TestBackend`.
   what's left (a tip reaching a commit has a generation at least its,
   and one the graph has reaches nothing it lacks, the graph being
   closed under parents). No commit-graph, or a shallow clone: every tip
-  is hidden, as before. A property test checks the count against
+  is hidden, as before. The details' lists of commits on no remote and
+  on no branch hide only the tips that could hold them
+  (`reach::hiding`), giving up past 2000 commits, where a walk that
+  stops at the list's end is cheaper. A property test checks the count against
   `git rev-list --count` on random histories.
 * **The message history** (`v L`) keeps what the status line said (the
   same message running twice is kept once), each job's outcome, and
