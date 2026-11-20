@@ -50,13 +50,24 @@ fn runtime(
     forge: argus_core::pull::ForgeFactory<'static>,
 ) -> Runtime {
     Runtime::new(Options {
-        state_path: sb.path("state.toml"),
         config_path: config.to_path_buf(),
         forge_factory: forge,
-        notices: vec![],
         opener: opener.into(),
-        start_in: None,
+        ..options(sb)
     })
+}
+
+fn options(sb: &Sandbox) -> Options {
+    Options {
+        state_path: sb.path("state.toml"),
+        config_path: sb.path("config.toml"),
+        forge_factory: &no_forge,
+        notices: vec![],
+        opener: "true".into(),
+        start_in: None,
+        verbose: false,
+        early_steps: vec![],
+    }
 }
 
 /// Put the cursor on the repo named `name`.
@@ -86,6 +97,56 @@ fn path(app: &App, name: &str) -> PathBuf {
         .position(|e| e.display_name() == name)
         .unwrap();
     app.ws.entries[i].path.clone()
+}
+
+/// With `-v`, each step goes to the history: those taken before the TUI
+/// started first, then what the runtime does (here, a refresh).
+#[test]
+fn verbose_steps_go_to_the_history() {
+    use argus_core::trace::Step;
+    use argus_tui::app::Happened;
+    let (sb, mut app, _) = setup("");
+    let mut rt = Runtime::new(Options {
+        verbose: true,
+        early_steps: vec![Step {
+            what: "config ~/x".into(),
+            took: None,
+        }],
+        ..options(&sb)
+    });
+    rt.log_steps(&mut app);
+    let dirty = sb.path("dev/dirty");
+    run(&mut app, &mut rt, vec![Effect::Refresh(vec![dirty])]);
+    argus_core::trace::set_sink(None);
+    let steps: Vec<String> = app
+        .history
+        .iter()
+        .filter_map(|e| match &e.what {
+            Happened::Step(s) => Some(s.what.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(steps[0], "config ~/x");
+    assert!(
+        steps
+            .iter()
+            .any(|s| s.starts_with("status ") && s.contains("dev/dirty")),
+        "{steps:?}"
+    );
+    // inverse: not without it
+    let (sb, mut app, _) = setup("");
+    let mut rt = Runtime::new(options(&sb));
+    rt.log_steps(&mut app);
+    run(
+        &mut app,
+        &mut rt,
+        vec![Effect::Refresh(vec![sb.path("dev/dirty")])],
+    );
+    assert!(
+        !app.history
+            .iter()
+            .any(|e| matches!(e.what, Happened::Step(_)))
+    );
 }
 
 #[test]

@@ -81,6 +81,8 @@ pub enum Action {
     StartFilter,
     ClearFilter,
     Help,
+    /// The message history.
+    History,
     Quit,
     ToggleLog,
     Fetch(Scope),
@@ -583,6 +585,8 @@ struct ForgeLook {
 /// Results coming back from the runtime.
 #[derive(Debug)]
 pub enum Msg {
+    /// A step taken (with `-v`), for the history.
+    Step(argus_core::trace::Step),
     /// A full describe finished (its answer is remembered by status).
     Described(PathBuf),
     /// What a forge said of a repo, asked about these branches.
@@ -652,6 +656,10 @@ pub enum Mode {
     Help {
         scroll: u16,
     },
+    /// The message history, scrolled `back` lines from its newest.
+    History {
+        back: usize,
+    },
     /// Picking from a list by typing: `names` matched fuzzily against the
     /// query, `shown` their indices best first, `cursor` into `shown`.
     Pick {
@@ -687,6 +695,30 @@ pub enum Confirmed {
 pub enum Row {
     Repo(usize),
     Detail { repo: usize, line: DetailLine },
+}
+
+/// Something that happened, for the message history (`m`).
+#[derive(Debug, Clone)]
+pub struct Event {
+    pub at: jiff::Timestamp,
+    pub what: Happened,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Happened {
+    /// What the status line said.
+    Said(String),
+    /// A failure the status line reported.
+    Failed(String),
+    /// A job finished.
+    Job {
+        repo: String,
+        label: String,
+        ok: bool,
+        output: String,
+    },
+    /// A step taken (with `-v`).
+    Step(argus_core::trace::Step),
 }
 
 #[derive(Debug, Clone)]
@@ -767,6 +799,9 @@ pub struct App {
     picks: Option<(PathBuf, Vec<Op>)>,
     pub log: Vec<LogEntry>,
     pub show_log: bool,
+    /// Everything said and done this session (see [`Happened`]), oldest
+    /// first.
+    pub history: Vec<Event>,
     pub message: Option<(String, bool)>,
     pub scanning: bool,
     /// Shown with each scan result, e.g. "no roots configured…".
@@ -820,6 +855,7 @@ impl App {
             picks: None,
             log: vec![],
             show_log: false,
+            history: vec![],
             message: None,
             scanning: false,
             notices: vec![],
@@ -1193,7 +1229,9 @@ impl App {
     }
 
     fn info(&mut self, s: impl Into<String>) {
-        self.message = Some((s.into(), false));
+        let s = s.into();
+        self.remember_said(Happened::Said(s.clone()));
+        self.message = Some((s, false));
     }
 
     /// Report a failure in the status line (e.g. a save that failed).
@@ -1202,7 +1240,32 @@ impl App {
     }
 
     fn error(&mut self, s: impl Into<String>) {
-        self.message = Some((s.into(), true));
+        let s = s.into();
+        self.remember_said(Happened::Failed(s.clone()));
+        self.message = Some((s, true));
+    }
+
+    /// The status line's message, for the history: unless it says again
+    /// what it said last.
+    fn remember_said(&mut self, said: Happened) {
+        let last = self
+            .history
+            .iter()
+            .rev()
+            .find(|e| matches!(e.what, Happened::Said(_) | Happened::Failed(_)));
+        if last.is_none_or(|e| e.what != said) {
+            self.remember(said);
+        }
+    }
+
+    pub fn remember(&mut self, what: Happened) {
+        self.history.push(Event {
+            at: jiff::Timestamp::now(),
+            what,
+        });
+        if self.history.len() > 5000 {
+            self.history.drain(..500);
+        }
     }
 
     // ---------- keys ----------
@@ -1314,6 +1377,17 @@ impl App {
                         }
                         _ => {}
                     },
+                }
+                vec![]
+            }
+            Mode::History { back } => {
+                let page = self.page.max(1);
+                match k.code {
+                    KeyCode::Up | KeyCode::Char('k' | 'p') => *back = back.saturating_add(1),
+                    KeyCode::Down | KeyCode::Char('j' | 'n') => *back = back.saturating_sub(1),
+                    KeyCode::PageUp => *back = back.saturating_add(page),
+                    KeyCode::PageDown => *back = back.saturating_sub(page),
+                    _ => self.mode = Mode::Normal,
                 }
                 vec![]
             }
@@ -1483,6 +1557,7 @@ impl App {
                 '?' | 'h' => Help,
                 'q' => Quit,
                 '$' | 'L' => ToggleLog,
+                'm' => History,
                 '!' => Shell,
                 'a' => ToggleAttention,
                 'H' => ToggleHidden,
@@ -1763,6 +1838,7 @@ impl App {
                 self.rebuild();
             }
             Help => self.mode = Mode::Help { scroll: 0 },
+            History => self.mode = Mode::History { back: 0 },
             Quit => {
                 self.quit = true;
                 return vec![Effect::SaveState, Effect::Quit];
@@ -5400,6 +5476,7 @@ impl App {
                     self.rebuild();
                 }
             }
+            Msg::Step(step) => self.remember(Happened::Step(step)),
             Msg::Described(path) => {
                 self.describing.remove(&path);
                 // status now has the remembered answer
@@ -5590,6 +5667,12 @@ impl App {
             .get(path)
             .map(|e| e.display_name())
             .unwrap_or_else(|| paths::contract_tilde(path));
+        self.remember(Happened::Job {
+            repo: repo.clone(),
+            label: label.clone(),
+            ok,
+            output: output.clone(),
+        });
         self.log.push(LogEntry {
             at: jiff::Timestamp::now(),
             repo,

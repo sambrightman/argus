@@ -58,6 +58,29 @@ pub fn commits(
     range: &Range,
     limit: usize,
 ) -> Result<(Vec<CommitLine>, bool), String> {
+    crate::trace::timed(
+        |r: &Result<(Vec<CommitLine>, bool), String>| {
+            let what = match range {
+                Range::NotOnRemote { tip } => format!("commits of {tip} on no remote"),
+                Range::Missing { tip, from } => format!("commits of {tip} missing from {from}"),
+                Range::Orphans => "commits on no branch".into(),
+                Range::Ancestors { tip } => format!("history of {tip}"),
+            };
+            let n = r.as_ref().map_or(0, |(v, _)| v.len());
+            format!(
+                "{what} in {}: {n} (up to {limit})",
+                crate::paths::contract_tilde(repo)
+            )
+        },
+        || read_commits(repo, range, limit),
+    )
+}
+
+fn read_commits(
+    repo: &Path,
+    range: &Range,
+    limit: usize,
+) -> Result<(Vec<CommitLine>, bool), String> {
     let repo = crate::isolation::open(repo).map_err(err)?;
     let id_of = |spec: &str| -> Result<gix::ObjectId, String> {
         Ok(repo.rev_parse_single(spec).map_err(err)?.detach())
@@ -121,6 +144,13 @@ fn line(c: &gix::Commit<'_>) -> CommitLine {
 
 /// The commit `id` (or any revision) in full.
 pub fn commit_detail(repo: &Path, id: &str) -> Result<CommitDetail, String> {
+    crate::trace::timed(
+        |_| format!("commit {id} in {}", crate::paths::contract_tilde(repo)),
+        || read_commit_detail(repo, id),
+    )
+}
+
+fn read_commit_detail(repo: &Path, id: &str) -> Result<CommitDetail, String> {
     let repo = crate::isolation::open(repo).map_err(err)?;
     let c = repo
         .rev_parse_single(id)

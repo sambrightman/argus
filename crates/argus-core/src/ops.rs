@@ -792,7 +792,8 @@ pub fn staged_removal_fails(repo: &Path, file: &str) -> bool {
             .envs(crate::isolation::git_env().iter().map(|(k, v)| (k, v)));
         c
     };
-    let Ok(patch) = cmd(&[
+    let ran = Instant::now();
+    let diff = [
         "diff-index",
         "--cached",
         "-p",
@@ -801,9 +802,15 @@ pub fn staged_removal_fails(repo: &Path, file: &str) -> bool {
         "HEAD",
         "--",
         file,
-    ])
-    .stdin(Stdio::null())
-    .output() else {
+    ];
+    let patch = cmd(&diff).stdin(Stdio::null()).output();
+    traced(
+        repo,
+        &diff,
+        patch.as_ref().is_ok_and(|o| o.status.success()),
+        ran,
+    );
+    let Ok(patch) = patch else {
         return true;
     };
     if !patch.status.success() {
@@ -817,11 +824,14 @@ pub fn staged_removal_fails(repo: &Path, file: &str) -> bool {
     else {
         return true;
     };
+    let ran = Instant::now();
     let wrote = apply
         .stdin
         .take()
         .is_some_and(|mut i| std::io::Write::write_all(&mut i, &patch.stdout).is_ok());
-    !(apply.wait().is_ok_and(|s| s.success()) && wrote)
+    let applies = apply.wait().is_ok_and(|s| s.success());
+    traced(repo, &["apply", "-R", "--check"], applies, ran);
+    !(applies && wrote)
 }
 
 pub fn run(dir: &Path, op: &Op) -> OpOutcome {
@@ -1032,13 +1042,21 @@ fn pop(cwd: &Path, index: usize, id: Option<&str>, staging: bool, started: Insta
     }
     // (its third parent, when it has one, holds what was untracked: each
     // needs its place free, and its folders to be folders)
+    let ran = Instant::now();
+    let args = ["ls-tree", "-r", "--name-only", "-z", &format!("{stash}^3")];
     let held = Command::new("git")
         .current_dir(cwd)
-        .args(["ls-tree", "-r", "--name-only", "-z", &format!("{stash}^3")])
+        .args(args)
         .envs(crate::isolation::git_env().iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output();
+    traced(
+        cwd,
+        &args,
+        held.as_ref().is_ok_and(|o| o.status.success()),
+        ran,
+    );
     let held = held.map(|o| o.stdout).unwrap_or_default();
     let in_the_way = |file: &&str| {
         let path = Path::new(file);
@@ -1343,6 +1361,7 @@ fn stash_lines(
         ));
     }
     let scratch_index = scratch.0.to_string_lossy().into_owned();
+    let ran = Instant::now();
     let with_lines = Command::new("git")
         .current_dir(cwd)
         .arg("write-tree")
@@ -1350,6 +1369,8 @@ fn stash_lines(
         .envs(crate::isolation::git_env().iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .output();
+    let ok = with_lines.as_ref().is_ok_and(|o| o.status.success());
+    traced(cwd, &["write-tree", "(of a scratch index)"], ok, ran);
     let with_lines = match with_lines {
         Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()),
         Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
@@ -1406,6 +1427,7 @@ fn git_stdin(
     started: Instant,
 ) -> OpOutcome {
     use std::io::Write;
+    let ran = Instant::now();
     let child = Command::new("git")
         .current_dir(cwd)
         .args(args)
@@ -1420,6 +1442,12 @@ fn git_stdin(
         c.stdin.take().expect("piped").write_all(input.as_bytes())?;
         c.wait_with_output()
     });
+    traced(
+        cwd,
+        args,
+        out.as_ref().is_ok_and(|o| o.status.success()),
+        ran,
+    );
     match out {
         Ok(o) => OpOutcome {
             success: o.status.success(),
@@ -1661,6 +1689,22 @@ fn conflicted_files(names: &str) -> String {
     }
 }
 
+/// `git <args>` in `cwd`, started at `started`, as a step.
+fn traced<S: AsRef<str>>(cwd: &Path, args: &[S], ok: bool, started: Instant) {
+    crate::trace::took(
+        || {
+            let args: Vec<&str> = args.iter().map(AsRef::as_ref).collect();
+            let failed = if ok { "" } else { ", failed" };
+            format!(
+                "git {} in {}{failed}",
+                args.join(" "),
+                crate::paths::contract_tilde(cwd)
+            )
+        },
+        started.elapsed(),
+    );
+}
+
 /// Run a read-only git command for status (no network, no prompts).
 pub(crate) fn git_in(cwd: &Path, args: &[&str]) -> OpOutcome {
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -1668,6 +1712,7 @@ pub(crate) fn git_in(cwd: &Path, args: &[&str]) -> OpOutcome {
 }
 
 fn git(cwd: &Path, args: &[String], started: Instant) -> OpOutcome {
+    let ran = Instant::now();
     let out = Command::new("git")
         .current_dir(cwd)
         .args(args)
@@ -1678,6 +1723,12 @@ fn git(cwd: &Path, args: &[String], started: Instant) -> OpOutcome {
         .envs(crate::isolation::git_env().iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .output();
+    traced(
+        cwd,
+        args,
+        out.as_ref().is_ok_and(|o| o.status.success()),
+        ran,
+    );
     match out {
         Ok(o) => {
             // stdout, then stderr

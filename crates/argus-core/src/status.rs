@@ -365,10 +365,35 @@ impl Default for StatusOptions {
 
 /// Errors leave out `path`: front-ends show it next to the error already.
 pub fn status(path: &Path, opts: StatusOptions) -> Result<RepoStatus, StatusError> {
-    crate::isolation::open(path)
-        .map_err(err)
-        .and_then(|repo| status_of(&repo, opts))
-        .map_err(|e| StatusError(without_path(&e.0, path)))
+    traced(path, |parts| {
+        parts
+            .time("open", || crate::isolation::open(path))
+            .map_err(err)
+            .and_then(|repo| status_in_parts(&repo, opts, parts))
+    })
+    .map_err(|e| StatusError(without_path(&e.0, path)))
+}
+
+/// `read` as a step, with how long each part took.
+fn traced(
+    path: &Path,
+    read: impl FnOnce(&mut crate::trace::Parts) -> Result<RepoStatus, StatusError>,
+) -> Result<RepoStatus, StatusError> {
+    let mut parts = crate::trace::Parts::default();
+    let started = std::time::Instant::now();
+    let r = read(&mut parts);
+    crate::trace::took(
+        || {
+            let failed = if r.is_err() { ", failed" } else { "" };
+            format!(
+                "status {}{}{failed}",
+                crate::paths::contract_tilde(path),
+                parts.summary()
+            )
+        },
+        started.elapsed(),
+    );
+    r
 }
 
 /// Repos kept open between status reads (the TUI's refreshes). Opening is
@@ -480,10 +505,13 @@ fn config_candidates(env: &mut dyn FnMut(&str) -> Option<std::ffi::OsString>) ->
 
 impl KeptRepos {
     pub fn status(&self, path: &Path, opts: StatusOptions) -> Result<RepoStatus, StatusError> {
-        self.open(path)
-            .map_err(err)
-            .and_then(|repo| status_of(&repo, opts))
-            .map_err(|e| StatusError(without_path(&e.0, path)))
+        traced(path, |parts| {
+            parts
+                .time("open", || self.open(path))
+                .map_err(err)
+                .and_then(|repo| status_in_parts(&repo, opts, parts))
+        })
+        .map_err(|e| StatusError(without_path(&e.0, path)))
     }
 
     fn open(&self, path: &Path) -> gix::Result<gix::Repository> {
@@ -668,18 +696,29 @@ impl<'r> Refs<'r> {
 }
 
 pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStatus, StatusError> {
+    status_in_parts(repo, opts, &mut crate::trace::Parts::default())
+}
+
+/// [`status_of`], timing its parts in `parts`.
+fn status_in_parts(
+    repo: &gix::Repository,
+    opts: StatusOptions,
+    parts: &mut crate::trace::Parts,
+) -> Result<RepoStatus, StatusError> {
     let h = repo.head().map_err(err)?;
     let head = head_of(&h);
     let head_id = h.id().map(|id| id.detach());
     let head_commit = head_id.and_then(|id| repo.find_commit(id).ok());
-    let refs = Refs::read(repo)?;
+    let refs = parts.time("refs", || Refs::read(repo))?;
     let (remote, remote_url) = remote_and_url(repo);
     let default_branch = default_branch(repo, &refs, remote.as_deref());
     let default_tip = default_branch
         .as_deref()
         .and_then(|d| default_tip(&refs, remote.as_deref(), d));
 
-    let branches = branches(repo, &refs, head.branch(), default_tip)?;
+    let branches = parts.time("branches", || {
+        branches(repo, &refs, head.branch(), default_tip)
+    })?;
     let upstream = head
         .branch()
         .and_then(|b| branches.iter().find(|bi| bi.name == b))
@@ -689,19 +728,24 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
     let changes = if bare {
         Changes::default()
     } else {
-        changes(
-            repo,
-            opts,
-            head_commit.as_ref().and_then(|c| c.tree_id().ok()),
-        )?
+        parts.time("files", || {
+            changes(
+                repo,
+                opts,
+                head_commit.as_ref().and_then(|c| c.tree_id().ok()),
+            )
+        })?
     };
-    let moved_submodules = moved_submodules(repo, &changes.moved);
+    let moved_submodules = parts.time("moved submodules", || {
+        moved_submodules(repo, &changes.moved)
+    });
     let missing_submodules = changes.missing.clone();
-    let integration = integration(repo, &head, upstream.as_ref());
+    let integration = parts.time("upstream", || integration(repo, &head, upstream.as_ref()));
     let detached_orphans = match &head {
-        Head::Detached(_) if repo.kind() != gix::repository::Kind::Submodule => {
-            detached_orphans(repo, &refs, head_id)?
-        }
+        Head::Detached(_) if repo.kind() != gix::repository::Kind::Submodule => parts
+            .time("detached commits", || {
+                detached_orphans(repo, &refs, head_id)
+            })?,
         _ => 0,
     };
     let at_head = match (&head, head_id) {
@@ -713,15 +757,18 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         _ => vec![],
     };
 
-    let (stash_ids, stashes) = stash_entries(repo.common_dir()).into_iter().unzip();
-    let tags = head_tags(repo, &refs, head_id);
+    let (stash_ids, stashes) = parts
+        .time("stashes", || stash_entries(repo.common_dir()))
+        .into_iter()
+        .unzip();
+    let tags = parts.time("tags", || head_tags(repo, &refs, head_id));
     let (describe, describe_gave_up) = match (&head, head_id) {
-        (Head::Detached(_), Some(id)) if tags.is_empty() => {
+        (Head::Detached(_), Some(id)) if tags.is_empty() => parts.time("describe", || {
             describe(repo, &refs, id, opts.describe_limit)
-        }
+        }),
         _ => (None, false),
     };
-    let worktrees = worktrees(repo);
+    let worktrees = parts.time("worktrees", || worktrees(repo));
     Ok(RepoStatus {
         describe,
         describe_gave_up,
@@ -1528,6 +1575,18 @@ fn describe(
 /// the bounded walk gave up (`describe_gave_up`) and the answer is wanted:
 /// with no tag in history it walks all of it.
 pub fn describe_fully(path: &Path) -> Option<String> {
+    crate::trace::timed(
+        |_| {
+            format!(
+                "describe HEAD fully in {}",
+                crate::paths::contract_tilde(path)
+            )
+        },
+        || read_description(path),
+    )
+}
+
+fn read_description(path: &Path) -> Option<String> {
     let repo = crate::isolation::open(path).ok()?;
     let head = repo.head_id().ok()?.detach();
     let refs = Refs::read(&repo).ok()?;

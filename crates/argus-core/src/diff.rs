@@ -250,6 +250,22 @@ pub struct DiffError {
 /// The `side` changes of `path` (relative to the work tree) in the repo at
 /// `repo`, with 3 lines of context.
 pub fn file_diff(repo: &Path, path: &str, side: Side) -> Result<FileDiff, DiffError> {
+    let side_name = match side {
+        Side::Unstaged => "unstaged",
+        Side::Staged => "staged",
+    };
+    crate::trace::timed(
+        |_| {
+            format!(
+                "{side_name} diff of {path} in {}",
+                crate::paths::contract_tilde(repo)
+            )
+        },
+        || read_file_diff(repo, path, side),
+    )
+}
+
+fn read_file_diff(repo: &Path, path: &str, side: Side) -> Result<FileDiff, DiffError> {
     let err = |e: &dyn std::fmt::Display| DiffError {
         path: path.to_string(),
         message: e.to_string(),
@@ -296,6 +312,18 @@ pub fn file_diff(repo: &Path, path: &str, side: Side) -> Result<FileDiff, DiffEr
 /// parent (an empty file for a root commit), with 3 lines of context. A
 /// rename is given as `old -> new`, as [`crate::history`] lists it.
 pub fn commit_file_diff(repo: &Path, commit: &str, path: &str) -> Result<FileDiff, DiffError> {
+    crate::trace::timed(
+        |_| {
+            format!(
+                "diff of {path} in {commit} in {}",
+                crate::paths::contract_tilde(repo)
+            )
+        },
+        || read_commit_file_diff(repo, commit, path),
+    )
+}
+
+fn read_commit_file_diff(repo: &Path, commit: &str, path: &str) -> Result<FileDiff, DiffError> {
     let err = |e: &dyn std::fmt::Display| DiffError {
         path: path.to_string(),
         message: e.to_string(),

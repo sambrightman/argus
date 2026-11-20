@@ -272,9 +272,31 @@ impl Workspace {
 
     /// Discover repos and compute every status in parallel.
     pub fn scan(&mut self) {
-        let discovery = in_pool(self.config.disk_jobs(), || {
-            discover::discover_all(&self.config.roots, &self.discover_options())
-        });
+        let discovery = crate::trace::timed(
+            |d: &discover::Discovery| {
+                let roots: Vec<String> = self
+                    .config
+                    .roots
+                    .iter()
+                    .map(|r| contract_tilde(r))
+                    .collect();
+                let cut = match d.truncated.len() {
+                    0 => String::new(),
+                    n => format!(", {n} cut short by max_depth"),
+                };
+                format!(
+                    "discover in {}: {} {}{cut}",
+                    roots.join(", "),
+                    d.found.len(),
+                    crate::plural(d.found.len(), "repo", "repos")
+                )
+            },
+            || {
+                in_pool(self.config.disk_jobs(), || {
+                    discover::discover_all(&self.config.roots, &self.discover_options())
+                })
+            },
+        );
         self.truncated = discovery.truncated;
         let found = discovery.found;
         let old: HashMap<PathBuf, Entry> = self
@@ -497,7 +519,11 @@ impl Workspace {
     }
 
     pub fn refresh_all(&mut self) {
-        let results = self.statuses(self.entries.iter().map(|e| e.path.as_path()));
+        let n = self.entries.len();
+        let results = crate::trace::timed(
+            |_| format!("statuses of {n} {}", crate::plural(n, "repo", "repos")),
+            || self.statuses(self.entries.iter().map(|e| e.path.as_path())),
+        );
         let ids = self.config.local_forges();
         for (e, r) in self.entries.iter_mut().zip(results) {
             e.set_status(r, &ids);
@@ -641,7 +667,11 @@ impl Workspace {
             return;
         }
         let extra: Vec<Entry> = extra.into_values().collect();
-        let results = self.statuses(extra.iter().map(|e| e.path.as_path()));
+        let n = extra.len();
+        let results = crate::trace::timed(
+            |_| format!("statuses of {n} more (submodules and worktrees of those before)"),
+            || self.statuses(extra.iter().map(|e| e.path.as_path())),
+        );
         let ids = self.config.local_forges();
         for (mut e, r) in extra.into_iter().zip(results) {
             e.set_status(r, &ids);

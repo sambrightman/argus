@@ -850,6 +850,13 @@ impl Config {
     /// Load from `path`, with the files it extends; a missing file yields the
     /// default config.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
+        crate::trace::timed(
+            |_| format!("config {}", crate::paths::contract_tilde(path)),
+            || Self::read(path),
+        )
+    }
+
+    fn read(path: &Path) -> Result<Self, ConfigError> {
         if !path.exists() {
             return Ok(Self::default());
         }

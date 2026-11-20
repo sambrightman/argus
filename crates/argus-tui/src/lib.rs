@@ -39,6 +39,10 @@ pub struct Options {
     pub opener: String,
     /// Where argus was started: the cursor starts on the repo holding it.
     pub start_in: Option<PathBuf>,
+    /// Steps taken go to the message history ([`argus_core::trace`]).
+    pub verbose: bool,
+    /// Steps taken before the TUI started, for the history.
+    pub early_steps: Vec<argus_core::trace::Step>,
 }
 
 /// `open` on macOS, `xdg-open` elsewhere.
@@ -79,6 +83,7 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
         app.report_error(format!("config: {w}"));
     }
     let mut rt = Runtime::new(opts);
+    rt.log_steps(&mut app);
 
     let mut terminal = init_terminal(&rt.panics);
     app.scanning = true;
@@ -148,6 +153,12 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
                     // terminal shows it again
                     let _ = terminal.show_cursor();
                     ratatui::restore();
+                    argus_core::trace::note(|| {
+                        format!(
+                            "suspended for {program} in {}",
+                            argus_core::paths::contract_tilde(&cwd)
+                        )
+                    });
                     println!("{}", suspend_banner(&program, &cwd));
                     let r = run_suspended(&program, &args, &cwd, login_shell);
                     dirty = true;
@@ -342,6 +353,21 @@ impl Runtime {
         }
     }
 
+    /// With `verbose`, steps taken go to `app`'s history from now on, after
+    /// those taken before the TUI started.
+    pub fn log_steps(&mut self, app: &mut App) {
+        if !self.opts.verbose {
+            return;
+        }
+        for step in std::mem::take(&mut self.opts.early_steps) {
+            app.remember(app::Happened::Step(step));
+        }
+        let tx = self.tx.clone();
+        argus_core::trace::set_sink(Some(Arc::new(move |step| {
+            let _ = tx.send(Msg::Step(step));
+        })));
+    }
+
     /// Handle messages that have arrived (a bounded number, so a flood
     /// can't starve input handling). Returns effects needing the terminal,
     /// and whether any arrived (the screen may have changed).
@@ -444,7 +470,11 @@ impl Runtime {
             Effect::Quit => app.quit = true,
             Effect::SaveTags(before) => {
                 let path = &self.opts.config_path;
-                if let Err(err) = configfile::update_tag_lists(path, &before, &app.ws.config) {
+                let saved = argus_core::trace::timed(
+                    |_| format!("save tags in {}", argus_core::paths::contract_tilde(path)),
+                    || configfile::update_tag_lists(path, &before, &app.ws.config),
+                );
+                if let Err(err) = saved {
                     app.report_error(err.to_string());
                 }
             }
@@ -466,6 +496,10 @@ impl Runtime {
                 });
             }
             Effect::Refresh(paths) => {
+                argus_core::trace::note(|| match &paths[..] {
+                    [one] => format!("refresh {}", argus_core::paths::contract_tilde(one)),
+                    many => format!("refresh {} repos", many.len()),
+                });
                 let n = app.ws.config.disk_jobs();
                 let reader = app.ws.status_reader();
                 self.spawn(move |tx| {
@@ -575,9 +609,14 @@ impl Runtime {
                 let mut ws = app.ws.clone();
                 let factory = self.opts.forge_factory;
                 self.spawn(move |tx| {
+                    let started = std::time::Instant::now();
                     let listings = pull::list_tracks(&mut ws, factory);
                     let mut plan = pull::plan_tracks(&ws, &listings.repos, listings.protocol);
                     pull::locate_orphans(&mut plan, factory);
+                    argus_core::trace::took(
+                        || "plan pulls and clones of tracked owners' repos".into(),
+                        started.elapsed(),
+                    );
                     let _ = tx.send(Msg::PullPlanned {
                         tracks: ws.state,
                         plan,
@@ -595,6 +634,7 @@ impl Runtime {
             }
             Effect::Open(url) => {
                 let opener = &self.opts.opener;
+                argus_core::trace::note(|| format!("{opener} {url}"));
                 let r = std::process::Command::new(opener)
                     .arg(&url)
                     .stdin(std::process::Stdio::null())

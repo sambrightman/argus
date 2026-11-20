@@ -515,6 +515,118 @@ fn job_finish_logs_and_refreshes() {
     assert!(app.act(Action::Fetch(Scope::Selected)).is_empty());
 }
 
+/// What the status line said, each job's outcome, and (with `-v`) each
+/// step are kept: `m` shows them, newest at the bottom; any key other
+/// than the scrolling ones closes it.
+#[test]
+fn the_message_history_keeps_what_was_said_and_done() {
+    use argus_core::trace::Step;
+    let (_sb, mut app) = setup("");
+    let entries = app.ws.entries.clone();
+    app.on_msg(Msg::Scanned {
+        entries,
+        truncated: vec![],
+    });
+    app.report_error("could not save");
+    app.report_error("could not save");
+    let path = app.current().unwrap().path.clone();
+    app.act(Action::Fetch(Scope::Selected));
+    app.on_msg(Msg::JobFinished {
+        path,
+        label: "fetch".into(),
+        op: Op::Fetch,
+        outcome: argus_core::ops::OpOutcome {
+            success: false,
+            code: Some(1),
+            output: "fatal: no remote".into(),
+            duration: Default::default(),
+        },
+    });
+    app.on_msg(Msg::Step(Step {
+        what: "status ~/dev/x (files 3ms)".into(),
+        took: Some(std::time::Duration::from_millis(12)),
+    }));
+    app.on_key(key('m'));
+    assert!(matches!(app.mode, Mode::History { .. }));
+    let screen = render(&mut app, 100, 30);
+    for said in [
+        "3 repos",
+        "could not save",
+        "fetch",
+        "fatal: no remote",
+        "12ms  status ~/dev/x (files 3ms)",
+    ] {
+        assert!(screen.contains(said), "{said:?} in\n{screen}");
+    }
+    // the same message twice running is kept once
+    assert_eq!(screen.matches("could not save").count(), 1, "{screen}");
+    app.on_key(key('x'));
+    assert!(matches!(app.mode, Mode::Normal));
+    // inverse: the history isn't drawn while closed
+    assert!(!render(&mut app, 100, 30).contains("12ms  status ~/dev/x"));
+}
+
+/// The history opens at the newest and scrolls back through the rest.
+#[test]
+fn the_message_history_scrolls_back() {
+    let (_sb, mut app) = setup("");
+    for n in 0..100 {
+        app.report_error(format!("message {n:02}"));
+    }
+    app.on_key(key('m'));
+    let screen = render(&mut app, 80, 20);
+    assert!(
+        screen.contains("message 99") && !screen.contains("message 50"),
+        "{screen}"
+    );
+    // (17 lines fit: 00 to 99 at the newest is 83 to 99)
+    for _ in 0..49 {
+        app.on_key(key('k'));
+    }
+    let screen = render(&mut app, 80, 20);
+    assert!(
+        screen.contains("message 34") && screen.contains("message 50"),
+        "{screen}"
+    );
+    assert!(
+        !screen.contains("message 33") && !screen.contains("message 51"),
+        "{screen}"
+    );
+    app.on_key(code(KeyCode::Up));
+    app.on_key(ctrl('p'));
+    let screen = render(&mut app, 80, 20);
+    assert!(
+        screen.contains("message 32") && !screen.contains("message 49"),
+        "{screen}"
+    );
+    app.on_key(key('j'));
+    app.on_key(code(KeyCode::Down));
+    app.on_key(ctrl('n'));
+    let screen = render(&mut app, 80, 20);
+    assert!(
+        screen.contains("message 51") && !screen.contains("message 34"),
+        "{screen}"
+    );
+    // a page at a time, and no further back than the oldest
+    for _ in 0..20 {
+        app.on_key(code(KeyCode::PageUp));
+    }
+    let screen = render(&mut app, 80, 20);
+    assert!(
+        screen.contains("message 00") && !screen.contains("message 99"),
+        "{screen}"
+    );
+    for _ in 0..20 {
+        app.on_key(code(KeyCode::PageDown));
+    }
+    assert!(render(&mut app, 80, 20).contains("message 99"));
+    // also from the View menu
+    app.on_key(key('q'));
+    app.on_key(key('v'));
+    app.on_key(key('m'));
+    assert!(matches!(app.mode, Mode::History { .. }));
+}
+
 #[test]
 fn auto_fix_only_targets_repos_with_applicable_fixes() {
     let (_sb, mut app) = setup("");

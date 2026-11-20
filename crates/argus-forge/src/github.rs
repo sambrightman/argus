@@ -28,8 +28,33 @@ pub trait Http: Send + Sync {
 
 struct Ureq(ureq::Agent);
 
+/// A request as a step: its status, or why it failed.
+fn traced(
+    method: &str,
+    url: &str,
+    send: impl FnOnce() -> Result<Response, String>,
+) -> Result<Response, String> {
+    argus_core::trace::timed(
+        |r: &Result<Response, String>| match r {
+            Ok(r) => format!("{method} {url}: {}", r.status),
+            Err(e) => format!("{method} {url}: {e}"),
+        },
+        send,
+    )
+}
+
 impl Http for Ureq {
     fn get(&self, url: &str, token: Option<&str>) -> Result<Response, String> {
+        traced("GET", url, || self.send_get(url, token))
+    }
+
+    fn post(&self, url: &str, token: Option<&str>, body: &str) -> Result<Response, String> {
+        traced("POST", url, || self.send_post(url, token, body))
+    }
+}
+
+impl Ureq {
+    fn send_get(&self, url: &str, token: Option<&str>) -> Result<Response, String> {
         let mut req = self
             .0
             .get(url)
@@ -53,7 +78,7 @@ impl Http for Ureq {
         Ok(Response { status, body, link })
     }
 
-    fn post(&self, url: &str, token: Option<&str>, body: &str) -> Result<Response, String> {
+    fn send_post(&self, url: &str, token: Option<&str>, body: &str) -> Result<Response, String> {
         let mut req = self
             .0
             .post(url)
@@ -615,11 +640,20 @@ struct ApiRepo {
 
 /// `program`'s trimmed output, if it succeeded and printed something.
 fn run_cli(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .ok()?;
+    let out = argus_core::trace::timed(
+        |o: &std::io::Result<std::process::Output>| {
+            let ok = o.as_ref().is_ok_and(|o| o.status.success());
+            let failed = if ok { "" } else { ", failed" };
+            format!("{program} {}{failed}", args.join(" "))
+        },
+        || {
+            Command::new(program)
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .output()
+        },
+    )
+    .ok()?;
     let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
     (out.status.success() && !s.is_empty()).then_some(s)
 }

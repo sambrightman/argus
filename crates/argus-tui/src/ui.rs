@@ -91,6 +91,7 @@ pub fn draw(f: &mut Frame, app: &mut App, v: &View) -> Vec<LinkAt> {
     match &app.mode {
         Mode::Menu { .. } => app.menu_shown = draw_menu(f, app, v, main),
         Mode::Help { scroll } => draw_help(f, v, &app.ws.config.tag_icons(), main, *scroll),
+        Mode::History { .. } => draw_history(f, app, v, main),
         Mode::Pick { .. } => draw_pick(f, app, v, main),
         _ => return links,
     }
@@ -786,6 +787,7 @@ pub fn help_lines() -> Vec<(String, String)> {
         ("R", "rescan roots"),
         ("!", "shell in repo"),
         ("$ L", "process log"),
+        ("m", "message history (with -v, each step taken and its time)"),
         ("q C-c", "quit"),
     ]
     .iter()
@@ -896,6 +898,94 @@ pub fn legend<'a>(i: &'a Icons, tags: &'a [(String, String)]) -> Vec<(&'a str, R
             .map(|(icon, r, m)| (icon, r, m.to_string())),
     );
     v
+}
+
+/// The message history over the list, newest at the bottom, scrolled
+/// back as far as `Mode::History` says (at most to the oldest).
+fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
+    use crate::app::Happened;
+    let t = v.theme;
+    let failed = || Span::styled(format!("{} ", v.icons.failed.trim_end()), t.ui(Ui::Failed));
+    let mut lines: Vec<Line> = vec![];
+    for e in &app.history {
+        let time = Span::styled(format!("{} ", e.at.strftime("%H:%M:%S")), t.ui(Ui::Dim));
+        let (first, rest): (Vec<Span>, Vec<&str>) = match &e.what {
+            Happened::Said(s) => {
+                let mut l = s.lines();
+                (
+                    vec![Span::raw(l.next().unwrap_or("").to_string())],
+                    l.collect(),
+                )
+            }
+            Happened::Failed(s) => {
+                let mut l = s.lines();
+                let first = Span::styled(l.next().unwrap_or("").to_string(), t.ui(Ui::Failed));
+                (vec![failed(), first], l.collect())
+            }
+            Happened::Job {
+                repo,
+                label,
+                ok,
+                output,
+            } => {
+                let mark = if *ok {
+                    Span::styled(format!("{} ", v.icons.ok.trim_end()), t.ui(Ui::Ok))
+                } else {
+                    failed()
+                };
+                let name = Span::styled(
+                    format!("{repo} "),
+                    t.ui(Ui::Name).add_modifier(Modifier::BOLD),
+                );
+                (
+                    vec![mark, name, Span::raw(label.clone())],
+                    output.lines().collect(),
+                )
+            }
+            Happened::Step(step) => (vec![Span::styled(step.to_string(), t.ui(Ui::Dim))], vec![]),
+        };
+        lines.push(Line::from([vec![time], first].concat()));
+        for l in rest {
+            lines.push(Line::from(Span::styled(
+                format!("         {l}"),
+                t.ui(Ui::Dim),
+            )));
+        }
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(" nothing yet", t.ui(Ui::Dim))));
+    }
+    let r = Rect {
+        x: area.x + 1,
+        y: area.y,
+        width: area.width.saturating_sub(2),
+        height: area.height,
+    };
+    let height = r.height.saturating_sub(2) as usize;
+    let most = lines.len().saturating_sub(height);
+    let back = match &mut app.mode {
+        Mode::History { back } => {
+            *back = (*back).min(most);
+            *back
+        }
+        _ => 0,
+    };
+    let start = most - back;
+    let shown: Vec<Line> = lines.into_iter().skip(start).take(height).collect();
+    f.render_widget(Clear, r);
+    f.render_widget(
+        Paragraph::new(shown).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(t.ui(Ui::Border))
+                .title(Span::styled(
+                    " messages (j k ↑ ↓ PgUp PgDn scroll; any other key closes) ",
+                    t.ui(Ui::Title),
+                )),
+        ),
+        r,
+    );
 }
 
 fn draw_help(f: &mut Frame, v: &View, tags: &[(String, String)], area: Rect, scroll: u16) {

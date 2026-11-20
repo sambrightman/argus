@@ -203,6 +203,7 @@ again runs it.
 | `g` `C-l` / `R` | refresh statuses / rescan roots |
 | `!` | shell in repo, a login shell as in a new terminal tab (TUI suspends; `exit` returns) |
 | `$` | process log |
+| `m` | message history: everything the status line said, each job's outcome and output, and with `-v` each step taken and its time (`j` `k` `↑` `↓` `PgUp` `PgDn` scroll; any other key closes) |
 | `?` | help |
 | `F` | **Pull**: `p` selected, `a` all tagged for pull, `c` clone new repos of tracked owners, then pull all tagged |
 | `f` | **Fetch**: `f` selected, `a` all shown except hidden |
@@ -259,6 +260,18 @@ to scan other directories just this once; `--max-depth N` overrides
 directories (or set `follow_symlinks = true`), and `-x` /
 `--one-file-system` keeps each root's scan off other mounts, such as
 network shares and external disks (or set `one_file_system = true`).
+
+`-v` / `--verbose` says each step taken and how long it took: config and
+state read, the scan, each repo's status (with its slow parts: `files`,
+`branches`, `describe`…), every git command, forge requests. On stderr,
+or in the TUI's message history (`m`). For finding out what makes a
+scan slow:
+
+```text
+argus:     8ms  status ~/dev/top/m20 (files 6ms)
+argus:    68ms  statuses of 1 repo
+argus:    48ms  statuses of 24 more (submodules and worktrees of those before)
+```
 
 Anything that permanently loses data asks first: in the TUI a `y/n` in the
 status line, in the CLI a prompt on the terminal. `-y` / `--yes` proceeds

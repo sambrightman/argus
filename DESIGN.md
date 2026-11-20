@@ -906,6 +906,17 @@ rendering is snapshot-tested via `TestBackend`.
   stopped (`no tag in the last 1000 commits`). Text only: `--json`
   already has the fields.
 
+* **Steps for `-v` go through one sink** (`argus_core::trace`): a
+  global, replaceable callback, as the steps happen on rayon threads deep
+  in core. Off by default, and then a step's text is never built. The
+  CLI prints them on stderr; the TUI keeps those before it started and
+  then sends each as a message to its history. A repo's status is one
+  step, its parts (`files`, `branches`, …) timed inside it and named
+  when they took a millisecond or more.
+* **The message history** (`m`) keeps what the status line said (the
+  same message running twice is kept once), each job's outcome, and
+  steps: a status line message is easily overwritten by the next.
+
 ## 8a. Build and test setup
 
 Measured locally (macOS, 10 cores, stable 1.99), compiling the workspace's

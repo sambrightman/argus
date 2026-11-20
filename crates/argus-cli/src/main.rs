@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
 use argus_core::attention::Issue;
@@ -30,6 +31,7 @@ use argus_core::icons::{self, Icons};
 use argus_core::pull;
 use argus_core::rules::{IssueList, Tag};
 use argus_core::runner::{self, Event};
+use argus_core::trace;
 use argus_core::{Config, State, ViewFilter, Workspace, configfile, paths, plural};
 use clap::{Args, Parser, Subcommand};
 use unicode_width::UnicodeWidthStr;
@@ -66,6 +68,11 @@ struct Cli {
     /// progress still go to stderr). Not for the TUI or completions.
     #[arg(long, global = true)]
     json: bool,
+    /// Say each step taken (scans, each repo's status, every git command,
+    /// forge requests…) and how long it took: on stderr, or in the TUI's
+    /// message history (`m`).
+    #[arg(long, short = 'v', global = true)]
+    verbose: bool,
     /// Proceed with permanently destructive operations without asking
     /// (otherwise they ask on the terminal, or refuse without one).
     #[arg(long, short = 'y', global = true)]
@@ -373,6 +380,21 @@ fn report(e: &anyhow::Error) -> String {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    // the TUI takes over the terminal: its steps until then are kept for it
+    let early_steps: Arc<Mutex<Vec<trace::Step>>> = Arc::default();
+    let tui = matches!(
+        cli.cmd,
+        None | Some(Cmd::Tui | Cmd::Demo { glyphs: false, .. })
+    );
+    if cli.verbose {
+        let into = early_steps.clone();
+        trace::set_sink(Some(if tui {
+            Arc::new(move |s| into.lock().unwrap().push(s))
+        } else {
+            Arc::new(|s| eprintln!("argus: {s}"))
+        }));
+    }
+    let early_steps = || std::mem::take(&mut *early_steps.lock().unwrap());
     let ctx = Ctx {
         config_path: cli.config.clone().unwrap_or_else(paths::config_file),
         state_path: cli.state.clone().unwrap_or_else(paths::state_file),
@@ -429,7 +451,7 @@ fn run() -> Result<()> {
         Some(Cmd::Demo { glyphs: true, .. }) => return demo_glyphs(&ctx, json),
         Some(Cmd::Demo { theme, icons, .. }) => {
             argus_tui::check_terminal().map_err(|e| anyhow::anyhow!(e))?;
-            return demo(&ctx, theme, icons);
+            return demo(&ctx, theme, icons, cli.verbose, early_steps());
         }
         None | Some(Cmd::Tui) => argus_tui::check_terminal().map_err(|e| anyhow::anyhow!(e))?,
         _ => {}
@@ -441,7 +463,6 @@ fn run() -> Result<()> {
     if cli.one_file_system {
         ws.config.one_file_system = true;
     }
-    let tui = matches!(cli.cmd, None | Some(Cmd::Tui));
     if !tui {
         for n in &notices {
             eprintln!("argus: {n}");
@@ -456,6 +477,8 @@ fn run() -> Result<()> {
                 notices,
                 opener: argus_tui::default_opener().into(),
                 start_in: std::env::current_dir().and_then(std::fs::canonicalize).ok(),
+                verbose: cli.verbose,
+                early_steps: early_steps(),
             };
             argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))?;
         }
@@ -1485,7 +1508,13 @@ fn indent(s: &str) -> String {
 
 // ---------- demo ----------
 
-fn demo(ctx: &Ctx, theme: Option<String>, icons: Option<String>) -> Result<()> {
+fn demo(
+    ctx: &Ctx,
+    theme: Option<String>,
+    icons: Option<String>,
+    verbose: bool,
+    early_steps: Vec<trace::Step>,
+) -> Result<()> {
     eprintln!("argus: building sample repos…");
     let d = argus_core::demo::build();
     let config = demo_config(&d.root, Config::load(&ctx.config_path).ok(), theme, icons);
@@ -1504,6 +1533,8 @@ fn demo(ctx: &Ctx, theme: Option<String>, icons: Option<String>) -> Result<()> {
         )],
         opener: argus_tui::default_opener().into(),
         start_in: None,
+        verbose,
+        early_steps,
     };
     argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))
 }

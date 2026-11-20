@@ -353,6 +353,34 @@ fn fix_dry_run_then_apply() {
         .stdout(predicate::str::contains("nothing to fix"));
 }
 
+/// `-v` prints each step argus takes, with how long it took, on stderr:
+/// here the scan, each repo's status and the git a fix runs.
+#[test]
+fn verbose_prints_each_step_and_its_time_on_stderr() {
+    let sb = Sandbox::new();
+    three(&sb);
+    let timed = |what: &str| {
+        predicate::str::is_match(format!(r"argus: +(<1ms|\d+ms|\d+\.\d\ds)  {what}")).unwrap()
+    };
+    argus(&sb)
+        .args(["-v", "fix", "-k", "stash", "acme/dirty"])
+        .assert()
+        .success()
+        .stderr(timed("config "))
+        .stderr(timed("discover in ~/dev: 3 repos"))
+        .stderr(timed("statuses of 3 repos"))
+        .stderr(timed(r"status ~/dev/dirty( \(.*\))?\n"))
+        .stderr(timed("git stash "))
+        .stdout(predicate::str::contains("status ~/dev").not());
+    // inverse: without it, none
+    argus(&sb)
+        .args(["fix", "-k", "stash", "acme/feature"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("discover in").not())
+        .stderr(predicate::str::contains("status ~/dev").not());
+}
+
 #[test]
 fn fix_with_explicit_kind_and_pattern() {
     let sb = Sandbox::new();

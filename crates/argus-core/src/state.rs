@@ -72,6 +72,13 @@ pub enum StateError {
 
 impl State {
     pub fn load(path: &Path) -> Result<Self, StateError> {
+        crate::trace::timed(
+            |_| format!("state {}", crate::paths::contract_tilde(path)),
+            || Self::read(path),
+        )
+    }
+
+    fn read(path: &Path) -> Result<Self, StateError> {
         match std::fs::read_to_string(path) {
             Ok(s) => toml::from_str(&s).map_err(|source| StateError::Parse {
                 path: path.into(),
@@ -99,7 +106,17 @@ impl State {
     /// in between are kept: `self` and `base` both become the result.
     /// Where both changed the same thing, ours stays.
     pub fn save_merged(&mut self, path: &Path, base: &mut State) -> Result<(), StateError> {
-        let theirs = Self::load(path)?;
+        let started = std::time::Instant::now();
+        let r = self.merge_into(path, base);
+        crate::trace::took(
+            || format!("save state {}", crate::paths::contract_tilde(path)),
+            started.elapsed(),
+        );
+        r
+    }
+
+    fn merge_into(&mut self, path: &Path, base: &mut State) -> Result<(), StateError> {
+        let theirs = Self::read(path)?;
         // (a file that's gone has nothing written to it since: all of
         // ours is saved, not all the file "took out" dropped)
         if theirs != *base && path.exists() {
