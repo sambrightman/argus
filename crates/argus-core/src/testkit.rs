@@ -122,6 +122,41 @@ impl Sandbox {
         p
     }
 
+    /// `top` with the submodule `mid`, which has the submodule `leaf`, all
+    /// checked out, and the plain folder `mid/leaf/deep/er`; and
+    /// `top/scratch/clone`, a repo inside `top` that isn't a submodule.
+    pub fn nested_submodules(&self) -> PathBuf {
+        let add = |dir: &Path, src: &Path, at: &str| {
+            let src = src.to_str().unwrap();
+            let file = ["-c", "protocol.file.allow=always"];
+            git(
+                dir,
+                &[&file[..], &["submodule", "add", "-q", src, at]].concat(),
+            );
+            commit(dir, "sub");
+        };
+        let leaf = self.init("src/leaf");
+        let mid = self.init("src/mid");
+        add(&mid, &leaf, "leaf");
+        let top = self.init("top");
+        add(&top, &mid, "mid");
+        git(
+            &top,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "-q",
+                "--init",
+                "--recursive",
+            ],
+        );
+        std::fs::create_dir_all(top.join("mid/leaf/deep/er")).unwrap();
+        self.init("top/scratch/clone");
+        top
+    }
+
     /// A bare "forge" repo at `forge/<owner>/<name>.git` with one commit on main.
     pub fn remote(&self, owner: &str, name: &str) -> PathBuf {
         let bare = self.path(&format!("forge/{owner}/{name}.git"));

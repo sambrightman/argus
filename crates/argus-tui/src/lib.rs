@@ -37,6 +37,8 @@ pub struct Options {
     pub notices: Vec<String>,
     /// The program opening URLs (see [`default_opener`]).
     pub opener: String,
+    /// Where argus was started: the cursor starts on the repo holding it.
+    pub start_in: Option<PathBuf>,
 }
 
 /// `open` on macOS, `xdg-open` elsewhere.
@@ -72,6 +74,7 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
     let mut icons_name = ws.config.ui.icons.clone();
     let mut app = App::new(ws);
     app.notices = opts.notices.clone();
+    app.start_in = opts.start_in.clone();
     if let Some(w) = warnings.iter().chain(&icon_warnings).next() {
         app.report_error(format!("config: {w}"));
     }

@@ -101,3 +101,48 @@ fn a_dot_git_symlink_is_followed() {
     let st = status(&r, StatusOptions::default()).unwrap();
     assert!(st.head.branch().is_some(), "{:?}", st.head);
 }
+
+#[test]
+fn the_outermost_repo_found_is_through_submodules_up_from_anywhere_in_them() {
+    use argus_core::discover::containing_repo;
+    let sb = argus_core::testkit::Sandbox::new();
+    let top = sb.nested_submodules();
+    for from in ["", "mid", "mid/leaf", "mid/leaf/deep/er"] {
+        assert_eq!(
+            containing_repo(&top.join(from)),
+            Some(top.clone()),
+            "from {from:?}"
+        );
+    }
+    // inverse: a repo inside another that isn't its submodule is its own
+    let clone = top.join("scratch/clone");
+    assert_eq!(containing_repo(&clone), Some(clone.clone()));
+    // a plain folder of the work tree is in the repo
+    assert_eq!(containing_repo(&top.join("scratch")), Some(top.clone()));
+    // and outside every repo, there's none
+    assert_eq!(containing_repo(&sb.path("src")), None);
+}
+
+/// A repo added with `git add` (a gitlink with no `.gitmodules` entry,
+/// its `.git` a folder inside it) is a submodule as git sees it.
+#[test]
+fn a_gitlink_without_gitmodules_counts_as_a_submodule() {
+    use argus_core::discover::containing_repo;
+    use argus_core::testkit::{commit, git};
+    let sb = argus_core::testkit::Sandbox::new();
+    let top = sb.init("top");
+    let inner = sb.init("top/inner");
+    git(&top, &["add", "inner"]);
+    commit(&top, "gitlink");
+    assert_eq!(containing_repo(&inner), Some(top.clone()));
+    // inverse: once it's removed from the index, it's on its own again
+    git(&top, &["rm", "-q", "--cached", "inner"]);
+    assert_eq!(containing_repo(&inner), Some(inner.clone()));
+    // nor is a repo where the index has a file of that name
+    let other = sb.init("other");
+    argus_core::testkit::write(&other, "inner", "a file\n");
+    commit(&other, "file");
+    std::fs::remove_file(other.join("inner")).unwrap();
+    let inner = sb.init("other/inner");
+    assert_eq!(containing_repo(&inner), Some(inner.clone()));
+}

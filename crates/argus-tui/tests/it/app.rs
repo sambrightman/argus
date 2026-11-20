@@ -670,6 +670,47 @@ fn render_empty_states() {
     }
 }
 
+/// The first scan puts the cursor on the repo the TUI was started in: the
+/// deepest listed one holding that directory. Later scans leave it.
+#[test]
+fn the_first_scan_starts_on_the_repo_you_are_in() {
+    let sb = Sandbox::new();
+    let top = sb.nested_submodules();
+    let mut config = Config::parse(&format!("roots = ['{}']", top.display())).unwrap();
+    config.ui.attention_only = false;
+    config.ui.forge_info = false;
+    let mut ws = Workspace::new(config, State::default()).unwrap();
+    ws.scan();
+    let scanned = |app: &mut App| {
+        let entries = app.ws.entries.clone();
+        app.on_msg(Msg::Scanned {
+            entries,
+            truncated: vec![],
+        });
+    };
+    let started_in = |from: PathBuf| {
+        let mut app = App::new(ws.clone());
+        app.start_in = Some(from);
+        scanned(&mut app);
+        app
+    };
+    let mut app = started_in(top.join("mid/leaf/deep"));
+    assert_eq!(app.current().unwrap().path, top.join("mid/leaf"));
+    app.act(Action::Top);
+    let moved = app.current().unwrap().path.clone();
+    assert_ne!(moved, top.join("mid/leaf"));
+    scanned(&mut app);
+    assert_eq!(app.current().unwrap().path, moved, "later scans leave it");
+    // a folder of a repo that isn't one itself: that repo
+    let app = started_in(top.join("scratch"));
+    assert_eq!(app.current().unwrap().path, top);
+    let app = started_in(top.join("mid"));
+    assert_eq!(app.current().unwrap().path, top.join("mid"));
+    // inverse: outside every listed repo, it stays where it was (the top)
+    let app = started_in(sb.path("src"));
+    assert_eq!(app.cursor, 0);
+}
+
 #[test]
 fn scanned_message_replaces_entries_and_keeps_cursor_repo() {
     let (_sb, mut app) = setup("");

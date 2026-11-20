@@ -90,6 +90,8 @@ fn argus_in(sb: &Sandbox, cwd: &std::path::Path) -> Command {
     }
     c.env_remove("ARGUS_CONFIG")
         .env_remove("ARGUS_STATE")
+        .env_remove("GIT_CEILING_DIRECTORIES")
+        .env_remove("GIT_DISCOVERY_ACROSS_FILESYSTEM")
         .current_dir(cwd);
     c
 }
@@ -117,6 +119,83 @@ fn no_roots_scans_current_directory_with_a_hint() {
         .success()
         .stdout(predicate::str::contains("of 3 repos"))
         .stderr(predicate::str::contains("no roots configured").not());
+}
+
+const SCANNING_HERE: &str =
+    "no roots configured; scanning the current directory (save it with `argus root add`)";
+
+/// From inside a repo, its outermost superproject is scanned as well as
+/// the current directory, so the repo you're in is listed.
+#[test]
+fn no_roots_inside_a_repo_scans_the_repo_it_is_in_too() {
+    let sb = Sandbox::new();
+    let top = sb.nested_submodules();
+    let in_top = "no roots configured; scanning the current directory and ~/top, \
+                  the repo it's in (save them with `argus root add`)";
+    for from in ["mid/leaf/deep", "mid"] {
+        argus_in(&sb, &top.join(from))
+            .arg("status")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("of 3 repos"))
+            .stderr(predicate::str::contains(in_top));
+    }
+    // inverse: at the top, the current directory is the repo
+    argus_in(&sb, &top)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("of 3 repos"))
+        .stderr(predicate::str::contains(SCANNING_HERE));
+    // and outside every repo, only the current directory
+    argus_in(&sb, &sb.path("src"))
+        .arg("status")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(SCANNING_HERE));
+}
+
+/// The repo is found as git finds it: not past `GIT_CEILING_DIRECTORIES`.
+#[test]
+fn no_roots_looks_for_the_repo_it_is_in_within_gits_ceilings() {
+    let sb = Sandbox::new();
+    let top = sb.init("top");
+    std::fs::create_dir_all(top.join("a/b")).unwrap();
+    std::fs::create_dir_all(sb.path("elsewhere")).unwrap();
+    let run = |ceiling: &std::path::Path| {
+        argus_in(&sb, &top.join("a/b"))
+            .env("GIT_CEILING_DIRECTORIES", ceiling)
+            .arg("status")
+            .assert()
+            .success()
+    };
+    run(&top.join("a")).stderr(predicate::str::contains(SCANNING_HERE));
+    // inverse: a ceiling elsewhere doesn't stop it (nor is it an error)
+    run(&sb.path("elsewhere")).stderr(predicate::str::contains("~/top, the repo it's in"));
+}
+
+/// Nor onto another filesystem, unless `GIT_DISCOVERY_ACROSS_FILESYSTEM`
+/// says so.
+#[cfg(target_os = "macos")]
+#[test]
+fn no_roots_looks_for_the_repo_it_is_in_on_its_filesystem_only() {
+    let sb = Sandbox::new();
+    let top = sb.init("top");
+    let mounted = argus_core::testkit::Mounted::new(&sb, "top/mnt");
+    std::fs::create_dir_all(mounted.0.join("here")).unwrap();
+    argus_in(&sb, &mounted.0.join("here"))
+        .arg("status")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(SCANNING_HERE));
+    // inverse: allowed across
+    argus_in(&sb, &mounted.0.join("here"))
+        .env("GIT_DISCOVERY_ACROSS_FILESYSTEM", "true")
+        .arg("status")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("~/top, the repo it's in"));
+    drop(top);
 }
 
 #[test]

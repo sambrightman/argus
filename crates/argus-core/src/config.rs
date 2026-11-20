@@ -27,7 +27,8 @@ pub struct Config {
     /// ["build-cache"]`.
     pub extend: Vec<String>,
     /// Directories scanned (recursively) for repositories. When empty, the
-    /// current directory is scanned. Manage with `argus root add|remove|list`.
+    /// current directory is scanned, and the repo it's in from that repo's
+    /// top. Manage with `argus root add|remove|list`.
     #[schemars(example = vec!["~/dev"])]
     pub roots: Vec<PathBuf>,
     /// Directories never descended into (roots are always scanned). Like

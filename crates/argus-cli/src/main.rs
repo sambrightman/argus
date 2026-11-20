@@ -455,6 +455,7 @@ fn run() -> Result<()> {
                 forge_factory: forge_factory(),
                 notices,
                 opener: argus_tui::default_opener().into(),
+                start_in: std::env::current_dir().and_then(std::fs::canonicalize).ok(),
             };
             argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))?;
         }
@@ -576,7 +577,8 @@ fn run() -> Result<()> {
 }
 
 /// Load config and state. With no roots configured (and none given), the
-/// current directory is scanned; the returned notices say so.
+/// current directory is scanned, and the repo it's in ([`default_roots`]);
+/// the returned notices say so.
 fn load(
     ctx: &Ctx,
     roots: &[PathBuf],
@@ -592,11 +594,17 @@ fn load(
     }
     if config.roots.is_empty() {
         let cwd = std::env::current_dir().context("current directory")?;
-        notices.push(
-            "no roots configured; scanning the current directory (save it with `argus root add`)"
+        config.roots = default_roots(cwd);
+        notices.push(match &config.roots[..] {
+            [_, repo] => format!(
+                "no roots configured; scanning the current directory and {}, \
+                 the repo it's in (save them with `argus root add`)",
+                paths::contract_tilde(repo)
+            ),
+            _ => "no roots configured; scanning the current directory \
+                  (save it with `argus root add`)"
                 .to_string(),
-        );
-        config.roots = vec![cwd];
+        });
     }
     let state = State::load(&ctx.state_path)?;
     if let Some(lines) = state.old_marks_as_config() {
@@ -751,13 +759,22 @@ fn issue_list_completer() -> clap_complete::ArgValueCompleter {
     })
 }
 
+/// The roots with none configured: the current directory, and the
+/// outermost repo it's in if that's elsewhere (the current directory is
+/// below its top, or it's a submodule), so that repo is listed too.
+fn default_roots(cwd: PathBuf) -> Vec<PathBuf> {
+    let repo = argus_core::discover::containing_repo(&cwd)
+        .filter(|r| std::fs::canonicalize(&cwd).ok().as_ref() != Some(r));
+    std::iter::once(cwd).chain(repo).collect()
+}
+
 /// Every repo's name, as completion offers them.
 fn repo_names() -> Vec<String> {
     let mut config = completion_config();
     if config.roots.is_empty()
         && let Ok(cwd) = std::env::current_dir()
     {
-        config.roots = vec![cwd];
+        config.roots = default_roots(cwd);
     }
     Workspace::new(config, State::default())
         .map(|ws| ws.repo_names())
@@ -864,7 +881,9 @@ fn root_cmd(ctx: &Ctx, cmd: RootCmd, json: bool) -> Result<()> {
                 return print_json(&roots);
             }
             if config.roots.is_empty() {
-                println!("no roots configured (the current directory is scanned)");
+                println!(
+                    "no roots configured (the current directory is scanned, and the repo it's in)"
+                );
             }
             for r in &config.roots {
                 let missing = if r.is_dir() { "" } else { "  (missing)" };
@@ -1484,6 +1503,7 @@ fn demo(ctx: &Ctx, theme: Option<String>, icons: Option<String>) -> Result<()> {
             d.root.display()
         )],
         opener: argus_tui::default_opener().into(),
+        start_in: None,
     };
     argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))
 }

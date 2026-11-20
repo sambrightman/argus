@@ -744,7 +744,12 @@ rendering is snapshot-tested via `TestBackend`.
   arrives, the same chain is what it would apply.
 
 * **No `init`.** Without configured roots the current directory is
-  scanned (with a hint). The config file is created on first run as a
+  scanned (with a hint), and so is the outermost repo it's in: found
+  upwards as git finds it (ceilings, filesystem boundary), then through
+  each repo recording it as a gitlink. Walking only down from a subfolder
+  would leave out the repo you're in. The current directory stays a root
+  so nothing found below it today is lost (a home folder that's a repo
+  would otherwise replace every clone under `~/dev`). The config file is created on first run as a
   fully commented example generated from the code: the JSON schema
   (schemars) supplies doc comments, `Default` values and `example`
   annotations, so the documentation can't drift from the code. Roots

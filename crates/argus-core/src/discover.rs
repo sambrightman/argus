@@ -647,6 +647,60 @@ pub fn classify(dir: &Path) -> Option<RepoKind> {
     classify_dotgit(dir).or_else(|| is_bare_listing(&list(dir)).then_some(RepoKind::Bare))
 }
 
+/// The outermost repo `dir` is in, by the real path of its work tree:
+/// the nearest found upwards as git finds it (stopping at
+/// `GIT_CEILING_DIRECTORIES`, and at another filesystem unless
+/// `GIT_DISCOVERY_ACROSS_FILESYSTEM` allows it), then each repo it's a
+/// submodule of: one recording it as a gitlink, as `git rev-parse
+/// --show-superproject-working-tree` checks. None outside every repo or
+/// in a bare one.
+pub fn containing_repo(dir: &Path) -> Option<PathBuf> {
+    let mut top = work_tree_above(dir)?;
+    while let Some(outer) = top.parent().and_then(work_tree_above) {
+        if !records_gitlink(&outer, &top) {
+            break;
+        }
+        top = outer;
+    }
+    Some(top)
+}
+
+/// The real path of the nearest work tree at or above `dir`.
+fn work_tree_above(dir: &Path) -> Option<PathBuf> {
+    use gix::discover::upwards::Options;
+    let mut opts = Options {
+        // as git: ceilings that don't contain `dir` are no error
+        match_ceiling_dir_or_error: false,
+        ..Options::default()
+    }
+    .apply_environment();
+    if let Some(Ok(b)) =
+        std::env::var_os("GIT_DISCOVERY_ACROSS_FILESYSTEM").map(gix::config::Boolean::try_from)
+    {
+        opts.cross_fs = b.into();
+    }
+    let (path, _) = gix::discover::upwards_opts(dir, opts).ok()?;
+    let (_, work_tree) = path.into_repository_and_work_tree_directories();
+    fs::canonicalize(work_tree?).ok()
+}
+
+/// Whether the repo at `outer` has a gitlink in its index at `inner`.
+fn records_gitlink(outer: &Path, inner: &Path) -> bool {
+    let Some(rel) = inner
+        .strip_prefix(outer)
+        .ok()
+        .and_then(|r| gix::path::into_bstr(r).ok())
+    else {
+        return false;
+    };
+    let Ok(index) = crate::isolation::open(outer).and_then(|r| r.index_or_empty()) else {
+        return false;
+    };
+    index
+        .entry_by_path(rel.as_ref())
+        .is_some_and(|e| e.mode.is_submodule())
+}
+
 /// A work tree's kind, from its `.git` (one `stat`: a symlink is followed,
 /// as git does).
 fn classify_dotgit(dir: &Path) -> Option<RepoKind> {

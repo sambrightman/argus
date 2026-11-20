@@ -30,6 +30,10 @@ argus root add ~/dev ~/work   # save roots; then `argus` works from anywhere
 ```
 
 With no roots configured, argus scans the current directory and says so.
+From inside a repo it scans the repo too, from its top (through any
+superprojects, as `git rev-parse --show-superproject-working-tree` finds
+them, and within `GIT_CEILING_DIRECTORIES`), so the repo you're in is
+listed even from a subfolder. The TUI starts with the cursor on it.
 On first run it writes `~/.config/argus/config.toml`: every setting with
 its default and documentation, commented out, generated from the code (so
 it can't drift). `argus root add|remove|list` edit it in place, keeping

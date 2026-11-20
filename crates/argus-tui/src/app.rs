@@ -771,6 +771,9 @@ pub struct App {
     pub scanning: bool,
     /// Shown with each scan result, e.g. "no roots configured…".
     pub notices: Vec<String>,
+    /// Where argus was started (a real path): the first scan puts the
+    /// cursor on the repo holding it.
+    pub start_in: Option<PathBuf>,
     pub quit: bool,
     /// Pending "g" for vi-style `gg`.
     pending_g: bool,
@@ -820,6 +823,7 @@ impl App {
             message: None,
             scanning: false,
             notices: vec![],
+            start_in: None,
             quit: false,
             pending_g: false,
         };
@@ -839,6 +843,20 @@ impl App {
         self.cursor = at
             .unwrap_or(self.cursor)
             .min(self.rows.len().saturating_sub(1));
+    }
+
+    /// The cursor to the deepest listed repo holding `dir`, if one does.
+    fn start_on_repo_holding(&mut self, dir: &Path) {
+        let holding = self.rows.iter().enumerate().filter_map(|(n, r)| match r {
+            Row::Repo(i) => Some((n, &self.ws.entries[*i].path)),
+            _ => None,
+        });
+        if let Some((n, _)) = holding
+            .filter(|(_, p)| dir.starts_with(p))
+            .max_by_key(|(_, p)| p.components().count())
+        {
+            self.cursor = n;
+        }
     }
 
     /// The rows of the listed repo that row `n` is of or under: its own
@@ -5362,6 +5380,9 @@ impl App {
                 parts.extend(went);
                 self.info(parts.join(" · "));
                 self.rebuild();
+                if let Some(here) = self.start_in.take() {
+                    self.start_on_repo_holding(&here);
+                }
             }
             Msg::Status(path, st) => {
                 return self.statuses(vec![(path, *st)]);
