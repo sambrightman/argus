@@ -381,6 +381,184 @@ fn verbose_prints_each_step_and_its_time_on_stderr() {
         .stderr(predicate::str::contains("status ~/dev").not());
 }
 
+/// A fake `git` first on `PATH`: asked for its installation config (as
+/// gix asks), it names the file `$FAKE_GIT_ANSWER` holds (none if it's
+/// empty), after `$FAKE_GIT_DELAY` seconds; for all else it runs git.
+fn fake_git(sb: &Sandbox) -> std::path::PathBuf {
+    let out = std::process::Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let bin = sb.path("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = config ] && [ \"$2\" = -lz ]; then\n\
+         \tsleep \"${{FAKE_GIT_DELAY:-0}}\"\n\
+         \tanswer=$(cat \"$FAKE_GIT_ANSWER\")\n\
+         \t[ -n \"$answer\" ] && printf '%s\\0file:%s\\0core.excludesfile\\0' \"${{FAKE_GIT_SCOPE:-system}}\" \"$answer\"\n\
+         \texit 0\n\
+         fi\n\
+         exec {real} \"$@\"\n"
+    );
+    let git = bin.join("git");
+    std::fs::write(&git, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+/// argus with the fake git, reading git's installation config.
+fn argus_with_fake_git(sb: &Sandbox, bin: &std::path::Path) -> Command {
+    let mut c = argus(sb);
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    c.env("PATH", path)
+        .env("FAKE_GIT_ANSWER", sb.path("answer"))
+        .env_remove("GIT_CONFIG_NOSYSTEM");
+    c
+}
+
+/// How many untracked files `argus --json status --all` says `r` has.
+fn untracked_in(out: &[u8], r: &std::path::Path) -> u64 {
+    let v: serde_json::Value = serde_json::from_slice(out).unwrap();
+    let entry = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["path"].as_str() == Some(r.to_str().unwrap()))
+        .unwrap_or_else(|| panic!("{r:?} in {v}"));
+    entry["status"]["Ok"]["changes"]["untracked"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("{entry}"))
+}
+
+/// Git's installation config is remembered, and repos opened with it at
+/// once; git, asked alongside, has the last word: when it names another,
+/// the statuses are read again with that one, before anything's shown.
+#[test]
+fn gits_installation_config_is_remembered_and_checked_alongside() {
+    let sb = Sandbox::new();
+    let r = sb.init("dev/r");
+    write(&r, "junk", "x\n");
+    let bin = fake_git(&sb);
+    write(&sb.root(), "ignores", "junk\n");
+    let ignoring = sb.path("ignoring.gitconfig");
+    let excludes = format!(
+        "[core]\n\texcludesFile = {}\n",
+        sb.path("ignores").display()
+    );
+    std::fs::write(&ignoring, excludes).unwrap();
+    let plain = sb.path("plain.gitconfig");
+    std::fs::write(&plain, "").unwrap();
+    let answer = |a: &str| std::fs::write(sb.path("answer"), a).unwrap();
+    let kept = sb.path(".state/argus/git-installation");
+    let run = || {
+        let o = argus_with_fake_git(&sb, &bin)
+            .args(["-v", "--json", "status", "--all"])
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{o:?}");
+        (
+            untracked_in(&o.stdout, &r),
+            String::from_utf8(o.stderr).unwrap(),
+        )
+    };
+    const AGAIN: &str = "statuses read again";
+    // first: git asked as repos open, and its answer kept
+    answer(ignoring.to_str().unwrap());
+    let (n, err) = run();
+    assert_eq!(n, 0, "junk ignored by the installation config\n{err}");
+    assert!(!err.contains(AGAIN), "{err}");
+    let line = format!("system\t{}\n", ignoring.display());
+    assert_eq!(std::fs::read_to_string(&kept).unwrap(), line);
+    // git now names another: opened with the kept one, read again
+    answer(plain.to_str().unwrap());
+    let (n, err) = run();
+    assert_eq!(n, 1, "{err}");
+    assert!(err.contains(AGAIN), "{err}");
+    let line = format!("system\t{}\n", plain.display());
+    assert_eq!(std::fs::read_to_string(&kept).unwrap(), line);
+    // and with that kept, nothing to read again
+    let (n, err) = run();
+    assert_eq!(n, 1);
+    assert!(!err.contains(AGAIN), "{err}");
+    // none at all is an answer too
+    answer("");
+    let (n, err) = run();
+    assert_eq!(n, 1);
+    assert!(err.contains(AGAIN), "{err}");
+    assert_eq!(std::fs::read_to_string(&kept).unwrap(), "none\n");
+    answer(ignoring.to_str().unwrap());
+    let (n, err) = run();
+    assert_eq!(n, 0, "{err}");
+    assert!(err.contains(AGAIN), "{err}");
+}
+
+/// As git: `GIT_CONFIG_SYSTEM` replaces an installation config in the
+/// system scope (Homebrew's), not one in another (Apple's).
+#[test]
+fn git_config_system_replaces_a_kept_system_scoped_installation_config() {
+    let sb = Sandbox::new();
+    let r = sb.init("dev/r");
+    write(&r, "junk", "x\n");
+    let bin = fake_git(&sb);
+    write(&sb.root(), "ignores", "junk\n");
+    let ignoring = sb.path("ignoring.gitconfig");
+    let excludes = format!(
+        "[core]\n\texcludesFile = {}\n",
+        sb.path("ignores").display()
+    );
+    std::fs::write(&ignoring, excludes).unwrap();
+    let plain = sb.path("plain.gitconfig");
+    std::fs::write(&plain, "").unwrap();
+    std::fs::write(sb.path("answer"), ignoring.to_str().unwrap()).unwrap();
+    let untracked = |scope: &str, system: Option<&std::path::Path>| {
+        let mut c = argus_with_fake_git(&sb, &bin);
+        c.env("FAKE_GIT_SCOPE", scope)
+            .args(["--json", "status", "--all"]);
+        if let Some(s) = system {
+            c.env("GIT_CONFIG_SYSTEM", s);
+        }
+        untracked_in(&c.output().unwrap().stdout, &r)
+    };
+    // (each first run keeps the answer; the second opens with it kept)
+    for _ in 0..2 {
+        assert_eq!(untracked("system", None), 0);
+        assert_eq!(untracked("system", Some(&plain)), 1, "replaced");
+    }
+    for _ in 0..2 {
+        assert_eq!(untracked("unknown", Some(&plain)), 0, "not replaced");
+    }
+}
+
+/// With the answer kept, opening a repo doesn't wait for git.
+#[test]
+fn a_kept_installation_config_spares_repos_waiting_for_git() {
+    let sb = Sandbox::new();
+    sb.init("dev/r");
+    let bin = fake_git(&sb);
+    std::fs::write(sb.path("answer"), "").unwrap();
+    let opened = |delay: &str| {
+        let o = argus_with_fake_git(&sb, &bin)
+            .env("FAKE_GIT_DELAY", delay)
+            .args(["-v", "status"])
+            .output()
+            .unwrap();
+        let err = String::from_utf8(o.stderr).unwrap();
+
+        err.lines()
+            .find(|l| l.contains("  status ~/dev/r"))
+            .unwrap_or_else(|| panic!("{err}"))
+            .to_string()
+    };
+    // first, nothing kept: the open waits out git's second
+    let waited = predicate::str::is_match(r"open 1\.\d\ds").unwrap();
+    assert!(waited.eval(&opened("1")), "{}", opened("0"));
+    // then kept: it doesn't
+    assert!(!waited.eval(&opened("1")));
+}
+
 #[test]
 fn fix_with_explicit_kind_and_pattern() {
     let sb = Sandbox::new();

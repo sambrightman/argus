@@ -15,6 +15,7 @@ pub mod gitignore;
 pub mod history;
 pub mod icons;
 pub mod identity;
+pub mod installation;
 pub mod isolation;
 pub mod ops;
 pub mod paths;

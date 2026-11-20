@@ -499,7 +499,11 @@ fn config_candidates(env: &mut dyn FnMut(&str) -> Option<std::ffi::OsString>) ->
         Source::User,
     ]
     .into_iter()
-    .filter_map(|s| s.storage_location(env))
+    .filter_map(|s| match (s, crate::installation::file()) {
+        // as repos are opened: without waiting for git if it's known
+        (Source::GitInstallation, Some(known)) => known,
+        _ => s.storage_location(env),
+    })
     .collect()
 }
 
@@ -512,6 +516,11 @@ impl KeptRepos {
                 .and_then(|repo| status_in_parts(&repo, opts, parts))
         })
         .map_err(|e| StatusError(without_path(&e.0, path)))
+    }
+
+    /// Close every kept repo: the next status of each opens it afresh.
+    pub fn forget(&self) {
+        self.kept.lock().unwrap().clear();
     }
 
     fn open(&self, path: &Path) -> gix::Result<gix::Repository> {

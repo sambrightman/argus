@@ -313,6 +313,16 @@ impl Workspace {
             })
             .collect();
         self.refresh_all();
+        // read with git's installation config as remembered: if git now
+        // says another, again with that
+        if crate::installation::settle() {
+            crate::trace::note(|| "git's installation config moved: statuses read again".into());
+            // (shared with the workspaces cloned from this one)
+            if let Some(k) = &self.kept {
+                k.forget();
+            }
+            self.refresh_all();
+        }
         if let Some(k) = &self.kept {
             let found: std::collections::HashSet<&Path> =
                 self.entries.iter().map(|e| e.path.as_path()).collect();

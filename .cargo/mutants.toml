@@ -25,6 +25,9 @@ exclude_re = [
     # only saves work: a tag's object header is read before peeling it,
     # and peeling a lightweight tag's commit gives the same commit
     'crates/argus-core/src/status\.rs:\d+:\d+: replace match guard h\.kind\(\) == gix::object::Kind::Tag with true in head_tags$',
+    # only starts asking git sooner: the first repo opened starts it
+    # anyway, so nothing but the timing can tell
+    'crates/argus-core/src/installation\.rs:\d+:\d+: replace start with \(\)$',
     # HTTPS is also Protocol's Default, so the replacement is the same
     'crates/argus-core/src/forge\.rs:\d+:\d+: replace Forge::protocol -> Protocol with Default::default\(\)$',
     # reading the core kinds from sysctl: macOS only (not compiled on

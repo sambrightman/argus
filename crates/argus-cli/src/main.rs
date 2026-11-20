@@ -456,6 +456,8 @@ fn run() -> Result<()> {
         None | Some(Cmd::Tui) => argus_tui::check_terminal().map_err(|e| anyhow::anyhow!(e))?,
         _ => {}
     }
+    // (git is asked for its installation config alongside what follows)
+    argus_core::installation::start();
     let (mut ws, notices) = load(&ctx, &cli.roots, cli.max_depth)?;
     if cli.follow_symlinks {
         ws.config.follow_symlinks = true;

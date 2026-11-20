@@ -28,6 +28,20 @@ fn a_repo_is_opened_once_while_its_config_is_unchanged() {
     assert_eq!(k.opens(), 1);
 }
 
+/// Forgotten, a kept repo is opened afresh at its next status.
+#[test]
+fn forgotten_repos_are_opened_again() {
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    let k = KeptRepos::default();
+    kept(&k, &r);
+    kept(&k, &r);
+    assert_eq!(k.opens(), 1);
+    k.forget();
+    kept(&k, &r);
+    assert_eq!(k.opens(), 2);
+}
+
 #[test]
 fn each_repo_is_kept_separately() {
     let sb = Sandbox::new();

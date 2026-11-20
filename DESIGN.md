@@ -932,6 +932,17 @@ rendering is snapshot-tested via `TestBackend`.
   (`reach::hiding`), giving up past 2000 commits, where a walk that
   stops at the list's end is cheaper. A property test checks the count against
   `git rev-list --count` on random histories.
+* **Git's installation config is remembered between runs** (`installation`):
+  only git knows where it is (Homebrew's `/opt/homebrew/etc/gitconfig`,
+  Apple's under the developer tools), and asking runs `git`, which every
+  repo opened meanwhile waited for: 83ms of a 181ms cold scan. Now repos
+  open with the answer kept beside the state file while git is asked
+  again alongside; the scan waits for git at its end, and if it names
+  another file (another git first on `PATH`, `xcode-select`, an
+  upgrade), the answer is kept and the statuses read again with it
+  (kept repos opened afresh) before anything's shown. No key such as the
+  binary's path and size can tell: `/usr/bin/git` on macOS is a shim
+  choosing a git, and wrappers choose too. The first run asks as before.
 * **The message history** (`v m`) keeps what the status line said (the
   same message running twice is kept once), each job's outcome, and
   steps: a status line message is easily overwritten by the next.
