@@ -6,7 +6,7 @@ use argus_core::config::Config;
 use argus_core::ops::{Op, ResetMode};
 use argus_core::testkit::{Sandbox, commit, git, write};
 use argus_core::{State, Workspace};
-use argus_tui::app::{Action, App, Effect, Mode, Msg, Prompt, Row, Scope, StashKind};
+use argus_tui::app::{Action, App, Effect, Happened, Mode, Msg, Prompt, Row, Scope, StashKind};
 use argus_tui::details::Seg;
 use argus_tui::menu::MenuId;
 use argus_tui::theme::Theme;
@@ -566,6 +566,23 @@ fn the_message_history_keeps_what_was_said_and_done() {
     assert!(!render(&mut app, 100, 30).contains("12ms  status ~/dev/x"));
 }
 
+/// The history keeps the last 5000 things, dropping the oldest 500 at a
+/// time; with none yet it says so.
+#[test]
+fn the_message_history_is_capped() {
+    let (_sb, mut app) = setup("");
+    app.on_key(key('m'));
+    assert!(render(&mut app, 80, 20).contains("nothing yet"));
+    app.on_key(key('x'));
+    for n in 0..5000 {
+        app.report_error(format!("message {n}"));
+    }
+    assert_eq!(app.history.len(), 5000);
+    app.report_error("one more");
+    assert_eq!(app.history.len(), 4501);
+    assert!(matches!(&app.history[0].what, Happened::Failed(s) if s == "message 500"));
+}
+
 /// The history opens at the newest and scrolls back through the rest.
 #[test]
 fn the_message_history_scrolls_back() {
@@ -620,6 +637,9 @@ fn the_message_history_scrolls_back() {
         app.on_key(code(KeyCode::PageDown));
     }
     assert!(render(&mut app, 80, 20).contains("message 99"));
+    // inset by a column, as the help is
+    let screen = render(&mut app, 80, 20);
+    assert!(screen.starts_with(" ╭ messages"), "{screen}");
     // also from the View menu
     app.on_key(key('q'));
     app.on_key(key('v'));

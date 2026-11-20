@@ -17,4 +17,5 @@ mod pull;
 mod roots;
 mod stash;
 mod status;
+mod trace;
 mod workspace;
