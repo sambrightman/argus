@@ -229,11 +229,10 @@ fn a_scan_finds_the_repos() {
     run(&mut app, &mut rt, vec![Effect::Scan]);
     assert!(!app.scanning);
     assert_eq!(app.ws.entries.len(), 3);
-    assert!(
-        app.message.as_ref().unwrap().0.contains("3 repos"),
-        "{:?}",
-        app.message
-    );
+    // (the header counts them; the status line keeps its keys)
+    assert_eq!(app.message, None);
+    let said = |e: &argus_tui::app::Event| matches!(&e.what, argus_tui::app::Happened::Said(s) if s == "scanned: 3 repos");
+    assert!(app.history.iter().any(said), "{:?}", app.history);
 }
 
 #[test]

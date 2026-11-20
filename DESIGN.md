@@ -913,7 +913,7 @@ rendering is snapshot-tested via `TestBackend`.
   then sends each as a message to its history. A repo's status is one
   step, its parts (`files`, `branches`, …) timed inside it and named
   when they took a millisecond or more.
-* **The message history** (`L`) keeps what the status line said (the
+* **The message history** (`v L`) keeps what the status line said (the
   same message running twice is kept once), each job's outcome, and
   steps: a status line message is easily overwritten by the next.
 

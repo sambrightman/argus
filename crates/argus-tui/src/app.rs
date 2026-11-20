@@ -1561,8 +1561,6 @@ impl App {
                 '/' => StartFilter,
                 '?' | 'h' => Help,
                 'q' => Quit,
-                '$' => ToggleLog,
-                'L' => History,
                 '!' => Shell,
                 'a' => ToggleAttention,
                 'H' => ToggleHidden,
@@ -5443,10 +5441,11 @@ impl App {
                 self.ws.resolve_flags();
                 let hidden = self.ws.entries.iter().filter(|e| e.flags.hidden()).count();
                 let n = self.ws.entries.len();
-                let mut parts = vec![match hidden {
+                let count = match hidden {
                     0 => format!("{n} {}", plural(n, "repo", "repos")),
                     h => format!("{n} {}, {h} hidden", plural(n, "repo", "repos")),
-                }];
+                };
+                let mut parts = vec![];
                 // (what's marked in a repo no longer listed goes with it; the
                 // rows are the old ones still, so nothing here reads them)
                 let listed = |repo: &PathBuf| self.ws.index_of(repo).is_some();
@@ -5459,7 +5458,14 @@ impl App {
                 parts.extend(self.notices.iter().cloned());
                 parts.extend(self.ws.truncation_warning());
                 parts.extend(went);
-                self.info(parts.join(" · "));
+                // the header has the count: the status line says what's
+                // more, if anything, else keeps showing the keys
+                let all = [count].into_iter().chain(parts.iter().cloned());
+                self.remember(Happened::Said(format!(
+                    "scanned: {}",
+                    all.collect::<Vec<_>>().join(" · ")
+                )));
+                self.message = (!parts.is_empty()).then(|| (parts.join(" · "), false));
                 self.rebuild();
                 if let Some(here) = self.start_in.take() {
                     self.start_on_repo_holding(&here);

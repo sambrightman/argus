@@ -786,8 +786,6 @@ pub fn help_lines() -> Vec<(String, String)> {
         ("g C-l", "refresh statuses"),
         ("R", "rescan roots"),
         ("!", "shell in repo"),
-        ("$", "process log"),
-        ("L", "message history (with -v, each step taken and its time)"),
         ("q C-c", "quit"),
     ]
     .iter()

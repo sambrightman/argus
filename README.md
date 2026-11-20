@@ -202,8 +202,6 @@ again runs it.
 | `a` / `H` | show all / attention only (the default, `[ui] attention_only`); show hidden |
 | `g` `C-l` / `R` | refresh statuses / rescan roots |
 | `!` | shell in repo, a login shell as in a new terminal tab (TUI suspends; `exit` returns) |
-| `$` | process log |
-| `L` | message history: everything the status line said, each job's outcome and output, and with `-v` each step taken and its time (`j` `k` `n` `p` (with or without `C-`) `↑` `↓` scroll, `C-v` `M-v` `PgDn` `PgUp` by the page; any other key closes) |
 | `?` | help |
 | `F` | **Pull**: `p` selected, `a` all tagged for pull, `c` clone new repos of tracked owners, then pull all tagged |
 | `f` | **Fetch**: `f` selected, `a` all shown except hidden |
@@ -215,7 +213,7 @@ again runs it.
 | `x` | **Fix**: `x` fix once (one fix for each selected repo), `a` the same for all shown except hidden; `X` fix auto (fix after fix until nothing more applies) and `A` the same for all shown; each saying what it would do (and left out when it would do nothing); then every fix that applies to the selection, with its reason (or how many repos it applies to): `s` stash, `c` commit…, `i` gitignore…, `b` branch…, `p` push, `u` publish, `R` add-remote…, `P` push-branches, `d` switch-default, `r` reattach, `F` pull, `f` fast-forward, `D` delete-branches…, `S` submodule-update, `w` prune-worktrees, `W` remove-worktree…, `z` stash-pop, `k` abort…; on a repo whose folder is gone, `g` drops it from the list and `G` rescans. Those marked … ask first. Opened on a fix line in the details, it starts on that fix |
 | `t` | **Tag**: each tag by its `key` (`f` favourite, then yours: "tag work" / "untag work"), `p` pull, `i` ignore issues (a menu of the repo's issues and their state), `I` ignore or unignore the repo, `z` snooze (on an issue line in the details, just that issue), `u` unsnooze (on an issue line, just that issue; else the repo and its issues), `a` ack new, `c` clear |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page (on a branch with a pull request, the pull request) |
-| `v` | **View**: toggles, expand/collapse all, log |
+| `v` | **View**: toggles, expand/collapse all, refresh and rescan, theme and icons for the session; `$` the process log (each job's outcome, under the list); `L` the message history: everything the status line said (after a scan, the count is in the history and the header, and the status line keeps its keys unless there's more to say), each job's outcome and output, and with `-v` each step taken and its time (`j` `k` `n` `p` (with or without `C-`) `↑` `↓` scroll, `C-v` `M-v` `PgDn` `PgUp` by the page; any other key closes) |
 
 ## CLI
 
@@ -264,7 +262,7 @@ network shares and external disks (or set `one_file_system = true`).
 `-v` / `--verbose` says each step taken and how long it took: config and
 state read, the scan, each repo's status (with its slow parts: `files`,
 `branches`, `describe`…), every git command, forge requests. On stderr,
-or in the TUI's message history (`L`). For finding out what makes a
+or in the TUI's message history (`v L`). For finding out what makes a
 scan slow:
 
 ```text

@@ -546,7 +546,7 @@ fn the_message_history_keeps_what_was_said_and_done() {
         what: "status ~/dev/x (files 3ms)".into(),
         took: Some(std::time::Duration::from_millis(12)),
     }));
-    app.on_key(key('L'));
+    open_history(&mut app);
     assert!(matches!(app.mode, Mode::History { .. }));
     let screen = render(&mut app, 100, 30);
     for said in [
@@ -571,7 +571,7 @@ fn the_message_history_keeps_what_was_said_and_done() {
 #[test]
 fn the_message_history_is_capped() {
     let (_sb, mut app) = setup("");
-    app.on_key(key('L'));
+    open_history(&mut app);
     assert!(render(&mut app, 80, 20).contains("nothing yet"));
     app.on_key(key('x'));
     for n in 0..5000 {
@@ -590,7 +590,7 @@ fn the_message_history_scrolls_back() {
     for n in 0..100 {
         app.report_error(format!("message {n:02}"));
     }
-    app.on_key(key('L'));
+    open_history(&mut app);
     let screen = render(&mut app, 80, 20);
     assert!(
         screen.contains("message 99") && !screen.contains("message 50"),
@@ -653,18 +653,30 @@ fn the_message_history_scrolls_back() {
     // inset by a column, as the help is
     let screen = render(&mut app, 80, 20);
     assert!(screen.starts_with(" ╭ messages"), "{screen}");
-    // also from the View menu
-    app.on_key(key('q'));
+}
+
+/// The history and the process log are in the View menu (`v L`, `v $`),
+/// not on keys of their own.
+#[test]
+fn the_history_and_process_log_are_in_the_view_menu() {
+    let (_sb, mut app) = setup("");
+    for k in ['L', '$', 'm'] {
+        app.on_key(key(k));
+        assert!(matches!(app.mode, Mode::Normal) && !app.show_log, "{k}");
+    }
+    app.on_key(key('v'));
+    app.on_key(key('$'));
+    assert!(app.show_log);
+    app.on_key(key('v'));
+    app.on_key(key('$'));
+    assert!(!app.show_log);
+    open_history(&mut app);
+    assert!(matches!(app.mode, Mode::History { .. }));
+}
+
+fn open_history(app: &mut App) {
     app.on_key(key('v'));
     app.on_key(key('L'));
-    assert!(matches!(app.mode, Mode::History { .. }));
-    // inverse: m isn't it, nor L the process log
-    app.on_key(key('q'));
-    app.on_key(key('m'));
-    assert!(!matches!(app.mode, Mode::History { .. }));
-    app.mode = Mode::Normal;
-    app.on_key(key('L'));
-    assert!(!app.show_log);
 }
 
 #[test]
@@ -873,9 +885,21 @@ fn scanned_message_replaces_entries_and_keeps_cursor_repo() {
     let truncated = vec![PathBuf::from("/deep/dir")];
     app.on_msg(Msg::Scanned { entries, truncated });
     assert_eq!(app.current().unwrap().path, path);
+    // the count is in the header: the status line says only what's more,
+    // the history all of it
     let (msg, is_error) = app.message.clone().unwrap();
     assert!(!is_error);
-    assert!(msg.starts_with("3 repos · no roots configured · 1 directory below max_depth (6) not scanned, e.g. /deep/dir"), "{msg}");
+    let more = "no roots configured · 1 directory below max_depth (6) not scanned, e.g. /deep/dir";
+    assert!(msg.starts_with(more), "{msg}");
+    let said = |app: &App| match &app.history.last().unwrap().what {
+        Happened::Said(s) => s.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        said(&app).starts_with(&format!("scanned: 3 repos · {more}")),
+        "{}",
+        said(&app)
+    );
     // a snoozed (hidden) one: counted, and said
     let key = app.ws.entries[0].key.clone();
     app.ws.state.snoozed.insert(
@@ -888,7 +912,22 @@ fn scanned_message_replaces_entries_and_keeps_cursor_repo() {
         truncated: vec![],
     });
     let (msg, _) = app.message.clone().unwrap();
-    assert!(msg.starts_with("3 repos, 1 hidden · "), "{msg}");
+    assert!(msg.starts_with("no roots configured"), "{msg}");
+    assert!(
+        said(&app).starts_with("scanned: 3 repos, 1 hidden · "),
+        "{}",
+        said(&app)
+    );
+    // with nothing more to say, the status line keeps showing the keys
+    app.notices.clear();
+    let entries = app.ws.entries.clone();
+    app.on_msg(Msg::Scanned {
+        entries,
+        truncated: vec![],
+    });
+    assert_eq!(app.message, None);
+    assert!(render(&mut app, 100, 20).contains("? help"));
+    assert_eq!(said(&app), "scanned: 3 repos, 1 hidden");
 }
 
 fn detail_texts(app: &App) -> Vec<String> {
@@ -2922,9 +2961,9 @@ fn toggles_say_what_they_will_do() {
         label(&mut app, 'v', 'h'),
         "h show ignored and snoozed repos"
     );
-    assert_eq!(label(&mut app, 'v', 'l'), "l show process log");
+    assert_eq!(label(&mut app, 'v', '$'), "$ show process log");
     app.act(Action::ToggleLog);
-    assert_eq!(label(&mut app, 'v', 'l'), "l hide process log");
+    assert_eq!(label(&mut app, 'v', '$'), "$ hide process log");
 
     assert_eq!(
         label(&mut app, 't', 'p'),
