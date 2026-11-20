@@ -786,8 +786,8 @@ pub fn help_lines() -> Vec<(String, String)> {
         ("g C-l", "refresh statuses"),
         ("R", "rescan roots"),
         ("!", "shell in repo"),
-        ("$ L", "process log"),
-        ("m", "message history (with -v, each step taken and its time)"),
+        ("$", "process log"),
+        ("L", "message history (with -v, each step taken and its time)"),
         ("q C-c", "quit"),
     ]
     .iter()
@@ -980,7 +980,7 @@ fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
                 .border_type(BorderType::Rounded)
                 .border_style(t.ui(Ui::Border))
                 .title(Span::styled(
-                    " messages (j k ↑ ↓ PgUp PgDn scroll; any other key closes) ",
+                    " messages (j k n p ↑ ↓ C-v M-v PgUp PgDn scroll; any other key closes) ",
                     t.ui(Ui::Title),
                 )),
         ),

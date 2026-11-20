@@ -546,7 +546,7 @@ fn the_message_history_keeps_what_was_said_and_done() {
         what: "status ~/dev/x (files 3ms)".into(),
         took: Some(std::time::Duration::from_millis(12)),
     }));
-    app.on_key(key('m'));
+    app.on_key(key('L'));
     assert!(matches!(app.mode, Mode::History { .. }));
     let screen = render(&mut app, 100, 30);
     for said in [
@@ -571,7 +571,7 @@ fn the_message_history_keeps_what_was_said_and_done() {
 #[test]
 fn the_message_history_is_capped() {
     let (_sb, mut app) = setup("");
-    app.on_key(key('m'));
+    app.on_key(key('L'));
     assert!(render(&mut app, 80, 20).contains("nothing yet"));
     app.on_key(key('x'));
     for n in 0..5000 {
@@ -590,7 +590,7 @@ fn the_message_history_scrolls_back() {
     for n in 0..100 {
         app.report_error(format!("message {n:02}"));
     }
-    app.on_key(key('m'));
+    app.on_key(key('L'));
     let screen = render(&mut app, 80, 20);
     assert!(
         screen.contains("message 99") && !screen.contains("message 50"),
@@ -637,14 +637,34 @@ fn the_message_history_scrolls_back() {
         app.on_key(code(KeyCode::PageDown));
     }
     assert!(render(&mut app, 80, 20).contains("message 99"));
+    // and by C-v / M-v, as the list
+    app.on_key(alt('v'));
+    let screen = render(&mut app, 80, 20);
+    assert!(
+        !screen.contains("message 99") && screen.contains("message 82"),
+        "{screen}"
+    );
+    app.on_key(ctrl('v'));
+    assert!(render(&mut app, 80, 20).contains("message 99"));
+    assert!(
+        matches!(app.mode, Mode::History { .. }),
+        "they don't close it"
+    );
     // inset by a column, as the help is
     let screen = render(&mut app, 80, 20);
     assert!(screen.starts_with(" ╭ messages"), "{screen}");
     // also from the View menu
     app.on_key(key('q'));
     app.on_key(key('v'));
-    app.on_key(key('m'));
+    app.on_key(key('L'));
     assert!(matches!(app.mode, Mode::History { .. }));
+    // inverse: m isn't it, nor L the process log
+    app.on_key(key('q'));
+    app.on_key(key('m'));
+    assert!(!matches!(app.mode, Mode::History { .. }));
+    app.mode = Mode::Normal;
+    app.on_key(key('L'));
+    assert!(!app.show_log);
 }
 
 #[test]

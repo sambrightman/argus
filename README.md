@@ -203,7 +203,7 @@ again runs it.
 | `g` `C-l` / `R` | refresh statuses / rescan roots |
 | `!` | shell in repo, a login shell as in a new terminal tab (TUI suspends; `exit` returns) |
 | `$` | process log |
-| `m` | message history: everything the status line said, each job's outcome and output, and with `-v` each step taken and its time (`j` `k` `↑` `↓` `PgUp` `PgDn` scroll; any other key closes) |
+| `L` | message history: everything the status line said, each job's outcome and output, and with `-v` each step taken and its time (`j` `k` `n` `p` (with or without `C-`) `↑` `↓` scroll, `C-v` `M-v` `PgDn` `PgUp` by the page; any other key closes) |
 | `?` | help |
 | `F` | **Pull**: `p` selected, `a` all tagged for pull, `c` clone new repos of tracked owners, then pull all tagged |
 | `f` | **Fetch**: `f` selected, `a` all shown except hidden |
@@ -264,7 +264,7 @@ network shares and external disks (or set `one_file_system = true`).
 `-v` / `--verbose` says each step taken and how long it took: config and
 state read, the scan, each repo's status (with its slow parts: `files`,
 `branches`, `describe`…), every git command, forge requests. On stderr,
-or in the TUI's message history (`m`). For finding out what makes a
+or in the TUI's message history (`L`). For finding out what makes a
 scan slow:
 
 ```text

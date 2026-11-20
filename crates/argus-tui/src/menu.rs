@@ -353,7 +353,7 @@ impl MenuId {
                     item('e', "expand all", Action::ExpandAll),
                     item('c', "collapse all", Action::CollapseAll),
                     item('l', "toggle process log", Action::ToggleLog),
-                    item('m', "message history", Action::History),
+                    item('L', "message history", Action::History),
                     item('g', "refresh statuses", Action::Refresh),
                     item('G', "rescan roots", Action::Rescan),
                     item('t', "next theme (this session)", Action::NextTheme),

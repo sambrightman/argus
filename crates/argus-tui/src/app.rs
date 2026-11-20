@@ -1382,7 +1382,12 @@ impl App {
             }
             Mode::History { back } => {
                 let page = self.page.max(1);
+                let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+                let alt = k.modifiers.contains(KeyModifiers::ALT);
                 match k.code {
+                    // a page, as C-v and M-v move the list
+                    KeyCode::Char('v') if ctrl => *back = back.saturating_sub(page),
+                    KeyCode::Char('v') if alt => *back = back.saturating_add(page),
                     KeyCode::Up | KeyCode::Char('k' | 'p') => *back = back.saturating_add(1),
                     KeyCode::Down | KeyCode::Char('j' | 'n') => *back = back.saturating_sub(1),
                     KeyCode::PageUp => *back = back.saturating_add(page),
@@ -1556,8 +1561,8 @@ impl App {
                 '/' => StartFilter,
                 '?' | 'h' => Help,
                 'q' => Quit,
-                '$' | 'L' => ToggleLog,
-                'm' => History,
+                '$' => ToggleLog,
+                'L' => History,
                 '!' => Shell,
                 'a' => ToggleAttention,
                 'H' => ToggleHidden,
