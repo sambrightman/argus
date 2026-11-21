@@ -853,6 +853,7 @@ impl Config {
     /// default config.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         crate::trace::timed(
+            "config",
             |_| format!("config {}", crate::paths::contract_tilde(path)),
             || Self::read(path),
         )

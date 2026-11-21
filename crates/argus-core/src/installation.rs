@@ -34,6 +34,7 @@ static KNOWN: LazyLock<Known> = LazyLock::new(|| Known {
 
 fn ask() -> Installation {
     crate::trace::timed(
+        "git config",
         |i: &Installation| match &i.path {
             Some(p) => format!("git's installation config: {}", p.display()),
             None => "git's installation config: none".into(),

@@ -363,9 +363,10 @@ impl Runtime {
             app.remember(app::Happened::Step(step));
         }
         let tx = self.tx.clone();
-        argus_core::trace::set_sink(Some(Arc::new(move |step| {
+        let sink: argus_core::trace::Sink = Arc::new(move |step| {
             let _ = tx.send(Msg::Step(step));
-        })));
+        });
+        argus_core::trace::set_sink(Some((argus_core::trace::Form::Whole, sink)));
     }
 
     /// Handle messages that have arrived (a bounded number, so a flood
@@ -471,6 +472,7 @@ impl Runtime {
             Effect::SaveTags(before) => {
                 let path = &self.opts.config_path;
                 let saved = argus_core::trace::timed(
+                    "save",
                     |_| format!("save tags in {}", argus_core::paths::contract_tilde(path)),
                     || configfile::update_tag_lists(path, &before, &app.ws.config),
                 );
@@ -481,6 +483,7 @@ impl Runtime {
             Effect::SaveUi { key, value } => {
                 let path = &self.opts.config_path;
                 let saved = argus_core::trace::timed(
+                    "save",
                     |_| {
                         format!(
                             "save [ui] {key} in {}",
@@ -512,20 +515,27 @@ impl Runtime {
                 });
             }
             Effect::Refresh(paths) => {
-                argus_core::trace::note(|| match &paths[..] {
-                    [one] => format!("refresh {}", argus_core::paths::contract_tilde(one)),
-                    many => format!("refresh {} repos", many.len()),
-                });
                 let n = app.ws.config.disk_jobs();
                 let reader = app.ws.status_reader();
                 self.spawn(move |tx| {
-                    argus_core::workspace::in_pool(n, || {
-                        use rayon::prelude::*;
-                        paths.into_par_iter().for_each(|p| {
-                            let r = reader.read(&p);
-                            let _ = tx.send(Msg::Status(p, Box::new(r)));
-                        });
-                    })
+                    let what = match &paths[..] {
+                        [one] => format!("refresh {}", argus_core::paths::contract_tilde(one)),
+                        many => format!("refresh {} repos", many.len()),
+                    };
+                    argus_core::trace::step(
+                        "refresh",
+                        || what,
+                        || {
+                            argus_core::workspace::in_pool(n, || {
+                                use rayon::prelude::*;
+                                let here = argus_core::trace::within();
+                                paths.into_par_iter().for_each(|p| {
+                                    let r = here.run(|| reader.read(&p));
+                                    let _ = tx.send(Msg::Status(p, Box::new(r)));
+                                });
+                            })
+                        },
+                    )
                 });
             }
             Effect::Jobs(jobs) => {
@@ -630,6 +640,7 @@ impl Runtime {
                     let mut plan = pull::plan_tracks(&ws, &listings.repos, listings.protocol);
                     pull::locate_orphans(&mut plan, factory);
                     argus_core::trace::took(
+                        "plan",
                         || "plan pulls and clones of tracked owners' repos".into(),
                         started.elapsed(),
                     );

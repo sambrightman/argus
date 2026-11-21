@@ -543,10 +543,11 @@ fn the_message_history_keeps_what_was_said_and_done() {
             duration: Default::default(),
         },
     });
-    app.on_msg(Msg::Step(Step {
-        what: "status ~/dev/x (files 3ms)".into(),
-        took: Some(std::time::Duration::from_millis(12)),
-    }));
+    app.on_msg(Msg::Step(Step::new(
+        "status",
+        "status ~/dev/x",
+        Some(std::time::Duration::from_millis(12)),
+    )));
     open_history(&mut app);
     assert!(matches!(app.mode, Mode::History { .. }));
     let screen = render(&mut app, 100, 30);
@@ -555,7 +556,7 @@ fn the_message_history_keeps_what_was_said_and_done() {
         "could not save",
         "fetch",
         "fatal: no remote",
-        "12ms  status ~/dev/x (files 3ms)",
+        "12ms  status ~/dev/x",
     ] {
         assert!(screen.contains(said), "{said:?} in\n{screen}");
     }

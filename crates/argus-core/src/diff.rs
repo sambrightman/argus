@@ -255,6 +255,7 @@ pub fn file_diff(repo: &Path, path: &str, side: Side) -> Result<FileDiff, DiffEr
         Side::Staged => "staged",
     };
     crate::trace::timed(
+        "diff",
         |_| {
             format!(
                 "{side_name} diff of {path} in {}",
@@ -313,6 +314,7 @@ fn read_file_diff(repo: &Path, path: &str, side: Side) -> Result<FileDiff, DiffE
 /// rename is given as `old -> new`, as [`crate::history`] lists it.
 pub fn commit_file_diff(repo: &Path, commit: &str, path: &str) -> Result<FileDiff, DiffError> {
     crate::trace::timed(
+        "diff",
         |_| {
             format!(
                 "diff of {path} in {commit} in {}",

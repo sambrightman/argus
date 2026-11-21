@@ -43,7 +43,15 @@ pub fn run_jobs(
                             return;
                         }
                         on_event(Event::Started { index });
-                        let outcome = ops::run(&jobs[index].path, &jobs[index].op);
+                        let job = &jobs[index];
+                        let outcome = crate::trace::timed(
+                            "job",
+                            |o: &OpOutcome| match o.success {
+                                true => job.label.clone(),
+                                false => format!("{}, failed", job.label),
+                            },
+                            || ops::run(&job.path, &job.op),
+                        );
                         let ok = outcome.success;
                         results.lock().unwrap()[index] = Some(outcome.clone());
                         on_event(Event::Finished { index, outcome });

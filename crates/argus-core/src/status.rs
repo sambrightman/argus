@@ -365,35 +365,27 @@ impl Default for StatusOptions {
 
 /// Errors leave out `path`: front-ends show it next to the error already.
 pub fn status(path: &Path, opts: StatusOptions) -> Result<RepoStatus, StatusError> {
-    traced(path, |parts| {
-        parts
-            .time("open", || crate::isolation::open(path))
+    traced(path, || {
+        crate::trace::part("open", || crate::isolation::open(path))
             .map_err(err)
-            .and_then(|repo| status_in_parts(&repo, opts, parts))
+            .and_then(|repo| status_of(&repo, opts))
     })
     .map_err(|e| StatusError(without_path(&e.0, path)))
 }
 
-/// `read` as a step, with how long each part took.
+/// `read` as a step, its parts steps in it.
 fn traced(
     path: &Path,
-    read: impl FnOnce(&mut crate::trace::Parts) -> Result<RepoStatus, StatusError>,
+    read: impl FnOnce() -> Result<RepoStatus, StatusError>,
 ) -> Result<RepoStatus, StatusError> {
-    let mut parts = crate::trace::Parts::default();
-    let started = std::time::Instant::now();
-    let r = read(&mut parts);
-    crate::trace::took(
-        || {
-            let failed = if r.is_err() { ", failed" } else { "" };
-            format!(
-                "status {}{}{failed}",
-                crate::paths::contract_tilde(path),
-                parts.summary()
-            )
-        },
-        started.elapsed(),
-    );
-    r
+    let what = || format!("status {}", crate::paths::contract_tilde(path));
+    crate::trace::step("status", what, || {
+        let r = read();
+        if r.is_err() {
+            crate::trace::amend(|| format!("{}, failed", what()));
+        }
+        r
+    })
 }
 
 /// Repos kept open between status reads (the TUI's refreshes). Opening is
@@ -509,11 +501,10 @@ fn config_candidates(env: &mut dyn FnMut(&str) -> Option<std::ffi::OsString>) ->
 
 impl KeptRepos {
     pub fn status(&self, path: &Path, opts: StatusOptions) -> Result<RepoStatus, StatusError> {
-        traced(path, |parts| {
-            parts
-                .time("open", || self.open(path))
+        traced(path, || {
+            crate::trace::part("open", || self.open(path))
                 .map_err(err)
-                .and_then(|repo| status_in_parts(&repo, opts, parts))
+                .and_then(|repo| status_of(&repo, opts))
         })
         .map_err(|e| StatusError(without_path(&e.0, path)))
     }
@@ -704,28 +695,20 @@ impl<'r> Refs<'r> {
     }
 }
 
+/// A repo's status, each part of it a step.
 pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStatus, StatusError> {
-    status_in_parts(repo, opts, &mut crate::trace::Parts::default())
-}
-
-/// [`status_of`], timing its parts in `parts`.
-fn status_in_parts(
-    repo: &gix::Repository,
-    opts: StatusOptions,
-    parts: &mut crate::trace::Parts,
-) -> Result<RepoStatus, StatusError> {
     let h = repo.head().map_err(err)?;
     let head = head_of(&h);
     let head_id = h.id().map(|id| id.detach());
     let head_commit = head_id.and_then(|id| repo.find_commit(id).ok());
-    let refs = parts.time("refs", || Refs::read(repo))?;
+    let refs = crate::trace::part("refs", || Refs::read(repo))?;
     let (remote, remote_url) = remote_and_url(repo);
     let default_branch = default_branch(repo, &refs, remote.as_deref());
     let default_tip = default_branch
         .as_deref()
         .and_then(|d| default_tip(&refs, remote.as_deref(), d));
 
-    let branches = parts.time("branches", || {
+    let branches = crate::trace::part("branches", || {
         branches(repo, &refs, head.branch(), default_tip)
     })?;
     let upstream = head
@@ -737,7 +720,7 @@ fn status_in_parts(
     let changes = if bare {
         Changes::default()
     } else {
-        parts.time("files", || {
+        crate::trace::part("files", || {
             changes(
                 repo,
                 opts,
@@ -745,16 +728,18 @@ fn status_in_parts(
             )
         })?
     };
-    let moved_submodules = parts.time("moved submodules", || {
+    let moved_submodules = crate::trace::part("moved submodules", || {
         moved_submodules(repo, &changes.moved)
     });
     let missing_submodules = changes.missing.clone();
-    let integration = parts.time("upstream", || integration(repo, &head, upstream.as_ref()));
+    let integration =
+        crate::trace::part("upstream", || integration(repo, &head, upstream.as_ref()));
     let detached_orphans = match &head {
-        Head::Detached(_) if repo.kind() != gix::repository::Kind::Submodule => parts
-            .time("detached commits", || {
+        Head::Detached(_) if repo.kind() != gix::repository::Kind::Submodule => {
+            crate::trace::part("detached commits", || {
                 detached_orphans(repo, &refs, head_id)
-            })?,
+            })?
+        }
         _ => 0,
     };
     let at_head = match (&head, head_id) {
@@ -766,18 +751,17 @@ fn status_in_parts(
         _ => vec![],
     };
 
-    let (stash_ids, stashes) = parts
-        .time("stashes", || stash_entries(repo.common_dir()))
+    let (stash_ids, stashes) = crate::trace::part("stashes", || stash_entries(repo.common_dir()))
         .into_iter()
         .unzip();
-    let tags = parts.time("tags", || head_tags(repo, &refs, head_id));
+    let tags = crate::trace::part("tags", || head_tags(repo, &refs, head_id));
     let (describe, describe_gave_up) = match (&head, head_id) {
-        (Head::Detached(_), Some(id)) if tags.is_empty() => parts.time("describe", || {
+        (Head::Detached(_), Some(id)) if tags.is_empty() => crate::trace::part("describe", || {
             describe(repo, &refs, id, opts.describe_limit)
         }),
         _ => (None, false),
     };
-    let worktrees = parts.time("worktrees", || worktrees(repo));
+    let worktrees = crate::trace::part("worktrees", || worktrees(repo));
     Ok(RepoStatus {
         describe,
         describe_gave_up,
@@ -1611,6 +1595,7 @@ fn describe(
 /// with no tag in history it walks all of it.
 pub fn describe_fully(path: &Path) -> Option<String> {
     crate::trace::timed(
+        "describe",
         |_| {
             format!(
                 "describe HEAD fully in {}",

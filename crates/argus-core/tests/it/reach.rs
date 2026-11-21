@@ -298,11 +298,14 @@ fn steps(prefix: &'static str, f: impl FnOnce()) -> Vec<String> {
     use std::sync::{Arc, Mutex};
     let got: Arc<Mutex<Vec<String>>> = Arc::default();
     let into = got.clone();
-    argus_core::trace::set_sink(Some(Arc::new(move |s: argus_core::trace::Step| {
-        if s.what.starts_with(prefix) {
-            into.lock().unwrap().push(s.what);
-        }
-    })));
+    argus_core::trace::set_sink(Some((
+        argus_core::trace::Form::Each,
+        Arc::new(move |s: argus_core::trace::Step| {
+            if s.what.starts_with(prefix) {
+                into.lock().unwrap().push(s.what);
+            }
+        }),
+    )));
     f();
     argus_core::trace::set_sink(None);
     got.lock().unwrap().clone()

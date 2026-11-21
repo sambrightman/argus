@@ -26,6 +26,8 @@ toml_edit = "0.25.18"
 serde_json = "1.0.154"
 url = "2.5.8"
 vte = "0.15.0"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", default-features = false, features = ["registry", "std"] }
 
 [dev-dependencies]
 argus-core = { package = "argus-git-core", path = ".", features = ["testkit", "demo"] }

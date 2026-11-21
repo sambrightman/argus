@@ -17,11 +17,14 @@ fn git_commands_are_steps() {
     write(&repo, "new", "x\n");
     let got: Arc<Mutex<Vec<Step>>> = Arc::default();
     let into = got.clone();
-    trace::set_sink(Some(Arc::new(move |s: Step| {
-        if s.what.contains("steps-repo") {
-            into.lock().unwrap().push(s);
-        }
-    })));
+    trace::set_sink(Some((
+        argus_core::trace::Form::Each,
+        Arc::new(move |s: Step| {
+            if s.what.contains("steps-repo") {
+                into.lock().unwrap().push(s);
+            }
+        }),
+    )));
     let added = ops::run(
         &repo,
         &Op::Add {

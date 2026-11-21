@@ -35,6 +35,7 @@ fn traced(
     send: impl FnOnce() -> Result<Response, String>,
 ) -> Result<Response, String> {
     argus_core::trace::timed(
+        "http",
         |r: &Result<Response, String>| match r {
             Ok(r) => format!("{method} {url}: {}", r.status),
             Err(e) => format!("{method} {url}: {e}"),
@@ -641,6 +642,7 @@ struct ApiRepo {
 /// `program`'s trimmed output, if it succeeded and printed something.
 fn run_cli(program: &str, args: &[&str]) -> Option<String> {
     let out = argus_core::trace::timed(
+        "command",
         |o: &std::io::Result<std::process::Output>| {
             let ok = o.as_ref().is_ok_and(|o| o.status.success());
             let failed = if ok { "" } else { ", failed" };

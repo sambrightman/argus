@@ -277,7 +277,19 @@ impl Workspace {
 
     /// Discover repos and compute every status in parallel.
     pub fn scan(&mut self) {
+        crate::trace::timed(
+            "scan",
+            |n: &usize| format!("scan: {n} {}", crate::plural(*n, "repo", "repos")),
+            || {
+                self.scan_untimed();
+                self.entries.len()
+            },
+        );
+    }
+
+    fn scan_untimed(&mut self) {
         let discovery = crate::trace::timed(
+            "discover",
             |d: &discover::Discovery| {
                 let roots: Vec<String> = self
                     .config
@@ -537,6 +549,7 @@ impl Workspace {
     pub fn refresh_all(&mut self) {
         let n = self.entries.len();
         let results = crate::trace::timed(
+            "statuses",
             |_| format!("statuses of {n} {}", crate::plural(n, "repo", "repos")),
             || self.statuses(self.entries.iter().map(|e| e.path.as_path())),
         );
@@ -685,6 +698,7 @@ impl Workspace {
         let extra: Vec<Entry> = extra.into_values().collect();
         let n = extra.len();
         let results = crate::trace::timed(
+            "statuses",
             |_| format!("statuses of {n} more (submodules and worktrees of those before)"),
             || self.statuses(extra.iter().map(|e| e.path.as_path())),
         );
@@ -968,8 +982,10 @@ fn exclusive(c: &Config, m: Tag, on: bool) -> Vec<(Tag, bool)> {
 /// Run `f` on a pool of `n` threads, so its parallel iterators use at most
 /// that many (on the current thread if the pool can't be made).
 pub fn in_pool<R: Send>(n: usize, f: impl FnOnce() -> R + Send) -> R {
+    // (on the pool's thread, still in the caller's step)
+    let here = crate::trace::within();
     match rayon::ThreadPoolBuilder::new().num_threads(n).build() {
-        Ok(pool) => pool.install(f),
+        Ok(pool) => pool.install(|| here.run(f)),
         Err(_) => f(),
     }
 }
@@ -983,7 +999,11 @@ impl Workspace {
         let paths: Vec<&Path> = paths.collect();
         let reader = self.status_reader();
         in_pool(self.config.disk_jobs(), || {
-            paths.par_iter().map(|p| reader.read(p)).collect()
+            let here = crate::trace::within();
+            paths
+                .par_iter()
+                .map(|p| here.run(|| reader.read(p)))
+                .collect()
         })
     }
 }

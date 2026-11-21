@@ -23,9 +23,15 @@ fn child_scan() {
     };
     let said: Arc<Mutex<Vec<String>>> = Arc::default();
     let into = said.clone();
-    trace::set_sink(Some(Arc::new(move |s: trace::Step| {
-        into.lock().unwrap().push(s.what)
-    })));
+    trace::set_sink(Some((
+        argus_core::trace::Form::Each,
+        Arc::new(move |s: trace::Step| {
+            into.lock().unwrap().push(match s.took {
+                Some(d) => format!("{} in {}", s.what, trace::duration(d)),
+                None => s.what,
+            })
+        }),
+    )));
     let config = Config {
         roots: vec![PathBuf::from(&root)],
         ..Config::default()
@@ -282,9 +288,9 @@ fn a_kept_answer_spares_opening_a_repo_the_wait_for_git() {
     let waited = |text: &str| {
         let line = text
             .lines()
-            .find(|l| l.starts_with("said status "))
+            .find(|l| l.starts_with("said status ") && l.contains(": open in "))
             .unwrap();
-        line.contains("open 1.") || line.contains("open 2.")
+        line.contains(": open in 1.") || line.contains(": open in 2.")
     };
     // nothing kept: the open waits for git
     let (_, _, text) = r.scan(&[]);

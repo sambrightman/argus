@@ -59,6 +59,7 @@ pub fn commits(
     limit: usize,
 ) -> Result<(Vec<CommitLine>, bool), String> {
     crate::trace::timed(
+        "commits",
         |r: &Result<(Vec<CommitLine>, bool), String>| {
             let what = match range {
                 Range::NotOnRemote { tip } => format!("commits of {tip} on no remote"),
@@ -196,6 +197,7 @@ fn line(c: &gix::Commit<'_>) -> CommitLine {
 /// The commit `id` (or any revision) in full.
 pub fn commit_detail(repo: &Path, id: &str) -> Result<CommitDetail, String> {
     crate::trace::timed(
+        "commit",
         |_| format!("commit {id} in {}", crate::paths::contract_tilde(repo)),
         || read_commit_detail(repo, id),
     )

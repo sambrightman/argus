@@ -388,10 +388,13 @@ fn run() -> Result<()> {
     );
     if cli.verbose {
         let into = early_steps.clone();
+        // (the TUI's messages hold each step whole; -v says each by itself)
         trace::set_sink(Some(if tui {
-            Arc::new(move |s| into.lock().unwrap().push(s))
+            let sink: trace::Sink = Arc::new(move |s| into.lock().unwrap().push(s));
+            (trace::Form::Whole, sink)
         } else {
-            Arc::new(|s| eprintln!("argus: {s}"))
+            let sink: trace::Sink = Arc::new(|s| eprintln!("argus: {s}"));
+            (trace::Form::Each, sink)
         }));
     }
     let early_steps = || std::mem::take(&mut *early_steps.lock().unwrap());

@@ -122,31 +122,34 @@ fn verbose_steps_go_to_the_history() {
     let (sb, mut app, _) = setup("");
     let mut rt = Runtime::new(Options {
         verbose: true,
-        early_steps: vec![Step {
-            what: "config ~/x".into(),
-            took: None,
-        }],
+        early_steps: vec![Step::new("config", "config ~/x", None)],
         ..options(&sb)
     });
     rt.log_steps(&mut app);
     let dirty = sb.path("dev/dirty");
     run(&mut app, &mut rt, vec![Effect::Refresh(vec![dirty])]);
     argus_core::trace::set_sink(None);
-    let steps: Vec<String> = app
+    let tops: Vec<&Step> = app
         .history
         .iter()
         .filter_map(|e| match &e.what {
-            Happened::Step(s) => Some(s.what.clone()),
+            Happened::Step(s) => Some(s),
             _ => None,
         })
         .collect();
-    assert_eq!(steps[0], "config ~/x");
-    assert!(
-        steps
-            .iter()
-            .any(|s| s.starts_with("status ") && s.contains("dev/dirty")),
-        "{steps:?}"
-    );
+    assert_eq!(tops[0].what, "config ~/x");
+    // the refresh, whole: the repo's status in it, its parts in that
+    let refresh = tops
+        .iter()
+        .find(|s| s.kind == "refresh")
+        .expect("a refresh");
+    let status = refresh
+        .steps
+        .iter()
+        .find(|s| s.kind == "status")
+        .expect("its status");
+    assert!(status.what.contains("dev/dirty"), "{status:?}");
+    assert!(status.steps.iter().any(|s| s.kind == "files"), "{status:?}");
     // inverse: not without it
     let (sb, mut app, _) = setup("");
     let mut rt = Runtime::new(options(&sb));

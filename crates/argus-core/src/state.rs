@@ -73,6 +73,7 @@ pub enum StateError {
 impl State {
     pub fn load(path: &Path) -> Result<Self, StateError> {
         crate::trace::timed(
+            "state",
             |_| format!("state {}", crate::paths::contract_tilde(path)),
             || Self::read(path),
         )
@@ -109,6 +110,7 @@ impl State {
         let started = std::time::Instant::now();
         let r = self.merge_into(path, base);
         crate::trace::took(
+            "state",
             || format!("save state {}", crate::paths::contract_tilde(path)),
             started.elapsed(),
         );

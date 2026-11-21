@@ -1756,6 +1756,7 @@ fn conflicted_files(names: &str) -> String {
 /// `git <args>` in `cwd`, started at `started`, as a step.
 fn traced<S: AsRef<str>>(cwd: &Path, args: &[S], ok: bool, started: Instant) {
     crate::trace::took(
+        "git",
         || {
             let args: Vec<&str> = args.iter().map(AsRef::as_ref).collect();
             let failed = if ok { "" } else { ", failed" };

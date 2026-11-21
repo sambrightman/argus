@@ -575,16 +575,17 @@ fn a_kept_installation_config_spares_repos_waiting_for_git() {
         let err = String::from_utf8(o.stderr).unwrap();
 
         err.lines()
-            .find(|l| l.contains("  status ~/dev/r"))
+            .find(|l| l.ends_with("  status ~/dev/r: open"))
             .unwrap_or_else(|| panic!("{err}"))
             .to_string()
     };
-    // how long the open took, in ms (a part under 1 ms isn't said)
+    // how long the open took, in ms
     let open_ms = |line: &str| -> f64 {
-        let Some((_, rest)) = line.split_once("open ") else {
-            return 0.0;
-        };
-        let took = rest.split([',', ')']).next().unwrap_or_default();
+        let took = line
+            .trim_start_matches("argus:")
+            .split_whitespace()
+            .next()
+            .unwrap_or_default();
         match took.strip_suffix("ms") {
             Some(ms) => ms.parse().unwrap_or(0.0),
             None => took.trim_end_matches('s').parse::<f64>().unwrap_or(0.0) * 1000.0,
