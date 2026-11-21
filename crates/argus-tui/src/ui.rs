@@ -791,6 +791,7 @@ pub fn help_lines() -> Vec<(String, String)> {
         ("g C-l", "refresh statuses"),
         ("R", "rescan roots"),
         ("!", "shell in repo"),
+        ("? h", "help"),
         ("q C-c", "quit"),
     ]
     .iter()
@@ -798,12 +799,33 @@ pub fn help_lines() -> Vec<(String, String)> {
     .collect();
     for id in MenuId::ALL {
         let m = id.menu();
-        let items = m
+        let mut items: Vec<String> = m
             .items
             .iter()
             .map(|i| format!("{} {}", i.key, i.label))
-            .collect::<Vec<_>>()
-            .join(" · ");
+            .collect();
+        match id {
+            // built from what applies: every item it can have
+            MenuId::Fix => {
+                items = [
+                    "x fix once",
+                    "a fix all once",
+                    "X fix auto",
+                    "A fix all auto",
+                ]
+                .map(String::from)
+                .to_vec();
+                items.extend(
+                    argus_core::fix::FixKind::ALL
+                        .iter()
+                        .map(|&k| format!("{} {}", crate::menu::fix_key(k), k.name())),
+                );
+            }
+            // (the tags are config's: favourite's `f`, and yours)
+            MenuId::Tag => items.insert(0, "each tag by its key".into()),
+            _ => {}
+        }
+        let items = items.join(" · ");
         v.push((format!("{} …", id.key()), format!("{}: {items}", m.title)));
     }
     v

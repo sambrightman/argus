@@ -1263,6 +1263,31 @@ fn view_menu_cycles_themes_and_icon_sets_and_saves_them() {
     assert_eq!(app.ws.config.ui.theme, "terminal");
 }
 
+/// The help names every key the list answers to, and each menu's items,
+/// the Fix menu's too, though it's built from what applies.
+#[test]
+fn help_names_the_keys_and_every_menus_items() {
+    let help = argus_tui::ui::help_lines();
+    let row = |keys: &str| help.iter().find(|(k, _)| k == keys).map(|(_, d)| d.clone());
+    assert_eq!(row("? h").as_deref(), Some("help"));
+    assert_eq!(row("q C-c").as_deref(), Some("quit"));
+    let fix = row("x …").unwrap();
+    for item in [
+        "x fix once",
+        "a fix all once",
+        "X fix auto",
+        "A fix all auto",
+    ] {
+        assert!(fix.contains(item), "{fix}");
+    }
+    for kind in argus_core::fix::FixKind::ALL {
+        let item = format!("{} {}", argus_tui::menu::fix_key(kind), kind.name());
+        assert!(fix.contains(&item), "{item} in {fix}");
+    }
+    let tag = row("t …").unwrap();
+    assert!(tag.starts_with("Tag: each tag by its key"), "{tag}");
+}
+
 #[test]
 fn help_has_a_legend_of_every_icon() {
     let (_sb, mut app) = setup("");
