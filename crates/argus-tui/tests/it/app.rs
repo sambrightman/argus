@@ -10466,11 +10466,40 @@ fn three_hunks(sb: &Sandbox) {
     write(&d, "f", &changed);
 }
 
+/// `line` with each age ("0s ago", "3d ago") written `_ ago`.
+fn without_ages(line: &str) -> String {
+    let words: Vec<&str> = line.split(' ').collect();
+    let age = |w: &str| {
+        let digits = w.trim_end_matches(char::is_alphabetic);
+        !digits.is_empty() && digits.len() < w.len() && digits.chars().all(|c| c.is_ascii_digit())
+    };
+    (0..words.len())
+        .map(
+            |i| match words.get(i + 1) == Some(&"ago") && age(words[i]) {
+                true => "_",
+                false => words[i],
+            },
+        )
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[test]
 fn the_cursor_stays_on_any_line_when_a_status_comes_back() {
     let (sb, mut app) = setup_with("", three_hunks);
     let d = sb.path("dev/dirty");
-    let text = |app: &App| trimmed(app)[app.cursor_line()].clone();
+    // (an age, "commit 0s ago", may tick over between two readings)
+    let text = |app: &App| without_ages(&trimmed(app)[app.cursor_line()]);
+    let (was, now) = (
+        "activity  commit 0s ago, never fetched",
+        "activity  commit 1s ago, never fetched",
+    );
+    assert_eq!(without_ages(was), without_ages(now));
+    assert_ne!(
+        without_ages(was),
+        without_ages("activity  commit 0s ago, fetched 1h ago!")
+    );
+    assert_eq!(without_ages("unstaged (1)"), "unstaged (1)");
     for start in [
         "remote",
         "activity",
