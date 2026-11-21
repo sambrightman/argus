@@ -11,6 +11,9 @@ use ratatui::style::{Color, Modifier, Style};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Ui {
     Selection,
+    /// The rows a region (`C-space`) spans: a background, kept off what
+    /// has one of its own.
+    Region,
     Marked,
     /// A repo marked for a batch action: its name, and the mark before it.
     MarkedRepo,
@@ -58,6 +61,7 @@ const ROLE_NAMES: &[(Role, &str)] = &[
 
 const UI_NAMES: &[(Ui, &str)] = &[
     (Ui::Selection, "selection"),
+    (Ui::Region, "region"),
     (Ui::Marked, "marked"),
     (Ui::MarkedRepo, "marked_repo"),
     (Ui::Header, "header"),
@@ -201,6 +205,7 @@ impl Theme {
                 ("diff-remove", fg(Rgb(0xf7, 0x76, 0x8e))),
                 ("diff-hunk", fg(Rgb(0x7a, 0xa2, 0xf7))),
                 ("selection", Style::new().bg(Rgb(0x28, 0x34, 0x57))),
+                ("region", Style::new().bg(Rgb(0x1f, 0x23, 0x35))),
                 ("marked", fg(Rgb(0xe0, 0xaf, 0x68)).add_modifier(b)),
                 ("marked_repo", fg(Rgb(0x7d, 0xcf, 0xff)).add_modifier(b)),
                 ("header", fg(Rgb(0x7a, 0xa2, 0xf7)).add_modifier(b)),
@@ -243,6 +248,7 @@ impl Theme {
                 ("diff-remove", fg(Rgb(0xc0, 0x1c, 0x28))),
                 ("diff-hunk", fg(Rgb(0x1e, 0x50, 0xa0))),
                 ("selection", Style::new().bg(Rgb(0xdd, 0xe4, 0xf0))),
+                ("region", Style::new().bg(Rgb(0xee, 0xf1, 0xf7))),
                 ("marked", fg(Rgb(0x8f, 0x5e, 0x15)).add_modifier(b)),
                 ("marked_repo", fg(Rgb(0x0f, 0x4b, 0x6e)).add_modifier(b)),
                 ("header", fg(Rgb(0x1e, 0x50, 0xa0)).add_modifier(b)),
@@ -283,6 +289,7 @@ impl Theme {
                 ("diff-remove", Style::new().add_modifier(Modifier::ITALIC)),
                 ("diff-hunk", Style::new().add_modifier(Modifier::UNDERLINED)),
                 ("selection", Style::new().add_modifier(Modifier::REVERSED)),
+                ("region", Style::new().add_modifier(Modifier::UNDERLINED)),
                 ("marked", Style::new().add_modifier(b)),
                 (
                     "marked_repo",
@@ -322,6 +329,7 @@ impl Theme {
                     ("diff-remove", fg(Red)),
                     ("diff-hunk", fg(Cyan)),
                     ("selection", Style::new().add_modifier(Modifier::REVERSED)),
+                    ("region", Style::new().bg(Indexed(236))),
                     ("marked", fg(Yellow).add_modifier(b)),
                     ("marked_repo", fg(Cyan).add_modifier(b)),
                     ("header", fg(Blue).add_modifier(b)),
@@ -395,8 +403,11 @@ mod tests {
         for name in BUILTIN {
             let (t, w) = Theme::build(name, &BTreeMap::new());
             assert!(w.is_empty(), "{name}: {w:?}");
-            // selection must be visible in every theme
+            // selection must be visible in every theme, and a region
+            // (the cursor's row is its end) apart from it
             assert_ne!(t.ui(Ui::Selection), Style::default(), "{name}");
+            assert_ne!(t.ui(Ui::Region), Style::default(), "{name}");
+            assert_ne!(t.ui(Ui::Region), t.ui(Ui::Selection), "{name}");
         }
     }
 

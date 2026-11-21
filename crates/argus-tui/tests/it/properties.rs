@@ -142,9 +142,15 @@ fn arranged(
         app.cursor = targets[pick.index(targets.len())];
         app.on_key(plain(KeyCode::Char(' ')));
     }
-    // a region: started on a row of some diff, then so many rows down
+    // a region: started on a file, a hunk or a line of one (what it
+    // takes follows), then so many rows down
     let in_diff: Vec<usize> = (0..app.rows.len())
-        .filter(|&n| matches!(app.target(n), Some(Target::Hunk { .. })))
+        .filter(|&n| {
+            matches!(
+                app.target(n),
+                Some(Target::Hunk { .. } | Target::File { .. })
+            )
+        })
         .collect();
     match region {
         Some((start, down)) if !in_diff.is_empty() => {

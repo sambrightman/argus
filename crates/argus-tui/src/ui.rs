@@ -301,6 +301,8 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) -> Vec<LinkAt> 
     let refined = refined_rows(app, app.scroll..app.scroll + height);
     let mut lines = vec![];
     let mut links = vec![];
+    // (worked out once for the frame, not once a row)
+    let region = app.region_rows();
     for (row_idx, row) in app.rows.iter().enumerate().skip(app.scroll).take(height) {
         let selected = row_idx == app.cursor;
         let mut line = match row {
@@ -379,6 +381,16 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) -> Vec<LinkAt> 
             // extend the selection bar to the full width
             let pad = (body.width as usize).saturating_sub(line.width());
             line.push_span(Span::styled(" ".repeat(pad), t.ui(Ui::Selection)));
+        } else if region.contains(&row_idx) {
+            // (as magit's: what has a background of its own keeps it)
+            let style = t.ui(Ui::Region);
+            for span in &mut line.spans {
+                if span.style.bg.is_none() {
+                    span.style = span.style.patch(style);
+                }
+            }
+            let pad = (body.width as usize).saturating_sub(line.width());
+            line.push_span(Span::styled(" ".repeat(pad), style));
         }
         lines.push(line);
     }
@@ -785,7 +797,7 @@ pub fn help_lines() -> Vec<(String, String)> {
         ),
         (
             "C-space",
-            "in a diff: a region of lines, for s u K e (again: keep as marks)",
+            "a region: of lines, hunks or files, as where it starts (again: keep as marks)",
         ),
         (
             "e",

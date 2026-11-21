@@ -72,8 +72,8 @@ pub enum Action {
     /// repo alone: the answers to the same question.
     StashAll,
     GitignoreIn(bool),
-    /// Start a region of diff lines at the cursor (`C-space`), or end it,
-    /// keeping its lines as marks.
+    /// Start a region at the cursor (`C-space`), of lines, hunks or files
+    /// as where it starts is, or end it, keeping what it takes as marks.
     ToggleRegion,
     /// Unmark the repos listed.
     UnmarkAll,
@@ -757,8 +757,8 @@ pub struct App {
     /// Added or removed lines marked in diffs: repo, file, side, hunk and
     /// line index. They go when the repo's status (so its diff) changes.
     pub marked_lines: BTreeSet<MarkedLine>,
-    /// Where a region (`C-space`) starts: a diff row's repo, file, side,
-    /// hunk and line. Its lines run to the cursor.
+    /// Where a region (`C-space`) starts, and what it takes: it runs to
+    /// the cursor.
     pub region: Option<RegionStart>,
     /// The patch being edited (`e`), until it's applied or dropped.
     pub editing: Option<PatchEdit>,
@@ -1705,29 +1705,12 @@ impl App {
             }
             ToggleRegion => {
                 if self.region.is_some() {
-                    // ended: its lines kept as marks
+                    // ended: what it takes kept as marks
                     self.keep_region();
-                } else if let Some(Row::Detail { line, .. }) = self.rows.get(self.cursor)
-                    && line.diff.is_some()
-                    && line.section == Some(Section::Untracked)
-                {
-                    self.info("an untracked file is marked whole: space marks it");
-                } else if let Some(Row::Detail { repo, line }) = self.rows.get(self.cursor)
-                    && let (Some(f), Some(d)) = (&line.file, line.diff.as_deref())
-                    && let Some(root) = self.listed_path()
-                {
-                    // (the file's own line: the last file in its place)
-                    let file_line = line.id.iter().rposition(|s| matches!(s, Seg::File(_)));
-                    self.region = Some(RegionStart {
-                        repo: self.ws.entries[*repo].path.clone(),
-                        file: f.clone(),
-                        side: d.side,
-                        at: Self::diff_pos(line),
-                        root,
-                        home: line.id[..file_line.map_or(0, |n| n + 1)].to_vec(),
-                    });
+                } else if let Some(r) = self.region_at(self.cursor) {
+                    self.region = Some(r);
                 } else {
-                    self.info("C-space starts a region in a file's diff");
+                    self.info("C-space starts a region on a file, a hunk or a line of a diff");
                 }
             }
             Toggle(Switch::Untracked) => self.stash.untracked = !self.stash.untracked,
@@ -2430,10 +2413,8 @@ impl App {
             files.iter().any(|(s, _)| *s == Section::Untracked)
         };
         // (only those are marks to it: its repos are the ones with some)
-        let marks = self
-            .marked_files
-            .iter()
-            .filter(|(_, files)| untracked(files));
+        let files = self.files();
+        let marks = files.iter().filter(|(_, files)| untracked(files));
         let marks: BTreeSet<PathBuf> = marks.map(|(repo, _)| repo.clone()).collect();
         let this = Some(('i', Action::GitignoreIn(false)));
         match self.asks_which("Gitignore", marks, this, Action::GitignoreIn(true)) {
@@ -2449,7 +2430,7 @@ impl App {
         // rows) the cursor is on; else, outside the changes, all of them
         let here = self.current_path();
         let marked: Vec<(usize, Vec<String>)> = self
-            .marked_files
+            .files()
             .iter()
             .filter(|(repo, _)| all || here.as_ref() == Some(*repo))
             .filter_map(|(repo, files)| {
@@ -3278,7 +3259,7 @@ impl App {
         menu.items.retain(|it| match it.action {
             Action::Stash(StashKind::Staged) => staged,
             Action::Stash(StashKind::MarkedFiles) => {
-                !self.marked_files.is_empty() || !self.lines().is_empty()
+                !self.files().is_empty() || !self.lines().is_empty()
             }
             Action::PopStash | Action::DropStash => stashes,
             _ => true,
@@ -3710,7 +3691,8 @@ impl App {
     /// Whether `file` is marked whole where `section` lists it: itself, or
     /// (untracked) the folder it's in.
     pub fn file_marked(&self, repo: &Path, section: Section, file: &str) -> bool {
-        let files = self.marked_files.get(repo);
+        let files = self.files();
+        let files = files.get(repo);
         files.is_some_and(|m| m.iter().any(|(s, f)| *s == section && f == file))
             || self.in_marked_folder(repo, section, file)
     }
@@ -3718,7 +3700,8 @@ impl App {
     /// Whether `file` is in an untracked folder that's marked (`build/`,
     /// listed as one path and unfolding into what's in it).
     fn in_marked_folder(&self, repo: &Path, section: Section, file: &str) -> bool {
-        let files = self.marked_files.get(repo);
+        let files = self.files();
+        let files = files.get(repo);
         files.is_some_and(|m| m.iter().any(|(s, f)| *s == section && within(f, file)))
     }
 
@@ -3746,7 +3729,7 @@ impl App {
         let mut files: Vec<&str> = lost.iter().map(|k| k.1.as_str()).collect();
         files.sort_unstable();
         files.dedup();
-        let region = self.region.as_ref();
+        let region = self.region.as_ref().filter(|r| r.unit != Unit::Files);
         let region =
             region.is_some_and(|r| of(&r.repo) && !kept.contains(&key(&r.repo, &r.file, r.side)));
         let said = match (lost.len(), region) {
@@ -3769,7 +3752,7 @@ impl App {
 
     /// The lines that are marked: those marked one by one, and those of a
     /// region while there is one (but for a file marked whole, which has
-    /// them already). The one place that says so, for what's drawn as
+    /// them already, a region of files making it so too). The one place that says so, for what's drawn as
     /// marked and for every key that takes what's marked.
     pub fn lines(&self) -> std::borrow::Cow<'_, BTreeSet<MarkedLine>> {
         if self.region.is_none() {
@@ -3779,16 +3762,32 @@ impl App {
             Side::Unstaged => Section::Unstaged,
             Side::Staged => Section::Staged,
         };
-        let region = self.region_lines().into_iter();
-        let region = region.filter(|k| !self.file_marked(&k.0, section(k.2), &k.1));
-        let mut lines = self.marked_lines.clone();
-        lines.extend(region);
-        std::borrow::Cow::Owned(lines)
+        // (a file marked whole, by a region of files too, has all its
+        // lines: those marked one by one in it are in that)
+        let lines = self.marked_lines.iter().cloned().chain(self.region_lines());
+        let lines = lines.filter(|k| !self.file_marked(&k.0, section(k.2), &k.1));
+        std::borrow::Cow::Owned(lines.collect())
     }
 
-    /// A region ends: its lines are kept as marks.
+    /// The files marked whole, by repo: those marked one by one, and
+    /// those of a region of files while there is one. The one place that
+    /// says so, as [`Self::lines`] is for lines.
+    pub fn files(&self) -> std::borrow::Cow<'_, BTreeMap<PathBuf, BTreeSet<(Section, String)>>> {
+        let region = self.region_files();
+        if region.is_empty() {
+            return std::borrow::Cow::Borrowed(&self.marked_files);
+        }
+        let mut files = self.marked_files.clone();
+        for (repo, section, file) in region {
+            files.entry(repo).or_default().insert((section, file));
+        }
+        std::borrow::Cow::Owned(files)
+    }
+
+    /// A region ends: what it takes is kept as marks.
     fn keep_region(&mut self) {
-        self.marked_lines = self.lines().into_owned();
+        let (lines, files) = (self.lines().into_owned(), self.files().into_owned());
+        (self.marked_lines, self.marked_files) = (lines, files);
         self.region = None;
     }
 
@@ -3806,7 +3805,8 @@ impl App {
             return Marked::Wholly;
         }
         // (an untracked folder with something marked in it)
-        let files = self.marked_files.get(repo).into_iter().flatten();
+        let marked = self.files();
+        let files = marked.get(repo).into_iter().flatten();
         if files
             .into_iter()
             .any(|(s, f)| *s == section && within(file, f))
@@ -3851,7 +3851,8 @@ impl App {
     /// `None`).
     pub fn marked_in(&self, path: Option<&Path>) -> (usize, usize) {
         let within = |repo: &PathBuf| path.is_none_or(|p| repo.starts_with(p));
-        let files = self.marked_files.iter().filter(|(repo, _)| within(repo));
+        let marked = self.files();
+        let files = marked.iter().filter(|(repo, _)| within(repo));
         let lines = self.lines();
         let lines = lines.iter().filter(|k| within(&k.0));
         (files.map(|(_, f)| f.len()).sum(), lines.count())
@@ -3885,7 +3886,7 @@ impl App {
     pub fn repos_with_marks(&self) -> BTreeSet<PathBuf> {
         let lines = self.lines();
         let lines = lines.iter().map(|k| &k.0);
-        self.marked_files.keys().chain(lines).cloned().collect()
+        self.files().keys().chain(lines).cloned().collect()
     }
 
     /// Where `repos` are, when that's not just the repo the cursor is in:
@@ -4117,12 +4118,13 @@ impl App {
     fn taken_in(&self, only: Option<&Path>) -> (Vec<Target>, bool) {
         let lines = self.lines();
         let within = |repo: &PathBuf| only.is_none_or(|o| repo == o);
-        let marked = self.marked_files.keys().any(within) || lines.iter().any(|k| within(&k.0));
+        let files = self.files();
+        let marked = files.keys().any(within) || lines.iter().any(|k| within(&k.0));
         if !marked {
             return (self.under_cursor().into_iter().collect(), false);
         }
         let mut taken = vec![];
-        for (repo, files) in self.marked_files.iter().filter(|(r, _)| within(r)) {
+        for (repo, files) in files.iter().filter(|(r, _)| within(r)) {
             for (section, file) in files {
                 taken.push(Target::File {
                     repo: repo.clone(),
@@ -4645,19 +4647,48 @@ impl App {
         }
     }
 
-    /// The added and removed lines of a region: those of its file and side
-    /// between where it starts and the cursor (unchanged lines ignored).
-    pub fn region_lines(&self) -> Vec<MarkedLine> {
-        let Some(r) = &self.region else {
-            return vec![];
+    /// A region starting on row `n`, its unit what the row is: a file's
+    /// own line (files of its section), a hunk's own line (hunks of its
+    /// file) or any other line of a diff (lines of its file, across
+    /// hunks). An untracked file's diff is the file, whole.
+    fn region_at(&self, n: usize) -> Option<RegionStart> {
+        let Some(Row::Detail { repo, line }) = self.rows.get(n) else {
+            return None;
         };
-        // (a diff converted to text has no lines to take by themselves)
-        let diff = self.diffs.get(&(r.repo.clone(), r.file.clone(), r.side));
-        let Some(Ok(FileDiff::Text(hunks))) = diff else {
-            return vec![];
+        let (section, file) = (line.section?, line.file.clone()?);
+        let unit = match line.diff.as_deref() {
+            _ if section == Section::Untracked => Unit::Files,
+            Some(DiffRef {
+                hunk: Some(_),
+                at: None,
+                ..
+            }) => Unit::Hunks,
+            Some(DiffRef { hunk: Some(_), .. }) => Unit::Lines,
+            // (the blank line that ends a diff: from its end)
+            Some(_) if line.id.last() == Some(&Seg::Blank) => Unit::Lines,
+            _ => Unit::Files,
         };
-        // where the cursor is in the diff: in the copy the region is of,
-        // its own place; else that copy's side of it
+        // (its copy on screen: of a file's diff, under the file's line; of
+        // files, under their section's)
+        let upto = match unit {
+            Unit::Files => line.id.iter().rposition(|s| matches!(s, Seg::Section(_))),
+            _ => line.id.iter().rposition(|s| matches!(s, Seg::File(_))),
+        };
+        Some(RegionStart {
+            repo: self.ws.entries[*repo].path.clone(),
+            side: section.side(),
+            section,
+            file,
+            at: Self::diff_pos(line),
+            root: self.listed_path()?,
+            home: line.id[..upto? + 1].to_vec(),
+            unit,
+        })
+    }
+
+    /// The rows of the region's copy on screen, and where the cursor is
+    /// beside them: before (`Less`), after (`Greater`) or among them.
+    fn region_copy(&self, r: &RegionStart) -> (Vec<usize>, Option<std::cmp::Ordering>) {
         let top = self
             .rows
             .iter()
@@ -4666,27 +4697,140 @@ impl App {
             .and_then(|top| self.rows_of(top))
             .map(|(_, rows)| rows.filter(|n| self.id(*n).starts_with(&r.home)).collect())
             .unwrap_or_default();
+        use std::cmp::Ordering::{Equal, Greater, Less};
+        let side = copy.first().zip(copy.last()).map(|(first, last)| {
+            match (self.cursor.cmp(first), self.cursor.cmp(last)) {
+                (Less, _) => Less,
+                (_, Greater) => Greater,
+                _ => Equal,
+            }
+        });
+        (copy, side)
+    }
+
+    /// Where a region of a diff (lines or hunks) runs to in the diff: the
+    /// cursor's place while it's in the region's copy, else that copy's
+    /// start or end (it doesn't end by leaving).
+    fn region_end(&self, r: &RegionStart) -> DiffPos {
         use std::cmp::Ordering::{Greater, Less};
-        let sides = copy.first().zip(copy.last());
-        let sides = sides.map(|(first, last)| (self.cursor.cmp(first), self.cursor.cmp(last)));
-        let end = match (sides, self.rows.get(self.cursor)) {
-            (Some((Less, _)), _) => DIFF_START,
-            (Some((_, Greater)), _) => DIFF_END,
+        match (self.region_copy(r).1, self.rows.get(self.cursor)) {
+            (Some(Less), _) => DIFF_START,
+            (Some(Greater), _) => DIFF_END,
             (Some(_), Some(Row::Detail { line, .. })) => Self::diff_pos(line),
             // (the copy folded away: no further than where it starts)
             _ => r.at,
+        }
+    }
+
+    /// The hunks a region of hunks runs over, of `hunks` in all.
+    fn region_hunks(&self, r: &RegionStart, hunks: usize) -> std::ops::RangeInclusive<usize> {
+        let last = hunks.saturating_sub(1);
+        let (a, b) = (r.at.0.min(last), self.region_end(r).0.min(last));
+        a.min(b)..=a.max(b)
+    }
+
+    /// The added and removed lines of a region of a diff: of lines, those
+    /// of its file and side between where it starts and the cursor
+    /// (unchanged lines ignored); of hunks, all of theirs.
+    pub fn region_lines(&self) -> Vec<MarkedLine> {
+        let Some(r) = self.region.as_ref().filter(|r| r.unit != Unit::Files) else {
+            return vec![];
         };
+        // (a diff converted to text has no lines to take by themselves)
+        let diff = self.diffs.get(&(r.repo.clone(), r.file.clone(), r.side));
+        let Some(Ok(FileDiff::Text(hunks))) = diff else {
+            return vec![];
+        };
+        let end = self.region_end(r);
         let (from, to) = (r.at.min(end), r.at.max(end));
+        let over = self.region_hunks(r, hunks.len());
         let mut lines = vec![];
         for (h, hunk) in hunks.iter().enumerate() {
             for (at, l) in hunk.lines.iter().enumerate() {
                 let changed = l.kind != argus_core::diff::LineKind::Context;
-                if changed && (from..=to).contains(&(h, 2 * at + 1)) {
+                let within = match r.unit {
+                    Unit::Hunks => over.contains(&h),
+                    _ => (from..=to).contains(&(h, 2 * at + 1)),
+                };
+                if changed && within {
                     lines.push((r.repo.clone(), r.file.clone(), r.side, h, at));
                 }
             }
         }
         lines
+    }
+
+    /// The files of a region of files: those of its section between where
+    /// it starts and the cursor's file (the section's first or last while
+    /// the cursor is before or after it).
+    pub fn region_files(&self) -> Vec<(PathBuf, Section, String)> {
+        let Some(r) = self.region.as_ref().filter(|r| r.unit == Unit::Files) else {
+            return vec![];
+        };
+        let Some(s) = self.ws.get(&r.repo).and_then(Entry::status) else {
+            return vec![];
+        };
+        let files = r.section.files(s);
+        let Some(start) = files.iter().position(|f| *f == r.file) else {
+            return vec![];
+        };
+        // (a file in an untracked folder is the folder's, as listed)
+        let place = |file: &str| files.iter().position(|f| f == file || within(f, file));
+        use std::cmp::Ordering::{Greater, Less};
+        let end = match (self.region_copy(r).1, self.rows.get(self.cursor)) {
+            (Some(Less), _) => 0,
+            (Some(Greater), _) => files.len() - 1,
+            (Some(_), Some(Row::Detail { line, .. })) => {
+                line.file.as_deref().and_then(place).unwrap_or(0)
+            }
+            _ => start,
+        };
+        files[start.min(end)..=start.max(end)]
+            .iter()
+            .map(|f| (r.repo.clone(), r.section, f.clone()))
+            .collect()
+    }
+
+    /// The rows a region spans, to be shown as one: of lines, the rows of
+    /// its diff between its ends; of hunks, theirs; of files, theirs and
+    /// their diffs'. In the copy it was started in.
+    pub fn region_rows(&self) -> BTreeSet<usize> {
+        let Some(r) = &self.region else {
+            return BTreeSet::new();
+        };
+        let (copy, _) = self.region_copy(r);
+        let line = |n: usize| match self.rows.get(n) {
+            Some(Row::Detail { line, .. }) => Some(line),
+            _ => None,
+        };
+        match r.unit {
+            Unit::Files => {
+                let files = self.region_files();
+                let of = |f: &str| files.iter().any(|(_, _, g)| g == f || within(g, f));
+                let rows = copy.into_iter();
+                rows.filter(|&n| line(n).and_then(|l| l.file.as_deref()).is_some_and(of))
+                    .collect()
+            }
+            _ => {
+                let end = self.region_end(r);
+                let (from, to) = (r.at.min(end), r.at.max(end));
+                let hunks = match self.diffs.get(&(r.repo.clone(), r.file.clone(), r.side)) {
+                    Some(Ok(FileDiff::Text(hunks))) => hunks.len(),
+                    _ => 0,
+                };
+                let over = self.region_hunks(r, hunks);
+                let within = |l: &DetailLine| match (r.unit, l.diff.as_deref()) {
+                    (Unit::Hunks, Some(DiffRef { hunk: Some(h), .. })) => over.contains(h),
+                    (_, Some(DiffRef { hunk: Some(_), .. })) => {
+                        (from..=to).contains(&Self::diff_pos(l))
+                    }
+                    _ => false,
+                };
+                copy.into_iter()
+                    .filter(|&n| line(n).is_some_and(within))
+                    .collect()
+            }
+        }
     }
 
     /// Where a row of a file's diff (or its file's own line) is in the
@@ -5002,7 +5146,7 @@ impl App {
     /// A stash of `kind`, now or (the message switch on) once its message
     /// has been asked for.
     fn stash_action(&mut self, kind: StashKind) -> Vec<Effect> {
-        let marked = !self.marked_files.is_empty() || !self.lines().is_empty();
+        let marked = !self.files().is_empty() || !self.lines().is_empty();
         if kind == StashKind::MarkedFiles && !marked {
             self.info("mark files in the details view first (Tab, then space on a file)");
             return vec![];
@@ -5980,22 +6124,36 @@ type DiffPos = (usize, usize);
 const DIFF_START: DiffPos = (0, 0);
 const DIFF_END: DiffPos = (usize::MAX, usize::MAX);
 
-/// A region (`C-space`): where it starts in a file's diff. It runs from
-/// there to the cursor, in the diff's own order: its lines are the diff's,
+/// A region (`C-space`): where it starts, which sets what it takes (see
+/// [`Unit`]). It runs from there to the cursor, in the diff's (or the
+/// section's) own order: what it takes is the diff's or the section's,
 /// not the rows between two rows, so it's the same whatever is folded or
-/// shown twice. The cursor is somewhere in the diff only while it's in
-/// the copy the region was started in (`home`, under `root`); before that
-/// copy it's the diff's start, after it the diff's end.
+/// shown twice. The cursor is somewhere in it only while it's in the copy
+/// the region was started in (`home`, under `root`); before that copy
+/// it's at the start, after it at the end: leaving doesn't end it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegionStart {
     /// The repo the diff is of (a nested repo's own path).
     pub repo: PathBuf,
     pub file: String,
     pub side: argus_core::diff::Side,
+    /// The section the file is listed in.
+    pub section: Section,
     at: DiffPos,
-    /// The listed repo the rows are under, and the file's line there.
+    /// The listed repo the rows are under, and the file's line there (or
+    /// for files, their section's).
     root: PathBuf,
     home: Vec<Seg>,
+    /// What it takes, as where it started was.
+    pub unit: Unit,
+}
+
+/// What a region takes: lines of a diff, its hunks, or files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unit {
+    Lines,
+    Hunks,
+    Files,
 }
 
 /// What `s`/`u`/`K` do to a hunk or line.

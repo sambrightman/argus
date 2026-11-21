@@ -6211,25 +6211,218 @@ fn space_on_the_blank_line_after_a_diff_marks_nothing() {
     assert_eq!(app.cursor, blank + 1);
 }
 
-/// An untracked file is marked whole, so no region starts in its diff.
+/// An untracked file is taken whole, so a region started in its diff is
+/// of files.
 #[test]
-fn no_region_starts_in_an_untracked_file() {
+fn a_region_started_in_an_untracked_file_is_of_files() {
     let (_sb, mut app) = setup_with("", diff_fixture);
     to_file(&mut app, "new");
     app.act(Action::ToggleExpand);
     app.cursor = shown_row(&app, "+a");
     app.on_key(ctrl(' '));
-    assert!(app.region.is_none());
     assert_eq!(
-        app.message.as_ref().unwrap().0,
-        "an untracked file is marked whole: space marks it"
+        app.region.as_ref().map(|r| r.unit),
+        Some(argus_tui::app::Unit::Files)
     );
-    // inverse: one starts in a changed file's
+    // (C-space again: kept as a mark, the file's)
+    app.on_key(ctrl(' '));
+    assert!(app.marked_files.values().flatten().any(|(_, f)| f == "new"));
+    // inverse: in a changed file's, of lines
     to_file(&mut app, "README");
     app.act(Action::ToggleExpand);
     app.cursor = shown_row(&app, "+hello there");
     app.on_key(ctrl(' '));
+    assert_eq!(
+        app.region.as_ref().map(|r| r.unit),
+        Some(argus_tui::app::Unit::Lines)
+    );
+}
+
+/// A region started on a hunk's own line takes whole hunks of its file:
+/// from there to the cursor's hunk; the last (or first) while the cursor
+/// is past the diff, the region going on.
+#[test]
+fn a_region_from_a_hunk_takes_whole_hunks() {
+    use argus_tui::app::Unit;
+    let (_sb, mut app) = setup_with("", two_hunks);
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    // the first hunk's own line, above its lines
+    app.cursor = (0..shown_row(&app, "-line 3"))
+        .rev()
+        .find(|&n| {
+            matches!(&app.rows[n], Row::Detail { line, .. }
+            if line.diff.as_deref().is_some_and(|d| d.hunk == Some(0) && d.at.is_none()))
+        })
+        .unwrap();
+    app.on_key(ctrl(' '));
+    assert_eq!(app.region.as_ref().map(|r| r.unit), Some(Unit::Hunks));
+    let hunks = |app: &App| {
+        let mut h: Vec<usize> = app.region_lines().iter().map(|k| k.3).collect();
+        h.dedup();
+        (h, app.region_lines().len())
+    };
+    // the first, all of it, whichever of its lines the cursor is on
+    app.cursor = shown_row(&app, "+line three");
+    assert_eq!(hunks(&app), (vec![0], 2));
+    // into the second: both
+    app.cursor = shown_row(&app, "+added");
+    assert_eq!(hunks(&app), (vec![0, 1], 3));
+    // past the diff, and its repo: still both, the region not ended
+    app.act(Action::Bottom);
+    assert_eq!(hunks(&app), (vec![0, 1], 3));
     assert!(app.region.is_some());
+    // and run back from the second hunk into the first
+    app.on_key(ctrl('g'));
+    app.cursor = (0..shown_row(&app, "+added"))
+        .rev()
+        .find(|&n| {
+            matches!(&app.rows[n], Row::Detail { line, .. }
+            if line.diff.as_deref().is_some_and(|d| d.hunk == Some(1) && d.at.is_none()))
+        })
+        .unwrap();
+    app.on_key(ctrl(' '));
+    assert_eq!(hunks(&app), (vec![1], 1));
+    app.cursor = shown_row(&app, "-line 3");
+    assert_eq!(hunks(&app), (vec![0, 1], 3));
+    // what s stages is all of them (from within the repo: past it, s
+    // would ask which repo's are meant)
+    app.cursor = shown_row(&app, "-line 3");
+    let fx = app.on_key(key('s'));
+    let patches: Vec<String> = job_ops(&fx)
+        .into_iter()
+        .map(|op| match op {
+            Op::Apply { patch, .. } => patch,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert!(patches.concat().contains("+line three") && patches.concat().contains("+added"));
+}
+
+/// A region started on the blank line that ends a diff is of lines, from
+/// the diff's end.
+#[test]
+fn a_region_from_the_end_of_a_diff_takes_lines() {
+    use argus_tui::app::Unit;
+    let (_sb, mut app) = setup_with("", diff_fixture);
+    // (README's diff, followed by both's line: a blank line ends it)
+    to_file(&mut app, "README");
+    app.act(Action::ToggleExpand);
+    let changed = shown_row(&app, "+hello there");
+    app.cursor = (changed..app.rows.len())
+        .find(|&n| matches!(&app.rows[n], Row::Detail { line, .. } if line.id.last() == Some(&Seg::Blank)))
+        .unwrap();
+    app.on_key(ctrl(' '));
+    assert_eq!(app.region.as_ref().map(|r| r.unit), Some(Unit::Lines));
+    app.cursor = changed;
+    let lines = app.region_lines();
+    assert!(lines.len() == 1 && lines[0].1 == "README", "{lines:?}");
+}
+
+/// A region started on a file's own line takes whole files of its
+/// section: from there to the cursor's file; the section's last while the
+/// cursor is below it.
+#[test]
+fn a_region_from_a_file_takes_whole_files_of_its_section() {
+    use argus_tui::app::Unit;
+    let (sb, mut app) = setup_with("", diff_fixture);
+    let file_row = |app: &App, section: argus_tui::details::Section, file: &str| {
+        app.rows
+            .iter()
+            .position(|r| {
+                matches!(r, Row::Detail { line, .. }
+                if line.section == Some(section) && line.file.as_deref() == Some(file)
+                    && line.diff.is_none())
+            })
+            .unwrap_or_else(|| panic!("{file}: {:?}", trimmed(app)))
+    };
+    use argus_tui::details::Section::{Staged, Unstaged, Untracked};
+    to_file(&mut app, "README");
+    app.cursor = file_row(&app, Unstaged, "README");
+    app.on_key(ctrl(' '));
+    assert_eq!(app.region.as_ref().map(|r| r.unit), Some(Unit::Files));
+    let files =
+        |app: &App| -> Vec<String> { app.region_files().into_iter().map(|(_, _, f)| f).collect() };
+    assert_eq!(files(&app), ["README"]);
+    app.cursor = file_row(&app, Unstaged, "both");
+    assert_eq!(files(&app), ["README", "both"]);
+    // shown as marked, whole, through the one source
+    let dirty = app.ws.entries.iter().find(|e| e.path.ends_with("dirty"));
+    let both = argus_tui::app::Target::File {
+        repo: dirty.unwrap().path.clone(),
+        section: Unstaged,
+        file: "both".into(),
+    };
+    assert_eq!(app.marked(&both), argus_tui::app::Marked::Wholly);
+    // below the section (on a staged file): still its last; above it
+    // (untracked comes first), its first
+    app.cursor = file_row(&app, Staged, "both");
+    assert_eq!(files(&app), ["README", "both"]);
+    app.cursor = file_row(&app, Untracked, "new");
+    assert_eq!(files(&app), ["README"]);
+    // (from the last, above is still back to the first)
+    app.on_key(ctrl('g'));
+    app.cursor = file_row(&app, Unstaged, "both");
+    app.on_key(ctrl(' '));
+    assert_eq!(files(&app), ["both"]);
+    app.cursor = file_row(&app, Untracked, "new");
+    assert_eq!(files(&app), ["README", "both"]);
+    app.cursor = file_row(&app, Unstaged, "README");
+    // a file's changes changing leaves it be: it's of files, not lines
+    let d = sb.path("dev/dirty");
+    write(&d, "README", "hello again\n");
+    status_arrives(&mut app, &d);
+    assert_eq!(files(&app), ["README", "both"]);
+    let fx = app.on_key(key('s'));
+    assert_eq!(
+        job_ops(&fx),
+        [Op::AddTracked {
+            paths: vec!["README".into(), "both".into()]
+        }]
+    );
+}
+
+/// The rows a region spans are shown by a background, as magit's: on what
+/// has none of its own (here, added lines are given one), and not on the
+/// cursor's row, which is the selection.
+#[test]
+fn a_region_is_shown_by_a_background() {
+    let (_sb, mut app) = setup_with("[ui.colors]\n\"diff-add\" = \"green on red\"", two_hunks);
+    to_file(&mut app, "f");
+    app.act(Action::ToggleExpand);
+    let start = shown_row(&app, "-line 3");
+    app.cursor = start;
+    app.on_key(ctrl(' '));
+    app.cursor = shown_row(&app, " line 5");
+    let in_region = app.region_rows();
+    assert!(in_region.contains(&start) && in_region.contains(&(start + 1)));
+    assert!(
+        !in_region.contains(&(start - 1)),
+        "the context line before it"
+    );
+    let (theme, _) = Theme::for_config(&app.ws.config);
+    let mut t = Terminal::new(TestBackend::new(100, 60)).unwrap();
+    let view = ui::View {
+        theme: &theme,
+        icons: argus_core::icons::UNICODE,
+        tick: 0,
+    };
+    t.draw(|f| drop(ui::draw(f, &mut app, &view))).unwrap();
+    let buf = t.backend().buffer().clone();
+    // (the header line before the rows)
+    let bg = |row: usize, x: u16| buf[(x, (row + 1 - app.scroll) as u16)].bg;
+    let region = theme.ui(argus_tui::theme::Ui::Region).bg.unwrap();
+    let removed = start;
+    let added = start + 1;
+    assert_eq!(bg(removed, 10), region);
+    assert_eq!(bg(added, 10), ratatui::style::Color::Red, "its own kept");
+    assert_eq!(bg(added, 90), region, "past its text: the region's");
+    assert_ne!(bg(start - 1, 10), region);
+    assert_ne!(
+        bg(app.cursor, 10),
+        region,
+        "the cursor's row: the selection"
+    );
 }
 
 /// Marks stay when what was asked for them doesn't start (the repo busy).
