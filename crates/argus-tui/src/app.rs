@@ -2638,6 +2638,7 @@ impl App {
             id: MenuId::PickCommit,
             title,
             items,
+            notes: vec![],
         };
         self.pick = Some(CommitPick {
             path: e.path.clone(),
@@ -2838,6 +2839,7 @@ impl App {
                     Switch::Anchored,
                 ),
             ],
+            notes: vec![],
         })
     }
 
@@ -2918,6 +2920,7 @@ impl App {
             id: MenuId::Ignore,
             title: format!("Ignore issues · {}", e.display_name()),
             items,
+            notes: vec![],
         })
     }
 
@@ -3066,6 +3069,55 @@ impl App {
         }]
     }
 
+    /// Of the repos at `paths`, those auto-fix leaves, having fixes but
+    /// none in `[fix] auto`: how many, and of which fixes (those that could
+    /// be auto, so not commit and the rest that need input).
+    fn left_out_of_auto(&self, paths: &[PathBuf]) -> Option<String> {
+        let auto = &self.ws.config.fix.auto;
+        let mut counts: Vec<(FixKind, usize)> = vec![];
+        let mut repos = 0;
+        for p in paths {
+            let Some(i) = self.ws.index_of(p) else {
+                continue;
+            };
+            let e = &self.ws.entries[i];
+            let Some(s) = e.status() else { continue };
+            if fix::choose(s, &e.fix_kinds(auto), &self.ws.config.stash).is_some() {
+                continue;
+            }
+            let mut kinds: Vec<FixKind> = self
+                .fixes_for(i)
+                .into_iter()
+                .map(|(_, f)| f.kind)
+                .filter(|k| !k.manual())
+                .collect();
+            kinds.sort_by_key(|k| FixKind::ALL.iter().position(|a| a == k));
+            kinds.dedup();
+            if kinds.is_empty() {
+                continue;
+            }
+            repos += 1;
+            for k in kinds {
+                match counts.iter_mut().find(|c| c.0 == k) {
+                    Some(c) => c.1 += 1,
+                    None => counts.push((k, 1)),
+                }
+            }
+        }
+        if repos == 0 {
+            return None;
+        }
+        let tally: Vec<String> = counts
+            .iter()
+            .map(|(k, n)| format!("{} ({n})", k.name()))
+            .collect();
+        Some(format!(
+            "{repos} more {} with fixes not in [fix] auto: {}",
+            plural(repos, "repo", "repos"),
+            tally.join(", ")
+        ))
+    }
+
     /// The Fix menu's items: auto-fix for the selection and for all shown,
     /// saying what each would do (when it would do something); then each
     /// fix that applies to the selection, with its reason for one repo or
@@ -3097,6 +3149,7 @@ impl App {
                     .push(menu::item(keys[1], format!("fix all {how} · {t}"), every));
             }
         }
+        menu.notes.extend(self.left_out_of_auto(&all));
         let selected = self.selected();
         let plans: Vec<Vec<fix::Fix>> = selected
             .iter()
@@ -4240,6 +4293,7 @@ impl App {
             id: MenuId::Across,
             title: format!("{word} · marked repos: {}", names.join(", ")),
             items,
+            notes: vec![],
         };
         self.mode = Mode::Menu { menu, cursor: 0 };
         true

@@ -2770,6 +2770,41 @@ fn menu_items(app: &App) -> Vec<String> {
     }
 }
 
+/// The Fix menu says how many repos "fix all" leaves because their only
+/// fixes aren't in `[fix] auto`, and which.
+#[test]
+fn the_fix_menu_says_what_fix_all_leaves_out() {
+    // clean: behind, with two other branches behind too (one repo,
+    // counted once); dirty: to stash
+    let prep = |sb: &Sandbox| {
+        let clean = sb.path("dev/clean");
+        git(&clean, &["branch", "-q", "--track", "other", "origin/main"]);
+        git(&clean, &["branch", "-q", "--track", "third", "origin/main"]);
+        sb.advance_remote("acme", "clean", "new");
+        git(&clean, &["fetch", "-q"]);
+    };
+    let notes = |app: &mut App| {
+        app.on_key(key('x'));
+        let notes = match &app.mode {
+            Mode::Menu { menu, .. } => menu.notes.clone(),
+            _ => panic!("no menu"),
+        };
+        let screen = render(app, 120, 40);
+        app.on_key(ctrl('g'));
+        (notes, screen)
+    };
+    let (_sb, mut app) = setup_with("", prep);
+    let (n, screen) = notes(&mut app);
+    let said = "2 more repos with fixes not in [fix] auto: stash (1), pull (1), fast-forward (1)";
+    assert_eq!(n, [said]);
+    assert!(screen.contains(said), "{screen}");
+    // inverse: with those in it, nothing's left out
+    let auto = "[fix]\nauto = ['push', 'push-branches', 'switch-default', 'reattach', \
+                'stash', 'pull', 'fast-forward']";
+    let (_sb, mut app) = setup_with(auto, prep);
+    assert!(notes(&mut app).0.is_empty());
+}
+
 #[test]
 fn the_ignore_menu_steps_an_issue_through_its_states() {
     let (_sb, mut app) = setup("");

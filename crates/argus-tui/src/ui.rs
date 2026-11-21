@@ -673,7 +673,7 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) -> Option<std::ops:
     };
     let mut lines: Vec<Line> = vec![];
     // as many items as fit, around the cursor, saying how many are hidden
-    let fixed = 3; // borders and the footer
+    let fixed = 3 + menu.notes.len(); // borders, the footer and the notes
     let room = (area.height as usize).saturating_sub(fixed);
     let total = menu.items.len();
     let (start, shown) = if total <= room {
@@ -713,6 +713,9 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) -> Option<std::ops:
             t.ui(Ui::Dim),
         )));
     }
+    for note in &menu.notes {
+        lines.push(Line::from(Span::styled(format!(" {note}"), t.ui(Ui::Dim))));
+    }
     let moves = if menu.id.is_list() {
         "↑↓ n p j k"
     } else {
@@ -722,10 +725,12 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) -> Option<std::ops:
         format!(" q/Esc/C-g cancel · {moves} Enter"),
         t.ui(Ui::Dim),
     )));
+    let notes = menu.notes.iter().map(|n| n.len() as u16 + 4);
     let w = menu
         .items
         .iter()
         .map(|i| i.label.len() as u16 + 12)
+        .chain(notes)
         .max()
         .unwrap_or(20)
         .max(title.len() as u16 + 4);

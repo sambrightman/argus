@@ -45,6 +45,8 @@ pub struct Menu {
     pub id: MenuId,
     pub title: String,
     pub items: Vec<Item>,
+    /// Said dimmed under the items, never chosen.
+    pub notes: Vec<String>,
 }
 
 pub fn item(key: char, label: impl Into<String>, action: Action) -> Item {
@@ -365,6 +367,7 @@ impl MenuId {
             id: self,
             title: title.into(),
             items,
+            notes: vec![],
         }
     }
 }
