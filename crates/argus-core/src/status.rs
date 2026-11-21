@@ -1031,17 +1031,24 @@ fn branches(
     head_branch: Option<&str>,
     default_tip: Option<(gix::ObjectId, bool)>,
 ) -> Result<Vec<BranchInfo>, StatusError> {
-    let mut remote_tips: Vec<gix::ObjectId> = vec![];
-    for i in refs.prefixed("refs/remotes/") {
-        if let gix::refs::TargetRef::Symbolic(_) = refs.refs[i].target() {
-            continue; // origin/HEAD
-        }
-        if let Some(id) = refs.peel_at(i) {
-            remote_tips.push(id);
-        }
-    }
-    remote_tips.sort();
-    remote_tips.dedup();
+    let remote_tips = crate::trace::timed(
+        "remote tips",
+        |tips: &Vec<gix::ObjectId>| format!("remote tips: {}", tips.len()),
+        || {
+            let mut remote_tips: Vec<gix::ObjectId> = vec![];
+            for i in refs.prefixed("refs/remotes/") {
+                if let gix::refs::TargetRef::Symbolic(_) = refs.refs[i].target() {
+                    continue; // origin/HEAD
+                }
+                if let Some(id) = refs.peel_at(i) {
+                    remote_tips.push(id);
+                }
+            }
+            remote_tips.sort();
+            remote_tips.dedup();
+            remote_tips
+        },
+    );
     let mut out = vec![];
     for i in refs.prefixed("refs/heads/") {
         let full = refs.refs[i].name().to_owned();

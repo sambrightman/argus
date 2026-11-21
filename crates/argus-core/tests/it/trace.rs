@@ -84,9 +84,11 @@ fn a_status_holds_its_parts_and_each_branch_its_checks() {
         assert!(parts.iter().any(|p| p == part), "{part} in {parts:?}");
     }
     let branches = status.steps.iter().find(|s| s.kind == "branches").unwrap();
-    let [main, topic] = &branches.steps[..] else {
-        panic!("two branches in {branches:?}");
+    // the remote branches' tips gathered first, then each branch
+    let [tips, main, topic] = &branches.steps[..] else {
+        panic!("the remote tips and two branches in {branches:?}");
     };
+    assert_eq!(tips.what, "remote tips: 1", "{tips:?}");
     assert!(
         main.what.starts_with("branch main in ") && main.what.ends_with("tree-repo"),
         "{main:?}"
