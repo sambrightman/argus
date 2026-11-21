@@ -120,7 +120,11 @@ pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
             if dirty || (busy && drawn.elapsed() >= SPIN) {
                 tick = tick.wrapping_add(1);
                 let mut links = vec![];
-                terminal.draw(|f| links = ui::draw(f, &mut app, &view))?;
+                argus_core::trace::if_slow(
+                    "frame",
+                    || "frame drawn, slowly".into(),
+                    || terminal.draw(|f| links = ui::draw(f, &mut app, &view)),
+                )?;
                 ui::write_links(terminal.backend_mut(), &links)?;
                 drawn = std::time::Instant::now();
             }

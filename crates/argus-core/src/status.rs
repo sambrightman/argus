@@ -1046,110 +1046,142 @@ fn branches(
     for i in refs.prefixed("refs/heads/") {
         let full = refs.refs[i].name().to_owned();
         let name = full.shorten().to_str_lossy().into_owned();
+        let said = name.clone();
         let Some(tip) = refs.peel_at(i) else { continue };
-        // remote branches this one's commits are likeliest to be on, and
-        // whether any is known to have them all
-        let mut likely: Vec<gix::ObjectId> = vec![];
-        let mut all_on_remote = false;
-        let mut on_remote = |name: &gix::refs::FullNameRef, at: gix::ObjectId, ahead: usize| {
-            if name.as_bstr().starts_with(b"refs/remotes/") {
-                likely.push(at);
-                all_on_remote |= ahead == 0;
-            }
-        };
-        let upstream = match repo.branch_remote_tracking_ref_name(full.as_ref(), Direction::Fetch) {
-            Some(Ok(tracking)) => {
-                let short = tracking.shorten().to_str_lossy().into_owned();
-                match refs.peel(&tracking.as_bstr().to_str_lossy()) {
-                    Some(up) => Some(Tracking {
-                        name: short,
-                        ahead: {
-                            let ahead = count_exclusive(repo, tip, up)?;
-                            on_remote(tracking.as_ref(), up, ahead);
-                            ahead
+        let info = crate::trace::step(
+            "branch",
+            || {
+                let at = repo.workdir().unwrap_or_else(|| repo.git_dir());
+                format!("branch {said} in {}", crate::paths::contract_tilde(at))
+            },
+            || {
+                // remote branches this one's commits are likeliest to be on, and
+                // whether any is known to have them all
+                let mut likely: Vec<gix::ObjectId> = vec![];
+                let mut all_on_remote = false;
+                let mut on_remote =
+                    |name: &gix::refs::FullNameRef, at: gix::ObjectId, ahead: usize| {
+                        if name.as_bstr().starts_with(b"refs/remotes/") {
+                            likely.push(at);
+                            all_on_remote |= ahead == 0;
+                        }
+                    };
+                let upstream = crate::trace::part("upstream", || -> Result<_, StatusError> {
+                    Ok(
+                        match repo.branch_remote_tracking_ref_name(full.as_ref(), Direction::Fetch)
+                        {
+                            Some(Ok(tracking)) => {
+                                let short = tracking.shorten().to_str_lossy().into_owned();
+                                match refs.peel(&tracking.as_bstr().to_str_lossy()) {
+                                    Some(up) => Some(Tracking {
+                                        name: short,
+                                        ahead: {
+                                            let ahead = count_exclusive(repo, tip, up)?;
+                                            on_remote(tracking.as_ref(), up, ahead);
+                                            ahead
+                                        },
+                                        behind: count_exclusive(repo, up, tip)?,
+                                        gone: false,
+                                    }),
+                                    None => Some(Tracking {
+                                        name: short,
+                                        ahead: 0,
+                                        behind: 0,
+                                        gone: true,
+                                    }),
+                                }
+                            }
+                            _ => None,
                         },
-                        behind: count_exclusive(repo, up, tip)?,
-                        gone: false,
-                    }),
-                    None => Some(Tracking {
-                        name: short,
-                        ahead: 0,
-                        behind: 0,
-                        gone: true,
-                    }),
+                    )
+                })?;
+                let own = crate::trace::part("push branch", || -> Result<_, StatusError> {
+                    Ok(match (&upstream, own_push_ref(repo, full.as_ref())) {
+                        (Some(t), Some(tracking))
+                            if t.name != tracking.shorten().to_str_lossy() =>
+                        {
+                            let short = tracking.shorten().to_str_lossy().into_owned();
+                            Some(match refs.peel(&tracking.as_bstr().to_str_lossy()) {
+                                Some(o) => Tracking {
+                                    ahead: {
+                                        let ahead = count_exclusive(repo, tip, o)?;
+                                        on_remote(tracking.as_ref(), o, ahead);
+                                        ahead
+                                    },
+                                    behind: count_exclusive(repo, o, tip)?,
+                                    name: short,
+                                    gone: false,
+                                },
+                                None => Tracking {
+                                    name: short,
+                                    ahead: 0,
+                                    behind: 0,
+                                    gone: true,
+                                },
+                            })
+                        }
+                        _ => None,
+                    })
+                })?;
+                let merged = crate::trace::part("merged", || match default_tip {
+                    Some((d, _)) => Ok::<_, StatusError>(count_exclusive(repo, tip, d)? == 0),
+                    None => Ok(false),
+                })?;
+                let absorbed = !merged
+                    && crate::trace::part("absorbed", || {
+                        default_tip.is_some_and(|(d, _)| absorbed(repo, tip, d))
+                    });
+                // merged into the remote's default branch: all on a remote
+                if let Some((d, true)) = default_tip {
+                    all_on_remote |= merged;
+                    likely.push(d);
                 }
-            }
-            _ => None,
-        };
-        let own = match (&upstream, own_push_ref(repo, full.as_ref())) {
-            (Some(t), Some(tracking)) if t.name != tracking.shorten().to_str_lossy() => {
-                let short = tracking.shorten().to_str_lossy().into_owned();
-                Some(match refs.peel(&tracking.as_bstr().to_str_lossy()) {
-                    Some(o) => Tracking {
-                        ahead: {
-                            let ahead = count_exclusive(repo, tip, o)?;
-                            on_remote(tracking.as_ref(), o, ahead);
-                            ahead
+                // and a remote branch of the same name
+                let same_name = format!("/{name}");
+                likely.extend(
+                    refs.prefixed("refs/remotes/")
+                        .filter(|&i| {
+                            refs.refs[i]
+                                .name()
+                                .as_bstr()
+                                .ends_with(same_name.as_bytes())
+                        })
+                        .filter_map(|i| refs.peel_at(i)),
+                );
+                let unpushed = if remote_tips.is_empty() {
+                    None
+                } else if all_on_remote {
+                    Some(0)
+                } else {
+                    let counted = crate::trace::timed(
+                        "unpushed",
+                        |c: &Result<crate::reach::Counted, _>| match c {
+                            Ok(c) => format!("unpushed: {}, {}", c.n, c.how),
+                            Err(_) => "unpushed, failed".into(),
                         },
-                        behind: count_exclusive(repo, o, tip)?,
-                        name: short,
-                        gone: false,
-                    },
-                    None => Tracking {
-                        name: short,
-                        ahead: 0,
-                        behind: 0,
-                        gone: true,
-                    },
+                        || crate::reach::exclusive(repo, tip, &likely, &remote_tips),
+                    )
+                    .map_err(err)?;
+                    Some(counted.n)
+                };
+                // absorbed into a remote's default branch: nothing of it is unpushed
+                let unpushed = match default_tip {
+                    Some((_, true)) if absorbed => Some(0),
+                    _ => unpushed,
+                };
+                Ok(BranchInfo {
+                    is_head: head_branch == Some(name.as_str()),
+                    name,
+                    tip: tip.to_string(),
+                    upstream,
+                    merged,
+                    absorbed,
+                    unpushed,
+                    own,
                 })
-            }
-            _ => None,
-        };
-        let merged = match default_tip {
-            Some((d, _)) => count_exclusive(repo, tip, d)? == 0,
-            None => false,
-        };
-        let absorbed = !merged && default_tip.is_some_and(|(d, _)| absorbed(repo, tip, d));
-        // merged into the remote's default branch: all on a remote
-        if let Some((d, true)) = default_tip {
-            all_on_remote |= merged;
-            likely.push(d);
-        }
-        // and a remote branch of the same name
-        let same_name = format!("/{name}");
-        likely.extend(
-            refs.prefixed("refs/remotes/")
-                .filter(|&i| {
-                    refs.refs[i]
-                        .name()
-                        .as_bstr()
-                        .ends_with(same_name.as_bytes())
-                })
-                .filter_map(|i| refs.peel_at(i)),
-        );
-        let unpushed = if remote_tips.is_empty() {
-            None
-        } else if all_on_remote {
-            Some(0)
-        } else {
-            let counted = crate::reach::exclusive(repo, tip, &likely, &remote_tips).map_err(err)?;
-            Some(counted.n)
-        };
-        // absorbed into a remote's default branch: nothing of it is unpushed
-        let unpushed = match default_tip {
-            Some((_, true)) if absorbed => Some(0),
-            _ => unpushed,
-        };
-        out.push(BranchInfo {
-            is_head: head_branch == Some(name.as_str()),
-            name,
-            tip: tip.to_string(),
-            upstream,
-            merged,
-            absorbed,
-            unpushed,
-            own,
-        });
+            },
+        )?;
+        out.push(info);
     }
     out.sort_by(|a, b| b.is_head.cmp(&a.is_head).then_with(|| a.name.cmp(&b.name)));
     Ok(out)

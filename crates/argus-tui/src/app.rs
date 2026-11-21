@@ -881,7 +881,11 @@ impl App {
     /// the one before, the line they were under.
     pub fn rebuild(&mut self) {
         let place = self.place(self.cursor);
-        self.build_rows();
+        argus_core::trace::if_slow(
+            "rows",
+            || "rows rebuilt, slowly".into(),
+            || self.build_rows(),
+        );
         let at = place.and_then(|p| self.find(p));
         self.cursor = at
             .unwrap_or(self.cursor)

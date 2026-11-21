@@ -150,6 +150,23 @@ pub fn took(kind: &'static str, what: impl FnOnce() -> String, took: Duration) {
     }
 }
 
+/// Longer than a frame: what's done for each, said only when it took this.
+pub const SLOW: Duration = Duration::from_millis(16);
+
+/// A step of `kind` that's taken often (a frame), said only when slow.
+pub fn if_slow<T>(kind: &'static str, what: impl FnOnce() -> String, f: impl FnOnce() -> T) -> T {
+    if !enabled() {
+        return f();
+    }
+    let started = Instant::now();
+    let out = f();
+    let d = started.elapsed();
+    if d >= SLOW {
+        took(kind, what, d);
+    }
+    out
+}
+
 /// The step the caller is in, to carry to another thread: steps taken
 /// there with [`Within::run`] are its.
 #[derive(Clone)]
@@ -416,6 +433,24 @@ mod tests {
         assert!(got.iter().all(|s| s.steps.is_empty()));
     }
 
+    /// A step taken often is said only when it took a frame or more.
+    #[test]
+    fn often_steps_are_said_when_slow() {
+        let got = steps(Form::Each, "t3", || {
+            let n = if_slow("frame", || "t3 quick".into(), || 1);
+            if_slow(
+                "frame",
+                || "t3 slow".into(),
+                || {
+                    std::thread::sleep(SLOW);
+                },
+            );
+            assert_eq!(n, 1);
+        });
+        assert_eq!(whats(&got), ["t3 slow"]);
+        assert!(got[0].took.is_some_and(|t| t >= SLOW));
+    }
+
     #[test]
     fn without_a_sink_no_step_is_described() {
         let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
@@ -428,6 +463,7 @@ mod tests {
             7
         );
         assert_eq!(step("x", || panic!("described with no sink"), || 8), 8);
+        assert_eq!(if_slow("x", || panic!("described with no sink"), || 9), 9);
     }
 
     #[test]

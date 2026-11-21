@@ -39,6 +39,18 @@ pub enum How {
     Full,
 }
 
+impl std::fmt::Display for How {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            How::IsAnother => write!(f, "the tip is another's"),
+            How::Remembered => write!(f, "remembered"),
+            How::Likely => write!(f, "on the likely remote branches"),
+            How::Pruned { hidden } => write!(f, "walked hiding {hidden} tips"),
+            How::Full => write!(f, "walked hiding every tip"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Counted {
     pub n: usize,
