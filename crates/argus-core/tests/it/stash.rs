@@ -563,19 +563,13 @@ fn lines_are_stashed_by_themselves() {
         )
     );
     // git pops onto no file with changes of its own (as after its own
-    // `stash -p`): its refusal is passed on with what to do, the stash kept
+    // `stash -p`): refused first, saying what to do, the stash kept
     let pop = ops::run(&r, &Op::StashPop);
     assert!(!pop.success, "{}", pop.output);
-    assert!(
-        pop.output.contains("would be overwritten"),
-        "{}",
-        pop.output
-    );
-    assert!(
-        pop.output
-            .ends_with("(commit or stash those files' other changes first)"),
-        "{}",
-        pop.output
+    assert_eq!(
+        pop.output,
+        "not popping: f has changes of its own the stash would overwrite \
+         (commit or stash them first)"
     );
     assert_eq!(git(&r, &["stash", "list"]).lines().count(), 1);
     // without them, they're back
@@ -864,11 +858,28 @@ fn a_pop_that_cannot_be_made_changes_nothing() {
     git(&r, &["stash", "-q"]);
     set(&r, "notes", 15, "L");
     let said = refused(&r, &[" M notes"]);
-    assert!(said.contains("would be overwritten"), "{said}");
-    assert!(
-        said.ends_with("(commit or stash those files' other changes first)"),
-        "{said}"
+    assert_eq!(
+        said,
+        "not popping: notes has changes of its own the stash would overwrite \
+         (commit or stash them first)"
     );
+    // a file it adds, here untracked
+    let r = popping(&sb, "adds");
+    write(&r, "added", "theirs\n");
+    git(&r, &["add", "added"]);
+    git(&r, &["stash", "-q"]);
+    write(&r, "added", "mine\n");
+    assert_eq!(
+        refused(&r, &["?? added"]),
+        "not popping: it adds added, which is here already, untracked: move it away first"
+    );
+    // inverse: one it doesn't change is no matter
+    let r = popping(&sb, "elsewhere");
+    set(&r, "notes", 1, "S");
+    git(&r, &["stash", "-q"]);
+    set(&r, "other", 1, "O");
+    let out = ops::run(&r, &Op::StashPop);
+    assert!(out.success, "{}", out.output);
 }
 
 /// What the stash had staged and what's staged now can disagree where

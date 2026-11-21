@@ -1050,10 +1050,68 @@ fn pop(cwd: &Path, index: usize, id: Option<&str>, staging: bool, started: Insta
         }
     };
     let unchecked = || not("can't check it for conflicts (git 2.40 or later is needed for that)");
-    match merged(&stash) {
-        Ok(_) => {}
+    let result = match merged(&stash) {
+        Ok(tree) => tree,
         Err(Some(files)) => return not(&format!("it would conflict in {files}")),
         Err(None) => return unchecked(),
+    };
+    // what git would refuse to write over: the files the pop changes
+    // (where the merge differs from what's staged) that have changes of
+    // their own, and those it adds that are here untracked
+    let join = |files: &[&String]| {
+        let files: Vec<&str> = files.iter().map(|f| f.as_str()).collect();
+        files.join(", ")
+    };
+    let names = |args: &[&str]| -> Option<Vec<String>> {
+        let o = git_in(cwd, args);
+        o.success.then(|| {
+            o.output
+                .split('\0')
+                .filter(|n| !n.is_empty())
+                .map(String::from)
+                .collect()
+        })
+    };
+    let changes = |only: Option<&str>| {
+        let only = only.map(|f| format!("--diff-filter={f}"));
+        let mut args = vec!["diff-tree", "-r", "--name-only", "-z"];
+        args.extend(only.as_deref());
+        args.extend([staged.as_str(), result.as_str()]);
+        names(&args)
+    };
+    let own = names(&["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z"]);
+    if let (Some(written), Some(own)) = (changes(None), own) {
+        let over: Vec<&String> = written.iter().filter(|w| own.contains(w)).collect();
+        if !over.is_empty() {
+            return not(&match &over[..] {
+                [one] => format!(
+                    "{one} has changes of its own the stash would overwrite \
+                     (commit or stash them first)"
+                ),
+                many => format!(
+                    "{} have changes of their own the stash would overwrite \
+                     (commit or stash them first)",
+                    join(many)
+                ),
+            });
+        }
+    }
+    if let Some(added) = changes(Some("A")) {
+        let here: Vec<&String> = added
+            .iter()
+            .filter(|a| cwd.join(a).symlink_metadata().is_ok())
+            .collect();
+        if !here.is_empty() {
+            return not(&match &here[..] {
+                [one] => {
+                    format!("it adds {one}, which is here already, untracked: move it away first")
+                }
+                many => format!(
+                    "it adds {}, which are here already, untracked: move them away first",
+                    join(many)
+                ),
+            });
+        }
     }
     // (its third parent, when it has one, holds what was untracked: each
     // needs its place free, and its folders to be folders)
@@ -1119,16 +1177,7 @@ fn pop(cwd: &Path, index: usize, id: Option<&str>, staging: bool, started: Insta
     // pop that resets)
     let applied = git_in(cwd, &["stash", "apply", "--no-index", "--quiet", &stash]);
     if !applied.success {
-        // git pops onto no file that has changes of its own
-        let own = "Your local changes to the following files would be overwritten";
-        let note = match applied.output.contains(own) {
-            true => "\n(commit or stash those files' other changes first)",
-            false => "",
-        };
-        return OpOutcome {
-            output: format!("{}{note}", applied.output),
-            ..applied
-        };
+        return applied;
     }
     if let Some(tree) = to_stage {
         let set = git_in(cwd, &["read-tree", "--reset", &tree]);

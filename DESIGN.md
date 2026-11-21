@@ -289,7 +289,11 @@ Two findings:
   and so rarely met it. The same steps work in another order
   (`ops::pop`): a trial merge of the stash's files onto what's staged
   (`git merge-tree`; a conflict is refused, nothing touched); a check
-  that the untracked files it holds have nothing in their way; the
+  that the untracked files it holds have nothing in their way, and that
+  no file it changes (where the merge differs from what's staged) has
+  changes of its own, nor any it adds is here untracked: what git's
+  apply would refuse, found from plumbing's names, so no message of
+  git's (translated or not) is read; the
   staging to end with, as a merge of what the stash had staged with
   what's staged now; the files, by `git stash apply --no-index`, which
   leaves the index alone and refuses cleanly when a file it would
