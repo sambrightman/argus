@@ -18,7 +18,8 @@ deferred.
   Mono, `✓` from Hack, `✗` from Fira Code, Hack and Source Code Pro,
   the messages' fold marks `▸` `▾` from Monaco (they're checked in Menlo,
   SF Mono, Monaco and DejaVu Sans only); kitty's default font isn't
-  checked. Rerun the counts once
+  checked. Whether the partly marked icon (`│`), which every font has,
+  reads as "less than `▌`" in each. Rerun the counts once
   the other fonts are installed, and look over the whole set (the nerd
   icons for off the default branch and the two worktree issues were
   picked without a font to check them in; acceptable as they are).
@@ -90,6 +91,3 @@ deferred.
   (it won't drop a stash that isn't the one it made) while saying "not
   stashed". No test reaches it: it needs another git process at that
   moment.
-- **The partly marked icon (`│`) isn't checked in the fonts** beyond
-  being a glyph all of them have; whether it reads as "less than `▌`"
-  in each is for the glyph review above.
