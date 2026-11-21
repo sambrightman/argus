@@ -10475,7 +10475,7 @@ fn without_ages(line: &str) -> String {
     };
     (0..words.len())
         .map(
-            |i| match words.get(i + 1) == Some(&"ago") && age(words[i]) {
+            |i| match words.get(i + 1).is_some_and(|w| w.starts_with("ago")) && age(words[i]) {
                 true => "_",
                 false => words[i],
             },
