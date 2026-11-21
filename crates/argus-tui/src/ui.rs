@@ -821,18 +821,18 @@ pub fn help_lines() -> Vec<(String, String)> {
     .collect();
     for id in MenuId::ALL {
         let m = id.menu();
-        let mut items: Vec<String> = m
+        // each item with its part of the menu
+        let mut items: Vec<(u8, String)> = m
             .items
             .iter()
-            .map(|i| format!("{} {}", i.key, i.label))
-            .collect();
-        // (its parts divided by a dash)
-        let mut parts: Vec<usize> = (1..m.items.len())
-            .filter(|&n| m.items[n - 1].section != m.items[n].section)
+            .map(|i| (i.section, format!("{} {}", i.key, i.label)))
             .collect();
         match id {
             // built from what applies: every item it can have
             MenuId::Fix => {
+                let fixes = argus_core::fix::FixKind::ALL
+                    .iter()
+                    .map(|&k| format!("{} {}", crate::menu::fix_key(k), k.name()));
                 items = [
                     "x fix once",
                     "a fix all once",
@@ -840,24 +840,24 @@ pub fn help_lines() -> Vec<(String, String)> {
                     "A fix all auto",
                 ]
                 .map(String::from)
-                .to_vec();
-                items.extend(
-                    argus_core::fix::FixKind::ALL
-                        .iter()
-                        .map(|&k| format!("{} {}", crate::menu::fix_key(k), k.name())),
-                );
+                .into_iter()
+                .chain(fixes)
+                .map(|item| (0, item))
+                .collect();
             }
             // (the tags are config's: favourite's `f`, and yours)
-            MenuId::Tag => {
-                items.insert(0, "each tag by its key".into());
-                parts.iter_mut().for_each(|p| *p += 1);
-            }
+            MenuId::Tag => items.insert(0, (0, "each tag by its key".into())),
             _ => {}
         }
+        // (its parts divided by a dash)
         let mut text = String::new();
-        for (n, item) in items.iter().enumerate() {
+        for (n, (part, item)) in items.iter().enumerate() {
             if n > 0 {
-                text.push_str(if parts.contains(&n) { " — " } else { " · " });
+                text.push_str(if items[n - 1].0 != *part {
+                    " — "
+                } else {
+                    " · "
+                });
             }
             text.push_str(item);
         }
