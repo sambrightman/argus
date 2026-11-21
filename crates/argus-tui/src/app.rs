@@ -4785,10 +4785,9 @@ impl App {
         };
         // (a file in an untracked folder is the folder's, as listed)
         let place = |file: &str| files.iter().position(|f| f == file || within(f, file));
-        use std::cmp::Ordering::{Greater, Less};
+        // (above the section, any row is none of its files: its first)
         let end = match (self.region_copy(r).1, self.rows.get(self.cursor)) {
-            (Some(Less), _) => 0,
-            (Some(Greater), _) => files.len() - 1,
+            (Some(std::cmp::Ordering::Greater), _) => files.len() - 1,
             (Some(_), Some(Row::Detail { line, .. })) => {
                 line.file.as_deref().and_then(place).unwrap_or(0)
             }

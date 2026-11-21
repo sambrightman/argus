@@ -6265,6 +6265,16 @@ fn a_region_from_a_hunk_takes_whole_hunks() {
     // into the second: both
     app.cursor = shown_row(&app, "+added");
     assert_eq!(hunks(&app), (vec![0, 1], 3));
+    // shown as one, each hunk all of it (past where the cursor is in it)
+    let rows = app.region_rows();
+    let last = (shown_row(&app, "+added")..app.rows.len())
+        .take_while(|&n| matches!(&app.rows[n], Row::Detail { line, .. } if line.diff.is_some()))
+        .last()
+        .unwrap();
+    assert!(
+        rows.contains(&shown_row(&app, "-line 3")) && rows.contains(&last),
+        "{rows:?}"
+    );
     // past the diff, and its repo: still both, the region not ended
     app.act(Action::Bottom);
     assert_eq!(hunks(&app), (vec![0, 1], 3));
@@ -6316,13 +6326,46 @@ fn a_region_from_the_end_of_a_diff_takes_lines() {
     assert!(lines.len() == 1 && lines[0].1 == "README", "{lines:?}");
 }
 
+/// A row of a diff that's none of its hunks (a binary file's note) is the
+/// file's: a region from it is of files, as from the file's own line.
+#[test]
+fn a_region_from_a_binary_files_note_is_of_files() {
+    use argus_tui::app::Unit;
+    let (_sb, mut app) = setup_with("", |sb| {
+        let d = sb.path("dev/dirty");
+        std::fs::write(d.join("img"), [0u8, 1, 2]).unwrap();
+        git(&d, &["add", "img"]);
+        git(&d, &["commit", "-q", "-m", "img", "--", "img"]);
+        std::fs::write(d.join("img"), [0u8, 3, 4]).unwrap();
+    });
+    to_file(&mut app, "img");
+    app.act(Action::ToggleExpand);
+    let note = (app.cursor..app.rows.len())
+        .find(|&n| {
+            matches!(&app.rows[n], Row::Detail { line, .. }
+            if line.diff.is_some() && line.id.last() == Some(&Seg::Note))
+        })
+        .unwrap_or_else(|| panic!("{:?}", trimmed(&app)));
+    app.cursor = note;
+    app.on_key(ctrl(' '));
+    assert_eq!(app.region.as_ref().map(|r| r.unit), Some(Unit::Files));
+}
+
 /// A region started on a file's own line takes whole files of its
 /// section: from there to the cursor's file; the section's last while the
 /// cursor is below it.
 #[test]
 fn a_region_from_a_file_takes_whole_files_of_its_section() {
     use argus_tui::app::Unit;
-    let (sb, mut app) = setup_with("", diff_fixture);
+    let (sb, mut app) = setup_with("", |sb| {
+        diff_fixture(sb);
+        // (a third, after both: README, both, third)
+        let d = sb.path("dev/dirty");
+        write(&d, "third", "1\n");
+        git(&d, &["add", "third"]);
+        git(&d, &["commit", "-q", "-m", "third", "--", "third"]);
+        write(&d, "third", "2\n");
+    });
     let file_row = |app: &App, section: argus_tui::details::Section, file: &str| {
         app.rows
             .iter()
@@ -6343,6 +6386,11 @@ fn a_region_from_a_file_takes_whole_files_of_its_section() {
     assert_eq!(files(&app), ["README"]);
     app.cursor = file_row(&app, Unstaged, "both");
     assert_eq!(files(&app), ["README", "both"]);
+    // its rows are shown as one: those files', no other's
+    let rows = app.region_rows();
+    let row_of = |app: &App, f: &str| file_row(app, Unstaged, f);
+    assert!(rows.contains(&row_of(&app, "README")) && rows.contains(&row_of(&app, "both")));
+    assert!(!rows.contains(&row_of(&app, "third")), "{rows:?}");
     // shown as marked, whole, through the one source
     let dirty = app.ws.entries.iter().find(|e| e.path.ends_with("dirty"));
     let both = argus_tui::app::Target::File {
@@ -6354,17 +6402,29 @@ fn a_region_from_a_file_takes_whole_files_of_its_section() {
     // below the section (on a staged file): still its last; above it
     // (untracked comes first), its first
     app.cursor = file_row(&app, Staged, "both");
-    assert_eq!(files(&app), ["README", "both"]);
+    assert_eq!(files(&app), ["README", "both", "third"]);
+    // past the repo: the section's last
+    app.act(Action::Bottom);
+    assert_eq!(files(&app), ["README", "both", "third"]);
     app.cursor = file_row(&app, Untracked, "new");
     assert_eq!(files(&app), ["README"]);
-    // (from the last, above is still back to the first)
+    // (from a later one, above is still back to the first)
     app.on_key(ctrl('g'));
     app.cursor = file_row(&app, Unstaged, "both");
     app.on_key(ctrl(' '));
     assert_eq!(files(&app), ["both"]);
     app.cursor = file_row(&app, Untracked, "new");
     assert_eq!(files(&app), ["README", "both"]);
+    // a file's own line with its diff open starts one of files too
+    app.on_key(ctrl('g'));
     app.cursor = file_row(&app, Unstaged, "README");
+    app.act(Action::ToggleExpand);
+    assert!(
+        matches!(app.rows.get(app.cursor + 1), Some(Row::Detail { line, .. }) if line.diff.is_some())
+    );
+    app.on_key(ctrl(' '));
+    assert_eq!(app.region.as_ref().map(|r| r.unit), Some(Unit::Files));
+    app.cursor = file_row(&app, Unstaged, "both");
     // a file's changes changing leaves it be: it's of files, not lines
     let d = sb.path("dev/dirty");
     write(&d, "README", "hello again\n");
