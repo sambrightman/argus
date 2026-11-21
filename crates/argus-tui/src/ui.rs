@@ -672,8 +672,23 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) -> Option<std::ops:
         ),
     };
     let mut lines: Vec<Line> = vec![];
+    let notes = menu.notes.iter().map(|n| n.len() as u16 + 4);
+    let w = menu
+        .items
+        .iter()
+        .map(|i| i.label.len() as u16 + 12)
+        .chain(notes)
+        .max()
+        .unwrap_or(20)
+        .max(title.len() as u16 + 4)
+        .max(36);
+    let parts = menu
+        .items
+        .windows(2)
+        .filter(|p| p[0].section != p[1].section)
+        .count();
     // as many items as fit, around the cursor, saying how many are hidden
-    let fixed = 3 + menu.notes.len(); // borders, the footer and the notes
+    let fixed = 3 + menu.notes.len() + parts; // borders, footer, notes, dividers
     let room = (area.height as usize).saturating_sub(fixed);
     let total = menu.items.len();
     let (start, shown) = if total <= room {
@@ -690,6 +705,10 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) -> Option<std::ops:
         )));
     }
     for (n, it) in menu.items.iter().enumerate().skip(start).take(shown) {
+        if n > start && menu.items[n - 1].section != it.section {
+            let line = v.icons.divider.repeat(w.saturating_sub(4) as usize);
+            lines.push(Line::from(Span::styled(format!(" {line}"), t.ui(Ui::Dim))));
+        }
         let label = match it.switch {
             Some(s) => format!(
                 "[{}] {}",
@@ -725,16 +744,7 @@ fn draw_menu(f: &mut Frame, app: &App, v: &View, area: Rect) -> Option<std::ops:
         format!(" q/Esc/C-g cancel · {moves} Enter"),
         t.ui(Ui::Dim),
     )));
-    let notes = menu.notes.iter().map(|n| n.len() as u16 + 4);
-    let w = menu
-        .items
-        .iter()
-        .map(|i| i.label.len() as u16 + 12)
-        .chain(notes)
-        .max()
-        .unwrap_or(20)
-        .max(title.len() as u16 + 4);
-    let r = popup(area, w.max(36), lines.len() as u16 + 2);
+    let r = popup(area, w, lines.len() as u16 + 2);
     f.render_widget(Clear, r);
     f.render_widget(
         Paragraph::new(lines).block(
@@ -804,6 +814,10 @@ pub fn help_lines() -> Vec<(String, String)> {
             .iter()
             .map(|i| format!("{} {}", i.key, i.label))
             .collect();
+        // (its parts divided by a dash)
+        let mut parts: Vec<usize> = (1..m.items.len())
+            .filter(|&n| m.items[n - 1].section != m.items[n].section)
+            .collect();
         match id {
             // built from what applies: every item it can have
             MenuId::Fix => {
@@ -822,10 +836,20 @@ pub fn help_lines() -> Vec<(String, String)> {
                 );
             }
             // (the tags are config's: favourite's `f`, and yours)
-            MenuId::Tag => items.insert(0, "each tag by its key".into()),
+            MenuId::Tag => {
+                items.insert(0, "each tag by its key".into());
+                parts.iter_mut().for_each(|p| *p += 1);
+            }
             _ => {}
         }
-        let items = items.join(" · ");
+        let mut text = String::new();
+        for (n, item) in items.iter().enumerate() {
+            if n > 0 {
+                text.push_str(if parts.contains(&n) { " — " } else { " · " });
+            }
+            text.push_str(item);
+        }
+        let items = text;
         v.push((format!("{} …", id.key()), format!("{}: {items}", m.title)));
     }
     v
@@ -914,6 +938,11 @@ pub fn legend<'a>(i: &'a Icons, tags: &'a [(String, String)]) -> Vec<(&'a str, R
             &i.marked_repo,
             Role::Dim,
             "a repo marked for a batch action",
+        ),
+        (
+            &i.divider,
+            Role::Dim,
+            "repeated: the line between a menu's parts",
         ),
         (&i.ok, Role::Ahead, "job or fix succeeded"),
         (&i.failed, Role::Error, "job or fix failed"),

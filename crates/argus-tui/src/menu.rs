@@ -39,6 +39,15 @@ pub struct Item {
     pub switch: Option<Switch>,
     /// Choosing it keeps the menu open, to show what changed.
     pub stays: bool,
+    /// Which part of the menu it's in: a line divides one from the next.
+    /// A switch shown in two parts is the one switch.
+    pub section: u8,
+}
+
+impl Item {
+    pub fn in_section(self, section: u8) -> Self {
+        Item { section, ..self }
+    }
 }
 
 pub struct Menu {
@@ -56,6 +65,7 @@ pub fn item(key: char, label: impl Into<String>, action: Action) -> Item {
         action,
         switch: None,
         stays: false,
+        section: 0,
     }
 }
 
@@ -74,6 +84,7 @@ pub fn switch(key: char, label: impl Into<String>, s: Switch) -> Item {
         action: Action::Toggle(s),
         switch: Some(s),
         stays: true,
+        section: 0,
     }
 }
 
@@ -167,15 +178,17 @@ impl MenuId {
             MenuId::Stash => (
                 "Stash",
                 vec![
-                    // (starred: these two switches, and what goes by them)
-                    switch('u', "include untracked*", Switch::Untracked),
-                    switch('k', "keep index*", Switch::KeepIndex),
+                    // each part with the switches that apply to it: the
+                    // first two don't to stashing what's staged
+                    switch('u', "include untracked", Switch::Untracked),
+                    switch('k', "keep index", Switch::KeepIndex),
                     switch('M', "message", Switch::Message),
-                    item('z', "stash all*", Action::Stash(StashKind::All)),
-                    item('m', "stash marked*", Action::Stash(StashKind::MarkedFiles)),
-                    item('g', "stash staged", Action::Stash(StashKind::Staged)),
-                    item('p', "pop…", Action::PopStash),
-                    item('d', "drop…", Action::DropStash),
+                    item('z', "stash all", Action::Stash(StashKind::All)),
+                    item('m', "stash marked", Action::Stash(StashKind::MarkedFiles)),
+                    switch('M', "message", Switch::Message).in_section(1),
+                    item('g', "stash staged", Action::Stash(StashKind::Staged)).in_section(1),
+                    item('p', "pop…", Action::PopStash).in_section(2),
+                    item('d', "drop…", Action::DropStash).in_section(2),
                 ],
             ),
             MenuId::Commit => (
@@ -498,12 +511,17 @@ mod tests {
             assert_eq!(MenuId::from_key(id.key()), Some(id));
             prefixes.push(id.key());
             let m = id.menu();
-            let mut keys: Vec<char> = m.items.iter().map(|i| i.key).collect();
-            let n = keys.len();
-            keys.sort();
-            keys.dedup();
-            assert_eq!(keys.len(), n, "duplicate key in {}", m.title);
-            assert!(!keys.contains(&'q'), "q always cancels");
+            // (a key may show again in another section: the same item)
+            for i in &m.items {
+                let same = m.items.iter().filter(|o| o.key == i.key);
+                assert!(
+                    same.into_iter().all(|o| o.action == i.action),
+                    "{} in {}",
+                    i.key,
+                    m.title
+                );
+            }
+            assert!(!m.items.iter().any(|i| i.key == 'q'), "q always cancels");
         }
         let n = prefixes.len();
         prefixes.sort();

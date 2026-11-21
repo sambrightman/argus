@@ -49,6 +49,8 @@ pub struct Icons {
     /// A repo marked for a batch action, before its name (one cell):
     /// apart from what's marked in its details.
     pub marked_repo: Cow<'static, str>,
+    /// Repeated, the line dividing a menu's parts (one cell).
+    pub divider: Cow<'static, str>,
     /// A job or fix that succeeded.
     pub ok: Cow<'static, str>,
     /// A job or fix that failed.
@@ -119,6 +121,7 @@ icon_names!(
     marked,
     partly_marked,
     marked_repo,
+    divider,
     ok,
     failed,
     celebrate,
@@ -190,6 +193,7 @@ pub const UNICODE: Icons = Icons {
     marked: s("▌"),
     partly_marked: s("│"),
     marked_repo: s("•"),
+    divider: s("─"),
     ok: s("✓"),
     failed: s("✗"),
     celebrate: s("🎉"),
@@ -230,6 +234,7 @@ pub const NERD: Icons = Icons {
     marked: s("▌"),
     partly_marked: s("│"),
     marked_repo: s("•"),
+    divider: s("─"),
     ok: s("\u{eab2} "),     // cod-check
     failed: s("\u{ea76} "), // cod-close
     celebrate: s("🎉"),
@@ -279,6 +284,7 @@ pub const ASCII: Icons = Icons {
     marked: s(">"),
     partly_marked: s("-"),
     marked_repo: s("#"),
+    divider: s("-"),
     ok: s("ok"),
     failed: s("FAILED"),
     celebrate: s(""),

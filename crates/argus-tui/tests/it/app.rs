@@ -1286,6 +1286,12 @@ fn help_names_the_keys_and_every_menus_items() {
     }
     let tag = row("t …").unwrap();
     assert!(tag.starts_with("Tag: each tag by its key"), "{tag}");
+    // a menu's parts divided as it divides them
+    assert_eq!(
+        row("z …").unwrap(),
+        "Stash: u include untracked · k keep index · M message · z stash all · \
+         m stash marked — M message · g stash staged — p pop… · d drop…"
+    );
 }
 
 #[test]
@@ -6353,7 +6359,7 @@ fn a_regions_lines_are_stashed_as_marked_ones_are() {
     );
     app.on_key(key('z'));
     assert!(
-        menu_items(&app).contains(&"m stash marked*".to_string()),
+        menu_items(&app).contains(&"m stash marked".to_string()),
         "{:?}",
         menu_items(&app)
     );
@@ -6539,7 +6545,7 @@ fn marked_lines_can_be_stashed() {
     let stash_marked = |app: &mut App| {
         app.on_key(key('z'));
         assert!(
-            menu_items(app).contains(&"m stash marked*".to_string()),
+            menu_items(app).contains(&"m stash marked".to_string()),
             "{:?}",
             menu_items(app)
         );
@@ -10464,7 +10470,9 @@ fn the_stash_menu_offers_only_what_applies() {
         items
     };
     let keys = |app: &mut App| -> String { offered(app).iter().map(|i| i.0).collect() };
-    // a star on the first two switches and on what goes by them
+    // in sections: the two switches over what goes by them, then
+    // stashing what's staged, which they don't apply to (the message
+    // switch, which does, in both)
     cursor_on_detail(&mut app, "dirty", "path");
     git(&d, &["add", "README"]);
     status_arrives(&mut app, &d);
@@ -10472,13 +10480,36 @@ fn the_stash_menu_offers_only_what_applies() {
     assert_eq!(
         labels,
         [
-            "include untracked*",
-            "keep index*",
+            "include untracked",
+            "keep index",
             "message",
-            "stash all*",
+            "stash all",
+            "message",
             "stash staged"
         ]
     );
+    app.on_key(key('z'));
+    let screen = render(&mut app, 100, 30);
+    app.on_key(code(KeyCode::Esc));
+    let menu: Vec<&str> = screen
+        .lines()
+        .map(str::trim)
+        .skip_while(|l| !l.contains("include untracked"))
+        .take(7)
+        .collect();
+    assert!(
+        menu[4].contains("────") && menu[5].contains("M  [ ] message"),
+        "{screen}"
+    );
+    // the message switch is one switch, shown twice
+    app.on_key(key('z'));
+    app.on_key(key('M'));
+    let screen = render(&mut app, 100, 30);
+    app.on_key(code(KeyCode::Esc));
+    assert_eq!(screen.matches("[x] message").count(), 2, "{screen}");
+    app.on_key(key('z'));
+    app.on_key(key('M'));
+    app.on_key(code(KeyCode::Esc));
     git(&d, &["reset", "-q"]);
     status_arrives(&mut app, &d);
     // unstaged changes only: no staged, marked, pop or drop
@@ -10487,14 +10518,14 @@ fn the_stash_menu_offers_only_what_applies() {
     // something staged
     git(&d, &["add", "README"]);
     status_arrives(&mut app, &d);
-    assert_eq!(keys(&mut app), "ukMzg");
+    assert_eq!(keys(&mut app), "ukMzMg");
     // a file marked
     git(&d, &["reset", "-q"]);
     status_arrives(&mut app, &d);
     to_file(&mut app, "README");
     app.act(Action::ToggleMark);
     let items = offered(&mut app);
-    assert!(items.contains(&('m', "stash marked*".into())), "{items:?}");
+    assert!(items.contains(&('m', "stash marked".into())), "{items:?}");
     app.marked_files.clear();
     // a stash: pop and drop, asking which unless the cursor is on one
     git(&d, &["stash", "push", "-q", "-m", "mine"]);

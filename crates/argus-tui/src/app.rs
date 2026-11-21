@@ -3282,6 +3282,15 @@ impl App {
             Action::PopStash | Action::DropStash => stashes,
             _ => true,
         });
+        // a part left with only switches has nothing they'd apply to
+        let acting: Vec<u8> = menu
+            .items
+            .iter()
+            .filter(|it| it.switch.is_none())
+            .map(|it| it.section)
+            .collect();
+        menu.items
+            .retain(|it| it.switch.is_none() || acting.contains(&it.section));
         // with the cursor on a stash, or one stash in all, there's nothing
         // to ask before popping it (dropping always asks)
         let only = matches!(self.selected()[..], [i]

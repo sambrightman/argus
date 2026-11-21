@@ -509,7 +509,7 @@ pub struct UiConfig {
     /// untracked, conflict, stash, in_progress, gone, no_upstream, no_remote, branches, off_default,
     /// finished_worktree, stale_worktrees,
     /// error, pull, worktree, submodule; and in the interface: spinner (one
-    /// frame per character), marked, partly_marked, marked_repo, ok, failed, celebrate, and the ignore
+    /// frame per character), marked, partly_marked, marked_repo, divider (repeated, between a menu's parts), ok, failed, celebrate, and the ignore
     /// menu's issue states issue_counted, issue_pinned, issue_ignored.
     #[schemars(example = example_icon_overrides())]
     pub icon_overrides: BTreeMap<String, String>,

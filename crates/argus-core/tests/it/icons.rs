@@ -34,6 +34,7 @@ fn icons(set: &Icons) -> Vec<(&'static str, &str)> {
         ("marked", &*set.marked),
         ("partly_marked", &*set.partly_marked),
         ("marked_repo", &*set.marked_repo),
+        ("divider", &*set.divider),
         ("ok", &*set.ok),
         ("failed", &*set.failed),
         ("celebrate", &*set.celebrate),
@@ -44,8 +45,10 @@ fn icons(set: &Icons) -> Vec<(&'static str, &str)> {
 }
 
 /// Symbols in all of Menlo, SF Mono, Inconsolata, DejaVu Sans Mono, Fira
-/// Code, Hack and Source Code Pro (checked with fontTools).
-const IN_ALL_FONTS: &str = "↑↓●×±≠…·—├└│»§•∞◊○▌†";
+/// Code, Hack and Source Code Pro (checked with fontTools). `─` was checked
+/// in Menlo, SF Mono and Monaco only; the others have `├`, `└` and `│`
+/// from the same box-drawing block, of which it's the plainest.
+const IN_ALL_FONTS: &str = "↑↓●×±≠…·—├└│─»§•∞◊○▌†";
 
 /// Known gaps, each to be judged with `argus demo --glyphs`.
 const GAPS: &[(char, &str)] = &[
@@ -132,6 +135,7 @@ fn nerd_icons_cover_everything_and_leave_room() {
                     "marked",
                     "partly_marked",
                     "marked_repo",
+                    "divider",
                     "celebrate",
                     "issue_counted",
                     "issue_pinned",
