@@ -86,13 +86,23 @@ pub enum Shown<'a> {
     Step(&'a Step),
     /// A line of what was said, or of a job's output, after its first.
     Output(&'a str),
-    /// The steps of a kind: how many, their time, the slowest's.
+    /// The steps of a kind, and their time.
     Kind {
         kind: &'a str,
-        count: usize,
-        total: Duration,
-        slowest: Duration,
+        tally: Tally,
     },
+}
+
+/// The steps of a kind: how many, their time, the slowest's, and how it
+/// divides (see [`argus_core::trace::Split`]): their own, and, of those
+/// that took steps, their steps' and those steps' total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Tally {
+    pub count: usize,
+    pub took: Duration,
+    pub slowest: Duration,
+    pub own: Duration,
+    pub sub_steps: Option<(Duration, Duration)>,
 }
 
 /// A message, or something it holds.
@@ -188,13 +198,22 @@ pub fn lines<'a>(history: &'a [Event], m: &Messages) -> Vec<MessageLine<'a>> {
             out = all;
         }
         By::Kinds => {
-            let mut kinds: BTreeMap<&str, (usize, Duration, Duration)> = BTreeMap::new();
-            fn count<'a>(s: &'a Step, kinds: &mut BTreeMap<&'a str, (usize, Duration, Duration)>) {
+            let mut kinds: BTreeMap<&str, Tally> = BTreeMap::new();
+            fn count<'a>(s: &'a Step, kinds: &mut BTreeMap<&'a str, Tally>) {
                 if let Some(took) = s.took {
                     let k = kinds.entry(&s.kind).or_default();
-                    k.0 += 1;
-                    k.1 += took;
-                    k.2 = k.2.max(took);
+                    k.count += 1;
+                    k.took += took;
+                    k.slowest = k.slowest.max(took);
+                    match s.split() {
+                        Some(split) => {
+                            k.own += split.own;
+                            let (sub, total) = k.sub_steps.get_or_insert_default();
+                            *sub += split.sub_steps;
+                            *total += split.total;
+                        }
+                        None => k.own += took,
+                    }
                 }
                 for s in &s.steps {
                     count(s, kinds);
@@ -209,21 +228,16 @@ pub fn lines<'a>(history: &'a [Event], m: &Messages) -> Vec<MessageLine<'a>> {
                 .into_iter()
                 .filter(|(k, _)| q.is_empty() || k.to_lowercase().contains(&q))
                 .collect();
-            kinds.sort_by_key(|(_, (_, total, _))| std::cmp::Reverse(*total));
+            kinds.sort_by_key(|(_, t)| std::cmp::Reverse(t.took));
             out = kinds
                 .into_iter()
                 .enumerate()
-                .map(|(i, (kind, (count, total, slowest)))| MessageLine {
+                .map(|(i, (kind, tally))| MessageLine {
                     depth: 0,
                     path: vec![i],
                     at: None,
                     fold: None,
-                    what: Shown::Kind {
-                        kind,
-                        count,
-                        total,
-                        slowest,
-                    },
+                    what: Shown::Kind { kind, tally },
                 })
                 .collect();
         }
@@ -356,12 +370,12 @@ pub fn key(history: &[Event], m: &mut Messages, k: KeyEvent, page: usize) -> Key
         // folds it, or goes to what holds it
         KeyCode::Left | KeyCode::Char('h') => match line {
             Some(l) if l.fold == Some(true) => flip(m, &l.path),
-            Some(l) if l.depth > 0 => {
+            Some(l) => {
                 if let Some(up) = lines[..at].iter().rposition(|u| u.depth < l.depth) {
                     m.cursor = go(up);
                 }
             }
-            _ => {}
+            None => {}
         },
         KeyCode::Char('s') => {
             m.by = m.by.next();
@@ -395,11 +409,4 @@ pub fn dropped(m: &mut Messages, n: usize, lines: usize) {
             p
         })
         .collect();
-}
-
-/// What `s`'s steps took summed, when more than it took (they ran side by
-/// side).
-pub fn summed(s: &Step) -> Option<Duration> {
-    let sum: Duration = s.steps.iter().filter_map(|s| s.took).sum();
-    s.took.filter(|&t| sum > t).map(|_| sum)
 }

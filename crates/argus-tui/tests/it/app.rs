@@ -694,6 +694,15 @@ fn the_message_history_scrolls_back() {
         matches!(app.mode, Mode::History { .. }),
         "they don't close it"
     );
+    // inverse: without C- or M-, v g < > do nothing
+    let on_newest = |app: &App| matches!(&app.mode, Mode::History { messages } if messages.cursor == usize::MAX);
+    for k in ['v', 'g', '<'] {
+        app.on_key(key(k));
+        assert!(on_newest(&app), "{k}");
+    }
+    app.on_key(key('k'));
+    app.on_key(key('>'));
+    assert!(!on_newest(&app) && matches!(app.mode, Mode::History { .. }));
     // inset by a column, as the help is
     let screen = render(&mut app, 80, 20);
     assert!(screen.starts_with(" ╭ messages"), "{screen}");
@@ -704,29 +713,35 @@ fn the_message_history_scrolls_back() {
 fn steps_taken(app: &mut App) {
     use argus_core::trace::Step;
     let ms = std::time::Duration::from_millis;
-    let status = |repo: &str, took, files| {
-        let mut s = Step::new("status", format!("status ~/dev/{repo}"), Some(ms(took)));
+    let t0 = std::time::Instant::now();
+    // (each at its time, in ms from the scan's start)
+    let step =
+        |kind, what: &str, took, at| Step::new(kind, what, Some(ms(took))).starting(t0 + ms(at));
+    // open, then the files
+    let status = |repo: &str, took, files, at| {
+        let mut s = step("status", &format!("status ~/dev/{repo}"), took, at);
         s.steps = vec![
-            Step::new("open", "open", Some(ms(1))),
-            Step::new("files", "files", Some(ms(files))),
+            step("open", "open", 1, at),
+            step("files", "files", files, at + 1),
         ];
         s
     };
-    let mut scan = Step::new("scan", "scan: 2 repos", Some(ms(30)));
+    // a in 2 to 22, b in 4 to 29: 27 of its 30 by them, 45 summed
+    let mut scan = step("scan", "scan: 2 repos", 30, 0);
     scan.steps = vec![
         Step::new("note", "roots ~/dev", None),
-        status("a", 20, 15),
-        status("b", 25, 22),
+        status("a", 20, 15, 2),
+        status("b", 25, 22, 4),
     ];
     app.on_msg(Msg::Step(scan));
-    let mut refresh = Step::new("refresh", "refresh ~/dev/a", Some(ms(9)));
-    refresh.steps = vec![status("a", 9, 7)];
+    let mut refresh = step("refresh", "refresh ~/dev/a", 9, 100);
+    refresh.steps = vec![status("a", 9, 7, 100)];
     app.on_msg(Msg::Step(refresh));
 }
 
 /// A step unfolds into the steps it took, as deep as they go; Tab, → and l
 /// unfold, Tab, ← and h fold, and ← on a step inside goes to what holds
-/// it. A step whose own took more than it did, side by side, says so.
+/// it. A step that took steps says how its time divides.
 #[test]
 fn steps_unfold_into_the_steps_they_took() {
     let (_sb, mut app) = setup("");
@@ -736,12 +751,15 @@ fn steps_unfold_into_the_steps_they_took() {
     assert!(screen.contains("▸    30ms  scan: 2 repos"), "{screen}");
     assert!(screen.contains("▸     9ms  refresh ~/dev/a"), "{screen}");
     assert!(!screen.contains("status ~/dev/b"), "{screen}");
-    // the scan's statuses took 45ms summed, in its 30
+    // 3ms its own, 27 the statuses', side by side, of their 45
     assert!(
-        screen.contains("scan: 2 repos (45ms summed, side by side)"),
+        screen.contains("30ms  scan: 2 repos (own 3ms, sub-steps 27ms from 45ms total)"),
         "{screen}"
     );
-    assert!(!screen.contains("refresh ~/dev/a ("), "{screen}");
+    assert!(
+        screen.contains("9ms  refresh ~/dev/a (own <1ms, sub-steps 9ms from 9ms total)"),
+        "{screen}"
+    );
     app.on_key(key('k'));
     app.on_key(code(KeyCode::Right));
     let screen = render(&mut app, 100, 30);
@@ -755,8 +773,13 @@ fn steps_unfold_into_the_steps_they_took() {
     }
     app.on_key(key('l'));
     let screen = render(&mut app, 100, 30);
-    assert!(screen.contains("▾    25ms  status ~/dev/b"), "{screen}");
-    assert!(screen.contains("        22ms  files"), "{screen}");
+    // one after another: as much from as by them
+    assert!(
+        screen.contains("▾    25ms  status ~/dev/b (own 2ms, sub-steps 23ms from 23ms total)"),
+        "{screen}"
+    );
+    // a step that took none: by itself
+    assert!(screen.contains("        22ms  files  "), "{screen}");
     // ← on a part goes to its status, then folds it, then goes to the scan
     app.on_key(key('j'));
     app.on_key(code(KeyCode::Left));
@@ -777,6 +800,67 @@ fn steps_unfold_into_the_steps_they_took() {
     app.on_key(code(KeyCode::Right));
     app.on_key(code(KeyCode::Right));
     assert!(render(&mut app, 100, 30).contains("▾    30ms  scan: 2 repos"));
+}
+
+/// The column `needle` starts at in its row of `screen`.
+fn column(screen: &str, needle: &str) -> usize {
+    let row = screen
+        .lines()
+        .find(|l| l.contains(needle))
+        .unwrap_or_else(|| panic!("{needle} in\n{screen}"));
+    row[..row.find(needle).unwrap()].chars().count()
+}
+
+/// Each line where it belongs: a message's fold mark after its time, what
+/// it holds two columns further in a level, a line holding nothing lined
+/// up with those that hold something; sorted by time, no marks; by kind,
+/// no times. The cursor's line is highlighted.
+#[test]
+fn message_lines_line_up() {
+    let (_sb, mut app) = setup("");
+    steps_taken(&mut app);
+    open_history(&mut app);
+    app.on_key(key('k'));
+    app.on_key(code(KeyCode::Tab));
+    for _ in 0..3 {
+        app.on_key(key('j'));
+    }
+    app.on_key(code(KeyCode::Tab));
+    let screen = render(&mut app, 120, 30);
+    // (inset a column, then the border, then the time)
+    assert_eq!(column(&screen, "▾    30ms  scan"), 1 + 1 + 9, "{screen}");
+    let scan = column(&screen, "scan: 2 repos");
+    let b = column(&screen, "status ~/dev/b");
+    assert_eq!(b, scan + 2, "{screen}");
+    assert_eq!(column(&screen, "roots ~/dev"), b, "{screen}");
+    assert_eq!(
+        column(&screen, "22ms  files") + "22ms  ".len(),
+        b + 2,
+        "{screen}"
+    );
+    // the cursor on b, highlighted; not the scan
+    let t = draw(&mut app, 120, 30);
+    let buf = t.backend().buffer().clone();
+    let rows: Vec<String> = (0..30)
+        .map(|y| (0..120).map(|x| buf[(x, y)].symbol().to_string()).collect())
+        .collect();
+    let row = |s: &str| rows.iter().position(|r| r.contains(s)).unwrap() as u16;
+    let (theme, _) = Theme::build("mono", &Default::default());
+    let sel = theme.ui(argus_tui::theme::Ui::Selection).add_modifier;
+    assert!(!sel.is_empty());
+    assert!(
+        buf[(b as u16, row("status ~/dev/b"))]
+            .modifier
+            .contains(sel)
+    );
+    assert!(!buf[(b as u16, row("scan: 2 repos"))].modifier.contains(sel));
+    app.on_key(key('s'));
+    let screen = render(&mut app, 120, 30);
+    assert_eq!(column(&screen, "scan: 2 repos"), scan - 2, "{screen}");
+    app.on_key(key('s'));
+    let screen = render(&mut app, 120, 30);
+    assert_eq!(column(&screen, "status    "), 2, "{screen}");
+    assert_eq!(column(&screen, "kind    "), 2, "{screen}");
 }
 
 /// `s` shows every timed step, slowest first and not as a tree, as htop
@@ -818,13 +902,20 @@ fn s_sorts_the_steps_by_time_then_totals_them_by_kind() {
     app.on_key(key('s'));
     let screen = render(&mut app, 100, 30);
     assert!(screen.contains("time by kind"), "{screen}");
-    // status: 3 steps, 54ms in all, the slowest 25ms; files 44ms; open 3
+    // status: 3 steps, 54ms in all, the slowest 25ms, 7 their own, 47
+    // their parts'; files took none: all their own
+    assert!(
+        screen.contains(
+            "kind                  steps     time  slowest      own  sub-steps  from total"
+        ),
+        "{screen}"
+    );
     let rows = [
-        "status                    3     54ms     25ms",
-        "files                     3     44ms     22ms",
-        "scan                      1     30ms     30ms",
-        "refresh                   1      9ms      9ms",
-        "open                      3      3ms      1ms",
+        "status                    3     54ms     25ms      7ms       47ms        47ms",
+        "files                     3     44ms     22ms     44ms          -           -",
+        "scan                      1     30ms     30ms      3ms       27ms        45ms",
+        "refresh                   1      9ms      9ms     <1ms        9ms         9ms",
+        "open                      3      3ms      1ms      3ms          -           -",
     ];
     let at: Vec<usize> = rows
         .iter()
@@ -838,6 +929,19 @@ fn s_sorts_the_steps_by_time_then_totals_them_by_kind() {
     app.on_key(key('s'));
     let screen = render(&mut app, 100, 30);
     assert!(screen.contains("▸    30ms  scan: 2 repos"), "{screen}");
+    // by kind, searched by kind
+    app.on_key(key('/'));
+    for c in "fil".chars() {
+        app.on_key(key(c));
+    }
+    app.on_key(code(KeyCode::Enter));
+    app.on_key(key('s'));
+    app.on_key(key('s'));
+    let screen = render(&mut app, 100, 30);
+    assert!(
+        screen.contains("files       ") && !screen.contains("status    "),
+        "{screen}"
+    );
 }
 
 /// Without steps (no -v), the views by time say where they come from.

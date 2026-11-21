@@ -41,6 +41,80 @@ impl Step {
     }
 }
 
+/// How a step's time divides: its own (none of its steps running), its
+/// steps' (some running), and their times added up, which is more than
+/// theirs where they ran side by side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Split {
+    pub own: Duration,
+    pub sub_steps: Duration,
+    pub total: Duration,
+}
+
+impl Step {
+    /// When it started.
+    pub fn started(&self) -> Instant {
+        self.started
+    }
+
+    /// It, started at `at` (as a test lays steps out).
+    pub fn starting(self, at: Instant) -> Self {
+        Step {
+            started: at,
+            ..self
+        }
+    }
+
+    /// How its time divides, if it was timed and took timed steps.
+    pub fn split(&self) -> Option<Split> {
+        let took = self.took?;
+        let end = self.started + took;
+        let timed: Vec<(Instant, Duration)> = self
+            .steps
+            .iter()
+            .filter_map(|s| s.took.map(|t| (s.started, t)))
+            .collect();
+        if timed.is_empty() {
+            return None;
+        }
+        let total = timed.iter().map(|(_, t)| *t).sum();
+        // the time any ran, within this one's: the union of their spans
+        let mut spans: Vec<(Instant, Instant)> = timed
+            .iter()
+            .map(|&(at, t)| (at.max(self.started), (at + t).min(end)))
+            .collect();
+        spans.sort();
+        let mut sub_steps = Duration::ZERO;
+        let mut reached = self.started;
+        for (from, to) in spans {
+            let from = from.max(reached);
+            if to > from {
+                sub_steps += to - from;
+                reached = to;
+            }
+        }
+        Some(Split {
+            own: took.saturating_sub(sub_steps),
+            sub_steps,
+            total,
+        })
+    }
+
+    /// Its time and, if it took steps, how that divides: `30ms  scan: 2
+    /// repos (own 5ms, sub-steps 25ms from 45ms total)`.
+    pub fn with_split(&self) -> String {
+        match self.split() {
+            Some(s) => format!(
+                "{self} (own {}, sub-steps {} from {} total)",
+                duration(s.own),
+                duration(s.sub_steps),
+                duration(s.total)
+            ),
+            None => self.to_string(),
+        }
+    }
+}
+
 impl std::fmt::Display for Step {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.took {
@@ -213,9 +287,8 @@ impl Visit for Fields {
         }
     }
 
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        self.record_str(field, &format!("{value:?}"));
-    }
+    // (ours are strs and a u64: nothing comes this way)
+    fn record_debug(&mut self, _: &Field, _: &dyn std::fmt::Debug) {}
 }
 
 /// The layer turning argus's spans and events into [`Step`]s.
@@ -301,7 +374,7 @@ where
                 }
                 None => emit(step),
             },
-            // (its own were said as they ended)
+            // (its own were said as they ended, none held in it)
             Some(Form::Each) => {
                 let of = span.parent().and_then(|p| {
                     let ext = p.extensions();
@@ -313,11 +386,7 @@ where
                     Some(of) if step.what == step.kind => format!("{of}: {}", step.what),
                     _ => step.what,
                 };
-                emit(Step {
-                    what,
-                    steps: vec![],
-                    ..step
-                })
+                emit(Step { what, ..step })
             }
             None => {}
         }
@@ -464,6 +533,59 @@ mod tests {
         );
         assert_eq!(step("x", || panic!("described with no sink"), || 8), 8);
         assert_eq!(if_slow("x", || panic!("described with no sink"), || 9), 9);
+    }
+
+    /// A step's own time is when none of its steps ran; theirs, when any
+    /// did, however they overlapped, within its own span; and their total.
+    #[test]
+    fn a_steps_time_divides_into_its_own_and_its_steps() {
+        let ms = Duration::from_millis;
+        let t0 = Instant::now();
+        let at = |n: u64| t0 + ms(n);
+        let step = |took: u64, from: u64| Step::new("x", "x", Some(ms(took))).starting(at(from));
+        let with = |took: u64, steps: Vec<Step>| Step {
+            steps,
+            ..step(took, 0)
+        };
+        let split = |own: u64, sub: u64, total: u64| Split {
+            own: ms(own),
+            sub_steps: ms(sub),
+            total: ms(total),
+        };
+        // one after another: 1 of its own, 4 of 2 each
+        let after = with(9, (0..4).map(|n| step(2, 1 + 2 * n)).collect());
+        assert_eq!(after.split(), Some(split(1, 8, 8)));
+        // all at once
+        let at_once = with(3, (0..4).map(|_| step(2, 1)).collect());
+        assert_eq!(at_once.split(), Some(split(1, 2, 8)));
+        // two pairs, the second starting halfway through the first
+        let pairs = with(4, vec![step(2, 1), step(2, 1), step(2, 2), step(2, 2)]);
+        assert_eq!(pairs.split(), Some(split(1, 3, 8)));
+        // apart, with a gap: covered is each, not from first to last
+        let apart = with(10, vec![step(2, 1), step(3, 6)]);
+        assert_eq!(apart.split(), Some(split(5, 5, 5)));
+        // one inside another, and another inside it after
+        let inside = with(10, vec![step(8, 1), step(2, 3)]);
+        assert_eq!(inside.split(), Some(split(2, 8, 10)));
+        let then = with(12, vec![step(8, 1), step(2, 3), step(2, 6)]);
+        assert_eq!(then.split(), Some(split(4, 8, 12)));
+        // one wholly past its end
+        let outside = with(5, vec![step(2, 1), step(2, 7)]);
+        assert_eq!(outside.split(), Some(split(3, 2, 4)));
+        // (said before it started, or past its end: only its part counts)
+        let past = with(5, vec![step(4, 3)]);
+        assert_eq!(past.split(), Some(split(3, 2, 4)));
+        // nothing timed in it: no split, said by itself
+        let noted = with(5, vec![Step::new("note", "roots", None)]);
+        assert_eq!(noted.split(), None);
+        assert_eq!(step(5, 0).split(), None);
+        assert_eq!(noted.with_split(), "    5ms  x");
+        assert_eq!(
+            pairs.with_split(),
+            "    4ms  x (own 1ms, sub-steps 3ms from 8ms total)"
+        );
+        // untimed: nothing
+        assert_eq!(Step::new("note", "n", None).split(), None);
     }
 
     #[test]

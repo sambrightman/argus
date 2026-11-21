@@ -983,7 +983,9 @@ fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
         width: area.width.saturating_sub(2),
         height: area.height,
     };
-    let height = (r.height.saturating_sub(2) as usize).max(1);
+    // (by kind, a row naming the columns)
+    let header = m.by == By::Kinds && !lines.is_empty();
+    let height = (r.height.saturating_sub(2 + header as u16) as usize).max(1);
     let at = m.cursor.min(lines.len().saturating_sub(1));
     // the cursor in view, the list moved as little as can be
     let top = m.top.min(at).max((at + 1).saturating_sub(height));
@@ -992,7 +994,7 @@ fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
         let by = match m.by {
             By::Tree => "messages (Tab folds; s slowest first",
             By::Slowest => "messages, slowest first (s time by kind",
-            By::Kinds => "messages, time by kind: steps, total, slowest (s as they happened",
+            By::Kinds => "messages, time by kind (s as they happened",
         };
         let search = match (&m.searching, m.query.as_str()) {
             (Some(editor), _) => format!("; searching: {}", editor.text()),
@@ -1009,11 +1011,21 @@ fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
     });
     let failed = || Span::styled(format!("{} ", v.icons.failed.trim_end()), t.ui(Ui::Failed));
     let mut shown: Vec<Line> = vec![];
+    if header {
+        shown.push(Line::from(Span::styled(
+            format!(
+                "{:<20} {:>6}  {:>7}  {:>7}  {:>7}  {:>9}  {:>10}",
+                "kind", "steps", "time", "slowest", "own", "sub-steps", "from total"
+            ),
+            t.ui(Ui::Dim),
+        )));
+    }
     for (n, l) in lines.iter().enumerate().skip(top).take(height) {
         let time = match l.at {
-            Some(at) if m.by != By::Kinds => format!("{} ", at.strftime("%H:%M:%S")),
-            _ if m.by == By::Kinds => String::new(),
-            _ => " ".repeat(9),
+            Some(at) => format!("{} ", at.strftime("%H:%M:%S")),
+            // (by kind, none has a time)
+            None if m.by == By::Kinds => String::new(),
+            None => " ".repeat(9),
         };
         let mark = match l.fold {
             Some(true) => format!("{} ", v.icons.unfolded.trim_end()),
@@ -1043,27 +1055,22 @@ fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
                 ));
                 spans.push(Span::raw(label.to_string()));
             }
-            Shown::Step(s) => {
-                spans.push(Span::styled(s.to_string(), t.ui(Ui::Dim)));
-                if let Some(sum) = crate::messages::summed(s).filter(|_| m.by == By::Tree) {
-                    let sum = argus_core::trace::duration(sum);
-                    spans.push(Span::styled(
-                        format!(" ({sum} summed, side by side)"),
-                        t.ui(Ui::Dim),
-                    ));
-                }
-            }
+            Shown::Step(s) => spans.push(Span::styled(s.with_split(), t.ui(Ui::Dim))),
             Shown::Output(s) => spans.push(Span::styled(s.to_string(), t.ui(Ui::Dim))),
-            Shown::Kind {
-                kind,
-                count,
-                total,
-                slowest,
-            } => spans.push(Span::raw(format!(
-                "{kind:<20} {count:>6}  {:>7}  {:>7}",
-                argus_core::trace::duration(*total),
-                argus_core::trace::duration(*slowest)
-            ))),
+            Shown::Kind { kind, tally } => {
+                let d = argus_core::trace::duration;
+                let (sub, from) = match tally.sub_steps {
+                    Some((sub, total)) => (d(sub), d(total)),
+                    None => ("-".into(), "-".into()),
+                };
+                spans.push(Span::raw(format!(
+                    "{kind:<20} {:>6}  {:>7}  {:>7}  {:>7}  {sub:>9}  {from:>10}",
+                    tally.count,
+                    d(tally.took),
+                    d(tally.slowest),
+                    d(tally.own),
+                )))
+            }
         }
         let mut line = Line::from(spans);
         if n == at {

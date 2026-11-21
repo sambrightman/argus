@@ -553,3 +553,18 @@ proptest! {
         prop_assert_eq!(have, want);
     }
 }
+
+/// How a count was got, as `-v` says it.
+#[test]
+fn how_a_count_was_got_is_said() {
+    let said = [
+        (How::IsAnother, "the tip is another's"),
+        (How::Remembered, "remembered"),
+        (How::Likely, "on the likely remote branches"),
+        (How::Pruned { hidden: 3 }, "walked hiding 3 tips"),
+        (How::Full, "walked hiding every tip"),
+    ];
+    for (how, text) in said {
+        assert_eq!(how.to_string(), text);
+    }
+}

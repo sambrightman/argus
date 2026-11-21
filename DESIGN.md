@@ -970,9 +970,18 @@ rendering is snapshot-tested via `TestBackend`.
   step what it took, folded. `s` sorts every timed step by time, which,
   as in htop, isn't a tree (a step's place among the slowest says more
   than its place in the scan), then totals them by kind; no threshold,
-  as sorted the quick ones are at the bottom. A step whose own took more
-  than it did, side by side on threads, says so (`45ms summed`), as the
-  sum and the time between start and end differ. `/` searches, showing
+  as sorted the quick ones are at the bottom. A step that took steps says
+  how its time divides: `30ms  scan (own 3ms, sub-steps 27ms from 45ms
+  total)`. Its own is when none of them ran; theirs, when any did (the
+  union of their spans, clipped to its), so the two add up to its time;
+  and their total, more than theirs where they ran side by side. A
+  step's total alone mixes its own time with how its steps overlapped:
+  10s of its own and steps fully side by side looks like little overlap.
+  Totals by kind add each kind's own and sub-step time too, so a
+  status's parts aren't counted twice when looking for where time goes.
+  Nothing says contention: a step's time includes waiting on threads
+  and the disk, so a slow step in a scan beside others against the same
+  one in a refresh by itself is the comparison for that. `/` searches, showing
   what leads to a match and all under one. The cursor's a line number,
   past the last meaning "the newest, following"; as the oldest 500
   messages are dropped at the cap, it and what's unfolded move with
