@@ -17,3 +17,10 @@ retries = 2
 
 [profile.ci.junit]
 path = "junit.xml"
+
+# Builds 400 random trees and walks each several times on rayon's pool:
+# 2-3 s alone, but past 60 s on CI's macOS runner among 11 other tests on
+# few cores. It runs by itself, everywhere.
+[[profile.default.overrides]]
+filter = 'test(=discover::tests::link_optimizations_agree_with_the_plain_walk_on_random_trees)'
+threads-required = "num-test-threads"
