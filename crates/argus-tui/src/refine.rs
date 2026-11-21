@@ -19,21 +19,19 @@ pub fn refine(lines: &[(LineKind, &str)]) -> Vec<Segments> {
         .iter()
         .map(|(_, t)| vec![(false, t.to_string())])
         .collect();
-    let mut i = 0;
-    while i < lines.len() {
-        if lines[i].0 != LineKind::Remove {
-            i += 1;
+    // runs of lines of a kind, as ranges: a removed run with an added one
+    // straight after it pairs up
+    let numbered: Vec<(usize, LineKind)> = lines.iter().map(|l| l.0).enumerate().collect();
+    let runs: Vec<(LineKind, std::ops::Range<usize>)> = numbered
+        .chunk_by(|a, b| a.1 == b.1)
+        .map(|run| (run[0].1, run[0].0..run[run.len() - 1].0 + 1))
+        .collect();
+    for pair in runs.windows(2) {
+        let [(LineKind::Remove, removed), (LineKind::Add, added)] = pair else {
             continue;
-        }
-        let removed = i..(i..lines.len())
-            .find(|&j| lines[j].0 != LineKind::Remove)
-            .unwrap_or(lines.len());
-        let end = (removed.end..lines.len())
-            .find(|&j| lines[j].0 != LineKind::Add)
-            .unwrap_or(lines.len());
-        let added = removed.end..end;
-        i = end;
-        if added.is_empty() || removed.len() > MAX_RUN || added.len() > MAX_RUN {
+        };
+        let (removed, added) = (removed.clone(), added.clone());
+        if removed.len() > MAX_RUN || added.len() > MAX_RUN {
             continue;
         }
         let join = |r: &std::ops::Range<usize>| {

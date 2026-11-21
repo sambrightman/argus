@@ -177,21 +177,18 @@ fn written<'a>(hunk: &'a Hunk, only: Option<&[usize]>, reverse: bool) -> Vec<Wri
     // the side the patch ends up with, and the one it's applied to
     let (result, target) = if reverse { ('-', '+') } else { ('+', '-') };
     let mut lines: Vec<Written> = vec![];
-    let mut i = 0;
-    while i < hunk.lines.len() {
-        if hunk.lines[i].kind == LineKind::Context {
-            lines.push((' ', &hunk.lines[i], hunk.lines[i].no_newline));
-            i += 1;
+    // runs of context, and of changes (each line with where it is)
+    let numbered: Vec<(usize, &Line)> = hunk.lines.iter().enumerate().collect();
+    let context = |l: &Line| l.kind == LineKind::Context;
+    for run in numbered.chunk_by(|(_, a), (_, b)| context(a) == context(b)) {
+        if run.iter().all(|(_, l)| context(l)) {
+            lines.extend(run.iter().map(|(_, l)| (' ', *l, l.no_newline)));
             continue;
         }
         // a run of changes: its removed lines, then its added ones
-        let run = hunk.lines[i..]
-            .iter()
-            .take_while(|l| l.kind != LineKind::Context)
-            .count();
         let of = |kind: LineKind| {
-            let run = (i..i + run).filter(move |&n| hunk.lines[n].kind == kind);
-            run.map(|n| (chosen(n), &hunk.lines[n]))
+            let run = run.iter().filter(move |(_, l)| l.kind == kind);
+            run.map(|&(n, l)| (chosen(n), l))
         };
         let (removed, added): (Vec<_>, Vec<_>) =
             (of(LineKind::Remove).collect(), of(LineKind::Add).collect());
@@ -217,27 +214,23 @@ fn written<'a>(hunk: &'a Hunk, only: Option<&[usize]>, reverse: bool) -> Vec<Wri
             .chain(coming)
             .chain(theirs[place..].iter().map(staying));
         lines.extend(block);
-        i += run;
     }
     // only the last line of the side being made can lack a newline
-    let mut last = lines.iter().rposition(|l| l.0 == ' ' || l.0 == result);
-    let mut n = 0;
-    while n < lines.len() {
-        let (sign, l, no_newline) = lines[n];
-        if no_newline && Some(n) != last {
-            if sign == result {
-                lines[n].2 = false;
-            } else if sign == ' ' {
-                // there without a newline, here with one
-                lines[n] = (target, l, true);
-                lines.insert(n + 1, (result, l, false));
-                last = last.map(|at| at + 1);
-                n += 1;
-            }
+    let last = lines.iter().rposition(|l| l.0 == ' ' || l.0 == result);
+    let ends = |n: usize, (sign, l, no_newline): Written<'a>| -> Vec<Written<'a>> {
+        match (sign, no_newline && Some(n) != last) {
+            (_, false) => vec![(sign, l, no_newline)],
+            (s, true) if s == result => vec![(sign, l, false)],
+            // there without a newline, here with one
+            (' ', true) => vec![(target, l, true), (result, l, false)],
+            _ => vec![(sign, l, no_newline)],
         }
-        n += 1;
-    }
+    };
     lines
+        .into_iter()
+        .enumerate()
+        .flat_map(|(n, w)| ends(n, w))
+        .collect()
 }
 
 #[derive(Debug, thiserror::Error)]

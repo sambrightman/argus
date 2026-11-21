@@ -128,27 +128,33 @@ impl LineEditor {
         Edit::Changed
     }
 
+    /// The start of the word before the cursor (past what isn't a word).
     fn word_left(&self) -> usize {
-        let mut i = self.cursor;
-        while i > 0 && !self.text[i - 1].is_alphanumeric() {
-            i -= 1;
-        }
-        while i > 0 && self.text[i - 1].is_alphanumeric() {
-            i -= 1;
-        }
-        i
+        let before = &self.text[..self.cursor];
+        let after = |p: usize| p + 1;
+        let word_end = before
+            .iter()
+            .rposition(|c| c.is_alphanumeric())
+            .map_or(0, after);
+        let word = &before[..word_end];
+        word.iter()
+            .rposition(|c| !c.is_alphanumeric())
+            .map_or(0, after)
     }
 
+    /// The end of the word after the cursor (past what isn't a word).
     fn word_right(&self) -> usize {
-        let n = self.text.len();
-        let mut i = self.cursor;
-        while i < n && !self.text[i].is_alphanumeric() {
-            i += 1;
-        }
-        while i < n && self.text[i].is_alphanumeric() {
-            i += 1;
-        }
-        i
+        let after = &self.text[self.cursor..];
+        let word_start = after
+            .iter()
+            .position(|c| c.is_alphanumeric())
+            .unwrap_or(after.len());
+        let word = &after[word_start..];
+        let word_len = word
+            .iter()
+            .position(|c| !c.is_alphanumeric())
+            .unwrap_or(word.len());
+        self.cursor + word_start + word_len
     }
 }
 
