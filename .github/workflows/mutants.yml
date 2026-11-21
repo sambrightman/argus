@@ -61,13 +61,12 @@ jobs:
       # copying the tree. Exit 2 (missed) and 3 (timeouts) still produce a
       # report: the summary job judges those.
       #
-      # A mutant can make a loop allocate or write without end (an index
-      # that never grows), filling the runner's memory or disk long before
-      # the timeout: the runner is then shut down, and its shard's results
-      # lost. On Linux each process is capped (12GB of address space, 4GB
-      # files), so such a mutant fails its tests, as it should, and is
-      # caught. Every mutant's outcome is printed, so a runner lost anyway
-      # names the last one it was on.
+      # Every mutant's outcome is printed, not only the misses: a mutant
+      # that makes a loop allocate without end (an index that never grows)
+      # fills the runner's memory before the timeout, and the runner is
+      # shut down with the shard's results; the log then names the last
+      # mutant it was on. Loops that step an index by hand are best made
+      # iterators, which leave no such mutant.
       - name: Mutants
         env:
           SHARD: ${{ matrix.shard }}/${{ matrix.of }}
@@ -76,9 +75,6 @@ jobs:
           if [ "$RUNNER_OS" = macOS ]; then
             read -ra macos <<< "$MACOS_FILES"
             for f in "${macos[@]}"; do files+=(-f "$f"); done
-          else
-            ulimit -v $((12 * 1024 * 1024))
-            ulimit -f $((4 * 1024 * 1024))
           fi
           set +e
           cargo mutants --in-place --baseline=skip --timeout 300 --shard "$SHARD" \
