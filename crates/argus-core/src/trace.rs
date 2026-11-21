@@ -87,11 +87,8 @@ impl Step {
         let mut sub_steps = Duration::ZERO;
         let mut reached = self.started;
         for (from, to) in spans {
-            let from = from.max(reached);
-            if to > from {
-                sub_steps += to - from;
-                reached = to;
-            }
+            sub_steps += to.saturating_duration_since(from.max(reached));
+            reached = reached.max(to);
         }
         Some(Split {
             own: took.saturating_sub(sub_steps),

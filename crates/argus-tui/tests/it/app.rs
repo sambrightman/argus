@@ -947,6 +947,30 @@ fn s_sorts_the_steps_by_time_then_totals_them_by_kind() {
     );
 }
 
+/// By kind, more kinds than fit: the cursor's, the last, in view below
+/// the row naming the columns.
+#[test]
+fn kinds_past_the_window_scroll_under_their_header() {
+    use argus_core::trace::Step;
+    let (_sb, mut app) = setup("");
+    let mut scan = Step::new("scan", "scan", Some(std::time::Duration::from_millis(500)));
+    scan.steps = (0..30)
+        .map(|n| {
+            let ms = std::time::Duration::from_millis(100 - n);
+            Step::new(&format!("kind{n:02}"), "x", Some(ms))
+        })
+        .collect();
+    app.on_msg(Msg::Step(scan));
+    open_history(&mut app);
+    app.on_key(key('s'));
+    app.on_key(key('s'));
+    let screen = render(&mut app, 100, 20);
+    assert!(screen.contains("kind                  steps"), "{screen}");
+    // the least, last
+    assert!(screen.contains("kind29 "), "{screen}");
+    assert!(!screen.contains("kind00 "), "{screen}");
+}
+
 /// Without steps (no -v), the views by time say where they come from.
 #[test]
 fn the_views_by_time_say_steps_need_v() {
