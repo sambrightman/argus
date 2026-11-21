@@ -382,10 +382,12 @@ fn draw_list(f: &mut Frame, app: &mut App, v: &View, area: Rect) -> Vec<LinkAt> 
             let pad = (body.width as usize).saturating_sub(line.width());
             line.push_span(Span::styled(" ".repeat(pad), t.ui(Ui::Selection)));
         } else if region.contains(&row_idx) {
-            // (as magit's: what has a background of its own keeps it)
+            // (as magit's: what has a background of its own keeps it, a
+            // changed word's in reverse video too)
             let style = t.ui(Ui::Region);
             for span in &mut line.spans {
-                if span.style.bg.is_none() {
+                let reversed = span.style.add_modifier.contains(Modifier::REVERSED);
+                if span.style.bg.is_none() && !reversed {
                     span.style = span.style.patch(style);
                 }
             }

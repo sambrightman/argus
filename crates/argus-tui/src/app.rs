@@ -4534,10 +4534,19 @@ impl App {
         // what it would do, to say exactly that: unstaged changes dropped,
         // untracked files deleted, staged work left
         let (mut changed, mut untracked): (Vec<&String>, Vec<&String>) = (vec![], vec![]);
+        let mut conflicted = 0;
         for (_, op) in &file_jobs {
             match op {
                 Op::Clean { paths } => untracked.extend(paths),
-                Op::Restore { paths, .. } => changed.extend(paths),
+                Op::Restore {
+                    paths, from_head, ..
+                } => {
+                    changed.extend(paths);
+                    // (a conflicted file goes back as committed)
+                    if *from_head {
+                        conflicted += paths.len();
+                    }
+                }
                 _ => {}
             }
         }
@@ -4548,21 +4557,23 @@ impl App {
         } else {
             ""
         };
+        // (of those, how many are conflicted)
+        let some = match (changed.len(), conflicted) {
+            (_, 0) => String::new(),
+            (1, _) => " (conflicted)".into(),
+            (_, n) => format!(" ({n} conflicted)"),
+        };
         let files_question = match (changed.as_slice(), untracked.as_slice()) {
             ([], []) => None,
-            ([one], []) => Some(format!("unstaged changes to {one}? They're lost.")),
-            ([], [one]) => Some(format!("untracked {one}? It's lost.")),
+            ([one], []) => Some(format!("unstaged changes to {one}{some}?")),
+            ([], [one]) => Some(format!("untracked {one}?")),
             (c, []) => Some(format!(
-                "unstaged changes to {} {of_marks}files? They're lost.",
+                "unstaged changes to {} {of_marks}files{some}?",
                 c.len()
             )),
-            ([], u) => Some(format!(
-                "{} {of_marks}untracked files? They're lost.",
-                u.len()
-            )),
+            ([], u) => Some(format!("{} {of_marks}untracked files?", u.len())),
             (c, u) => Some(format!(
-                "unstaged changes to {} {of_marks}{} and delete {} {of_marks}untracked? \
-                 They're lost.",
+                "unstaged changes to {} {of_marks}{}{some} and delete {} {of_marks}untracked?",
                 c.len(),
                 plural(c.len(), "file", "files"),
                 u.len()
@@ -4581,16 +4592,14 @@ impl App {
             }
             (0, _, Some(files)) if delete_only => format!("Delete {files}"),
             (0, _, Some(files)) => format!("Discard {files}"),
-            (_, Some(hunk), None) => format!(
-                "{}? It's lost.",
-                capitalised(&hunk.replacen("a ", "this ", 1))
-            ),
+            (_, Some(hunk), None) => {
+                format!("{}?", capitalised(&hunk.replacen("a ", "this ", 1)))
+            }
             (n, _, None) => format!(
-                "Discard the marked lines ({n} file{})? They're lost.",
+                "Discard the marked lines ({n} file{})?",
                 if n == 1 { "" } else { "s" }
             ),
             (_, _, Some(files)) => {
-                let files = files.replace("It's lost.", "They're lost.");
                 let of = format!("{lines} marked {}", plural(lines, "line", "lines"));
                 match (delete_only, untracked.is_empty()) {
                     (true, _) => format!("Discard {of} and delete {files}"),

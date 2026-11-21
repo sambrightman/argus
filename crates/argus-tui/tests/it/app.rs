@@ -2185,7 +2185,7 @@ fn a_sections_own_line_acts_on_all_its_files_and_folds_it() {
     to_section(&mut app, Section::Unstaged);
     assert!(app.on_key(key('K')).is_empty());
     assert!(
-        matches!(&app.mode, Mode::Confirm { question, .. } if question == "Discard unstaged changes to 2 files? They're lost.")
+        matches!(&app.mode, Mode::Confirm { question, .. } if question == "Discard unstaged changes to 2 files?")
     );
     app.on_key(key('n'));
     // Tab folds the section to its own line, and back; the others stay
@@ -2241,10 +2241,7 @@ fn discarding_always_asks() {
     let fx = app.on_key(key('K'));
     assert!(fx.is_empty());
     assert!(matches!(app.mode, Mode::Confirm { .. }));
-    assert!(
-        render(&mut app, 100, 30)
-            .contains("Discard unstaged changes to README? They're lost. (y/n)")
-    );
+    assert!(render(&mut app, 100, 30).contains("Discard unstaged changes to README? (y/n)"));
     let fx = app.on_key(key('n'));
     assert!(fx.is_empty() && matches!(app.mode, Mode::Normal));
     // several files: counted; y runs the discard
@@ -2255,7 +2252,7 @@ fn discarding_always_asks() {
     app.on_key(key('K'));
     // (saying what goes: the untracked one is deleted)
     assert!(render(&mut app, 120, 30).contains(
-        "Discard unstaged changes to 1 marked file and delete 1 marked untracked? They're lost. (y/n)"
+        "Discard unstaged changes to 1 marked file and delete 1 marked untracked? (y/n)"
     ));
     let fx = app.on_key(key('y'));
     assert_eq!(
@@ -2277,7 +2274,7 @@ fn discarding_always_asks() {
     // an untracked file alone: deleted, said so
     to_file(&mut app, "new");
     app.on_key(key('K'));
-    assert!(render(&mut app, 100, 30).contains("Delete untracked new? It's lost. (y/n)"));
+    assert!(render(&mut app, 100, 30).contains("Delete untracked new? (y/n)"));
     app.on_key(key('n'));
     // a file with staged changes too: only the unstaged ones go, from
     // its line or from the section's
@@ -5536,7 +5533,7 @@ fn hunks_and_lines_are_staged_unstaged_and_discarded() {
     });
     assert!(app.act(Action::DiscardFiles).is_empty());
     assert!(
-        matches!(&app.mode, Mode::Confirm { question, .. } if question == "Discard this hunk of README? It's lost.")
+        matches!(&app.mode, Mode::Confirm { question, .. } if question == "Discard this hunk of README?")
     );
     let (patch, index, reverse, what) = apply(app.on_key(key('y')));
     assert_eq!((index, reverse), (false, true));
@@ -5974,7 +5971,7 @@ fn marked_files_and_marked_lines_are_acted_on_together() {
     assert!(app.on_key(key('K')).is_empty());
     assert!(
         render(&mut app, 140, 30).contains(
-            "Discard 1 marked line, unstaged changes to 1 file and delete 1 untracked? They're lost. (y/n)"
+            "Discard 1 marked line, unstaged changes to 1 file and delete 1 untracked? (y/n)"
         ),
         "{}",
         render(&mut app, 140, 30)
@@ -6423,6 +6420,13 @@ fn a_region_is_shown_by_a_background() {
         region,
         "the cursor's row: the selection"
     );
+    // a changed word, in reverse video, keeps it: its background is its
+    // text's colour
+    let y = (removed + 1 - app.scroll) as u16;
+    let three = (0..100).find(|&x| buf[(x, y)].symbol() == "3").unwrap();
+    let cell = &buf[(three, y)];
+    assert!(cell.modifier.contains(ratatui::style::Modifier::REVERSED));
+    assert_ne!(cell.bg, region, "reversed, the region's would be its text");
 }
 
 /// Marks stay when what was asked for them doesn't start (the repo busy).
@@ -6492,7 +6496,7 @@ fn what_is_marked_twice_over_counts_once() {
     assert!(app.marked_lines.is_empty() && app.region.is_none());
     app.on_key(key('K'));
     assert!(
-        render(&mut app, 100, 40).contains("Discard unstaged changes to f? They're lost."),
+        render(&mut app, 100, 40).contains("Discard unstaged changes to f?"),
         "{}",
         render(&mut app, 100, 40)
     );
@@ -6542,7 +6546,7 @@ fn what_is_marked_twice_over_counts_once() {
     app.on_key(key(' '));
     app.on_key(key('K'));
     assert!(
-        render(&mut app, 100, 40).contains("Delete untracked build/? It's lost."),
+        render(&mut app, 100, 40).contains("Delete untracked build/?"),
         "{}",
         render(&mut app, 100, 40)
     );
@@ -7951,7 +7955,7 @@ fn marks_show_on_what_holds_them_and_k_says_where() {
     app.on_key(key('A'));
     assert!(
         render(&mut app, 140, 60)
-            .contains("In acme/dirty: discard unstaged changes to README? They're lost. (y/n)"),
+            .contains("In acme/dirty: discard unstaged changes to README? (y/n)"),
         "{}",
         render(&mut app, 140, 60)
     );
@@ -7959,9 +7963,7 @@ fn marks_show_on_what_holds_them_and_k_says_where() {
     // inverse: in its own repo, it needn't
     cursor_on_detail(&mut app, "dirty", "path");
     app.on_key(key('K'));
-    assert!(
-        render(&mut app, 140, 60).contains(" Discard unstaged changes to README? They're lost.")
-    );
+    assert!(render(&mut app, 140, 60).contains(" Discard unstaged changes to README?"));
     app.on_key(key('n'));
     assert!(!app.on_key(key('s')).is_empty());
     assert_eq!(app.message.as_ref().unwrap().0, "running 1 job(s)…");
@@ -7998,8 +8000,7 @@ fn discarding_in_several_repos_says_how_many() {
     app.on_key(key('K'));
     app.on_key(key('A'));
     assert!(
-        render(&mut app, 140, 60)
-            .contains("In 2 repos: delete 2 marked untracked files? They're lost."),
+        render(&mut app, 140, 60).contains("In 2 repos: delete 2 marked untracked files?"),
         "{}",
         render(&mut app, 140, 60)
     );
@@ -8373,13 +8374,13 @@ fn marks_beyond_the_cursors_repo_ask_which_is_meant() {
     // K asks which, then asks as it always does, about just that
     app.on_key(key('K'));
     app.on_key(key('K'));
-    assert!(render(&mut app, 140, 60).contains(" Delete untracked other? It's lost. (y/n)"));
+    assert!(render(&mut app, 140, 60).contains(" Delete untracked other? (y/n)"));
     app.on_key(key('n'));
     app.on_key(key('K'));
     app.on_key(key('A'));
     assert!(
         render(&mut app, 140, 60)
-            .contains("In acme/dirty: discard unstaged changes to README? They're lost. (y/n)")
+            .contains("In acme/dirty: discard unstaged changes to README? (y/n)")
     );
     app.on_key(key('n'));
     // marked here too: the key again is for this repo's marks, not the
@@ -8449,7 +8450,7 @@ fn the_keys_on_a_repos_row_take_the_whole_repo() {
     assert!(app.on_key(key('K')).is_empty());
     assert_eq!(
         asked(&mut app),
-        "Everything in acme/dirty: discard unstaged changes to 2 files and delete 2 untracked? They're lost. (y/n)"
+        "Everything in acme/dirty: discard unstaged changes to 2 files and delete 2 untracked? (y/n)"
     );
     app.on_key(key('n'));
     // the repo's own row, its details shown
@@ -8613,10 +8614,61 @@ fn s_and_u_leave_conflicted_files_out_and_say_so() {
     app.act(Action::ToggleExpand);
     app.cursor = clean(&app);
     assert!(app.on_key(key('s')).is_empty());
+    let asked = |app: &App| match &app.mode {
+        Mode::Confirm { question, .. } => question.clone(),
+        _ => panic!("not asked"),
+    };
+    assert_eq!(
+        asked(&app),
+        "Stage everything in acme/clean (1 file; README, conflicted, left out)?"
+    );
+    app.on_key(key('n'));
+    // K takes it, back as committed: its question counts it
+    app.cursor = clean(&app);
+    assert!(app.on_key(key('K')).is_empty());
+    assert_eq!(
+        asked(&app),
+        "Everything in acme/clean: discard unstaged changes to 1 file (conflicted) \
+         and delete 1 untracked?"
+    );
+    app.on_key(key('n'));
+    to_file(&mut app, "README");
+    assert!(app.on_key(key('K')).is_empty());
+    assert_eq!(
+        asked(&app),
+        "Discard unstaged changes to README (conflicted)?"
+    );
+}
+
+/// K's question counts the conflicted files among those it puts back.
+#[test]
+fn discarding_says_how_many_are_conflicted() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let r = sb.path("dev/clean");
+        write(&r, "notes", "one\n");
+        commit(&r, "notes");
+        git(&r, &["switch", "-q", "-c", "theirs"]);
+        write(&r, "README", "theirs\n");
+        commit(&r, "theirs");
+        git(&r, &["switch", "-q", "-"]);
+        write(&r, "README", "ours\n");
+        commit(&r, "ours");
+        assert!(!argus_core::testkit::git_may_fail(
+            &r,
+            &["merge", "-q", "theirs"]
+        ));
+        write(&r, "notes", "two\n");
+    });
+    app.cursor = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("clean")))
+        .unwrap();
+    assert!(app.on_key(key('K')).is_empty());
     match &app.mode {
         Mode::Confirm { question, .. } => assert_eq!(
             question,
-            "Stage everything in acme/clean (1 file; README, conflicted, left out)?"
+            "Everything in acme/clean: discard unstaged changes to 2 files (1 conflicted)?"
         ),
         _ => panic!("not asked"),
     }
@@ -8754,7 +8806,7 @@ fn discarding_marked_files_says_they_are_the_marked_ones() {
     }
     assert_eq!(
         asked(&mut app),
-        "Discard unstaged changes to 2 marked files? They're lost. (y/n)"
+        "Discard unstaged changes to 2 marked files? (y/n)"
     );
     for file in ["new", "new2"] {
         to_file(&mut app, file);
@@ -8762,23 +8814,17 @@ fn discarding_marked_files_says_they_are_the_marked_ones() {
     }
     assert_eq!(
         asked(&mut app),
-        "Discard unstaged changes to 2 marked files and delete 2 marked untracked? They're lost. (y/n)"
+        "Discard unstaged changes to 2 marked files and delete 2 marked untracked? (y/n)"
     );
     for file in ["README", "both"] {
         to_file(&mut app, file);
         app.on_key(key(' '));
     }
-    assert_eq!(
-        asked(&mut app),
-        "Delete 2 marked untracked files? They're lost. (y/n)"
-    );
+    assert_eq!(asked(&mut app), "Delete 2 marked untracked files? (y/n)");
     // inverse: a section's files, nothing marked, aren't called that
     app.on_key(ctrl('g'));
     to_section(&mut app, argus_tui::details::Section::Untracked);
-    assert_eq!(
-        asked(&mut app),
-        "Delete 3 untracked files? They're lost. (y/n)"
-    );
+    assert_eq!(asked(&mut app), "Delete 3 untracked files? (y/n)");
 }
 
 /// What's marked goes with a repo that a rescan no longer lists; and
@@ -8936,11 +8982,11 @@ fn discarding_marked_lines_and_files_says_which_kinds() {
     };
     assert_eq!(
         asked(&mut app, "README"),
-        "Discard 2 marked lines and unstaged changes to README? They're lost. (y/n)"
+        "Discard 2 marked lines and unstaged changes to README? (y/n)"
     );
     assert_eq!(
         asked(&mut app, "new"),
-        "Discard 2 marked lines and delete untracked new? They're lost. (y/n)"
+        "Discard 2 marked lines and delete untracked new? (y/n)"
     );
 }
 
