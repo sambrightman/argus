@@ -1055,7 +1055,7 @@ fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
                 ));
                 spans.push(Span::raw(label.to_string()));
             }
-            Shown::Step(s) => spans.push(Span::styled(s.with_split(), t.ui(Ui::Dim))),
+            Shown::Step { step, of } => spans.push(Span::styled(step.said_in(*of), t.ui(Ui::Dim))),
             Shown::Output(s) => spans.push(Span::styled(s.to_string(), t.ui(Ui::Dim))),
             Shown::Kind { kind, tally } => {
                 let d = argus_core::trace::duration;

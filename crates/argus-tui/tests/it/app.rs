@@ -876,12 +876,12 @@ fn s_sorts_the_steps_by_time_then_totals_them_by_kind() {
     let order: Vec<&str> = [
         "30ms  scan",
         "25ms  status ~/dev/b",
-        "22ms  files",
+        "22ms  status ~/dev/b: files",
         "20ms  status ~/dev/a",
-        "15ms  files",
+        "15ms  status ~/dev/a: files",
         "9ms  refresh",
         "9ms  status ~/dev/a",
-        "7ms  files",
+        "7ms  status ~/dev/a: files",
     ]
     .into_iter()
     .collect();
@@ -893,6 +893,9 @@ fn s_sorts_the_steps_by_time_then_totals_them_by_kind() {
         at.windows(2).all(|w| w[0] < w[1]),
         "{order:?} in order in\n{screen}"
     );
+    // a part, apart from its step, named with it; a step said in full not
+    assert!(screen.contains("1ms  status ~/dev/b: open"), "{screen}");
+    assert!(!screen.contains("scan: 2 repos: status"), "{screen}");
     // nothing untimed; none folded, none indented
     assert!(!screen.contains("roots ~/dev"), "{screen}");
     assert!(
@@ -997,12 +1000,13 @@ fn slash_searches_the_messages() {
     app.on_key(alt('<'));
     app.on_key(code(KeyCode::Tab));
     assert!(!render(&mut app, 100, 30).contains("status ~/dev/b"));
-    // kept by time too
+    // kept by time too, b's parts found by the repo in their names
     app.on_key(key('s'));
     let screen = render(&mut app, 100, 30);
     assert!(screen.contains("25ms  status ~/dev/b"), "{screen}");
+    assert!(screen.contains("22ms  status ~/dev/b: files"), "{screen}");
     assert!(
-        !screen.contains("scan") && !screen.contains("files"),
+        !screen.contains("scan") && !screen.contains("dev/a"),
         "{screen}"
     );
     app.on_key(key('s'));

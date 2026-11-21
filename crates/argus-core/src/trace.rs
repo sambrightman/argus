@@ -103,14 +103,34 @@ impl Step {
     /// Its time and, if it took steps, how that divides: `30ms  scan: 2
     /// repos (own 5ms, sub-steps 25ms from 45ms total)`.
     pub fn with_split(&self) -> String {
+        self.said_in(None)
+    }
+
+    /// [`Step::with_split`], a part named with the step it's in, `of`:
+    /// `12ms  status ~/dev/argus: files`, as it's said away from it.
+    pub fn said_in(&self, of: Option<&str>) -> String {
+        let time = match self.took {
+            Some(d) => duration(d),
+            None => String::new(),
+        };
+        let said = format!("{time:>7}  {}", self.named_in(of));
         match self.split() {
             Some(s) => format!(
-                "{self} (own {}, sub-steps {} from {} total)",
+                "{said} (own {}, sub-steps {} from {} total)",
                 duration(s.own),
                 duration(s.sub_steps),
                 duration(s.total)
             ),
-            None => self.to_string(),
+            None => said,
+        }
+    }
+
+    /// What it did, a part (said by its kind alone) named with the step
+    /// it's in, `of`: `status ~/dev/argus: files`.
+    pub fn named_in(&self, of: Option<&str>) -> String {
+        match of.filter(|of| !of.is_empty()) {
+            Some(of) if self.what == self.kind => format!("{of}: {}", self.what),
+            _ => self.what.clone(),
         }
     }
 }
@@ -378,14 +398,9 @@ where
             Some(Form::Each) => {
                 let of = span.parent().and_then(|p| {
                     let ext = p.extensions();
-                    ext.get::<Open>()
-                        .map(|o| o.what.clone())
-                        .filter(|w| !w.is_empty())
+                    ext.get::<Open>().map(|o| o.what.clone())
                 });
-                let what = match of {
-                    Some(of) if step.what == step.kind => format!("{of}: {}", step.what),
-                    _ => step.what,
-                };
+                let what = step.named_in(of.as_deref());
                 emit(Step { what, ..step })
             }
             None => {}
@@ -580,6 +595,17 @@ mod tests {
         assert_eq!(noted.split(), None);
         assert_eq!(step(5, 0).split(), None);
         assert_eq!(noted.with_split(), "    5ms  x");
+        // a part, named with what it's in; not a step said in full
+        let part = Step::new("files", "files", Some(ms(3)));
+        assert_eq!(
+            part.said_in(Some("status ~/a")),
+            "    3ms  status ~/a: files"
+        );
+        assert_eq!(part.said_in(None), "    3ms  files");
+        assert_eq!(part.said_in(Some("")), "    3ms  files");
+        let status = Step::new("status", "status ~/b", Some(ms(5)));
+        assert_eq!(status.said_in(Some("scan")), "    5ms  status ~/b");
+        assert_eq!(Step::new("note", "n", None).said_in(None), "         n");
         assert_eq!(
             pairs.with_split(),
             "    4ms  x (own 1ms, sub-steps 3ms from 8ms total)"

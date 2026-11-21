@@ -83,7 +83,12 @@ pub enum Shown<'a> {
         label: &'a str,
         ok: bool,
     },
-    Step(&'a Step),
+    /// A step, and what it's in where that's not shown above it (sorted
+    /// by time).
+    Step {
+        step: &'a Step,
+        of: Option<&'a str>,
+    },
     /// A line of what was said, or of a job's output, after its first.
     Output(&'a str),
     /// The steps of a kind, and their time.
@@ -140,9 +145,10 @@ impl<'a> Node<'a> {
                     label,
                     ok: *ok,
                 },
-                Happened::Step(s) => Shown::Step(s),
+                Happened::Step(s) => Shown::Step { step: s, of: None },
             },
-            Node::Step(s) => Shown::Step(s),
+            // (in the tree, what it's in is above it)
+            Node::Step(s) => Shown::Step { step: s, of: None },
             Node::Line(l) => Shown::Output(l),
         }
     }
@@ -154,7 +160,7 @@ impl<'a> Node<'a> {
             Shown::Job { repo, label, .. } => {
                 return repo.to_lowercase().contains(q) || label.to_lowercase().contains(q);
             }
-            Shown::Step(s) => &s.what,
+            Shown::Step { step, of } => return step.named_in(of).to_lowercase().contains(q),
             Shown::Kind { kind, .. } => kind,
         };
         text.to_lowercase().contains(q)
@@ -183,16 +189,16 @@ pub fn lines<'a>(history: &'a [Event], m: &Messages) -> Vec<MessageLine<'a>> {
             let mut all: Vec<MessageLine> = vec![];
             for (i, e) in history.iter().enumerate() {
                 if let Happened::Step(s) = &e.what {
-                    timed(&mut all, s, vec![i], e.at);
+                    timed(&mut all, s, None, vec![i], e.at);
                 }
             }
             all.retain(|l| {
                 q.is_empty()
-                    || matches!(l.what, Shown::Step(s) if s.what.to_lowercase().contains(&q))
+                    || matches!(l.what, Shown::Step { step, of } if step.named_in(of).to_lowercase().contains(&q))
             });
             // (stable: of those as slow, the earlier first)
             all.sort_by_key(|l| match l.what {
-                Shown::Step(s) => std::cmp::Reverse(s.took),
+                Shown::Step { step, .. } => std::cmp::Reverse(step.took),
                 _ => std::cmp::Reverse(None),
             });
             out = all;
@@ -280,21 +286,28 @@ fn tree<'a>(
     }
 }
 
-/// `s` and every step in it that was timed, each a line.
-fn timed<'a>(out: &mut Vec<MessageLine<'a>>, s: &'a Step, path: Vec<usize>, at: jiff::Timestamp) {
+/// `s` and every step in it that was timed, each a line; `of`, what `s`
+/// is in.
+fn timed<'a>(
+    out: &mut Vec<MessageLine<'a>>,
+    s: &'a Step,
+    of: Option<&'a str>,
+    path: Vec<usize>,
+    at: jiff::Timestamp,
+) {
     if s.took.is_some() {
         out.push(MessageLine {
             depth: 0,
             path: path.clone(),
             at: Some(at),
             fold: None,
-            what: Shown::Step(s),
+            what: Shown::Step { step: s, of },
         });
     }
     for (i, inner) in s.steps.iter().enumerate() {
         let mut p = path.clone();
         p.push(i);
-        timed(out, inner, p, at);
+        timed(out, inner, Some(&s.what), p, at);
     }
 }
 
