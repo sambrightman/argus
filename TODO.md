@@ -85,9 +85,16 @@ deferred.
   lines marked (or a file marked under unstaged alone that's staged
   too), `z m` refuses a file marked whole that's untracked, listed
   under staged, deleted, not text or with its mode changed, and refuses
-  staged lines; they'd need the stash's tree built file by file.
-- **If the lines can't be taken out after the stash is stored and
-  something else pushed a stash in that instant,** argus leaves its own
-  (it won't drop a stash that isn't the one it made) while saying "not
-  stashed". No test reaches it: it needs another git process at that
-  moment.
+  staged lines; they'd need the stash's tree built file by file. To do
+  after 0.3.0.
+- **Dropping a stash can drop another process's.** git drops stashes
+  only by position (`stash@{n}`, not a commit id: `drop <id>` is "not a
+  stash reference"), and locks for one command, not across two. So
+  argus checks the position still holds the stash it means, then drops
+  it, and a stash pushed in between (by an editor's `--autostash`, say)
+  is dropped instead: by the stash menu's drop, and by a line stash
+  undoing itself when its lines can't be taken out. The commit stays
+  in the repo until gc (`git fsck --unreachable` finds it). Nothing
+  built from git commands closes this; a cheap mitigation is to read
+  the list (with gix) after the drop and `git stash store` back every
+  entry gone that wasn't meant to go, which errs toward keeping a stash.
