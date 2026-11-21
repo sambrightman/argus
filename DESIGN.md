@@ -699,7 +699,9 @@ rendering is snapshot-tested via `TestBackend`.
   actions); the user can snooze or tolerate in between. A future
   "auto-fix all" may chain. Defaults: `push` (fast-forward, to the
   branch's own name only), `push-branches` (the same for other branches,
-  existing remote branches only), `switch-default` and `reattach`.
+  existing remote branches only), `switch-default`, `reattach` and
+  `fast-forward` (branches not checked out, by `git fetch . up:branch`:
+  never the work tree, never anything but a fast-forward, no network).
 * **The order of `[fix] auto` (or `-k`) is the priority.** Each action
   applies the first listed kind the repo needs; unlisted kinds rank after,
   in `FixKind::ALL` order: clean up uncommitted work (stash, commit), share

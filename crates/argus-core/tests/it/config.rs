@@ -21,6 +21,19 @@ fn err(r: Result<Config, argus_core::config::ConfigError>) -> String {
     }
 }
 
+/// Auto-fix applies, by default, what can't lose work or need input:
+/// sharing commits, leaving a finished branch, and fast-forwarding
+/// branches not checked out (which never touches the work tree), last.
+#[test]
+fn auto_fix_fast_forwards_other_branches_by_default() {
+    use FixKind::*;
+    let auto = Config::default().fix.auto;
+    assert_eq!(
+        auto,
+        [Push, PushBranches, SwitchDefault, Reattach, FastForward]
+    );
+}
+
 #[test]
 fn extend_appends_to_any_list_setting() {
     let d = Config::default();

@@ -2683,7 +2683,7 @@ fn explanations_when_nothing_applies() {
     assert!(app.act(Action::AutoFix(Scope::Selected)).is_empty());
     assert_eq!(
         msg(&app),
-        "no auto-fixes (push, push-branches, switch-default, reattach) apply"
+        "no auto-fixes (push, push-branches, switch-default, reattach, fast-forward) apply"
     );
     assert!(app.act(Action::AbortOperation).is_empty());
     assert_eq!(msg(&app), "nothing in progress");
@@ -2818,7 +2818,9 @@ fn the_fix_menu_says_what_fix_all_leaves_out() {
         app.on_key(ctrl('g'));
         (notes, screen)
     };
-    let (_sb, mut app) = setup_with("", prep);
+    // (fast-forward is auto by default: here it isn't)
+    let without = "[fix]\nauto = ['push', 'push-branches', 'switch-default', 'reattach']";
+    let (_sb, mut app) = setup_with(without, prep);
     let (n, screen) = notes(&mut app);
     let said = "2 more repos with fixes not in [fix] auto: stash (1), pull (1), fast-forward (1)";
     assert_eq!(n, [said]);

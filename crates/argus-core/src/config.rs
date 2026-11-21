@@ -463,6 +463,8 @@ impl Default for FixConfig {
                 FixKind::PushBranches,
                 FixKind::SwitchDefault,
                 FixKind::Reattach,
+                // (branches not checked out: never the work tree)
+                FixKind::FastForward,
             ],
         }
     }

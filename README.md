@@ -94,7 +94,7 @@ host = "/srv/git"
 owner = "team"
 
 [fix]
-auto = ["push", "push-branches", "switch-default", "reattach"]  # kinds `x x` / `argus fix` apply without asking
+auto = ["push", "push-branches", "switch-default", "reattach", "fast-forward"]  # kinds `x x` / `argus fix` apply without asking
 
 [tools]
 git_ui = "lazygit"               # or "emacsclient -t -e '(magit-status)'"
