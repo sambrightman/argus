@@ -4443,9 +4443,19 @@ impl App {
                     .ws
                     .get(&repo)
                     .map_or_else(String::new, |e| e.display_name());
-                let n: usize = files.iter().map(|(_, f)| f.len()).sum();
+                // (repos nested in it are left out, and said to be)
+                let n = files.iter().map(|(_, f)| f.len()).sum::<usize>() - nested.len();
+                // (a folder of nothing but repos is listed as one, `vendor/`)
+                let left_out = match nested.as_slice() {
+                    [] => String::new(),
+                    [one] if one.ends_with('/') => {
+                        format!("; {one}, which holds only repos, left out")
+                    }
+                    [one] => format!("; {one}, a repo of its own, left out"),
+                    many => format!("; {} left out: repos of their own", many.join(", ")),
+                };
                 let question = format!(
-                    "{} everything in {name} ({n} {})?",
+                    "{} everything in {name} ({n} {}{left_out})?",
                     capitalised(word),
                     plural(n, "file", "files")
                 );

@@ -8257,6 +8257,61 @@ fn the_keys_on_a_repos_row_take_the_whole_repo() {
     assert!(matches!(app.mode, Mode::Normal));
 }
 
+/// Staging a whole repo leaves out repos nested in it untracked: the
+/// question counts what's staged and says what's left out.
+#[test]
+fn staging_a_whole_repo_counts_without_the_repos_nested_in_it() {
+    let asked = |app: &mut App| {
+        let screen = render(app, 140, 40);
+        let line = screen
+            .lines()
+            .find(|l| l.contains("(y/n)"))
+            .unwrap_or_default();
+        line.trim().to_string()
+    };
+    let (sb, mut app) = setup_with("", |sb| {
+        sb.init("dev/dirty/vendor/thing");
+    });
+    let dirty = |app: &App| {
+        app.rows
+            .iter()
+            .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("dirty")))
+            .unwrap()
+    };
+    app.cursor = dirty(&app);
+    assert!(app.on_key(key('s')).is_empty());
+    assert_eq!(
+        asked(&mut app),
+        "Stage everything in acme/dirty (1 file; vendor/, which holds only repos, left out)? (y/n)"
+    );
+    app.on_key(key('n'));
+    // one in the work tree itself, and two
+    sb.init("dev/dirty/lib");
+    let entries = app.ws.entries.clone();
+    app.on_msg(Msg::Scanned {
+        entries,
+        truncated: vec![],
+    });
+    app.ws.refresh_all();
+    app.rebuild();
+    app.cursor = dirty(&app);
+    assert!(app.on_key(key('s')).is_empty());
+    assert_eq!(
+        asked(&mut app),
+        "Stage everything in acme/dirty (1 file; lib, vendor/ left out: repos of their own)? (y/n)"
+    );
+    app.on_key(key('n'));
+    std::fs::remove_dir_all(sb.path("dev/dirty/vendor")).unwrap();
+    app.ws.refresh_all();
+    app.rebuild();
+    app.cursor = dirty(&app);
+    assert!(app.on_key(key('s')).is_empty());
+    assert_eq!(
+        asked(&mut app),
+        "Stage everything in acme/dirty (1 file; lib, a repo of its own, left out)? (y/n)"
+    );
+}
+
 /// Stashing what's marked and gitignore ask the same as `s`, `u` and `K`
 /// when something is marked in a repo the cursor isn't in.
 #[test]
