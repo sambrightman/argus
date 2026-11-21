@@ -1,7 +1,7 @@
 //! Benchmarks for the hot paths: discovery (with and without `-L` and its
 //! optimizations), status and scanning real repos, a file's diff, config
-//! loading with extended files, and rule matching. Fixtures are built once per
-//! run in a temp directory.
+//! loading with extended files, rule matching, and what taking steps for `-v`
+//! costs. Fixtures are built once per run in a temp directory.
 //!
 //! ```sh
 //! cargo bench -p argus-core                          # all
@@ -121,6 +121,47 @@ fn status_and_scan(c: &mut Criterion) {
             black_box(ws.entries.len())
         })
     });
+    g.finish();
+}
+
+/// A step for `-v` and the TUI's messages, a part in it: with no sink (no
+/// `-v`), each said by itself (the CLI) and held whole (the TUI); and one
+/// repo's status, its dozen or so steps, without them and held whole.
+fn steps(c: &mut Criterion) {
+    use argus_core::trace::{self, Form, Sink};
+    use std::sync::Arc;
+    let take = || {
+        trace::step(
+            "status",
+            || "status ~/dev/r".to_string(),
+            || trace::part("files", || black_box(1)),
+        )
+    };
+    let sb = Sandbox::new();
+    let dev = repos(&sb, 1);
+    let one = dev.join("r0");
+    let mut g = c.benchmark_group("steps");
+    let sinks: [(&str, Option<(Form, Sink)>); 3] = [
+        ("off", None),
+        (
+            "each said",
+            Some((Form::Each, Arc::new(|s| drop(black_box(s))))),
+        ),
+        (
+            "held whole",
+            Some((Form::Whole, Arc::new(|s| drop(black_box(s))))),
+        ),
+    ];
+    for (name, sink) in sinks {
+        trace::set_sink(sink.clone());
+        g.bench_function(format!("a step holding a part, {name}"), |b| b.iter(take));
+        if name != "each said" {
+            g.bench_function(format!("one repo's status, {name}"), |b| {
+                b.iter(|| black_box(status(&one, StatusOptions::default()).unwrap()))
+            });
+        }
+    }
+    trace::set_sink(None);
     g.finish();
 }
 
@@ -271,6 +312,7 @@ criterion_group!(
     benches,
     discovery,
     status_and_scan,
+    steps,
     diff,
     config,
     rules,

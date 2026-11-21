@@ -25,6 +25,16 @@ deferred.
 
 ## Offered, not decided
 
+- **Remember unpushed counts between runs** (`reach`), not only within
+  one: an answer is kept per tip and set of others, so it holds until
+  either moves.
+- **A review of the wording** of messages, prompts and the help
+  (paused partway).
+- **Contention, from each step's CPU time** beside its wall time: a step
+  that waited on threads or the disk shows more wall than CPU time. Not
+  yet: wall time alone says how much ran side by side, not whether it
+  waited.
+
 - **Terminals drawing ambiguous-width symbols two cells wide** (CJK
   setting): detect it and swap those icons. Today `demo --glyphs` marks
   them with `*`.
@@ -61,6 +71,12 @@ deferred.
   after each operation.
 - **Python bindings** to `argus-core` (pyo3/maturin), for scripting over
   the same workspace, status and fix planning.
+- **Upstream to gix:** peeling packed refs without reading their objects
+  where `packed-refs` says `fully-peeled` (written and tested locally:
+  emacs's 259 remote branches cold went from 45ms to 1ms, its status
+  from 120-170ms to 85-110ms); and an issue on peeling reading whole
+  objects where a header lookup would do, which isn't free with the
+  object cache on.
 
 ## Known gaps
 
