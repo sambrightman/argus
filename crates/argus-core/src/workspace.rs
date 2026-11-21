@@ -879,11 +879,11 @@ impl Workspace {
                     0 => String::new(),
                     n => format!(" and {n} more"),
                 };
-                let last = match (shown.len(), more.is_empty()) {
-                    (n, true) if n > 1 => {
-                        format!("{} and {}", shown[..n - 1].join(", "), shown[n - 1])
-                    }
-                    _ => format!("{}{more}", shown.join(", ")),
+                // (two or more: one is said above)
+                let n = shown.len();
+                let last = match more.is_empty() {
+                    true => format!("{} and {}", shown[..n - 1].join(", "), shown[n - 1]),
+                    false => format!("{}{more}", shown.join(", ")),
                 };
                 format!(
                     "walked {least} folders or more in each of {last}, \

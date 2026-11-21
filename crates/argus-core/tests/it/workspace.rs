@@ -1480,6 +1480,16 @@ fn folders_walked_for_nothing_are_named_in_a_warning() {
             contract_tilde(&data)
         )
     );
+    w.barren = vec![(sb.path("a"), 1500), (sb.path("b"), 1000)];
+    assert_eq!(
+        w.barren_warning().unwrap(),
+        format!(
+            "walked 1000 folders or more in each of {} and {}, and found no repo: \
+             exclude_paths skips them",
+            contract_tilde(&sb.path("a")),
+            contract_tilde(&sb.path("b"))
+        )
+    );
     let more: Vec<(std::path::PathBuf, usize)> = ["a", "b", "c", "d"]
         .iter()
         .map(|d| (sb.path(d), 1000))
