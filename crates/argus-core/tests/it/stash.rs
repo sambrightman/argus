@@ -6,7 +6,7 @@ use argus_core::config::StashConfig;
 use argus_core::fix::{FixKind, apply_fix, plan, simulate};
 use argus_core::ops::{self, Op};
 use argus_core::status::{RepoStatus, StatusOptions, status};
-use argus_core::testkit::{Sandbox, commit, git, write};
+use argus_core::testkit::{Sandbox, commit, git, git_with_input, write};
 
 fn st(r: &Path) -> RepoStatus {
     status(r, StatusOptions::default()).unwrap()
@@ -646,6 +646,43 @@ fn a_stash_of_lines_that_fails_changes_nothing() {
         out.output
     );
     std::fs::remove_file(r.join(".git/index.lock")).unwrap();
+    nothing_changed(&r);
+    // and here, another file unmerged: the index has no tree to write
+    let blob = |text: &str| {
+        let file = r.join(".git/blob-for-test");
+        std::fs::write(&file, text).unwrap();
+        let id = git(&r, &["hash-object", "-w", ".git/blob-for-test"]);
+        std::fs::remove_file(file).unwrap();
+        id.trim().to_string()
+    };
+    let entries: String = [(1, "base"), (2, "ours"), (3, "theirs")]
+        .iter()
+        .map(|(stage, text)| format!("100644 {} {stage}\th\n", blob(text)))
+        .collect();
+    git_with_input(&r, &["update-index", "--index-info"], &entries);
+    let steps: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let into = steps.clone();
+    argus_core::trace::set_sink(Some((
+        argus_core::trace::Form::Each,
+        std::sync::Arc::new(move |s: argus_core::trace::Step| into.lock().unwrap().push(s.what)),
+    )));
+    let out = ops::run(&r, &op);
+    argus_core::trace::set_sink(None);
+    assert!(
+        !out.success && out.output.contains("not stashed") && out.output.contains("unmerged"),
+        "{}",
+        out.output
+    );
+    // and -v says which git command failed
+    let steps = steps.lock().unwrap();
+    let scratch = steps
+        .iter()
+        .find(|s| s.contains("write-tree (of a scratch index)"));
+    assert!(
+        scratch.is_some_and(|s| s.ends_with(", failed")),
+        "{steps:?}"
+    );
+    git(&r, &["update-index", "--force-remove", "h"]);
     nothing_changed(&r);
     // no commit to stash against
     let fresh = sb.path("fresh");

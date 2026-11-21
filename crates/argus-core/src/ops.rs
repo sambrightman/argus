@@ -1433,13 +1433,13 @@ fn stash_lines(
         .envs(crate::isolation::git_env().iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .output();
-    let ok = with_lines.as_ref().is_ok_and(|o| o.status.success());
-    traced(cwd, &["write-tree", "(of a scratch index)"], ok, ran);
     let with_lines = match with_lines {
         Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()),
         Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
         Err(e) => Err(format!("failed to run git: {e}")),
     };
+    let ok = with_lines.is_ok();
+    traced(cwd, &["write-tree", "(of a scratch index)"], ok, ran);
     let branch = run(&["symbolic-ref", "--short", "-q", "HEAD"]);
     let branch = branch.unwrap_or_else(|_| "(no branch)".into());
     let title = run(&["log", "-1", "--format=%h %s", "HEAD"]).unwrap_or_default();

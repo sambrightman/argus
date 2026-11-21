@@ -24,7 +24,7 @@ pub enum Side {
     Staged,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum LineKind {
     Context,
     Add,

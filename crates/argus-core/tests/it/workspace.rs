@@ -2182,4 +2182,14 @@ fn a_nested_entry_is_found_by_its_place_in_its_parent() {
         None
     );
     assert_eq!(w.nested_index(&a, "nothing-there"), None);
+    // a submodule: listed, its parent the repo it's in, but not nested
+    let sb = Sandbox::new();
+    let top = sb.nested_submodules().canonicalize().unwrap();
+    let cfg = format!("roots = ['{}']", top.display());
+    let mut w = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    w.scan();
+    let mid = w.get(&top.join("mid")).expect("the submodule, listed");
+    assert_eq!(mid.parent.as_deref(), Some(top.as_path()));
+    assert!(!mid.nested);
+    assert_eq!(w.nested_index(&top, "mid"), None, "listed, so not nested");
 }

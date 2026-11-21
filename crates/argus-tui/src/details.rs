@@ -114,7 +114,7 @@ impl Seg {
             let changed =
                 |l: &&argus_core::diff::Line| l.kind != argus_core::diff::LineKind::Context;
             for l in h.lines.iter().filter(changed) {
-                (l.kind == argus_core::diff::LineKind::Add, &l.text).hash(&mut hasher);
+                (l.kind, &l.text).hash(&mut hasher);
             }
             seen.push(hasher.finish());
         }

@@ -58,6 +58,36 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+/// [`git`], with `input` on its stdin.
+pub fn git_with_input(dir: &Path, args: &[&str], input: &str) -> String {
+    use std::io::Write;
+    let mut child = Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", global_config())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn git");
+    child
+        .stdin
+        .take()
+        .expect("piped")
+        .write_all(input.as_bytes())
+        .expect("write to git");
+    let out = child.wait_with_output().expect("git ran");
+    assert!(
+        out.status.success(),
+        "git {args:?} in {} failed:\n{}",
+        dir.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
 /// Run git in `dir` where failure is expected (e.g. a conflicting merge);
 /// returns whether it succeeded.
 pub fn git_may_fail(dir: &Path, args: &[&str]) -> bool {

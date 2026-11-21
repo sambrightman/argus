@@ -4241,6 +4241,23 @@ fn a_mixed_reset_asks_only_when_something_staged_would_be_lost() {
         )),
         other => panic!("{other:?}"),
     }
+    // soft and keep leave the index be: nothing staged is lost, nothing asked
+    for mode in ['s', 'k'] {
+        let (sb, mut app) = setup_with("", two_local_commits);
+        let c = sb.path("dev/clean");
+        write(&c, "README", "staged\n");
+        git(&c, &["add", "README"]);
+        write(&c, "README", "and changed again\n");
+        app.ws.refresh(&c);
+        app.rebuild();
+        while current(&app) != "acme/clean" {
+            app.act(Action::Down);
+        }
+        app.on_key(key('X'));
+        app.on_key(key(mode));
+        let fx = app.on_key(key('2'));
+        assert!(matches!(fx.as_slice(), [Effect::Jobs(_)]), "{mode}: {fx:?}");
+    }
     // staged for deletion and still there: nothing to lose either
     let (sb, mut app) = setup_with("", two_local_commits);
     let c = sb.path("dev/clean");
@@ -7854,6 +7871,11 @@ fn edits_that_are_refused() {
     app.cursor = 0;
     assert!(app.on_key(key('e')).is_empty());
     assert!(msg(&app).contains("diff"), "{}", msg(&app));
+    // on a file's own line, unmarked: its lines aren't taken unasked
+    to_file(&mut app, "f");
+    assert!(app.on_key(key('e')).is_empty());
+    assert!(msg(&app).contains("diff"), "{}", msg(&app));
+    assert!(app.editing.is_none());
     assert!(git_out(&sb.path("dev/dirty"), &["diff", "--cached"]).is_empty());
 }
 
@@ -11632,6 +11654,88 @@ fn what_was_unfolded_under_a_stash_or_an_issue_goes_with_it() {
     git(&d, &["checkout", "-q", "--", "README"]);
     status_arrives(&mut app, &d);
     assert!(app.toggled.is_empty(), "{:?}", app.toggled);
+}
+
+/// A branch unfolded, then deleted: forgotten. One still there stays
+/// unfolded.
+#[test]
+fn what_was_unfolded_under_a_branch_goes_with_it() {
+    let (sb, mut app) = setup_with("", |sb| {
+        // two branches with a commit of their own, to unfold
+        let f = sb.path("dev/feature");
+        let back = git(&f, &["branch", "--show-current"]);
+        for name in ["kept", "gone-soon"] {
+            git(&f, &["switch", "-q", "-c", name]);
+            commit(&f, name);
+            git(&f, &["switch", "-q", back.trim()]);
+        }
+    });
+    let f = sb.path("dev/feature");
+    cursor_on_detail(&mut app, "feature", "path");
+    for name in ["kept", "gone-soon"] {
+        let id = vec![Seg::Branches, Seg::Branch(name.into())];
+        app.cursor = app
+            .rows
+            .iter()
+            .position(|r| matches!(r, Row::Detail { line, .. } if line.id == id))
+            .unwrap_or_else(|| panic!("{name}'s line in {:?}", trimmed(&app)));
+        app.on_key(code(KeyCode::Tab));
+    }
+    let unfolded = |app: &App| -> Vec<String> {
+        let ids = app.toggled.values().flatten();
+        ids.filter_map(|id| match &id[..] {
+            [Seg::Branches, Seg::Branch(b)] => Some(b.clone()),
+            _ => None,
+        })
+        .collect()
+    };
+    assert_eq!(unfolded(&app), ["gone-soon", "kept"]);
+    // inverse: a status with both still there keeps both
+    status_arrives(&mut app, &f);
+    assert_eq!(unfolded(&app), ["gone-soon", "kept"]);
+    git(&f, &["branch", "-q", "-D", "gone-soon"]);
+    status_arrives(&mut app, &f);
+    assert_eq!(unfolded(&app), ["kept"]);
+}
+
+/// A hunk is known by its changed lines, wherever it is and whatever is
+/// around it: its fold and the cursor stay with it as the file changes
+/// elsewhere. A line added and the same line removed are different hunks.
+#[test]
+fn a_hunk_is_known_by_its_changed_lines() {
+    use argus_core::diff::{Hunk, Line, LineKind};
+    let line = |kind, text: &str| Line {
+        kind,
+        text: text.into(),
+        no_newline: false,
+        cr: false,
+    };
+    let hunk = |at, around: &str, changed: &[(LineKind, &str)]| Hunk {
+        old_start: at,
+        old_len: 2,
+        new_start: at,
+        new_len: 2,
+        lines: [line(LineKind::Context, around)]
+            .into_iter()
+            .chain(changed.iter().map(|(k, t)| line(*k, t)))
+            .collect(),
+    };
+    let change = [(LineKind::Remove, "old"), (LineKind::Add, "new")];
+    assert_eq!(
+        Seg::hunks(&[hunk(1, "above", &change)]),
+        Seg::hunks(&[hunk(40, "something else", &change)]),
+        "the same change, moved and with other lines around it"
+    );
+    assert_ne!(
+        Seg::hunks(&[hunk(1, "above", &[(LineKind::Add, "x")])]),
+        Seg::hunks(&[hunk(1, "above", &[(LineKind::Remove, "x")])]),
+        "added and removed"
+    );
+    assert_ne!(
+        Seg::hunks(&[hunk(1, "above", &[(LineKind::Add, "x")])]),
+        Seg::hunks(&[hunk(1, "above", &[(LineKind::Add, "y")])]),
+        "other text"
+    );
 }
 
 /// Fold the hunk whose line the cursor is on, as if from elsewhere: the
