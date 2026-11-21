@@ -219,10 +219,10 @@ fn written<'a>(hunk: &'a Hunk, only: Option<&[usize]>, reverse: bool) -> Vec<Wri
     let last = lines.iter().rposition(|l| l.0 == ' ' || l.0 == result);
     let ends = |n: usize, (sign, l, no_newline): Written<'a>| -> Vec<Written<'a>> {
         match (sign, no_newline && Some(n) != last) {
-            (_, false) => vec![(sign, l, no_newline)],
             (s, true) if s == result => vec![(sign, l, false)],
             // there without a newline, here with one
             (' ', true) => vec![(target, l, true), (result, l, false)],
+            // (with a newline, the last line, or the side applied to's)
             _ => vec![(sign, l, no_newline)],
         }
     };
