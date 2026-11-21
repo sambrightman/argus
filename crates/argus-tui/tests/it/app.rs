@@ -8339,6 +8339,73 @@ fn staging_a_whole_repo_counts_without_the_repos_nested_in_it() {
     );
 }
 
+/// `s` and `u` leave conflicted files out, and say so: staging one would
+/// mark it resolved with its markers in, unstaging one would leave its
+/// markers as an ordinary change.
+#[test]
+fn s_and_u_leave_conflicted_files_out_and_say_so() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        let r = sb.path("dev/clean");
+        git(&r, &["switch", "-q", "-c", "theirs"]);
+        write(&r, "README", "theirs\n");
+        commit(&r, "theirs");
+        git(&r, &["switch", "-q", "-"]);
+        write(&r, "README", "ours\n");
+        commit(&r, "ours");
+        assert!(!argus_core::testkit::git_may_fail(
+            &r,
+            &["merge", "-q", "theirs"]
+        ));
+        write(&r, "other", "x\n");
+    });
+    let clean = |app: &App| {
+        app.rows
+            .iter()
+            .position(|r| matches!(r, Row::Repo(i) if app.ws.entries[*i].path.ends_with("clean")))
+            .unwrap()
+    };
+    let said = |app: &App| {
+        app.message
+            .as_ref()
+            .map(|m| m.0.clone())
+            .unwrap_or_default()
+    };
+    app.cursor = clean(&app);
+    to_file(&mut app, "README");
+    assert!(app.on_key(key('s')).is_empty());
+    let why = "README is conflicted: resolve it first (K puts it back as committed)";
+    assert_eq!(said(&app), why);
+    // (not "that's not staged: s stages it")
+    assert!(app.on_key(key('u')).is_empty());
+    assert_eq!(said(&app), why);
+    // a section of nothing but it: nothing to take, and why
+    to_section(&mut app, argus_tui::details::Section::Unstaged);
+    assert!(app.on_key(key('s')).is_empty());
+    assert_eq!(said(&app), why);
+    // the whole repo: the rest is taken, and it's said what's left out
+    app.cursor = clean(&app);
+    let fx = app.on_key(key('s'));
+    assert_eq!(
+        job_ops(&fx),
+        [Op::Add {
+            paths: vec!["other".into()]
+        }]
+    );
+    assert_eq!(said(&app), "left out README: conflicted, resolve it first");
+    app.running.clear();
+    // asked first when folded, saying so there
+    app.act(Action::ToggleExpand);
+    app.cursor = clean(&app);
+    assert!(app.on_key(key('s')).is_empty());
+    match &app.mode {
+        Mode::Confirm { question, .. } => assert_eq!(
+            question,
+            "Stage everything in acme/clean (1 file; README, conflicted, left out)?"
+        ),
+        _ => panic!("not asked"),
+    }
+}
+
 /// Stashing what's marked and gitignore ask the same as `s`, `u` and `K`
 /// when something is marked in a repo the cursor isn't in.
 #[test]

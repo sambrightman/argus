@@ -4221,6 +4221,25 @@ impl App {
         by
     }
 
+    /// When `targets` are files (or parts of them) that are all conflicted,
+    /// why `s` and `u` aren't for them (see `ops::conflicted_in`).
+    fn only_conflicted(&self, targets: &[Target]) -> Option<String> {
+        let mut files: Vec<String> = vec![];
+        for t in targets {
+            let (Target::File { repo, file, .. } | Target::Hunk { repo, file, .. }) = t else {
+                return None;
+            };
+            let s = self.ws.get(repo)?.status()?;
+            if s.changes.entry(file).is_none_or(|c| c.index != 'U') {
+                return None;
+            }
+            if !files.contains(file) {
+                files.push(file.clone());
+            }
+        }
+        (!files.is_empty()).then(|| conflicted_why(&files))
+    }
+
     /// Why `verb` isn't for one of `targets`, if it isn't: staging what's
     /// staged, unstaging what isn't, discarding what's staged. Said of
     /// what's under the cursor, or (`marked`) of the marks to take off.
@@ -4322,6 +4341,13 @@ impl App {
             self.info(FILE_HINT);
             return vec![];
         }
+        // (before which side it's on: neither key is for a conflicted file)
+        if verb != HunkVerb::Discard
+            && let Some(why) = self.only_conflicted(&targets)
+        {
+            self.info(why);
+            return vec![];
+        }
         if let Some(why) = Self::not_for(verb, &targets, marked) {
             self.info(why);
             return vec![];
@@ -4403,10 +4429,15 @@ impl App {
         };
         let patched = ops.len();
         let mut nested: Vec<String> = vec![];
+        // (what staging and unstaging leave out: see `ops::conflicted_in`)
+        let mut conflicted: Vec<String> = vec![];
         let mut file_jobs = vec![];
         for (i, names) in &files {
             let e = &self.ws.entries[*i];
             let Some(s) = e.status() else { continue };
+            if verb != HunkVerb::Discard {
+                conflicted.extend(ops::conflicted_in(s, names).into_iter().cloned());
+            }
             // (what staging leaves out, to say why when that's everything)
             let inside: Vec<String> = ops::nested_repos_in(s, names)
                 .into_iter()
@@ -4428,13 +4459,14 @@ impl App {
                 .collect();
             jobs.extend(file_jobs.into_iter().map(|(i, op)| self.file_job(i, op)));
             if jobs.is_empty() {
-                match nested.first() {
+                match (conflicted.as_slice(), nested.first()) {
+                    ([_, ..], _) => self.info(conflicted_why(&conflicted)),
                     // (only staging leaves them out)
-                    Some(one) => self.info(format!(
+                    ([], Some(one)) => self.info(format!(
                         "{one} is a repo of its own: staging would add it as an embedded repo \
                          (gitignore it, or make it a submodule)"
                     )),
-                    None => self.info(format!("nothing to {word}")),
+                    ([], None) => self.info(format!("nothing to {word}")),
                 }
                 return vec![];
             }
@@ -4444,7 +4476,9 @@ impl App {
                     .get(&repo)
                     .map_or_else(String::new, |e| e.display_name());
                 // (repos nested in it are left out, and said to be)
-                let n = files.iter().map(|(_, f)| f.len()).sum::<usize>() - nested.len();
+                let n = files.iter().map(|(_, f)| f.len()).sum::<usize>()
+                    - nested.len()
+                    - conflicted.len();
                 // (a folder of nothing but repos is listed as one, `vendor/`)
                 let left_out = match nested.as_slice() {
                     [] => String::new(),
@@ -4453,6 +4487,10 @@ impl App {
                     }
                     [one] => format!("; {one}, a repo of its own, left out"),
                     many => format!("; {} left out: repos of their own", many.join(", ")),
+                } + &match conflicted.as_slice() {
+                    [] => String::new(),
+                    [one] => format!("; {one}, conflicted, left out"),
+                    many => format!("; {} left out: conflicted", many.join(", ")),
                 };
                 let question = format!(
                     "{} everything in {name} ({n} {}{left_out})?",
@@ -4472,6 +4510,13 @@ impl App {
             let fx = self.start_jobs(jobs);
             self.unmark_lines_started(&fx);
             self.note_elsewhere(&repos);
+            if !conflicted.is_empty() {
+                let them = if conflicted.len() == 1 { "it" } else { "them" };
+                self.info(format!(
+                    "left out {}: conflicted, resolve {them} first",
+                    conflicted.join(", ")
+                ));
+            }
             return fx;
         }
         // what it would do, to say exactly that: unstaged changes dropped,
@@ -5771,6 +5816,17 @@ impl App {
         if self.log.len() > 1000 {
             self.log.drain(..100);
         }
+    }
+}
+
+/// Why `s` and `u` don't take `files`, conflicted.
+fn conflicted_why(files: &[String]) -> String {
+    match files {
+        [one] => format!("{one} is conflicted: resolve it first (K puts it back as committed)"),
+        many => format!(
+            "{} are conflicted: resolve them first (K puts them back as committed)",
+            many.join(", ")
+        ),
     }
 }
 

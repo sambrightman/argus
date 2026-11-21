@@ -6,7 +6,7 @@ use argus_core::config::StashConfig;
 use argus_core::fix::{FixKind, apply_fix, plan, simulate};
 use argus_core::ops::{self, Op};
 use argus_core::status::{RepoStatus, StatusOptions, status};
-use argus_core::testkit::{Sandbox, git, write};
+use argus_core::testkit::{Sandbox, commit, git, write};
 
 fn st(r: &Path) -> RepoStatus {
     status(r, StatusOptions::default()).unwrap()
@@ -1057,4 +1057,66 @@ fn a_files_mode_change_is_seen() {
     let mode = std::fs::Permissions::from_mode(0o755);
     std::fs::set_permissions(r.join("README"), mode).unwrap();
     assert!(ops::mode_changed(&r, "README"));
+}
+
+/// A clone mid-merge: `README` conflicted, `other` changed and resolved.
+fn mid_merge(sb: &Sandbox) -> std::path::PathBuf {
+    let r = sb.init("r");
+    git(&r, &["switch", "-q", "-c", "theirs"]);
+    write(&r, "README", "theirs\n");
+    commit(&r, "theirs");
+    git(&r, &["switch", "-q", "-"]);
+    write(&r, "README", "ours\n");
+    commit(&r, "ours");
+    assert!(!argus_core::testkit::git_may_fail(
+        &r,
+        &["merge", "-q", "theirs"]
+    ));
+    write(&r, "other", "x\n");
+    git(&r, &["add", "other"]);
+    write(&r, "other", "y\n");
+    r
+}
+
+/// Staging a conflicted file would mark it resolved with its markers in,
+/// and unstaging it would put its conflict markers in the work tree as an
+/// ordinary change: neither takes one.
+#[test]
+fn conflicted_files_are_never_staged_or_unstaged() {
+    let sb = Sandbox::new();
+    let r = mid_merge(&sb);
+    let s = status(&r, StatusOptions::default()).unwrap();
+    let files = ["README".to_string(), "other".to_string()];
+    let paths = |ops: Vec<Op>| -> Vec<Vec<String>> {
+        ops.into_iter()
+            .map(|op| match op {
+                Op::Add { paths } | Op::AddTracked { paths } => paths,
+                Op::Restore { paths, .. } | Op::Remove { paths, .. } => paths,
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    };
+    assert_eq!(
+        paths(ops::stage_ops(&s, &files)),
+        [vec!["other".to_string()]]
+    );
+    assert_eq!(
+        paths(ops::unstage_ops(&s, &files)),
+        [vec!["other".to_string()]]
+    );
+    assert!(ops::stage_ops(&s, &files[..1]).is_empty());
+    assert_eq!(ops::conflicted_in(&s, &files), [&files[0]]);
+    // inverse: discarding does take it, back to HEAD
+    let back = ops::discard_ops(&s, &files[..1]);
+    assert!(
+        matches!(
+            &back[..],
+            [Op::Restore {
+                from_head: true,
+                staged: true,
+                ..
+            }]
+        ),
+        "{back:?}"
+    );
 }

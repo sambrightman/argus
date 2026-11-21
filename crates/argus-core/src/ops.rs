@@ -607,6 +607,7 @@ pub fn stage_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
         .iter()
         .filter_map(|f| Some((f, s.changes.entry(f)?.untracked())))
         .filter(|(f, _)| nested_repos_in(s, std::slice::from_ref(f)).is_empty())
+        .filter(|(f, _)| !is_conflicted(s, f))
         .partition(|(_, untracked)| *untracked);
     let paths = |v: Vec<(&String, bool)>| v.into_iter().map(|(f, _)| f.clone()).collect();
     let mut ops = vec![];
@@ -621,6 +622,19 @@ pub fn stage_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
         });
     }
     ops
+}
+
+/// Whether `file` is conflicted (status gives every kind of conflict `U`).
+fn is_conflicted(s: &crate::status::RepoStatus, file: &str) -> bool {
+    s.changes.entry(file).is_some_and(|c| c.index == 'U')
+}
+
+/// Which of `files` are conflicted, which staging and unstaging leave
+/// out: staging would mark one resolved with its conflict markers in;
+/// unstaging would leave the markers in the work tree as an ordinary
+/// change.
+pub fn conflicted_in<'f>(s: &crate::status::RepoStatus, files: &'f [String]) -> Vec<&'f String> {
+    files.iter().filter(|f| is_conflicted(s, f)).collect()
 }
 
 /// Which of `files` are repos nested in the work tree (or directories of
@@ -643,7 +657,8 @@ pub fn unstage_ops(s: &crate::status::RepoStatus, files: &[String]) -> Vec<Op> {
     let (mut restore, mut added) = (vec![], vec![]);
     for (f, index) in codes(s, files) {
         match index {
-            ' ' | '?' => {}
+            // (nor a conflicted one: see `conflicted_in`)
+            ' ' | '?' | 'U' => {}
             'A' => added.push(f.clone()),
             _ => restore.push(f.clone()),
         }
