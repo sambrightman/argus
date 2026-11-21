@@ -43,7 +43,12 @@ addition always takes effect; `extend_roots` if it has both), else starts
 `roots` at the top of the main file; `root
 remove` takes the directory out of every file that lists it. Each names
 the file it edited when it isn't the main one. If `max_depth` stops a scan before the bottom of a tree,
-argus warns and names a directory it skipped.
+argus warns and names a directory it skipped. It also names a folder
+it walked a thousand folders or more into without finding a repo (the
+topmost of such a chain), for `exclude_paths` to skip: "walked 1011
+folders in ~/dev/data and found no repo: exclude_paths skips it". Only
+walks outside repos count: a repo's insides aren't walked unless
+`scan_inside_repos`.
 
 ## Configuration
 

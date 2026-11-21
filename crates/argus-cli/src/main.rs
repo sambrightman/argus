@@ -647,10 +647,14 @@ fn load(
     Ok((ws, notices))
 }
 
-/// Scan, warning about directories skipped because of `max_depth`.
+/// Scan, warning about directories skipped because of `max_depth`, and
+/// folders walked for nothing.
 fn scan(ws: &mut Workspace) {
     ws.scan();
-    if let Some(w) = ws.truncation_warning() {
+    for w in [ws.truncation_warning(), ws.barren_warning()]
+        .into_iter()
+        .flatten()
+    {
         eprintln!("argus: {w}");
     }
 }

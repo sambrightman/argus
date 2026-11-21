@@ -270,6 +270,33 @@ fn root_add_list_remove() {
     );
 }
 
+/// A folder walked for nothing, a thousand folders deep: named, to skip.
+#[test]
+fn warns_of_a_folder_walked_for_nothing() {
+    let sb = Sandbox::new();
+    sb.init("dev/app");
+    for i in 0..1000 {
+        std::fs::create_dir_all(sb.path(&format!("dev/data/{}/{i}", i % 10))).unwrap();
+    }
+    argus(&sb)
+        .arg("status")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "walked 1011 folders in ~/dev/data and found no repo: exclude_paths skips it",
+        ));
+    // inverse: skipped, nothing said
+    let cfg = sb.path("cfg.toml");
+    std::fs::write(&cfg, "extend_exclude_paths = ['data']\n").unwrap();
+    argus(&sb)
+        .arg("--config")
+        .arg(&cfg)
+        .arg("status")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("walked").not());
+}
+
 #[test]
 fn warns_when_max_depth_stops_the_scan() {
     let sb = Sandbox::new();

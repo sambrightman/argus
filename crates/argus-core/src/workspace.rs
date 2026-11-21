@@ -163,6 +163,9 @@ pub struct Workspace {
     pub entries: Vec<Entry>,
     /// Directories the last scan didn't enter because of `max_depth`.
     pub truncated: Vec<PathBuf>,
+    /// Folders walked for nothing, with how many (see
+    /// [`discover::Discovery::barren`]).
+    pub barren: Vec<(PathBuf, usize)>,
     /// Repos kept open between status reads, if wanted (shared by clones).
     kept: Option<Arc<status::KeptRepos>>,
 }
@@ -197,6 +200,7 @@ impl Workspace {
             rules,
             entries: vec![],
             truncated: vec![],
+            barren: vec![],
             kept: None,
         })
     }
@@ -240,6 +244,7 @@ impl Workspace {
             skip_hidden: self.config.skip_hidden,
             follow_symlinks: self.config.follow_symlinks,
             one_file_system: self.config.one_file_system,
+            barren_at: discover::BARREN_AT,
             tuning: Default::default(),
         }
     }
@@ -298,6 +303,7 @@ impl Workspace {
             },
         );
         self.truncated = discovery.truncated;
+        self.barren = discovery.barren;
         let found = discovery.found;
         let old: HashMap<PathBuf, Entry> = self
             .entries
@@ -856,6 +862,35 @@ impl Workspace {
             contract_tilde(first),
             if n == 1 { "it" } else { "them" },
         ))
+    }
+
+    /// The folders walked for nothing, to skip with `exclude_paths`.
+    pub fn barren_warning(&self) -> Option<String> {
+        let names: Vec<String> = self.barren.iter().map(|(p, _)| contract_tilde(p)).collect();
+        Some(match (&self.barren[..], &names[..]) {
+            ([], _) => return None,
+            ([(_, n)], [one]) => {
+                format!("walked {n} folders in {one} and found no repo: exclude_paths skips it")
+            }
+            (all, names) => {
+                let least = all.iter().map(|(_, n)| *n).min().unwrap_or_default();
+                let shown = names.iter().take(3).cloned().collect::<Vec<_>>();
+                let more = match names.len().saturating_sub(3) {
+                    0 => String::new(),
+                    n => format!(" and {n} more"),
+                };
+                let last = match (shown.len(), more.is_empty()) {
+                    (n, true) if n > 1 => {
+                        format!("{} and {}", shown[..n - 1].join(", "), shown[n - 1])
+                    }
+                    _ => format!("{}{more}", shown.join(", ")),
+                };
+                format!(
+                    "walked {least} folders or more in each of {last}, \
+                     and found no repo: exclude_paths skips them"
+                )
+            }
+        })
     }
 
     pub fn depth(&self, i: usize) -> usize {

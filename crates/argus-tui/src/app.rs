@@ -604,6 +604,8 @@ pub enum Msg {
         entries: Vec<Entry>,
         /// Directories skipped because of `max_depth`.
         truncated: Vec<PathBuf>,
+        /// Folders walked for nothing, with how many.
+        barren: Vec<(PathBuf, usize)>,
     },
     Status(PathBuf, Box<Result<RepoStatus, String>>),
     JobStarted {
@@ -5716,12 +5718,17 @@ impl App {
 
     fn msg(&mut self, m: Msg) -> Vec<Effect> {
         match m {
-            Msg::Scanned { entries, truncated } => {
+            Msg::Scanned {
+                entries,
+                truncated,
+                barren,
+            } => {
                 self.scanning = false;
                 let went = self.reread_diffs(|_| true);
                 self.unfold_cache.clear();
                 self.ws.entries = entries;
                 self.ws.truncated = truncated;
+                self.ws.barren = barren;
                 self.ws.resolve_flags();
                 let hidden = self.ws.entries.iter().filter(|e| e.flags.hidden()).count();
                 let n = self.ws.entries.len();
@@ -5741,6 +5748,7 @@ impl App {
                 }
                 parts.extend(self.notices.iter().cloned());
                 parts.extend(self.ws.truncation_warning());
+                parts.extend(self.ws.barren_warning());
                 parts.extend(went);
                 // the header has the count: the status line says what's
                 // more, if anything, else keeps showing the keys

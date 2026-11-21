@@ -507,6 +507,7 @@ impl Runtime {
                     let _ = tx.send(Msg::Scanned {
                         entries: ws.entries,
                         truncated: ws.truncated,
+                        barren: ws.barren,
                     });
                 });
             }

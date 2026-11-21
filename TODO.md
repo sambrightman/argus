@@ -27,11 +27,6 @@ deferred.
   setting): detect it and swap those icons. Today `demo --glyphs` marks
   them with `*`.
 
-- **Warn of folders walked for nothing:** after a scan, name the topmost
-  folders that held no repo but took many folders to walk (a count, not
-  a time, so the same each run), suggesting `exclude_paths`. Only for
-  walks outside repos: with `scan_inside_repos` off, a repo's insides
-  aren't walked.
 - **The message history: sort steps by time, or hide quick ones** (a
   threshold), for finding what's slow among a scan's hundreds of steps.
 

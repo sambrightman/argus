@@ -526,6 +526,7 @@ fn the_message_history_keeps_what_was_said_and_done() {
     app.on_msg(Msg::Scanned {
         entries,
         truncated: vec![],
+        barren: vec![],
     });
     app.report_error("could not save");
     app.report_error("could not save");
@@ -853,6 +854,7 @@ fn the_first_scan_starts_on_the_repo_you_are_in() {
         app.on_msg(Msg::Scanned {
             entries,
             truncated: vec![],
+            barren: vec![],
         });
     };
     let started_in = |from: PathBuf| {
@@ -886,7 +888,11 @@ fn scanned_message_replaces_entries_and_keeps_cursor_repo() {
     let entries = app.ws.entries.clone();
     app.notices = vec!["no roots configured".into()];
     let truncated = vec![PathBuf::from("/deep/dir")];
-    app.on_msg(Msg::Scanned { entries, truncated });
+    app.on_msg(Msg::Scanned {
+        entries,
+        truncated,
+        barren: vec![(PathBuf::from("/data"), 1500)],
+    });
     assert_eq!(app.current().unwrap().path, path);
     // the count is in the header: the status line says only what's more,
     // the history all of it
@@ -894,6 +900,10 @@ fn scanned_message_replaces_entries_and_keeps_cursor_repo() {
     assert!(!is_error);
     let more = "no roots configured · 1 directory below max_depth (6) not scanned, e.g. /deep/dir";
     assert!(msg.starts_with(more), "{msg}");
+    assert!(
+        msg.ends_with("walked 1500 folders in /data and found no repo: exclude_paths skips it"),
+        "{msg}"
+    );
     let said = |app: &App| match &app.history.last().unwrap().what {
         Happened::Said(s) => s.clone(),
         other => panic!("{other:?}"),
@@ -913,6 +923,7 @@ fn scanned_message_replaces_entries_and_keeps_cursor_repo() {
     app.on_msg(Msg::Scanned {
         entries,
         truncated: vec![],
+        barren: vec![],
     });
     let (msg, _) = app.message.clone().unwrap();
     assert!(msg.starts_with("no roots configured"), "{msg}");
@@ -927,6 +938,7 @@ fn scanned_message_replaces_entries_and_keeps_cursor_repo() {
     app.on_msg(Msg::Scanned {
         entries,
         truncated: vec![],
+        barren: vec![],
     });
     assert_eq!(app.message, None);
     assert!(render(&mut app, 100, 20).contains("? help"));
@@ -5646,6 +5658,7 @@ fn marked_lines_case(then: Then) {
             app.on_msg(Msg::Scanned {
                 entries,
                 truncated: vec![],
+                barren: vec![],
             });
             assert!(app.marked_lines.len() == 2 && app.region.is_some());
             return;
@@ -8595,6 +8608,7 @@ fn staging_a_whole_repo_counts_without_the_repos_nested_in_it() {
     app.on_msg(Msg::Scanned {
         entries,
         truncated: vec![],
+        barren: vec![],
     });
     app.ws.refresh_all();
     app.rebuild();
@@ -8928,6 +8942,7 @@ fn marks_go_with_a_repo_no_longer_listed() {
     app.on_msg(Msg::Scanned {
         entries,
         truncated: vec![],
+        barren: vec![],
     });
     assert_eq!(app.marked_in(None), (0, 0));
     assert!(app.repos_with_marks().is_empty() && app.region.is_none());
@@ -11083,6 +11098,7 @@ fn a_rescan_reads_what_is_unfolded_again() {
     app.on_msg(Msg::Scanned {
         entries,
         truncated: vec![],
+        barren: vec![],
     });
     assert_eq!(count(&app, "zz"), 2, "{:?}", trimmed(&app));
 }

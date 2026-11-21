@@ -765,6 +765,12 @@ rendering is snapshot-tested via `TestBackend`.
 * **`max_depth` is reported**, not silent: a scan names a directory it
   didn't enter. `max_depth = 0` means no limit (0 as "the root only" had no
   use: the walk stops at a repo anyway).
+* **So are folders walked for nothing**: each folder listed is noted,
+  and after the walk every ancestor of a repo found (by the path walked,
+  so through a link too) counts as holding one. The topmost of a chain
+  that holds none is named when 1000 folders or more were walked in it
+  (`BARREN_AT`): a count, not a time, so the same each run. Sorted by
+  component, a folder's own follow it, so each count is one slice.
 * **`one_file_system` (`-x`) is off by default and not reported.** Each
   root's own filesystem is the boundary (as `find -xdev`), for
   directories and link targets alike. It costs an `lstat` per

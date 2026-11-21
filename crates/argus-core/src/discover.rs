@@ -53,9 +53,15 @@ pub struct DiscoverOptions {
     /// Don't enter directories (or follow links to them) on a different
     /// filesystem from their root's, like `find -xdev`. Unix only.
     pub one_file_system: bool,
+    /// Say a folder that held no repo when at least this many folders
+    /// were walked in it (see [`Discovery::barren`]); 0: never.
+    pub barren_at: usize,
     #[doc(hidden)]
     pub tuning: Tuning,
 }
+
+/// Folders walked in one without finding a repo, from which it's said.
+pub const BARREN_AT: usize = 1000;
 
 /// Optimizations of the `-L` walk, switchable to compare against the plain
 /// walk (tests, the `discover` example). Both on by default.
@@ -91,6 +97,7 @@ impl Default for DiscoverOptions {
             skip_hidden: true,
             follow_symlinks: false,
             one_file_system: false,
+            barren_at: BARREN_AT,
             tuning: Tuning::default(),
         }
     }
@@ -239,6 +246,11 @@ pub struct Discovery {
     pub found: Vec<Found>,
     /// Directories at `max_depth` that had subdirectories we didn't enter.
     pub truncated: Vec<PathBuf>,
+    /// The topmost folders walked without finding a repo in them, with
+    /// how many folders that took, where it was `barren_at` or more: for
+    /// `exclude_paths` to skip. Only folders walked: a repo's insides
+    /// aren't, unless `scan_inside_repos`.
+    pub barren: Vec<(PathBuf, usize)>,
 }
 
 /// Find repositories under `roots`. Results are sorted by path and de-duplicated
@@ -271,6 +283,9 @@ pub fn discover_all(roots: &[PathBuf], opts: &DiscoverOptions) -> Discovery {
     let mut found = sink.found.into_inner().unwrap();
     found.sort_by(|a, b| a.0.path.cmp(&b.0.path));
     found.dedup_by(|a, b| a.0.path == b.0.path);
+    // (by the paths walked, before a repo reached twice is told once)
+    let found_at: Vec<&Path> = found.iter().map(|(f, _)| f.path.as_path()).collect();
+    let barren = barren(sink.walked.into_inner().unwrap(), &found_at, opts.barren_at);
     let found = if opts.follow_symlinks {
         let skipped: HashSet<PathBuf> = sink.skipped.into_inner().unwrap().into_iter().collect();
         dedup_real(found, &skipped, &real_roots)
@@ -280,7 +295,40 @@ pub fn discover_all(roots: &[PathBuf], opts: &DiscoverOptions) -> Discovery {
     let mut truncated = sink.truncated.into_inner().unwrap();
     truncated.sort();
     truncated.dedup();
-    Discovery { found, truncated }
+    Discovery {
+        found,
+        truncated,
+        barren,
+    }
+}
+
+/// Of the folders `walked`, the topmost that hold none of `found`, with
+/// how many walked folders are in them (themselves too), where that's at
+/// least `at`.
+fn barren(mut walked: Vec<PathBuf>, found: &[&Path], at: usize) -> Vec<(PathBuf, usize)> {
+    // (with `at` 0 none were noted)
+    // (sorted by component, a folder's own come right after it)
+    walked.sort();
+    walked.dedup();
+    let held: HashSet<&Path> = found.iter().flat_map(|f| f.ancestors()).collect();
+    let top = |d: &&PathBuf| {
+        !held.contains(d.as_path())
+            && d.parent()
+                .is_none_or(|p| held.contains(p) || walked.binary_search(&p.to_path_buf()).is_err())
+    };
+    walked
+        .iter()
+        .filter(top)
+        .map(|d| {
+            let from = walked.partition_point(|w| w < d);
+            let n = walked[from..]
+                .iter()
+                .take_while(|w| w.starts_with(d))
+                .count();
+            (d.clone(), n)
+        })
+        .filter(|(_, n)| *n >= at)
+        .collect()
 }
 
 #[derive(Default)]
@@ -291,6 +339,8 @@ struct Sink {
     /// with `real_from_links`).
     found: Mutex<Vec<(Found, Option<PathBuf>)>>,
     truncated: Mutex<Vec<PathBuf>>,
+    /// The folders listed (for [`Discovery::barren`]).
+    walked: Mutex<Vec<PathBuf>>,
     /// Real paths of skipped directories (with `-L` only): a directory
     /// skipped on one route is skipped on every route.
     skipped: Mutex<Vec<PathBuf>>,
@@ -389,6 +439,10 @@ fn visit<'s>(s: &rayon::Scope<'s>, dir: PathBuf, depth: usize, walk: Walk<'s>, l
     let entries = list(&dir);
     if kind.is_none() && is_bare_listing(&entries) {
         kind = Some(RepoKind::Bare);
+    }
+    // (a repo too: it holds one, so it's never said, nor what holds it)
+    if opts.barren_at > 0 {
+        sink.walked.lock().unwrap().push(dir.clone());
     }
     if let Some(kind) = kind {
         let found = Found {
@@ -779,6 +833,81 @@ mod tests {
         );
         // inverse: a ceiling between stops it
         assert_eq!(nearest_work_tree(&deep, vec![repo.join("a")], false), None);
+    }
+
+    /// `n` folders, nested two deep, under `dir`.
+    fn folders(dir: &Path, n: usize) {
+        for i in 0..n {
+            mk(dir, &format!("f{}/g{i}", i % 3));
+        }
+    }
+
+    fn barren_with(roots: &[PathBuf], at: usize, follow: bool) -> Vec<(String, usize)> {
+        let opts = DiscoverOptions {
+            barren_at: at,
+            follow_symlinks: follow,
+            max_depth: 0,
+            ..Default::default()
+        };
+        let d = discover_all(roots, &opts);
+        let base = &roots[0];
+        let rel = |p: &Path| p.strip_prefix(base).unwrap_or(p).display().to_string();
+        d.barren.iter().map(|(p, n)| (rel(p), *n)).collect()
+    }
+
+    /// The topmost folders that took many folders to walk and held no
+    /// repo are said, with how many: for `exclude_paths` to skip.
+    #[test]
+    fn folders_walked_for_nothing_are_said_from_the_top() {
+        let t = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(t.path()).unwrap();
+        fake_repo(&root, "code/app");
+        // data: 30 folders (itself and the f's and g's), none a repo; a
+        // chain, said once, at its top
+        folders(&mk(&root, "data"), 26);
+        // code: walked to find app, so not said, though big beside it
+        folders(&mk(&root, "code/vendor"), 26);
+        let got = barren_with(std::slice::from_ref(&root), 10, false);
+        assert_eq!(
+            got,
+            [("code/vendor".to_string(), 30), ("data".to_string(), 30)]
+        );
+        // at the count: said; under it, not
+        assert_eq!(barren_with(std::slice::from_ref(&root), 30, false).len(), 2);
+        assert!(barren_with(std::slice::from_ref(&root), 31, false).is_empty());
+        // 0: never
+        assert!(barren_with(std::slice::from_ref(&root), 0, false).is_empty());
+    }
+
+    /// A root that held no repo is said itself.
+    #[test]
+    fn a_root_that_held_nothing_is_said_itself() {
+        let t = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(t.path()).unwrap();
+        folders(&root, 20);
+        let got = barren_with(std::slice::from_ref(&root), 5, false);
+        assert_eq!(got, [(String::new(), 24)]);
+    }
+
+    /// Through a link, a folder holding a repo is walked for it: not said
+    /// (the repo is known by its real path, the walk by the link's).
+    #[test]
+    fn a_folder_holding_a_repo_through_a_link_is_not_said() {
+        let t = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(t.path()).unwrap();
+        let out = mk(&root, "outside");
+        fake_repo(&out, "deep/r");
+        folders(&mk(&out, "deep"), 20);
+        let scan = mk(&root, "scan");
+        std::os::unix::fs::symlink(&out, scan.join("link")).unwrap();
+        // (the folders beside the repo, 7 or 8 each, are under the count)
+        let got = barren_with(std::slice::from_ref(&scan), 10, true);
+        assert!(got.is_empty(), "{got:?}");
+        // inverse: without the repo, the root the link is in is said
+        fs::remove_dir_all(out.join("deep/r")).unwrap();
+        let got = barren_with(std::slice::from_ref(&scan), 10, true);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].0, "", "{got:?}");
     }
 
     #[test]
@@ -1339,6 +1468,7 @@ mod tests {
                 skip_hidden: next(4) != 0,
                 follow_symlinks: true,
                 one_file_system: false,
+                barren_at: BARREN_AT,
                 tuning: Tuning::default(),
             };
             let ctx = format!(

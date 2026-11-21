@@ -1463,6 +1463,40 @@ fn change_count_is_changed_files_and_unpushed_commits() {
     assert_eq!(w.entries[0].change_count(), 3);
 }
 
+/// Folders walked for nothing are named, with how many, and how to skip
+/// them.
+#[test]
+fn folders_walked_for_nothing_are_named_in_a_warning() {
+    let sb = Sandbox::new();
+    sb.init("dev/app");
+    let mut w = ws(&sb, "");
+    assert_eq!(w.barren_warning(), None);
+    let data = sb.path("dev/data");
+    w.barren = vec![(data.clone(), 1234)];
+    assert_eq!(
+        w.barren_warning().unwrap(),
+        format!(
+            "walked 1234 folders in {} and found no repo: exclude_paths skips it",
+            contract_tilde(&data)
+        )
+    );
+    let more: Vec<(std::path::PathBuf, usize)> = ["a", "b", "c", "d"]
+        .iter()
+        .map(|d| (sb.path(d), 1000))
+        .collect();
+    w.barren = more;
+    assert_eq!(
+        w.barren_warning().unwrap(),
+        format!(
+            "walked 1000 folders or more in each of {}, {}, {} and 1 more, \
+             and found no repo: exclude_paths skips them",
+            contract_tilde(&sb.path("a")),
+            contract_tilde(&sb.path("b")),
+            contract_tilde(&sb.path("c"))
+        )
+    );
+}
+
 #[test]
 fn directories_below_max_depth_are_named_in_a_warning() {
     let sb = Sandbox::new();
