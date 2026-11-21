@@ -2813,6 +2813,8 @@ fn the_fix_menu_says_what_fix_all_leaves_out() {
         git(&clean, &["branch", "-q", "--track", "third", "origin/main"]);
         sb.advance_remote("acme", "clean", "new");
         git(&clean, &["fetch", "-q"]);
+        // (and something to stash, as dirty has: counted in both)
+        write(&clean, "scratch", "x\n");
     };
     let notes = |app: &mut App| {
         app.on_key(key('x'));
@@ -2828,9 +2830,24 @@ fn the_fix_menu_says_what_fix_all_leaves_out() {
     let without = "[fix]\nauto = ['push', 'push-branches', 'switch-default', 'reattach']";
     let (_sb, mut app) = setup_with(without, prep);
     let (n, screen) = notes(&mut app);
-    let said = "2 more repos with fixes not in [fix] auto: stash (1), pull (1), fast-forward (1)";
+    let said = "2 more repos with fixes not in [fix] auto: stash (2), pull (1), fast-forward (1)";
     assert_eq!(n, [said]);
     assert!(screen.contains(said), "{screen}");
+    // the menu as wide as the note, not wider
+    let line = screen.lines().find(|l| l.contains(said)).unwrap();
+    let after = line.split(said).nth(1).unwrap();
+    assert_eq!(after.trim_end(), " │", "{screen}");
+    // in a short terminal, the note and the footer still show, the items
+    // scrolling instead
+    app.on_key(key('x'));
+    let short = render(&mut app, 120, 9);
+    app.on_key(ctrl('g'));
+    assert!(
+        short.contains(said) && short.contains("q/Esc/C-g cancel"),
+        "{short}"
+    );
+    // (scrolling, it leaves the header above it)
+    assert!(short.starts_with(" argus  3 repos"), "{short}");
     // inverse: with those in it, nothing's left out
     let auto = "[fix]\nauto = ['push', 'push-branches', 'switch-default', 'reattach', \
                 'stash', 'pull', 'fast-forward']";
@@ -10501,8 +10518,17 @@ fn the_stash_menu_offers_only_what_applies() {
         menu[4].contains("────") && menu[5].contains("M  [ ] message"),
         "{screen}"
     );
+    // a short terminal: the items scroll, the dividers and footer fit
+    // below the header (a menu that scrolls leaves it; one that fits may
+    // cover it)
+    app.on_key(key('z'));
+    let short = render(&mut app, 100, 10);
+    app.on_key(code(KeyCode::Esc));
+    assert!(short.starts_with(" argus  "), "{short}");
+    assert!(short.contains("q/Esc/C-g cancel"), "{short}");
     // the message switch is one switch, shown twice
     app.on_key(key('z'));
+    render(&mut app, 100, 30);
     app.on_key(key('M'));
     let screen = render(&mut app, 100, 30);
     app.on_key(code(KeyCode::Esc));

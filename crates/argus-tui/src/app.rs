@@ -3085,14 +3085,13 @@ impl App {
             if fix::choose(s, &e.fix_kinds(auto), &self.ws.config.stash).is_some() {
                 continue;
             }
-            let mut kinds: Vec<FixKind> = self
-                .fixes_for(i)
-                .into_iter()
-                .map(|(_, f)| f.kind)
-                .filter(|k| !k.manual())
-                .collect();
-            kinds.sort_by_key(|k| FixKind::ALL.iter().position(|a| a == k));
-            kinds.dedup();
+            let mut kinds: Vec<FixKind> = vec![];
+            for (_, f) in self.fixes_for(i) {
+                // (once each, though it may be for several branches)
+                if !f.kind.manual() && !kinds.contains(&f.kind) {
+                    kinds.push(f.kind);
+                }
+            }
             if kinds.is_empty() {
                 continue;
             }
@@ -3107,6 +3106,8 @@ impl App {
         if repos == 0 {
             return None;
         }
+        // (in priority order, as auto-fix takes them)
+        counts.sort_by_key(|(k, _)| FixKind::ALL.iter().position(|a| a == k));
         let tally: Vec<String> = counts
             .iter()
             .map(|(k, n)| format!("{} ({n})", k.name()))
