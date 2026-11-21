@@ -552,11 +552,24 @@ fn a_kept_installation_config_spares_repos_waiting_for_git() {
             .unwrap_or_else(|| panic!("{err}"))
             .to_string()
     };
-    // first, nothing kept: the open waits out git's second
-    let waited = predicate::str::is_match(r"open 1\.\d\ds").unwrap();
-    assert!(waited.eval(&opened("1")), "{}", opened("0"));
+    // how long the open took, in ms (a part under 1 ms isn't said)
+    let open_ms = |line: &str| -> f64 {
+        let Some((_, rest)) = line.split_once("open ") else {
+            return 0.0;
+        };
+        let took = rest.split([',', ')']).next().unwrap_or_default();
+        match took.strip_suffix("ms") {
+            Some(ms) => ms.parse().unwrap_or(0.0),
+            None => took.trim_end_matches('s').parse::<f64>().unwrap_or(0.0) * 1000.0,
+        }
+    };
+    // first, nothing kept: the open waits for git (its second, less what
+    // passed before the open: git is asked from the start)
+    let first = opened("1");
+    assert!(open_ms(&first) >= 500.0, "{first}");
     // then kept: it doesn't
-    assert!(!waited.eval(&opened("1")));
+    let kept = opened("1");
+    assert!(open_ms(&kept) < 500.0, "{kept}");
 }
 
 #[test]
