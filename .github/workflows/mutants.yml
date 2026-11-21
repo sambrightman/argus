@@ -60,6 +60,14 @@ jobs:
       # the baseline run; --in-place reuses the cached build instead of
       # copying the tree. Exit 2 (missed) and 3 (timeouts) still produce a
       # report: the summary job judges those.
+      #
+      # A mutant can make a loop allocate or write without end (an index
+      # that never grows), filling the runner's memory or disk long before
+      # the timeout: the runner is then shut down, and its shard's results
+      # lost. On Linux each process is capped (12GB of address space, 4GB
+      # files), so such a mutant fails its tests, as it should, and is
+      # caught. Every mutant's outcome is printed, so a runner lost anyway
+      # names the last one it was on.
       - name: Mutants
         env:
           SHARD: ${{ matrix.shard }}/${{ matrix.of }}
@@ -68,9 +76,13 @@ jobs:
           if [ "$RUNNER_OS" = macOS ]; then
             read -ra macos <<< "$MACOS_FILES"
             for f in "${macos[@]}"; do files+=(-f "$f"); done
+          else
+            ulimit -v $((12 * 1024 * 1024))
+            ulimit -f $((4 * 1024 * 1024))
           fi
           set +e
-          cargo mutants --in-place --baseline=skip --timeout 300 --shard "$SHARD" "${files[@]}"
+          cargo mutants --in-place --baseline=skip --timeout 300 --shard "$SHARD" \
+            --caught --unviable "${files[@]}"
           rc=$?
           [ $rc -eq 0 ] || [ $rc -eq 2 ] || [ $rc -eq 3 ] || exit $rc
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
