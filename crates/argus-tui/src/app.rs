@@ -663,9 +663,9 @@ pub enum Mode {
     Help {
         scroll: u16,
     },
-    /// The message history, scrolled `back` lines from its newest.
+    /// The message history (see [`crate::messages`]).
     History {
-        back: usize,
+        messages: crate::messages::Messages,
     },
     /// Picking from a list by typing: `names` matched fuzzily against the
     /// query, `shown` their indices best first, `cursor` into `shown`.
@@ -1275,6 +1275,10 @@ impl App {
             what,
         });
         if self.history.len() > 5000 {
+            if let Mode::History { messages } = &mut self.mode {
+                let lines = crate::messages::lines(&self.history[..500], messages).len();
+                crate::messages::dropped(messages, 500, lines);
+            }
             self.history.drain(..500);
         }
     }
@@ -1391,19 +1395,12 @@ impl App {
                 }
                 vec![]
             }
-            Mode::History { back } => {
+            Mode::History { messages } => {
                 let page = self.page.max(1);
-                let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-                let alt = k.modifiers.contains(KeyModifiers::ALT);
-                match k.code {
-                    // a page, as C-v and M-v move the list
-                    KeyCode::Char('v') if ctrl => *back = back.saturating_sub(page),
-                    KeyCode::Char('v') if alt => *back = back.saturating_add(page),
-                    KeyCode::Up | KeyCode::Char('k' | 'p') => *back = back.saturating_add(1),
-                    KeyCode::Down | KeyCode::Char('j' | 'n') => *back = back.saturating_sub(1),
-                    KeyCode::PageUp => *back = back.saturating_add(page),
-                    KeyCode::PageDown => *back = back.saturating_sub(page),
-                    _ => self.mode = Mode::Normal,
+                if crate::messages::key(&self.history, messages, k, page)
+                    == crate::messages::Keyed::Close
+                {
+                    self.mode = Mode::Normal;
                 }
                 vec![]
             }
@@ -1835,7 +1832,11 @@ impl App {
                 self.rebuild();
             }
             Help => self.mode = Mode::Help { scroll: 0 },
-            History => self.mode = Mode::History { back: 0 },
+            History => {
+                self.mode = Mode::History {
+                    messages: Default::default(),
+                }
+            }
             Quit => {
                 self.quit = true;
                 return vec![Effect::SaveState, Effect::Quit];

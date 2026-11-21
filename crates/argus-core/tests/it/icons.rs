@@ -35,6 +35,8 @@ fn icons(set: &Icons) -> Vec<(&'static str, &str)> {
         ("partly_marked", &*set.partly_marked),
         ("marked_repo", &*set.marked_repo),
         ("divider", &*set.divider),
+        ("folded", &*set.folded),
+        ("unfolded", &*set.unfolded),
         ("ok", &*set.ok),
         ("failed", &*set.failed),
         ("celebrate", &*set.celebrate),
@@ -55,6 +57,9 @@ const GAPS: &[(char, &str)] = &[
     ('◆', "missing in SF Mono (macOS Terminal's default)"),
     ('✓', "missing in Hack"),
     ('✗', "missing in Fira Code, Hack, Source Code Pro"),
+    // (checked in Menlo, SF Mono, Monaco and DejaVu Sans only)
+    ('▸', "missing in Monaco"),
+    ('▾', "missing in Monaco"),
 ];
 
 /// Missing from most fonts, but the fallbacks fit the cell: braille
@@ -136,6 +141,8 @@ fn nerd_icons_cover_everything_and_leave_room() {
                     "partly_marked",
                     "marked_repo",
                     "divider",
+                    "folded",
+                    "unfolded",
                     "celebrate",
                     "issue_counted",
                     "issue_pinned",

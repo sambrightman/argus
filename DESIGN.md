@@ -920,13 +920,21 @@ rendering is snapshot-tested via `TestBackend`.
   stopped (`no tag in the last 1000 commits`). Text only: `--json`
   already has the fields.
 
-* **Steps for `-v` go through one sink** (`argus_core::trace`): a
-  global, replaceable callback, as the steps happen on rayon threads deep
-  in core. Off by default, and then a step's text is never built. The
-  CLI prints them on stderr; the TUI keeps those before it started and
-  then sends each as a message to its history. A repo's status is one
-  step, its parts (`files`, `branches`, …) timed inside it and named
-  when they took a millisecond or more.
+* **Steps for `-v` are `tracing` spans** (`argus_core::trace`), so a
+  step holds the steps taken in it, across rayon's threads too (carried
+  with `trace::within`): a scan holds each repo's status, a status its
+  parts (`open`, `branches`, `files`, …), `branches` a step per branch,
+  that its checks (`upstream`, `merged`, `absorbed`, `unpushed`, saying
+  how it was counted). A layer of ours turns them into `Step`s for one
+  global, replaceable sink; nothing else in argus touches `tracing`, and
+  other crates' spans are never made. Off by default, and then no span
+  is made and a step's text never built. The CLI asks for each step by
+  itself as it ends, flat, a part named with what it's in (`status
+  ~/dev/r: open`); the TUI for each outermost one whole, as a message
+  of its history. Rows rebuilt and frames drawn are said only when they
+  took a frame (16ms) or more, as they happen on most keys. `tracing`
+  over our own module: it carries a span into another thread, and a
+  file for Perfetto or `tokio-console` is a layer away if ever wanted.
 * **Commits on no remote, or on no ref, are counted without walking
   every remote branch when that can be helped** (`reach`): a walk hiding
   hundreds of tips costs all their histories down to the tip's, slow
@@ -957,7 +965,18 @@ rendering is snapshot-tested via `TestBackend`.
   choosing a git, and wrappers choose too. The first run asks as before.
 * **The message history** (`v m`) keeps what the status line said (the
   same message running twice is kept once), each job's outcome, and
-  steps: a status line message is easily overwritten by the next.
+  steps: a status line message is easily overwritten by the next. It's
+  a tree of messages, as magit's sections: a job holds its output, a
+  step what it took, folded. `s` sorts every timed step by time, which,
+  as in htop, isn't a tree (a step's place among the slowest says more
+  than its place in the scan), then totals them by kind; no threshold,
+  as sorted the quick ones are at the bottom. A step whose own took more
+  than it did, side by side on threads, says so (`45ms summed`), as the
+  sum and the time between start and end differ. `/` searches, showing
+  what leads to a match and all under one. The cursor's a line number,
+  past the last meaning "the newest, following"; as the oldest 500
+  messages are dropped at the cap, it and what's unfolded move with
+  them.
 
 ## 8a. Build and test setup
 

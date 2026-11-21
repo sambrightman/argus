@@ -15,8 +15,10 @@ deferred.
 - **Embedded terminal pane** (alacritty_terminal / tui-term) instead of
   suspending the TUI for a shell or git UI.
 - **A review of the glyphs,** font gaps included: `◆` is missing from SF
-  Mono, `✓` from Hack, `✗` from Fira Code, Hack and Source Code Pro;
-  Monaco and kitty's default font aren't checked. Rerun the counts once
+  Mono, `✓` from Hack, `✗` from Fira Code, Hack and Source Code Pro,
+  the messages' fold marks `▸` `▾` from Monaco (they're checked in Menlo,
+  SF Mono, Monaco and DejaVu Sans only); kitty's default font isn't
+  checked. Rerun the counts once
   the other fonts are installed, and look over the whole set (the nerd
   icons for off the default branch and the two worktree issues were
   picked without a font to check them in; acceptable as they are).
@@ -26,9 +28,6 @@ deferred.
 - **Terminals drawing ambiguous-width symbols two cells wide** (CJK
   setting): detect it and swap those icons. Today `demo --glyphs` marks
   them with `*`.
-
-- **The message history: sort steps by time, or hide quick ones** (a
-  threshold), for finding what's slow among a scan's hundreds of steps.
 
 - **`s`, `u` and `K` for the marked repos.** Fixes, pull and the rest
   apply to every marked repo (else the cursor's); these three take one

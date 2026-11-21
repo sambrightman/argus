@@ -9,6 +9,7 @@ pub mod details;
 pub mod fuzzy;
 pub mod input;
 pub mod menu;
+pub mod messages;
 pub mod refine;
 pub mod theme;
 pub mod ui;

@@ -220,7 +220,7 @@ again runs it.
 | `x` | **Fix**: `x` fix once (one fix for each selected repo), `a` the same for all shown except hidden; `X` fix auto (fix after fix until nothing more applies) and `A` the same for all shown; each saying what it would do (and left out when it would do nothing); a dimmed line under them says how many repos they leave out because none of their fixes is in `[fix] auto`, and which fixes those are; then every fix that applies to the selection, with its reason (or how many repos it applies to): `s` stash, `c` commit…, `i` gitignore…, `b` branch…, `p` push, `u` publish, `R` add-remote…, `P` push-branches, `d` switch-default, `r` reattach, `F` pull, `f` fast-forward, `D` delete-branches…, `S` submodule-update, `w` prune-worktrees, `W` remove-worktree…, `z` stash-pop, `k` abort…; on a repo whose folder is gone, `g` drops it from the list and `G` rescans. Those marked … ask first. Opened on a fix line in the details, it starts on that fix |
 | `t` | **Tag**: each tag by its `key` (`f` favourite, then yours: "tag work" / "untag work"), `p` pull, `i` ignore issues (a menu of the repo's issues and their state), `I` ignore or unignore the repo, `z` snooze (on an issue line in the details, just that issue), `u` unsnooze (on an issue line, just that issue; else the repo and its issues), `a` ack new, `c` clear, `o` the owner (all its repos): its own menu, where each tag, `p` pull and `I` ignore apply to the owner's pattern |
 | `o` | **Open**: `s` shell, `g` git UI, `e` editor, `w` forge page (on a branch with a pull request, the pull request) |
-| `v` | **View**: toggles, expand/collapse all, refresh and rescan, next theme and icon set (saved in the config); `$` the process log (each job's outcome, under the list); `m` the message history: everything the status line said (after a scan, the count is in the history and the header, and the status line keeps its keys unless there's more to say), each job's outcome and output, and with `-v` each step taken and its time (`j` `k` `n` `p` (with or without `C-`) `↑` `↓` scroll, `C-v` `M-v` `PgDn` `PgUp` by the page; any other key closes) |
+| `v` | **View**: toggles, expand/collapse all, refresh and rescan, next theme and icon set (saved in the config); `$` the process log (each job's outcome, under the list); `m` the messages: everything the status line said (after a scan, the count is in the messages and the header, and the status line keeps its keys unless there's more to say), each job's outcome with its output folded under it, and with `-v` each step taken and its time, holding the steps it took (`j` `k` `n` `p` (with or without `C-`) `↑` `↓` move, `C-v` `M-v` `PgDn` `PgUp` by the page, `Home` `End` `M-<` `M->` to the oldest and newest; `Tab` `Enter` fold and unfold, `→` `l` unfold, `←` `h` fold or go to what holds it; `s` every step slowest first, then time by kind, then back; `/` searches, `Esc` clears it; `q` `Esc` `C-g` close) |
 
 ## CLI
 
@@ -267,16 +267,22 @@ directories (or set `follow_symlinks = true`), and `-x` /
 network shares and external disks (or set `one_file_system = true`).
 
 `-v` / `--verbose` says each step taken and how long it took: config and
-state read, the scan, each repo's status (with its slow parts: `files`,
-`branches`, `describe`…), every git command, forge requests. On stderr,
-or in the TUI's message history (`v m`). For finding out what makes a
-scan slow:
+state read, the scan, each repo's status and its parts (`open`, `files`,
+`branches`, `describe`…), each branch's checks, every git command and
+job, forge requests. On stderr, each step by itself as it ends, a part
+named with what it's in:
 
 ```text
-argus:     8ms  status ~/dev/top/m20 (files 6ms)
+argus:     6ms  status ~/dev/top/m20: files
+argus:     8ms  status ~/dev/top/m20
 argus:    68ms  statuses of 1 repo
 argus:    48ms  statuses of 24 more (submodules and worktrees of those before)
 ```
+
+In the TUI's messages (`v m`) each step holds those taken in it, folded:
+a scan its statuses, a status its parts. `s` there lists every step
+slowest first, then totals their time by kind, for finding out what
+makes a scan slow.
 
 Anything that permanently loses data asks first: in the TUI a `y/n` in the
 status line, in the CLI a prompt on the terminal. `-y` / `--yes` proceeds

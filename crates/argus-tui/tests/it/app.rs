@@ -516,8 +516,8 @@ fn job_finish_logs_and_refreshes() {
 }
 
 /// What the status line said, each job's outcome, and (with `-v`) each
-/// step are kept: `m` shows them, newest at the bottom; any key other
-/// than the scrolling ones closes it.
+/// step are kept: `v m` shows them, newest at the bottom, a job's output
+/// folded under it; q, Esc and C-g close it.
 #[test]
 fn the_message_history_keeps_what_was_said_and_done() {
     use argus_core::trace::Step;
@@ -551,19 +551,31 @@ fn the_message_history_keeps_what_was_said_and_done() {
     open_history(&mut app);
     assert!(matches!(app.mode, Mode::History { .. }));
     let screen = render(&mut app, 100, 30);
-    for said in [
-        "3 repos",
-        "could not save",
-        "fetch",
-        "fatal: no remote",
-        "12ms  status ~/dev/x",
-    ] {
+    for said in ["3 repos", "could not save", "fetch", "12ms  status ~/dev/x"] {
         assert!(screen.contains(said), "{said:?} in\n{screen}");
     }
     // the same message twice running is kept once
     assert_eq!(screen.matches("could not save").count(), 1, "{screen}");
+    // the job's output, folded under it till unfolded
+    assert!(!screen.contains("fatal: no remote"), "{screen}");
+    assert!(screen.contains("▸ ✗ "), "{screen}");
+    // (up from the step, past what the status line said of the job)
+    app.on_key(key('k'));
+    app.on_key(key('k'));
+    app.on_key(code(KeyCode::Tab));
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("▾ ✗ "), "{screen}");
+    assert!(screen.contains("fatal: no remote"), "{screen}");
+    // other keys don't close it
     app.on_key(key('x'));
-    assert!(matches!(app.mode, Mode::Normal));
+    assert!(matches!(app.mode, Mode::History { .. }));
+    for close in [key('q'), code(KeyCode::Esc), ctrl('g')] {
+        assert!(matches!(app.mode, Mode::History { .. }));
+        app.on_key(close);
+        assert!(matches!(app.mode, Mode::Normal));
+        open_history(&mut app);
+    }
+    app.on_key(key('q'));
     // inverse: the history isn't drawn while closed
     assert!(!render(&mut app, 100, 30).contains("12ms  status ~/dev/x"));
 }
@@ -575,7 +587,7 @@ fn the_message_history_is_capped() {
     let (_sb, mut app) = setup("");
     open_history(&mut app);
     assert!(render(&mut app, 80, 20).contains("nothing yet"));
-    app.on_key(key('x'));
+    app.on_key(key('q'));
     for n in 0..5000 {
         app.report_error(format!("message {n}"));
     }
@@ -585,7 +597,8 @@ fn the_message_history_is_capped() {
     assert!(matches!(&app.history[0].what, Happened::Failed(s) if s == "message 500"));
 }
 
-/// The history opens at the newest and scrolls back through the rest.
+/// The history opens on the newest; the cursor moves back through the
+/// rest, the list keeping it in view.
 #[test]
 fn the_message_history_scrolls_back() {
     let (_sb, mut app) = setup("");
@@ -598,32 +611,33 @@ fn the_message_history_scrolls_back() {
         screen.contains("message 99") && !screen.contains("message 50"),
         "{screen}"
     );
-    // (17 lines fit: 00 to 99 at the newest is 83 to 99)
+    // (17 lines fit: 83 to 99; up to 50, the list follows it there)
     for _ in 0..49 {
         app.on_key(key('k'));
     }
     let screen = render(&mut app, 80, 20);
     assert!(
-        screen.contains("message 34") && screen.contains("message 50"),
+        screen.contains("message 50") && screen.contains("message 66"),
         "{screen}"
     );
     assert!(
-        !screen.contains("message 33") && !screen.contains("message 51"),
+        !screen.contains("message 49") && !screen.contains("message 67"),
         "{screen}"
     );
     app.on_key(code(KeyCode::Up));
     app.on_key(ctrl('p'));
     let screen = render(&mut app, 80, 20);
     assert!(
-        screen.contains("message 32") && !screen.contains("message 49"),
+        screen.contains("message 48") && !screen.contains("message 65"),
         "{screen}"
     );
+    // down again, in view: the list stays
     app.on_key(key('j'));
     app.on_key(code(KeyCode::Down));
     app.on_key(ctrl('n'));
     let screen = render(&mut app, 80, 20);
     assert!(
-        screen.contains("message 51") && !screen.contains("message 34"),
+        screen.contains("message 48") && screen.contains("message 51"),
         "{screen}"
     );
     // a page at a time, and no further back than the oldest
@@ -648,6 +662,34 @@ fn the_message_history_scrolls_back() {
     );
     app.on_key(ctrl('v'));
     assert!(render(&mut app, 80, 20).contains("message 99"));
+    // the oldest and the newest, as M-< and M-> go in Emacs
+    app.on_key(code(KeyCode::Home));
+    assert!(render(&mut app, 80, 20).contains("message 00"));
+    app.on_key(code(KeyCode::End));
+    assert!(render(&mut app, 80, 20).contains("message 99"));
+    app.on_key(alt('<'));
+    assert!(render(&mut app, 80, 20).contains("message 00"));
+    app.on_key(alt('>'));
+    assert!(render(&mut app, 80, 20).contains("message 99"));
+    // back onto the newest, it follows what's newer
+    app.on_key(key('k'));
+    app.on_key(key('j'));
+    for n in 100..120 {
+        app.report_error(format!("message {n}"));
+    }
+    assert!(render(&mut app, 80, 20).contains("message 119"));
+    // inverse: off it, it stays
+    app.on_key(key('k'));
+    for n in 120..140 {
+        app.report_error(format!("message {n}"));
+    }
+    let screen = render(&mut app, 80, 20);
+    assert!(
+        // (the status line says the newest, 139)
+        screen.contains("message 118") && !screen.contains("message 138"),
+        "{screen}"
+    );
+    app.on_key(alt('>'));
     assert!(
         matches!(app.mode, Mode::History { .. }),
         "they don't close it"
@@ -655,9 +697,331 @@ fn the_message_history_scrolls_back() {
     // inset by a column, as the help is
     let screen = render(&mut app, 80, 20);
     assert!(screen.starts_with(" ╭ messages"), "{screen}");
-    // inverse: v by itself is any other key
-    app.on_key(key('v'));
-    assert!(!matches!(app.mode, Mode::History { .. }));
+}
+
+/// A step, as `-v` keeps it: the scan, holding each repo's status,
+/// holding its parts; and a refresh beside it.
+fn steps_taken(app: &mut App) {
+    use argus_core::trace::Step;
+    let ms = std::time::Duration::from_millis;
+    let status = |repo: &str, took, files| {
+        let mut s = Step::new("status", format!("status ~/dev/{repo}"), Some(ms(took)));
+        s.steps = vec![
+            Step::new("open", "open", Some(ms(1))),
+            Step::new("files", "files", Some(ms(files))),
+        ];
+        s
+    };
+    let mut scan = Step::new("scan", "scan: 2 repos", Some(ms(30)));
+    scan.steps = vec![
+        Step::new("note", "roots ~/dev", None),
+        status("a", 20, 15),
+        status("b", 25, 22),
+    ];
+    app.on_msg(Msg::Step(scan));
+    let mut refresh = Step::new("refresh", "refresh ~/dev/a", Some(ms(9)));
+    refresh.steps = vec![status("a", 9, 7)];
+    app.on_msg(Msg::Step(refresh));
+}
+
+/// A step unfolds into the steps it took, as deep as they go; Tab, → and l
+/// unfold, Tab, ← and h fold, and ← on a step inside goes to what holds
+/// it. A step whose own took more than it did, side by side, says so.
+#[test]
+fn steps_unfold_into_the_steps_they_took() {
+    let (_sb, mut app) = setup("");
+    steps_taken(&mut app);
+    open_history(&mut app);
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("▸    30ms  scan: 2 repos"), "{screen}");
+    assert!(screen.contains("▸     9ms  refresh ~/dev/a"), "{screen}");
+    assert!(!screen.contains("status ~/dev/b"), "{screen}");
+    // the scan's statuses took 45ms summed, in its 30
+    assert!(
+        screen.contains("scan: 2 repos (45ms summed, side by side)"),
+        "{screen}"
+    );
+    assert!(!screen.contains("refresh ~/dev/a ("), "{screen}");
+    app.on_key(key('k'));
+    app.on_key(code(KeyCode::Right));
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("▾    30ms  scan: 2 repos"), "{screen}");
+    assert!(screen.contains("  ▸    25ms  status ~/dev/b"), "{screen}");
+    assert!(!screen.contains("files"), "{screen}");
+    assert!(screen.contains("               roots ~/dev"), "{screen}");
+    // into b, and unfolded: its parts, a level further in
+    for _ in 0..3 {
+        app.on_key(key('j'));
+    }
+    app.on_key(key('l'));
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("▾    25ms  status ~/dev/b"), "{screen}");
+    assert!(screen.contains("        22ms  files"), "{screen}");
+    // ← on a part goes to its status, then folds it, then goes to the scan
+    app.on_key(key('j'));
+    app.on_key(code(KeyCode::Left));
+    app.on_key(code(KeyCode::Left));
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("▸    25ms  status ~/dev/b"), "{screen}");
+    assert!(!screen.contains("files"), "{screen}");
+    app.on_key(key('h'));
+    app.on_key(key('h'));
+    let screen = render(&mut app, 100, 30);
+    assert!(!screen.contains("status ~/dev/b"), "{screen}");
+    // Tab both ways
+    app.on_key(code(KeyCode::Tab));
+    assert!(render(&mut app, 100, 30).contains("status ~/dev/b"));
+    app.on_key(code(KeyCode::Tab));
+    assert!(!render(&mut app, 100, 30).contains("status ~/dev/b"));
+    // inverse: → on an unfolded one, l on a line holding nothing, change nothing
+    app.on_key(code(KeyCode::Right));
+    app.on_key(code(KeyCode::Right));
+    assert!(render(&mut app, 100, 30).contains("▾    30ms  scan: 2 repos"));
+}
+
+/// `s` shows every timed step, slowest first and not as a tree, as htop
+/// does when sorted; then their time by kind; then as they happened.
+#[test]
+fn s_sorts_the_steps_by_time_then_totals_them_by_kind() {
+    let (_sb, mut app) = setup("");
+    steps_taken(&mut app);
+    open_history(&mut app);
+    app.on_key(key('s'));
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("messages, slowest first"), "{screen}");
+    let order: Vec<&str> = [
+        "30ms  scan",
+        "25ms  status ~/dev/b",
+        "22ms  files",
+        "20ms  status ~/dev/a",
+        "15ms  files",
+        "9ms  refresh",
+        "9ms  status ~/dev/a",
+        "7ms  files",
+    ]
+    .into_iter()
+    .collect();
+    let at: Vec<usize> = order
+        .iter()
+        .map(|s| screen.find(s).unwrap_or_else(|| panic!("{s} in\n{screen}")))
+        .collect();
+    assert!(
+        at.windows(2).all(|w| w[0] < w[1]),
+        "{order:?} in order in\n{screen}"
+    );
+    // nothing untimed; none folded, none indented
+    assert!(!screen.contains("roots ~/dev"), "{screen}");
+    assert!(
+        !screen.contains('▸') && !screen.contains("   files"),
+        "{screen}"
+    );
+    app.on_key(key('s'));
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("time by kind"), "{screen}");
+    // status: 3 steps, 54ms in all, the slowest 25ms; files 44ms; open 3
+    let rows = [
+        "status                    3     54ms     25ms",
+        "files                     3     44ms     22ms",
+        "scan                      1     30ms     30ms",
+        "refresh                   1      9ms      9ms",
+        "open                      3      3ms      1ms",
+    ];
+    let at: Vec<usize> = rows
+        .iter()
+        .map(|s| screen.find(s).unwrap_or_else(|| panic!("{s} in\n{screen}")))
+        .collect();
+    assert!(
+        at.windows(2).all(|w| w[0] < w[1]),
+        "most first in\n{screen}"
+    );
+    assert!(!screen.contains("note"), "{screen}");
+    app.on_key(key('s'));
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("▸    30ms  scan: 2 repos"), "{screen}");
+}
+
+/// Without steps (no -v), the views by time say where they come from.
+#[test]
+fn the_views_by_time_say_steps_need_v() {
+    let (_sb, mut app) = setup("");
+    app.report_error("could not save");
+    open_history(&mut app);
+    app.on_key(key('s'));
+    assert!(render(&mut app, 100, 30).contains("no steps timed: argus -v keeps them"));
+    app.on_key(key('s'));
+    assert!(render(&mut app, 100, 30).contains("no steps timed: argus -v keeps them"));
+}
+
+/// `/` searches: the messages holding what's typed are shown, unfolded
+/// to it; Enter keeps the search, Esc then clears it, and again closes.
+#[test]
+fn slash_searches_the_messages() {
+    let (_sb, mut app) = setup("");
+    app.report_error("could not save");
+    steps_taken(&mut app);
+    open_history(&mut app);
+    app.on_key(key('/'));
+    for c in "us ~/dev/B".chars() {
+        app.on_key(key(c));
+    }
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("searching: us ~/dev/B"), "{screen}");
+    // the scan, unfolded to b, not a; not the refresh, nor what was said
+    assert!(screen.contains("▾    30ms  scan: 2 repos"), "{screen}");
+    assert!(screen.contains("status ~/dev/b"), "{screen}");
+    assert!(!screen.contains("status ~/dev/a"), "{screen}");
+    assert!(!screen.contains("refresh"), "{screen}");
+    assert!(!screen.contains("could not save"), "{screen}");
+    // what's typed isn't a key while searching: s didn't sort
+    assert!(screen.contains("Tab folds"), "{screen}");
+    app.on_key(code(KeyCode::Enter));
+    let screen = render(&mut app, 100, 30);
+    assert!(
+        screen.contains("matching \"us ~/dev/B\", Esc clears"),
+        "{screen}"
+    );
+    // a match unfolds to all it holds
+    app.on_key(alt('>'));
+    app.on_key(code(KeyCode::Tab));
+    let screen = render(&mut app, 100, 30);
+    assert!(
+        screen.contains("22ms  files") && screen.contains("1ms  open"),
+        "{screen}"
+    );
+    app.on_key(code(KeyCode::Tab));
+    // a folded one unfolded where it holds a match folds too
+    app.on_key(alt('<'));
+    app.on_key(code(KeyCode::Tab));
+    assert!(!render(&mut app, 100, 30).contains("status ~/dev/b"));
+    // kept by time too
+    app.on_key(key('s'));
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("25ms  status ~/dev/b"), "{screen}");
+    assert!(
+        !screen.contains("scan") && !screen.contains("files"),
+        "{screen}"
+    );
+    app.on_key(key('s'));
+    assert!(render(&mut app, 100, 30).contains("nothing matches"));
+    app.on_key(key('s'));
+    app.on_key(code(KeyCode::Esc));
+    let screen = render(&mut app, 100, 30);
+    assert!(
+        screen.contains("could not save") && screen.contains("refresh"),
+        "{screen}"
+    );
+    assert!(matches!(app.mode, Mode::History { .. }));
+    app.on_key(code(KeyCode::Esc));
+    assert!(matches!(app.mode, Mode::Normal));
+    // all under a match, however deep: a status in the scan, its parts
+    open_history(&mut app);
+    app.on_key(key('/'));
+    for c in "scan:".chars() {
+        app.on_key(key(c));
+    }
+    app.on_key(code(KeyCode::Enter));
+    app.on_key(alt('<'));
+    app.on_key(code(KeyCode::Tab));
+    for _ in 0..3 {
+        app.on_key(key('j'));
+    }
+    app.on_key(code(KeyCode::Tab));
+    let screen = render(&mut app, 100, 30);
+    assert!(
+        screen.contains("status ~/dev/a") && screen.contains("22ms  files"),
+        "{screen}"
+    );
+    app.on_key(code(KeyCode::Esc));
+    // a job by its repo; the cursor, as the search changes, on the newest
+    app.remember(Happened::Job {
+        repo: "acme/x".into(),
+        label: "fetch".into(),
+        ok: true,
+        output: String::new(),
+    });
+    app.on_key(alt('<'));
+    app.on_key(key('/'));
+    for c in "acme".chars() {
+        app.on_key(key(c));
+    }
+    let screen = render(&mut app, 100, 30);
+    assert!(
+        screen.contains("acme/x fetch") && !screen.contains("scan"),
+        "{screen}"
+    );
+    assert!(
+        matches!(&app.mode, Mode::History { messages } if messages.cursor == usize::MAX),
+        "on the newest"
+    );
+    app.on_key(code(KeyCode::Esc));
+    app.on_key(code(KeyCode::Esc));
+    // Esc while typing drops the search
+    open_history(&mut app);
+    app.on_key(key('/'));
+    app.on_key(key('z'));
+    app.on_key(code(KeyCode::Esc));
+    let screen = render(&mut app, 100, 30);
+    assert!(
+        screen.contains("could not save") && screen.contains("/ searches"),
+        "{screen}"
+    );
+}
+
+/// Typing a search, the cursor is where it is in what's typed.
+#[test]
+fn the_search_shows_where_its_cursor_is() {
+    let (_sb, mut app) = setup("");
+    open_history(&mut app);
+    app.on_key(key('/'));
+    for c in "ab".chars() {
+        app.on_key(key(c));
+    }
+    app.on_key(code(KeyCode::Left));
+    let mut t = draw(&mut app, 100, 20);
+    let (row, at) = (0..20)
+        .find_map(|y| {
+            let row: String = (0..100)
+                .map(|x| t.backend().buffer()[(x, y)].symbol().to_string())
+                .collect();
+            let at = row.find("searching: ab")?;
+            Some((y, row[..at].chars().count() + "searching: ".len()))
+        })
+        .expect("the search in the title");
+    let pos = t.get_cursor_position().unwrap();
+    // on the b
+    assert_eq!((pos.x as usize, pos.y), (at + 1, row));
+}
+
+/// What's unfolded stays so as the oldest messages are dropped.
+#[test]
+fn what_is_unfolded_stays_unfolded_past_the_cap() {
+    let (_sb, mut app) = setup("");
+    app.report_error("message 0\nheld");
+    for n in 1..4990 {
+        app.report_error(format!("message {n}"));
+    }
+    steps_taken(&mut app);
+    open_history(&mut app);
+    // (the oldest unfolded too, to be dropped)
+    app.on_key(code(KeyCode::Home));
+    app.on_key(code(KeyCode::Tab));
+    app.on_key(code(KeyCode::End));
+    app.on_key(key('k'));
+    app.on_key(code(KeyCode::Tab));
+    for n in 0..20 {
+        app.report_error(format!("later {n}"));
+    }
+    assert_eq!(app.history.len(), 4512);
+    // (the cursor still on it, in view: 17 lines fit, the newest 23 below it)
+    let screen = render(&mut app, 100, 20);
+    assert!(screen.contains("▾    30ms  scan: 2 repos"), "{screen}");
+    for _ in 0..4 {
+        app.on_key(key('j'));
+    }
+    let screen = render(&mut app, 100, 20);
+    assert!(screen.contains("status ~/dev/b"), "{screen}");
+    // inverse: nothing else unfolded
+    assert!(screen.contains("▸     9ms  refresh"), "{screen}");
 }
 
 /// The history and the process log are in the View menu (`v m`, `v $`),

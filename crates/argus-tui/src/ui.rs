@@ -968,78 +968,125 @@ pub fn legend<'a>(i: &'a Icons, tags: &'a [(String, String)]) -> Vec<(&'a str, R
     v
 }
 
-/// The message history over the list, newest at the bottom, scrolled
-/// back as far as `Mode::History` says (at most to the oldest).
+/// The message history over the list (see [`crate::messages`]), newest
+/// at the bottom, the cursor's line in view.
 fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
-    use crate::app::Happened;
+    use crate::messages::{By, Shown};
+    let Mode::History { messages: m } = &app.mode else {
+        return;
+    };
     let t = v.theme;
-    let failed = || Span::styled(format!("{} ", v.icons.failed.trim_end()), t.ui(Ui::Failed));
-    let mut lines: Vec<Line> = vec![];
-    for e in &app.history {
-        let time = Span::styled(format!("{} ", e.at.strftime("%H:%M:%S")), t.ui(Ui::Dim));
-        let (first, rest): (Vec<Span>, Vec<&str>) = match &e.what {
-            Happened::Said(s) => {
-                let mut l = s.lines();
-                (
-                    vec![Span::raw(l.next().unwrap_or("").to_string())],
-                    l.collect(),
-                )
-            }
-            Happened::Failed(s) => {
-                let mut l = s.lines();
-                let first = Span::styled(l.next().unwrap_or("").to_string(), t.ui(Ui::Failed));
-                (vec![failed(), first], l.collect())
-            }
-            Happened::Job {
-                repo,
-                label,
-                ok,
-                output,
-            } => {
-                let mark = if *ok {
-                    Span::styled(format!("{} ", v.icons.ok.trim_end()), t.ui(Ui::Ok))
-                } else {
-                    failed()
-                };
-                let name = Span::styled(
-                    format!("{repo} "),
-                    t.ui(Ui::Name).add_modifier(Modifier::BOLD),
-                );
-                (
-                    vec![mark, name, Span::raw(label.clone())],
-                    output.lines().collect(),
-                )
-            }
-            Happened::Step(step) => (vec![Span::styled(step.to_string(), t.ui(Ui::Dim))], vec![]),
-        };
-        lines.push(Line::from([vec![time], first].concat()));
-        for l in rest {
-            lines.push(Line::from(Span::styled(
-                format!("         {l}"),
-                t.ui(Ui::Dim),
-            )));
-        }
-    }
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled(" nothing yet", t.ui(Ui::Dim))));
-    }
+    let lines = crate::messages::lines(&app.history, m);
     let r = Rect {
         x: area.x + 1,
         y: area.y,
         width: area.width.saturating_sub(2),
         height: area.height,
     };
-    let height = r.height.saturating_sub(2) as usize;
-    let most = lines.len().saturating_sub(height);
-    let back = match &mut app.mode {
-        Mode::History { back } => {
-            *back = (*back).min(most);
-            *back
-        }
-        _ => 0,
+    let height = (r.height.saturating_sub(2) as usize).max(1);
+    let at = m.cursor.min(lines.len().saturating_sub(1));
+    // the cursor in view, the list moved as little as can be
+    let top = m.top.min(at).max((at + 1).saturating_sub(height));
+    let top = top.min(lines.len().saturating_sub(height));
+    let title = {
+        let by = match m.by {
+            By::Tree => "messages (Tab folds; s slowest first",
+            By::Slowest => "messages, slowest first (s time by kind",
+            By::Kinds => "messages, time by kind: steps, total, slowest (s as they happened",
+        };
+        let search = match (&m.searching, m.query.as_str()) {
+            (Some(editor), _) => format!("; searching: {}", editor.text()),
+            (None, "") => "; / searches".into(),
+            (None, q) => format!("; matching {q:?}, Esc clears"),
+        };
+        format!(" {by}{search}; q closes) ")
     };
-    let start = most - back;
-    let shown: Vec<Line> = lines.into_iter().skip(start).take(height).collect();
+    // typing: the cursor in the title, after "searching: "
+    let typing = m.searching.as_ref().map(|editor| {
+        let before = title.find("searching: ").unwrap_or_default() + "searching: ".len();
+        let x = r.x + 1 + (UnicodeWidthStr::width(&title[..before]) + editor.cursor()) as u16;
+        (x.min(r.right().saturating_sub(2)), r.y)
+    });
+    let failed = || Span::styled(format!("{} ", v.icons.failed.trim_end()), t.ui(Ui::Failed));
+    let mut shown: Vec<Line> = vec![];
+    for (n, l) in lines.iter().enumerate().skip(top).take(height) {
+        let time = match l.at {
+            Some(at) if m.by != By::Kinds => format!("{} ", at.strftime("%H:%M:%S")),
+            _ if m.by == By::Kinds => String::new(),
+            _ => " ".repeat(9),
+        };
+        let mark = match l.fold {
+            Some(true) => format!("{} ", v.icons.unfolded.trim_end()),
+            Some(false) => format!("{} ", v.icons.folded.trim_end()),
+            None if m.by == By::Tree => "  ".into(),
+            None => String::new(),
+        };
+        let mut spans = vec![
+            Span::styled(time, t.ui(Ui::Dim)),
+            Span::raw("  ".repeat(l.depth)),
+            Span::styled(mark, t.ui(Ui::Dim)),
+        ];
+        match &l.what {
+            Shown::Said(s) => spans.push(Span::raw(s.to_string())),
+            Shown::Failed(s) => {
+                spans.push(failed());
+                spans.push(Span::styled(s.to_string(), t.ui(Ui::Failed)));
+            }
+            Shown::Job { repo, label, ok } => {
+                spans.push(match ok {
+                    true => Span::styled(format!("{} ", v.icons.ok.trim_end()), t.ui(Ui::Ok)),
+                    false => failed(),
+                });
+                spans.push(Span::styled(
+                    format!("{repo} "),
+                    t.ui(Ui::Name).add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::raw(label.to_string()));
+            }
+            Shown::Step(s) => {
+                spans.push(Span::styled(s.to_string(), t.ui(Ui::Dim)));
+                if let Some(sum) = crate::messages::summed(s).filter(|_| m.by == By::Tree) {
+                    let sum = argus_core::trace::duration(sum);
+                    spans.push(Span::styled(
+                        format!(" ({sum} summed, side by side)"),
+                        t.ui(Ui::Dim),
+                    ));
+                }
+            }
+            Shown::Output(s) => spans.push(Span::styled(s.to_string(), t.ui(Ui::Dim))),
+            Shown::Kind {
+                kind,
+                count,
+                total,
+                slowest,
+            } => spans.push(Span::raw(format!(
+                "{kind:<20} {count:>6}  {:>7}  {:>7}",
+                argus_core::trace::duration(*total),
+                argus_core::trace::duration(*slowest)
+            ))),
+        }
+        let mut line = Line::from(spans);
+        if n == at {
+            line = line.style(t.ui(Ui::Selection));
+        }
+        shown.push(line);
+    }
+    if shown.is_empty() {
+        let none = match (m.by, m.query.is_empty()) {
+            (_, false) => " nothing matches",
+            (By::Tree, true) => " nothing yet",
+            // (steps are kept with -v)
+            (_, true) => " no steps timed: argus -v keeps them",
+        };
+        shown.push(Line::from(Span::styled(none, t.ui(Ui::Dim))));
+    }
+    drop(lines);
+    if let Mode::History { messages } = &mut app.mode {
+        messages.top = top;
+    }
+    if let Some(at) = typing {
+        f.set_cursor_position(at);
+    }
     f.render_widget(Clear, r);
     f.render_widget(
         Paragraph::new(shown).block(
@@ -1047,10 +1094,7 @@ fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(t.ui(Ui::Border))
-                .title(Span::styled(
-                    " messages (j k n p ↑ ↓ C-v M-v PgUp PgDn scroll; any other key closes) ",
-                    t.ui(Ui::Title),
-                )),
+                .title(Span::styled(title, t.ui(Ui::Title))),
         ),
         r,
     );
