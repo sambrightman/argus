@@ -1,0 +1,14 @@
+# cargo-release (`cargo release minor --execute`, or patch, or major): bumps
+# the one version every crate shares (and their pins on each other, and
+# Cargo.lock), names the changelog's Unreleased section, runs the checks
+# CI would, and commits. Tagging waits for CI on that commit, and the
+# release workflow publishes once the tag's pushed (DESIGN.md, Releasing).
+shared-version = true
+consolidate-commits = true
+allow-branch = ["main"]
+pre-release-commit-message = "{{version}}"
+# (tagged by hand once CI passes on the commit: `git tag -a v1.2.3 -m
+# "argus 1.2.3"`, which the changelog's links assume)
+tag = false
+push = false
+publish = false

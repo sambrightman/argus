@@ -33,3 +33,14 @@ predicates = "3.1.4"
 
 [lints]
 workspace = true
+
+# cargo-release: the changelog's Unreleased section becomes the release's,
+# a new one starts, and the checks run before the release commit (the
+# rest of the setup is release.toml's).
+[package.metadata.release]
+pre-release-hook = ["../../scripts/release-checks.sh"]
+pre-release-replacements = [
+    { file = "../../CHANGELOG.md", search = "## Unreleased - ReleaseDate", replace = "## {{version}} - {{date}}", exactly = 1 },
+    { file = "../../CHANGELOG.md", search = "\\.\\.\\.HEAD", replace = "...v{{version}}", exactly = 1 },
+    { file = "../../CHANGELOG.md", search = "<!-- next-header -->", replace = "<!-- next-header -->\n## Unreleased - ReleaseDate\n\n**Full Changelog**: https://github.com/sambrightman/argus/compare/v{{version}}...HEAD\n", exactly = 1 },
+]

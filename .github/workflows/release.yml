@@ -2,8 +2,9 @@ name: Release
 
 # A tag `v1.2.3` (matching the version in Cargo.toml) builds argus for
 # Apple silicon macOS and Linux, publishes a GitHub release with the archives and their
-# SHA-256 sums, and publishes the crates to crates.io. Run by hand, it
-# builds and packages everything but publishes nothing.
+# SHA-256 sums and CHANGELOG.md's notes for the version, and publishes the
+# crates to crates.io. Run by hand, it builds and packages everything but
+# publishes nothing.
 on:
   push:
     tags: ["v*"]
@@ -16,6 +17,33 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The version's section of CHANGELOG.md, the release's notes: without
+  # notes there, nothing is published. Run by hand, Unreleased's section
+  # (which may be empty) is shown.
+  notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: parse-changelog
+      - name: The version's notes
+        run: |
+          version=Unreleased
+          if [ "$GITHUB_REF_TYPE" = tag ]; then version=${GITHUB_REF_NAME#v}; fi
+          parse-changelog CHANGELOG.md "$version" > notes.md
+          cat notes.md
+          if [ "$GITHUB_REF_TYPE" = tag ] \
+              && ! grep -v '^\*\*Full Changelog\*\*' notes.md | grep -q .; then
+            echo "::error::CHANGELOG.md has no notes for $version"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notes
+          path: notes.md
+          if-no-files-found: error
+
   build:
     strategy:
       matrix:
@@ -60,7 +88,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [build, notes]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -71,20 +99,23 @@ jobs:
           pattern: argus-*
           merge-multiple: true
           path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: notes
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --title "argus $GITHUB_REF_NAME" --generate-notes
+            --title "argus $GITHUB_REF_NAME" --notes-file notes.md
 
   # crates.io by trusted publishing (a short-lived token; no secret), which
   # each crate allows once it exists: its first version is published by
   # hand. Crates already there at this version are skipped, so that first
   # tag, or a re-run after a partial failure, goes through.
   crates-io:
-    needs: build
+    needs: [build, notes]
     runs-on: ubuntu-latest
     permissions:
       contents: read

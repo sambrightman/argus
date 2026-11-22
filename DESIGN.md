@@ -1080,6 +1080,38 @@ from one without. A panic already says its file and line, and a
 backtrace names every function. Fat LTO and `panic = "abort"` were
 considered and left too.
 
+**Releasing.** Notes go under `## Unreleased` in CHANGELOG.md (in Keep a
+Changelog's form) as changes are made, written for users: what to change
+on upgrading, what's new, what's fixed. Then:
+
+1. The full mutants run (`mutants.yml`) on main, and what it misses dealt
+   with.
+2. `scripts/release-checks.sh`: Unreleased has notes, and CI's lint, docs
+   and tests pass, and every crate packages (`cargo publish --workspace
+   --dry-run`).
+3. `cargo release minor --execute` (or `patch`, `major`; release.toml):
+   bumps the version all four crates share, their pins on each other and
+   Cargo.lock; renames Unreleased to the version and date and starts a
+   new Unreleased; runs the checks again, as its pre-release hook (from
+   the CLI crate's `[package.metadata.release]`, which also holds the
+   changelog's replacements, so they run once, not per crate); and
+   commits the version. It refuses off main or with uncommitted changes.
+   It doesn't tag, push or publish. If the checks fail, it leaves the
+   bump uncommitted: `git restore .` takes it back.
+4. Push main, and wait for CI on that commit.
+5. `git tag -a v1.2.3 -m "argus 1.2.3" && git push origin v1.2.3`. The
+   release workflow takes the version's section of CHANGELOG.md (with
+   `parse-changelog`) as the release's notes, and stops before anything
+   is published if it has none; builds; makes the GitHub release; and
+   publishes the crates.
+
+cargo-release over doing it by hand: the version is in five places plus
+Cargo.lock, and the changelog's heading, date and links follow from it.
+Its generated changelogs (and release-plz's, git-cliff's) come from
+Conventional Commits, which argus's commit messages aren't, and from
+commits rather than what a user needs to know; so the notes are written,
+and only named and dated by the tool.
+
 ## 9. Not done yet / next steps
 
 In [TODO.md](TODO.md). Planned in detail:
