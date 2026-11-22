@@ -18,8 +18,8 @@ env:
 
 jobs:
   # The version's section of CHANGELOG.md, the release's notes: without
-  # notes there, nothing is published. Run by hand, Unreleased's section
-  # (which may be empty) is shown.
+  # notes there, nothing is built or published. Run by hand, Unreleased's
+  # section (which may be empty) is shown.
   notes:
     runs-on: ubuntu-latest
     steps:
@@ -45,6 +45,7 @@ jobs:
           if-no-files-found: error
 
   build:
+    needs: notes
     strategy:
       matrix:
         include:
