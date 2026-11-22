@@ -1047,7 +1047,11 @@ with `Swatinem/rust-cache`, and mold as the Linux linker.
   platforms missed it, lists those and any timeouts, and fails if there
   are any, or if a shard failed (which would leave the intersection
   incomplete). The first full run (Linux only, 2026-11-11): 1,842 caught,
-  380 missed, 254 unviable.
+  380 missed, 254 unviable. Run by hand with `-f shard=Linux-9`, it runs
+  that one shard, logging the runner's memory, kernel caches, `/tmp` and
+  biggest processes every 30 s: for a shard whose runner keeps being lost
+  (Linux-9's, in November 2026, at varying times; on a Mac the same shard
+  left fseventsd holding 61 GB).
 * `bench.yml`, on every push to main: the criterion benchmarks, prebuilt
   into an image (`.github/bench`, with git for the fixtures), run on
   Bencher's bare-metal `intel-v1` runners, which are dedicated, so runs
