@@ -30,6 +30,14 @@ exclude_re = [
     'crates/argus-core/src/installation\.rs:\d+:\d+: replace start with \(\)$',
     # HTTPS is also Protocol's Default, so the replacement is the same
     'crates/argus-core/src/forge\.rs:\d+:\d+: replace Forge::protocol -> Protocol with Default::default\(\)$',
+    # every line naming a file and section unfolding as a file does: a
+    # diff's rows do too, into rows that do again, multiplying without end
+    # in one rebuild. The tests catch it (they fail on macOS), but on a
+    # Linux runner, which hands out memory until the runner itself goes,
+    # it takes the runner down first, and its shard's results with it.
+    # (The same from the other side, a diff row's `diff` deleted, is set
+    # apart in diff_rows: exclude_re doesn't reach field deletions.)
+    'crates/argus-tui/src/app\.rs:\d+:\d+: replace match guard line\.diff\.is_none\(\) with true in App::build_rows$',
     # reading the core kinds from sysctl: macOS only (not compiled on
     # Linux), and the hosted macOS VMs have one kind, for which None is
     # right; `performance_cores_agree_with_sysctl` checks it on Apple

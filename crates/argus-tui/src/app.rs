@@ -471,18 +471,23 @@ fn diff_rows(
             DiffPart::Line(h, i, l) if !whole => (Some(h), Some((i, l))),
             _ => (None, None),
         };
-        DetailLine {
+        let mut row = DetailLine {
             file: Some(file.to_string()),
-            diff: Some(Box::new(DiffRef {
-                side,
-                hunk,
-                line: line.map(|(_, l)| l.clone()),
-                at: line.map(|(i, _)| i),
-            })),
             body: whole && !matches!(part, DiffPart::Note),
             section: Some(section),
             ..crate::details::line_of(parts)
-        }
+        };
+        // (set apart from the rest: with `file` and `section`, it's all
+        // that keeps the row from unfolding as its file does, into rows
+        // that unfold again; a mutant deleting it from the literal above
+        // fills a Linux runner's memory before any test can fail)
+        row.diff = Some(Box::new(DiffRef {
+            side,
+            hunk,
+            line: line.map(|(_, l)| l.clone()),
+            at: line.map(|(i, _)| i),
+        }));
+        row
     };
     let converted = "converted to text (textconv): staged or discarded as a whole file";
     diff_lines(d, converted, &row)
