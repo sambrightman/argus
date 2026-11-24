@@ -991,10 +991,12 @@ fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
     let top = m.top.min(at).max((at + 1).saturating_sub(height));
     let top = top.min(lines.len().saturating_sub(height));
     let title = {
-        let by = match m.by {
-            By::Tree => "messages (Tab folds; s slowest first",
-            By::Slowest => "messages, slowest first (s time by kind",
-            By::Kinds => "messages, time by kind (s as they happened",
+        let by = match (m.by, m.own) {
+            (By::Tree, _) => "messages (Tab folds; s slowest first",
+            (By::Slowest, false) => "messages, slowest first (o by own time; s time by kind",
+            (By::Slowest, true) => "messages, most own time first (o by all of it; s time by kind",
+            (By::Kinds, false) => "messages, time by kind (o by own time; s as they happened",
+            (By::Kinds, true) => "messages, own time by kind (o by all of it; s as they happened",
         };
         let search = match (&m.searching, m.query.as_str()) {
             (Some(editor), _) => format!("; searching: {}", editor.text()),

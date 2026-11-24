@@ -967,7 +967,7 @@ rendering is snapshot-tested via `TestBackend`.
   same message running twice is kept once), each job's outcome, and
   steps: a status line message is easily overwritten by the next. It's
   a tree of messages, as magit's sections: a job holds its output, a
-  step what it took, folded. `s` sorts every timed step by time, which,
+  step what it took, folded. `s` sorts every timed step by time (`o`: by own time), which,
   as in htop, isn't a tree (a step's place among the slowest says more
   than its place in the scan), then totals them by kind; no threshold,
   as sorted the quick ones are at the bottom. A step that took steps says

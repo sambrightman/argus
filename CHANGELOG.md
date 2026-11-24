@@ -9,6 +9,10 @@ Releasing).
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### New
+
+- In the message history, `o` sorts the steps by their own time (when none of the steps they took ran) instead of all they took, slowest first or by kind.
+
 **Full Changelog**: https://github.com/sambrightman/argus/compare/v0.3.0...HEAD
 
 ## 0.3.0 - 2026-11-22

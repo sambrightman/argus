@@ -34,12 +34,14 @@ impl By {
     }
 }
 
-/// The window's state: how it's shown, the line the cursor's on (past the
+/// The window's state: how it's shown, sorted by own time rather than all
+/// a step took (by time, by kind), the line the cursor's on (past the
 /// last: on the newest, following), the first line shown, the messages
 /// folded the other way from how they'd be, and the search.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Messages {
     pub by: By,
+    pub own: bool,
     pub cursor: usize,
     pub top: usize,
     pub flipped: HashSet<Vec<usize>>,
@@ -51,6 +53,7 @@ impl Default for Messages {
     fn default() -> Self {
         Messages {
             by: By::Tree,
+            own: false,
             cursor: usize::MAX,
             top: 0,
             flipped: HashSet::new(),
@@ -198,6 +201,7 @@ pub fn lines<'a>(history: &'a [Event], m: &Messages) -> Vec<MessageLine<'a>> {
             });
             // (stable: of those as slow, the earlier first)
             all.sort_by_key(|l| match l.what {
+                Shown::Step { step, .. } if m.own => std::cmp::Reverse(own_time(step)),
                 Shown::Step { step, .. } => std::cmp::Reverse(step.took),
                 _ => std::cmp::Reverse(None),
             });
@@ -234,7 +238,7 @@ pub fn lines<'a>(history: &'a [Event], m: &Messages) -> Vec<MessageLine<'a>> {
                 .into_iter()
                 .filter(|(k, _)| q.is_empty() || k.to_lowercase().contains(&q))
                 .collect();
-            kinds.sort_by_key(|(_, t)| std::cmp::Reverse(t.took));
+            kinds.sort_by_key(|(_, t)| std::cmp::Reverse(if m.own { t.own } else { t.took }));
             out = kinds
                 .into_iter()
                 .enumerate()
@@ -395,6 +399,12 @@ pub fn key(history: &[Event], m: &mut Messages, k: KeyEvent, page: usize) -> Key
             m.cursor = usize::MAX;
             m.top = 0;
         }
+        // sorted by own time, or by all a step took
+        KeyCode::Char('o') if m.by != By::Tree => {
+            m.own = !m.own;
+            m.cursor = usize::MAX;
+            m.top = 0;
+        }
         KeyCode::Char('/') => m.searching = Some(LineEditor::new(&m.query)),
         KeyCode::Esc if !m.query.is_empty() => {
             m.query.clear();
@@ -422,4 +432,10 @@ pub fn dropped(m: &mut Messages, n: usize, lines: usize) {
             p
         })
         .collect();
+}
+
+/// The time `s` took that none of its steps ran in: all of it, if it took
+/// none.
+fn own_time(s: &Step) -> Option<Duration> {
+    s.split().map(|split| split.own).or(s.took)
 }

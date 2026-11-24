@@ -739,6 +739,22 @@ fn steps_taken(app: &mut App) {
     app.on_msg(Msg::Step(refresh));
 }
 
+/// Each of `texts` is on `screen`, each after the one before.
+fn in_order(screen: &str, texts: &[&str]) {
+    let at: Vec<usize> = texts
+        .iter()
+        .map(|t| {
+            screen
+                .find(t)
+                .unwrap_or_else(|| panic!("{t:?} in\n{screen}"))
+        })
+        .collect();
+    assert!(
+        at.windows(2).all(|w| w[0] < w[1]),
+        "{texts:?} in order in\n{screen}"
+    );
+}
+
 /// A step unfolds into the steps it took, as deep as they go; Tab, → and l
 /// unfold, Tab, ← and h fold, and ← on a step inside goes to what holds
 /// it. A step that took steps says how its time divides.
@@ -902,9 +918,43 @@ fn s_sorts_the_steps_by_time_then_totals_them_by_kind() {
         !screen.contains('▸') && !screen.contains("   files"),
         "{screen}"
     );
+    // o: by own time instead, when none of a step's own steps ran (a step
+    // that took none is all its own): the files first, then a's status (4
+    // of its 20 its own), the scan (3 of 30), b's (2 of 25)
+    app.on_key(key('o'));
+    let screen = render(&mut app, 100, 30);
+    assert!(
+        screen.contains("most own time first (o by all of it"),
+        "{screen}"
+    );
+    in_order(
+        &screen,
+        &[
+            "22ms  status ~/dev/b: files",
+            "15ms  status ~/dev/a: files",
+            "7ms  status ~/dev/a: files",
+            "20ms  status ~/dev/a",
+            "30ms  scan",
+            "25ms  status ~/dev/b",
+            "9ms  status ~/dev/a",
+            "9ms  refresh",
+        ],
+    );
+    // and by kind: the files' 44, the statuses' 7, the opens' and the
+    // scan's 3 each (in name order), the refresh's none
     app.on_key(key('s'));
     let screen = render(&mut app, 100, 30);
-    assert!(screen.contains("time by kind"), "{screen}");
+    assert!(
+        screen.contains("own time by kind (o by all of it"),
+        "{screen}"
+    );
+    in_order(
+        &screen,
+        &["files   ", "status   ", "open   ", "scan   ", "refresh   "],
+    );
+    app.on_key(key('o'));
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("time by kind (o by own time"), "{screen}");
     // status: 3 steps, 54ms in all, the slowest 25ms, 7 their own, 47
     // their parts'; files took none: all their own
     assert!(
@@ -932,6 +982,15 @@ fn s_sorts_the_steps_by_time_then_totals_them_by_kind() {
     app.on_key(key('s'));
     let screen = render(&mut app, 100, 30);
     assert!(screen.contains("▸    30ms  scan: 2 repos"), "{screen}");
+    // inverse: as they happened, o sorts nothing, and leaves the sorting
+    // as it was for the next view
+    app.on_key(key('o'));
+    assert_eq!(render(&mut app, 100, 30), screen);
+    app.on_key(key('s'));
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("slowest first (o by own time"), "{screen}");
+    app.on_key(key('s'));
+    app.on_key(key('s'));
     // by kind, searched by kind
     app.on_key(key('/'));
     for c in "fil".chars() {
