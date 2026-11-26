@@ -2042,24 +2042,35 @@ mod tests {
         let file = d.path().join("absorbed");
         let id = |n: u8| gix::ObjectId::from_bytes_or_panic(&[n; 20]);
         let line = |n: u8| format!("{} {} {}\n", id(n), id(n + 100), n % 2);
-        let three: String = (1..=3).map(line).collect();
-        std::fs::write(&file, &three).unwrap();
-        assert_eq!(keep_in(&file, 2).unwrap(), 3);
+        let five: String = (1..=5).map(line).collect();
+        std::fs::write(&file, &five).unwrap();
+        assert_eq!(keep_in(&file, 3).unwrap(), 5);
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
-            three,
+            five,
             "under twice: kept"
         );
-        let four: String = (1..=4).map(line).collect();
-        std::fs::write(&file, &four).unwrap();
-        assert_eq!(keep_in(&file, 2).unwrap(), 2);
+        let six: String = (1..=6).map(line).collect();
+        std::fs::write(&file, &six).unwrap();
+        assert_eq!(keep_in(&file, 3).unwrap(), 3);
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
-            format!("{}{}", line(3), line(4))
+            format!("{}{}{}", line(4), line(5), line(6))
         );
+        // no file is none yet; one that can't be read, an error
+        assert_eq!(keep_in(&d.path().join("new"), 3).unwrap(), 0);
+        #[cfg(unix)]
+        {
+            // (write-only: it could be added to, but its answers are lost)
+            use std::os::unix::fs::PermissionsExt;
+            let unread = d.path().join("unread");
+            std::fs::write(&unread, line(9)).unwrap();
+            std::fs::set_permissions(&unread, std::fs::Permissions::from_mode(0o200)).unwrap();
+            assert!(keep_in(&unread, 3).is_err());
+        }
         let k = known().lock().unwrap();
         assert_eq!(
-            (k.get(id(3), id(103)), k.get(id(4), id(104))),
+            (k.get(id(5), id(105)), k.get(id(6), id(106))),
             (Some(true), Some(false))
         );
     }
