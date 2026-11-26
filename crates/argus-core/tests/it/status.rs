@@ -1393,3 +1393,40 @@ fn the_files_step_says_what_was_read_to_find_changes() {
         ]
     );
 }
+
+/// How far a branch is ahead of and behind its upstream, and whether
+/// it's merged, are kept in the repo's file of answers: the next run
+/// (here, with what's in memory forgotten) takes them from it. A count
+/// planted there shows it's read, not worked out again.
+#[test]
+fn ahead_behind_and_merged_counts_are_kept_for_the_next_run() {
+    use argus_core::remember::{forget, keep_in};
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    let dir = sb.path("cache");
+    keep_in(&dir);
+    let ahead = |r: &std::path::Path| st(r).upstream.unwrap().ahead;
+    // level with its upstream: nothing to count, or keep
+    assert_eq!(ahead(&r), 0);
+    // (nothing asked: no file even)
+    assert!(!dir.exists());
+    write(&r, "a", "local\n");
+    commit(&r, "local");
+    assert_eq!(ahead(&r), 1);
+    let files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    let text = std::fs::read_to_string(&files[0]).unwrap();
+    let id = |rev: &str| git(&r, &["rev-parse", rev]).trim().to_string();
+    let line = format!("between {} {} 1", id("main"), id("origin/main"));
+    assert!(text.lines().any(|l| l == line), "{text}");
+    std::fs::write(&files[0], text.replace(&line, &line.replace(" 1", " 7"))).unwrap();
+    forget();
+    assert_eq!(ahead(&r), 7, "taken from the file");
+    // inverse: once the branch moves, worked out afresh
+    write(&r, "b", "more\n");
+    commit(&r, "more");
+    assert_eq!(ahead(&r), 2);
+}

@@ -494,16 +494,18 @@ Two findings:
   (`Workspace::update_statuses`, `App::on_statuses`): a refresh of every
   repo is one pass over the workspace and one rebuild, not one each.
   Answers their commits alone decide are worked out once and remembered
-  (`remember`): whether a branch is absorbed (squash-merged), and a
-  tip's commits on no remote (or no ref), so a repo with many stale
-  branches no longer pays for each at every status. A repo's answers
+  (`remember`): whether a branch is absorbed (squash-merged), a tip's
+  commits on no remote (or no ref), and one commit's that another lacks
+  (a branch ahead of and behind its upstream, merged or not), so a repo
+  with many stale branches no longer pays for each at every status (an
+  Emacs clone with 100 old branches: 11s the first run, 74ms the next). A repo's answers
   are those its last status asked for, so they never outgrow its
   branches and need no cap: a branch moved or gone, or a remote branch
   or the default branch moved, leaves its old answers behind. The CLI
   and TUI keep them in a file for each repo too (`$XDG_CACHE_HOME/argus/
   repos/`, named for the repo's path, which its first line says; then a
-  line an answer, `absorbed <tip> <default tip> <1|0>` or `unpushed
-  <tip> <others> <n>`, where `<others>` is the set of tips counted
+  line an answer, `absorbed <tip> <default tip> <1|0>`, `unpushed
+  <tip> <others> <n>` or `between <commit> <other> <n>`, where `<others>` is the set of tips counted
   against as one id, the same in every run), read when the repo is
   first statused and written, whole and atomically, only when a status
   asks for other answers than it holds. Nothing is loaded at start, so

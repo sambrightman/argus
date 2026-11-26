@@ -1,7 +1,8 @@
 //! Answers worked out for a repo that its commits alone decide, so they
 //! hold until those commits change: whether a branch is squash-merged
-//! (absorbed into the default branch), and how many of a tip's commits
-//! are on no remote (or no ref).
+//! (absorbed into the default branch), how many of a tip's commits are
+//! on no remote (or no ref), and how many of one commit's are not
+//! another's (a branch ahead of and behind its upstream, or merged).
 //!
 //! A repo's answers are those its last status asked for: a branch moved
 //! or gone, or a remote branch moved, leaves its old answers behind, so
@@ -16,6 +17,7 @@
 //! # /home/me/dev/argus/.git
 //! absorbed <branch tip> <default branch tip> <1|0>
 //! unpushed <tip> <the others' fingerprint> <count>
+//! between <commit> <other commit> <count>
 //! ```
 //!
 //! Other lines are passed over, so one an older or newer argus wrote is
@@ -36,6 +38,7 @@ type Pair = (ObjectId, ObjectId);
 struct Answers {
     absorbed: HashMap<Pair, bool>,
     unpushed: HashMap<Pair, usize>,
+    between: HashMap<Pair, usize>,
 }
 
 /// One repo's answers during a status: those it had, and those asked for.
@@ -127,6 +130,22 @@ impl Remembered {
         self.asked.unpushed.insert((tip, of), n);
     }
 
+    /// How many commits `a` has that `b` hasn't, as remembered, or else
+    /// as `work_out` counts (an error is no answer to keep).
+    pub(crate) fn between<E>(
+        &mut self,
+        a: ObjectId,
+        b: ObjectId,
+        work_out: impl FnOnce() -> Result<usize, E>,
+    ) -> Result<usize, E> {
+        let n = match self.had.between.get(&(a, b)) {
+            Some(&n) => n,
+            None => work_out()?,
+        };
+        self.asked.between.insert((a, b), n);
+        Ok(n)
+    }
+
     /// Keep what this status asked for, if that's not what was kept.
     pub fn keep(self) {
         if self.asked == self.had {
@@ -165,6 +184,12 @@ fn format(repo: &Path, answers: &Answers) -> String {
                 .iter()
                 .map(|((t, of), n)| format!("unpushed {t} {of} {n}\n")),
         )
+        .chain(
+            answers
+                .between
+                .iter()
+                .map(|((a, b), n)| format!("between {a} {b} {n}\n")),
+        )
         .collect();
     lines.sort();
     format!("# {}\n{}", repo.display(), lines.concat())
@@ -201,6 +226,11 @@ fn read(file: &Path) -> Answers {
                     answers.unpushed.insert((a, b), n);
                 }
             }
+            ("between", n) => {
+                if let Ok(n) = n.parse() {
+                    answers.between.insert((a, b), n);
+                }
+            }
             _ => {}
         }
     }
@@ -226,7 +256,7 @@ mod tests {
         let text = format!(
             "# /some/repo\nabsorbed {a} {b} 1\nabsorbed {b} {a} 0\nunpushed {a} {b} 12\n\
              junk\nabsorbed {a} {a} 2\nabsorbed {b} {b} 1 more\nabsorbed ab cd 1\n\
-             unpushed {b} {b} -1\nbranch {a} {b} 1\n"
+             unpushed {b} {b} -1\nbranch {a} {b} 1\nbetween {b} {a} 7\nbetween {a} {a} x\n"
         );
         std::fs::write(&file, text).unwrap();
         let got = read(&file);
@@ -235,11 +265,14 @@ mod tests {
             Answers {
                 absorbed: HashMap::from([((a, b), true), ((b, a), false)]),
                 unpushed: HashMap::from([((a, b), 12)]),
+                between: HashMap::from([((b, a), 7)]),
             }
         );
         assert_eq!(
             format(Path::new("/some/repo"), &got),
-            format!("# /some/repo\nabsorbed {a} {b} 1\nabsorbed {b} {a} 0\nunpushed {a} {b} 12\n")
+            format!(
+                "# /some/repo\nabsorbed {a} {b} 1\nabsorbed {b} {a} 0\nbetween {b} {a} 7\nunpushed {a} {b} 12\n"
+            )
         );
         assert_eq!(read(&d.path().join("none")), Answers::default());
         assert_eq!(read(d.path()), Answers::default());

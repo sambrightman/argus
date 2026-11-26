@@ -984,22 +984,26 @@ fn trial_merge(repo: &gix::Repository, tip: gix::ObjectId, default: gix::ObjectI
     Some(merged == ours)
 }
 
-/// Number of commits reachable from `a` but not from `b`.
+/// Number of commits reachable from `a` but not from `b`: remembered,
+/// as the two commits alone decide it.
 fn count_exclusive(
     repo: &gix::Repository,
     a: gix::ObjectId,
     b: gix::ObjectId,
+    remembered: &mut crate::remember::Remembered,
 ) -> Result<usize, StatusError> {
     if a == b {
         return Ok(0);
     }
-    let walk = repo.rev_walk([a]).with_hidden([b]).all().map_err(err)?;
-    let mut n = 0;
-    for info in walk {
-        info.map_err(err)?;
-        n += 1;
-    }
-    Ok(n)
+    remembered.between(a, b, || {
+        let walk = repo.rev_walk([a]).with_hidden([b]).all().map_err(err)?;
+        let mut n = 0;
+        for info in walk {
+            info.map_err(err)?;
+            n += 1;
+        }
+        Ok(n)
+    })
 }
 
 /// The remote-tracking ref of the branch `git push` would push `branch`
@@ -1077,11 +1081,11 @@ fn branches(
                                     Some(up) => Some(Tracking {
                                         name: short,
                                         ahead: {
-                                            let ahead = count_exclusive(repo, tip, up)?;
+                                            let ahead = count_exclusive(repo, tip, up, remembered)?;
                                             on_remote(tracking.as_ref(), up, ahead);
                                             ahead
                                         },
-                                        behind: count_exclusive(repo, up, tip)?,
+                                        behind: count_exclusive(repo, up, tip, remembered)?,
                                         gone: false,
                                     }),
                                     None => Some(Tracking {
@@ -1105,11 +1109,11 @@ fn branches(
                             Some(match refs.peel(&tracking.as_bstr().to_str_lossy()) {
                                 Some(o) => Tracking {
                                     ahead: {
-                                        let ahead = count_exclusive(repo, tip, o)?;
+                                        let ahead = count_exclusive(repo, tip, o, remembered)?;
                                         on_remote(tracking.as_ref(), o, ahead);
                                         ahead
                                     },
-                                    behind: count_exclusive(repo, o, tip)?,
+                                    behind: count_exclusive(repo, o, tip, remembered)?,
                                     name: short,
                                     gone: false,
                                 },
@@ -1125,7 +1129,9 @@ fn branches(
                     })
                 })?;
                 let merged = crate::trace::part("merged", || match default_tip {
-                    Some((d, _)) => Ok::<_, StatusError>(count_exclusive(repo, tip, d)? == 0),
+                    Some((d, _)) => {
+                        Ok::<_, StatusError>(count_exclusive(repo, tip, d, remembered)? == 0)
+                    }
                     None => Ok(false),
                 })?;
                 let absorbed = !merged

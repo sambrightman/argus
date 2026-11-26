@@ -402,7 +402,8 @@ Nothing is offered during a conflict.
   can be left with `switch-default`, shows as `merged (squashed or
   rebased)`, and is offered to `b x`. Trying those merges is slow for
   many old branches, so each answer is kept for later runs, as are
-  counts of unpushed commits: a file per repo in `~/.cache/argus/repos/`
+  counts of unpushed commits and of how far each branch is ahead of and
+  behind its upstream: a file per repo in `~/.cache/argus/repos/`
   (`$XDG_CACHE_HOME`), safe to delete. Not when the default branch has
   since changed the same lines again or reverted them, nor for a branch
   with no net change of its own: those stay as they were. So `b x` may
