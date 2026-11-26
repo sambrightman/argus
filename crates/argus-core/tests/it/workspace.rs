@@ -2365,6 +2365,8 @@ fn branches_left_unchecked_are_checked_later_unless_they_moved() {
             .map_or(0, |s| s.branches.iter().filter(|b| b.unchecked).count())
     };
     let mut w = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    // (as the TUI has it: checked through the kept repo)
+    w.keep_repos_open();
     w.check_branches_later();
     w.scan();
     assert_eq!((left(&w), unpushed(&w)), (2, Some(10)));
