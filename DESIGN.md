@@ -493,21 +493,24 @@ Two findings:
   Statuses that arrive together are applied together
   (`Workspace::update_statuses`, `App::on_statuses`): a refresh of every
   repo is one pass over the workspace and one rebuild, not one each.
-  Whether a branch is absorbed (squash-merged) is worked out once for a
-  pair of commits and remembered: the answer is theirs alone, and a repo
-  with many stale branches no longer pays for each at every status. A
-  repo's answers are those its last status asked for, so they never
-  outgrow its branches: a branch moved or gone, or the default branch
-  moved, leaves its old answer behind. The CLI and TUI keep them in a
-  file for each repo too (`$XDG_CACHE_HOME/argus/squash-merged/`, named
-  for the repo's path, which its first line says; then a line each,
-  `<tip> <default tip> <1|0>`), read when the repo is first statused and
-  written, whole and atomically, only when a status asks for other
-  answers than it holds. Nothing is loaded at start, so hundreds of repos
-  cost nothing until each is statused, and a run over some repos leaves
-  the others' files alone. A merge that couldn't be tried isn't kept.
-  The answer could differ under other merge settings (`merge.renames`);
-  it's kept as the first run found it. Forge requests from the TUI go through a gate as wide as
+  Answers their commits alone decide are worked out once and remembered
+  (`remember`): whether a branch is absorbed (squash-merged), and a
+  tip's commits on no remote (or no ref), so a repo with many stale
+  branches no longer pays for each at every status. A repo's answers
+  are those its last status asked for, so they never outgrow its
+  branches and need no cap: a branch moved or gone, or a remote branch
+  or the default branch moved, leaves its old answers behind. The CLI
+  and TUI keep them in a file for each repo too (`$XDG_CACHE_HOME/argus/
+  repos/`, named for the repo's path, which its first line says; then a
+  line an answer, `absorbed <tip> <default tip> <1|0>` or `unpushed
+  <tip> <others> <n>`, where `<others>` is the set of tips counted
+  against as one id, the same in every run), read when the repo is
+  first statused and written, whole and atomically, only when a status
+  asks for other answers than it holds. Nothing is loaded at start, so
+  hundreds of repos cost nothing until each is statused, and a run over
+  some repos leaves the others' files alone. A merge that couldn't be
+  tried isn't kept. The absorbed answer could differ under other merge
+  settings (`merge.renames`); it's kept as the first run found it. Forge requests from the TUI go through a gate as wide as
   `concurrency.network`.
 * **A question from the background waits its turn.** A forge's answer or
   a job's end may have something to ask (a renamed repo's remote, an
@@ -958,7 +961,8 @@ rendering is snapshot-tested via `TestBackend`.
   even when the answer is 0 (60ms in a repo with 259 remote branches).
   Exact in each step: a branch level with an upstream that's a remote
   branch, or merged into the remote's default branch, has 0; an answer
-  is remembered per tip and set of others; the likely tips are hidden
+  is remembered per tip and set of others, between runs too (see
+  "Results show within a frame"); the likely tips are hidden
   first, and if that leaves nothing, nothing; otherwise generation
   numbers from git's commit-graph rule out tips that can't contain
   what's left (a tip reaching a commit has a generation at least its,

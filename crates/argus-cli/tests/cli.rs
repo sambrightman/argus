@@ -2930,7 +2930,7 @@ fn squash_merge_answers_are_kept_in_the_cache() {
     git(&r, &["merge", "-q", "--squash", "feat"]);
     git(&r, &["commit", "-q", "-m", "feat (#1)"]);
     git(&r, &["push", "-q"]);
-    let dir = sb.root().join(".cache/argus/squash-merged");
+    let dir = sb.root().join(".cache/argus/repos");
     let paths = argus(&sb).arg("paths").output().unwrap();
     let out = String::from_utf8(paths.stdout).unwrap();
     assert!(out.contains(&format!("cache:  {}", dir.display())), "{out}");
@@ -2944,7 +2944,11 @@ fn squash_merge_answers_are_kept_in_the_cache() {
     assert_eq!(files.len(), 1, "a file for the repo: {files:?}");
     let text = std::fs::read_to_string(&files[0]).unwrap();
     assert!(
-        text.ends_with(&format!("\n{} {} 1\n", id("feat"), id("origin/main"))),
+        text.contains(&format!(
+            "\nabsorbed {} {} 1\n",
+            id("feat"),
+            id("origin/main")
+        )),
         "{text}"
     );
 }

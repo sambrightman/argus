@@ -708,11 +708,10 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         .as_deref()
         .and_then(|d| default_tip(&refs, remote.as_deref(), d));
 
-    let mut answers = Answers::of(repo);
+    let mut remembered = crate::remember::Remembered::of(repo);
     let branches = crate::trace::part("branches", || {
-        branches(repo, &refs, head.branch(), default_tip, &mut answers)
+        branches(repo, &refs, head.branch(), default_tip, &mut remembered)
     })?;
-    answers.keep();
     let upstream = head
         .branch()
         .and_then(|b| branches.iter().find(|bi| bi.name == b))
@@ -739,11 +738,12 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
     let detached_orphans = match &head {
         Head::Detached(_) if repo.kind() != gix::repository::Kind::Submodule => {
             crate::trace::part("detached commits", || {
-                detached_orphans(repo, &refs, head_id)
+                detached_orphans(repo, &refs, head_id, &mut remembered)
             })?
         }
         _ => 0,
     };
+    remembered.keep();
     let at_head = match (&head, head_id) {
         (Head::Detached(_), Some(id)) => refs
             .prefixed("refs/heads/")
@@ -930,137 +930,23 @@ fn default_tip(refs: &Refs, remote: Option<&str>, default: &str) -> Option<(gix:
 /// [`BranchInfo::absorbed`]): a trial merge in memory, nothing written to
 /// the repo. A conflict, or any failure, is a no; so is a branch with no
 /// net change since it split off (empty commits, a change and its
-/// revert), which nothing absorbed.
-///
-/// The answer is the two commits' alone, and commits don't change, so
-/// it's worked out once for a pair: a repo with many stale branches would
-/// pay for each of them at every status. A repo's answers are those its
-/// last status asked for (a branch moved or gone, or the default branch
-/// moved, leaves its old one behind), kept in memory and, once
-/// [`keep_absorbed_in`] names a folder, in a file of the repo's own there,
-/// read when the repo is first statused.
-struct Answers {
-    /// The repo's common dir (its worktrees share the answers; reached
-    /// by another path, through a link, it has a file of its own).
-    repo: PathBuf,
-    had: HashMap<(gix::ObjectId, gix::ObjectId), bool>,
-    asked: HashMap<(gix::ObjectId, gix::ObjectId), bool>,
-}
-
-/// Each repo's answers, by its common dir: as its last status left them.
-type Known = HashMap<PathBuf, HashMap<(gix::ObjectId, gix::ObjectId), bool>>;
-
-fn known() -> &'static std::sync::Mutex<Known> {
-    static KNOWN: std::sync::OnceLock<std::sync::Mutex<Known>> = std::sync::OnceLock::new();
-    KNOWN.get_or_init(Default::default)
-}
-
-/// The folder [`keep_absorbed_in`] named.
-fn kept_in() -> &'static std::sync::Mutex<Option<PathBuf>> {
-    static DIR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
-    &DIR
-}
-
-/// Keep the squash-merge check's answers ([`BranchInfo::absorbed`]) in
-/// `dir` from now on, a file for each repo, so later runs needn't work
-/// them out again. A repo's file is read when it's first statused, and
-/// written when a status asks for other answers than it holds.
-pub fn keep_absorbed_in(dir: &Path) {
-    *kept_in().lock().unwrap_or_else(|e| e.into_inner()) = Some(dir.to_path_buf());
-}
-
-impl Answers {
-    fn of(repo: &gix::Repository) -> Self {
-        let path = repo.common_dir().to_path_buf();
-        let had = known().lock().ok().and_then(|k| k.get(&path).cloned());
-        let had = had.unwrap_or_else(|| match Self::file(&path) {
-            Some(file) => read_answers(&file),
-            None => HashMap::new(),
-        });
-        Answers {
-            repo: path,
-            had,
-            asked: HashMap::new(),
-        }
-    }
-
-    /// The repo's file, in the folder [`keep_absorbed_in`] named: named
-    /// for its path (which its first line says).
-    fn file(repo: &Path) -> Option<PathBuf> {
-        let dir = kept_in().lock().ok()?.clone()?;
-        let id = gix::objs::compute_hash(
-            gix::hash::Kind::Sha1,
-            gix::objs::Kind::Blob,
-            repo.as_os_str().as_encoded_bytes(),
-        )
-        .ok()?;
-        Some(dir.join(id.to_string()))
-    }
-
-    fn absorbed(
-        &mut self,
-        repo: &gix::Repository,
-        tip: gix::ObjectId,
-        default: gix::ObjectId,
-    ) -> bool {
-        let pair = (tip, default);
-        if let Some(&answer) = self.had.get(&pair) {
-            self.asked.insert(pair, answer);
-            return answer;
-        }
-        TRIAL_MERGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        // (a merge that couldn't be tried at all, objects missing say, isn't
-        // an answer to keep)
-        match trial_merge(repo, tip, default) {
-            Some(answer) => {
-                self.asked.insert(pair, answer);
-                answer
-            }
-            None => false,
-        }
-    }
-
-    /// Keep what this status asked for, if that's not what was kept.
-    fn keep(self) {
-        if self.asked == self.had {
-            return;
-        }
-        if let Some(file) = Self::file(&self.repo) {
-            let mut text = format!("# {}\n", self.repo.display());
-            let mut lines: Vec<_> = self.asked.iter().collect();
-            lines.sort();
-            for ((tip, default), answer) in lines {
-                text += &format!("{tip} {default} {}\n", u8::from(*answer));
-            }
-            // (one that can't be written is worked out again next run)
-            let _ = crate::paths::write_atomically(&file, &text);
-        }
-        if let Ok(mut known) = known().lock() {
-            known.insert(self.repo, self.asked);
-        }
-    }
-}
-
-/// The answers in `file`, a line each: `<branch tip> <default branch tip>
-/// <1|0>`. Other lines (the first, saying the repo) are passed over, and
-/// a file that can't be read holds none.
-fn read_answers(file: &Path) -> HashMap<(gix::ObjectId, gix::ObjectId), bool> {
-    let Ok(text) = std::fs::read_to_string(file) else {
-        return HashMap::new();
-    };
-    text.lines()
-        .filter_map(|l| {
-            let mut words = l.split(' ');
-            let tip = gix::ObjectId::from_hex(words.next()?.as_bytes()).ok()?;
-            let default = gix::ObjectId::from_hex(words.next()?.as_bytes()).ok()?;
-            let answer = match words.next()? {
-                "1" => true,
-                "0" => false,
-                _ => return None,
-            };
-            words.next().is_none().then_some(((tip, default), answer))
+/// revert), which nothing absorbed. The answer is the two commits' alone,
+/// so it's remembered ([`crate::remember`]): a repo with many stale
+/// branches would pay for each of them at every status.
+fn absorbed(
+    repo: &gix::Repository,
+    tip: gix::ObjectId,
+    default: gix::ObjectId,
+    remembered: &mut crate::remember::Remembered,
+) -> bool {
+    remembered
+        .absorbed(tip, default, || {
+            TRIAL_MERGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // (a merge that couldn't be tried at all, objects missing say,
+            // isn't an answer to keep)
+            trial_merge(repo, tip, default)
         })
-        .collect()
+        .unwrap_or(false)
 }
 
 static TRIAL_MERGES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -1069,15 +955,6 @@ static TRIAL_MERGES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicU
 #[doc(hidden)]
 pub fn trial_merges() -> usize {
     TRIAL_MERGES.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Forget the squash-merge answers held in memory, as a new process
-/// starts without them (for tests of the files they're kept in).
-#[doc(hidden)]
-pub fn forget_absorbed() {
-    if let Ok(mut known) = known().lock() {
-        known.clear();
-    }
 }
 
 /// [`absorbed`], worked out: `None` when the merge couldn't be tried.
@@ -1145,7 +1022,7 @@ fn branches(
     refs: &Refs,
     head_branch: Option<&str>,
     default_tip: Option<(gix::ObjectId, bool)>,
-    answers: &mut Answers,
+    remembered: &mut crate::remember::Remembered,
 ) -> Result<Vec<BranchInfo>, StatusError> {
     let remote_tips = crate::trace::timed(
         "remote tips",
@@ -1252,7 +1129,7 @@ fn branches(
                 })?;
                 let absorbed = !merged
                     && crate::trace::part("absorbed", || {
-                        default_tip.is_some_and(|(d, _)| answers.absorbed(repo, tip, d))
+                        default_tip.is_some_and(|(d, _)| absorbed(repo, tip, d, remembered))
                     });
                 // merged into the remote's default branch: all on a remote
                 if let Some((d, true)) = default_tip {
@@ -1282,7 +1159,7 @@ fn branches(
                             Ok(c) => format!("unpushed: {}, {}", c.n, c.how),
                             Err(_) => "unpushed, failed".into(),
                         },
-                        || crate::reach::exclusive(repo, tip, &likely, &remote_tips),
+                        || crate::reach::exclusive(repo, tip, &likely, &remote_tips, remembered),
                     )
                     .map_err(err)?;
                     Some(counted.n)
@@ -1698,14 +1575,14 @@ fn head_tags(repo: &gix::Repository, refs: &Refs, head: Option<gix::ObjectId>) -
 
 /// Per repo (git dir): HEAD, a fingerprint of the tags, the answer, and
 /// the limit the walk gave up at, if it did (so the answer isn't final).
-type Remembered = HashMap<PathBuf, (gix::ObjectId, u64, Option<String>, Option<usize>)>;
+type Described = HashMap<PathBuf, (gix::ObjectId, u64, Option<String>, Option<usize>)>;
 
-fn remembered() -> &'static std::sync::Mutex<Remembered> {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<Remembered>> = std::sync::OnceLock::new();
+fn described() -> &'static std::sync::Mutex<Described> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Described>> = std::sync::OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
 
-/// The tagged commits, and a fingerprint of the tags for [`Remembered`]:
+/// The tagged commits, and a fingerprint of the tags for [`Described`]:
 /// names count too, or a renamed tag would keep its old name.
 fn tags_fingerprint(refs: &Refs) -> (std::collections::HashSet<gix::ObjectId>, u64) {
     use std::hash::{Hash, Hasher};
@@ -1748,7 +1625,7 @@ fn describe(
         return (None, false);
     }
     let dir = repo.git_dir().to_path_buf();
-    if let Ok(cache) = remembered().lock()
+    if let Ok(cache) = described().lock()
         && let Some((id, fp, answer, gave_up_at)) = cache.get(&dir)
         && (*id, *fp) == (head, fingerprint)
         // a walk that gave up says nothing about a longer one
@@ -1772,7 +1649,7 @@ fn describe(
         true => (describe_unbounded(repo, head), false),
         false => (None, limit == 0 || seen > limit),
     };
-    if let Ok(mut c) = remembered().lock() {
+    if let Ok(mut c) = described().lock() {
         c.insert(
             dir,
             (head, fingerprint, answer.clone(), gave_up.then_some(limit)),
@@ -1804,7 +1681,7 @@ fn read_description(path: &Path) -> Option<String> {
     let refs = Refs::read(&repo).ok()?;
     let (_, fingerprint) = tags_fingerprint(&refs);
     let answer = describe_unbounded(&repo, head);
-    if let Ok(mut c) = remembered().lock() {
+    if let Ok(mut c) = described().lock() {
         c.insert(
             repo.git_dir().to_path_buf(),
             (head, fingerprint, answer.clone(), None),
@@ -1847,6 +1724,7 @@ fn detached_orphans(
     repo: &gix::Repository,
     refs: &Refs,
     head: Option<gix::ObjectId>,
+    remembered: &mut crate::remember::Remembered,
 ) -> Result<usize, StatusError> {
     let Some(head) = head else {
         return Ok(0);
@@ -1861,7 +1739,7 @@ fn detached_orphans(
         .prefixed("refs/heads/")
         .filter_map(|i| refs.peel_at(i))
         .collect();
-    let counted = crate::reach::exclusive(repo, head, &branches, &tips).map_err(err)?;
+    let counted = crate::reach::exclusive(repo, head, &branches, &tips, remembered).map_err(err)?;
     Ok(counted.n)
 }
 
@@ -1955,9 +1833,11 @@ fn moved_submodules(repo: &gix::Repository, moved: &[String]) -> Vec<MovedSubmod
             let changed = r.is_dirty().unwrap_or(true);
             let head = r.head_id().ok().map(|id| id.detach());
             // unreadable counts as unsafe
+            let mut remembered = crate::remember::Remembered::of(&r);
             let unreferenced = Refs::read(&r)
-                .and_then(|refs| detached_orphans(&r, &refs, head))
+                .and_then(|refs| detached_orphans(&r, &refs, head, &mut remembered))
                 .unwrap_or(usize::MAX);
+            remembered.keep();
             Some(MovedSubmodule {
                 path,
                 unreferenced,
@@ -2069,28 +1949,6 @@ mod tests {
             said,
             ["0 bytes", "1023 bytes", "1KB", "1023KB", "1MB", "5GB"]
         );
-    }
-
-    /// A repo's file of answers: a line each, others passed over (its
-    /// first, saying the repo); no file, or one that can't be read, holds
-    /// none.
-    #[test]
-    fn answers_are_read_a_line_each_passing_over_others() {
-        let d = tempfile::tempdir().unwrap();
-        let file = d.path().join("f");
-        let id = |n: u8| gix::ObjectId::from_bytes_or_panic(&[n; 20]);
-        let text = format!(
-            "# /some/repo\n{a} {b} 1\n{b} {a} 0\njunk\n{a} {a} 2\n{b} {b} 1 more\nab cd 1\n",
-            a = id(1),
-            b = id(2)
-        );
-        std::fs::write(&file, text).unwrap();
-        assert_eq!(
-            read_answers(&file),
-            HashMap::from([((id(1), id(2)), true), ((id(2), id(1)), false)])
-        );
-        assert!(read_answers(&d.path().join("none")).is_empty());
-        assert!(read_answers(d.path()).is_empty());
     }
 
     #[test]

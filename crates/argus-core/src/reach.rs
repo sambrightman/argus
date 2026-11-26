@@ -5,8 +5,9 @@
 //! histories down to where they meet the tip's, so with hundreds of remote
 //! branches it's slow even when the answer is 0. Exact ways round it:
 //!
-//! 1. The answer for a tip and a set of others is remembered: commits
-//!    don't change, so until a ref moves it's the same.
+//! 1. The answer for a tip and a set of others is remembered (in the
+//!    repo's [`crate::remember::Remembered`]): commits don't change, so
+//!    until a ref moves it's the same.
 //! 2. The likely tips (a branch's upstream, the default branch) are hidden
 //!    first. If that leaves nothing, nothing it is; the others could only
 //!    hide more.
@@ -17,8 +18,6 @@
 //!    parents). Those alone are hidden in a second walk. With no
 //!    commit-graph, every tip is hidden, as before.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gix::ObjectId;
@@ -64,14 +63,15 @@ pub fn exclusive(
     tip: ObjectId,
     likely: &[ObjectId],
     others: &[ObjectId],
+    remembered: &mut crate::remember::Remembered,
 ) -> Result<Counted, String> {
     let done = |n, how| Ok(Counted { n, how });
     let all = sorted(others);
     if all.binary_search(&tip).is_ok() {
         return done(0, How::IsAnother);
     }
-    let key = (tip, fingerprint(&all));
-    if let Some(n) = remembered(&key) {
+    let of = crate::remember::fingerprint(&all);
+    if let Some(n) = remembered.unpushed(tip, of) {
         return done(n, How::Remembered);
     }
     let first = among(likely, &all);
@@ -109,7 +109,7 @@ pub fn exclusive(
             },
         }
     };
-    remember(key, counted.n);
+    remembered.counted(tip, of, counted.n);
     Ok(counted)
 }
 
@@ -220,40 +220,4 @@ static WALKS: AtomicUsize = AtomicUsize::new(0);
 /// How many walks this process has made (for tests of what's skipped).
 pub fn walks() -> usize {
     WALKS.load(Ordering::Relaxed)
-}
-
-/// Forget every remembered count (for tests).
-#[doc(hidden)]
-pub fn forget() {
-    if let Ok(mut known) = known().lock() {
-        known.clear();
-    }
-}
-
-type Key = (ObjectId, u64);
-
-fn known() -> &'static Mutex<HashMap<Key, usize>> {
-    static KNOWN: std::sync::OnceLock<Mutex<HashMap<Key, usize>>> = std::sync::OnceLock::new();
-    KNOWN.get_or_init(Default::default)
-}
-
-fn remembered(key: &Key) -> Option<usize> {
-    known().lock().ok()?.get(key).copied()
-}
-
-fn remember(key: Key, n: usize) {
-    if let Ok(mut known) = known().lock() {
-        if known.len() >= 100_000 {
-            known.clear();
-        }
-        known.insert(key, n);
-    }
-}
-
-/// The set of tips (sorted) as one number, for [`known`]'s keys.
-fn fingerprint(sorted: &[ObjectId]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    sorted.hash(&mut h);
-    h.finish()
 }

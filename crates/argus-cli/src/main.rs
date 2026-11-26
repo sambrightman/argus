@@ -411,7 +411,7 @@ fn run() -> Result<()> {
     }
     if !writes_nothing {
         // (without it, each run works the answers out again)
-        argus_core::status::keep_absorbed_in(&paths::absorbed_dir());
+        argus_core::remember::keep_in(&paths::repos_cache());
     }
     let json = cli.json;
     if json {
@@ -431,12 +431,12 @@ fn run() -> Result<()> {
                 return print_json(&serde_json::json!({
                     "config": ctx.config_path,
                     "state": ctx.state_path,
-                    "cache": paths::absorbed_dir(),
+                    "cache": paths::repos_cache(),
                 }));
             }
             println!("config: {}", ctx.config_path.display());
             println!("state:  {}", ctx.state_path.display());
-            println!("cache:  {}", paths::absorbed_dir().display());
+            println!("cache:  {}", paths::repos_cache().display());
             return Ok(());
         }
         Some(Cmd::Forge { cmd }) => return forge_cmd(cmd, json),

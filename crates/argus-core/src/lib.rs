@@ -21,6 +21,7 @@ pub mod ops;
 pub mod paths;
 pub mod pull;
 pub mod reach;
+pub mod remember;
 pub mod rules;
 pub mod runner;
 pub mod state;

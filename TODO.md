@@ -26,9 +26,6 @@ deferred.
 
 ## Offered, not decided
 
-- **Remember unpushed counts between runs** (`reach`), not only within
-  one: an answer is kept per tip and set of others, so it holds until
-  either moves.
 - **A review of the wording** of messages, prompts and the help
   (paused partway).
 - **Contention, from each step's CPU time** beside its wall time: a step

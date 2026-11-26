@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use argus_core::reach::{self, Counted, How, exclusive};
+use argus_core::remember::Remembered;
 use argus_core::status::{StatusOptions, status};
 use argus_core::testkit::{Sandbox, commit, git, write};
 use gix::ObjectId;
@@ -24,10 +25,15 @@ fn remote_tips(r: &Path) -> Vec<ObjectId> {
         .collect()
 }
 
+/// The count, as a status would make it: with the repo's remembered
+/// answers, kept after (so it's remembered for the next count).
 fn count(r: &Path, tip: &str, likely: &[&str], others: &[ObjectId]) -> Counted {
     let repo = gix::open(r).unwrap();
     let likely: Vec<ObjectId> = likely.iter().map(|l| id(r, l)).collect();
-    exclusive(&repo, id(r, tip), &likely, others).unwrap()
+    let mut remembered = Remembered::of(&repo);
+    let counted = exclusive(&repo, id(r, tip), &likely, others, &mut remembered).unwrap();
+    remembered.keep();
+    counted
 }
 
 fn write_graph(r: &Path) {
@@ -83,7 +89,7 @@ fn hiding_the_likely_tips_first_is_enough_when_it_leaves_nothing() {
     // a tip that's one of the others needs no walk at all
     assert_eq!(count(&r, "origin/old0", &[], &all).how, How::IsAnother);
     // inverse: with no likely tip, the first walk leaves the whole history
-    reach::forget();
+    argus_core::remember::forget();
     let c = count(&r, "HEAD~1", &[], &all);
     assert_eq!(c.n, 0);
     assert_ne!(c.how, How::Likely);
@@ -106,11 +112,11 @@ fn generations_rule_out_tips_that_cant_contain_whats_left() {
     assert_eq!(count(&r, "feat", &["origin/main"], &all), pruned);
     assert_eq!(reach::walks(), walks + 1, "nothing more to hide: one walk");
     // and written after, with them in it
-    reach::forget();
+    argus_core::remember::forget();
     write_graph(&r);
     assert_eq!(count(&r, "feat", &["origin/main"], &all), pruned);
     // inverse: without a graph, every tip is hidden
-    reach::forget();
+    argus_core::remember::forget();
     drop_graph(&r);
     assert_eq!(
         count(&r, "feat", &["origin/main"], &all),
@@ -194,11 +200,11 @@ fn tips_in_an_old_graph_cant_contain_newer_commits() {
         }
     );
     // and with none likely, the tips the graph lacks are hidden
-    reach::forget();
+    argus_core::remember::forget();
     let c = count(&r, "feat", &[], &all);
     assert_eq!(c.n, 2);
     // inverse: every tip likely leaves nothing to prune
-    reach::forget();
+    argus_core::remember::forget();
     let every: Vec<String> = all.iter().map(ToString::to_string).collect();
     let every: Vec<&str> = every.iter().map(String::as_str).collect();
     assert_eq!(
@@ -229,12 +235,21 @@ fn counts_are_remembered_for_the_same_tip_and_others() {
     assert_eq!(reach::walks(), walks, "no walk");
     // whatever the likely ones: they only make it faster
     assert_eq!(count(&r, "feat", &[], &all).how, How::Remembered);
-    // and beside others remembered since
-    assert_ne!(
+    // beside another counted in the same status, both kept
+    let repo = gix::open(&r).unwrap();
+    let main = [id(&r, "origin/main")];
+    let mut one = Remembered::of(&repo);
+    let both = [id(&r, "feat~1"), id(&r, "feat")]
+        .map(|tip| exclusive(&repo, tip, &main, &all, &mut one).unwrap().how);
+    assert_ne!(both[0], How::Remembered);
+    assert_eq!(both[1], How::Remembered);
+    one.keep();
+    assert_eq!(
         count(&r, "feat~1", &["origin/main"], &all).how,
         How::Remembered
     );
-    assert_eq!(
+    // but only what the last status asked for: feat wasn't, so counted again
+    assert_ne!(
         count(&r, "feat", &["origin/main"], &all).how,
         How::Remembered
     );
@@ -531,10 +546,10 @@ proptest! {
         args.extend(others.iter().map(String::as_str));
         let expected: usize = git(&r, &args).trim().parse().unwrap();
         let ids = |v: &[String]| -> Vec<ObjectId> { v.iter().map(|c| ObjectId::from_hex(c.as_bytes()).unwrap()).collect() };
-        reach::forget();
+        argus_core::remember::forget();
         let repo = gix::open(&r).unwrap();
         let tip_id = ObjectId::from_hex(tip.as_bytes()).unwrap();
-        let got = exclusive(&repo, tip_id, &ids(&likely), &ids(&others)).unwrap();
+        let got = exclusive(&repo, tip_id, &ids(&likely), &ids(&others), &mut Remembered::of(&repo)).unwrap();
         prop_assert_eq!(got.n, expected, "{:?}", got);
         // and hiding the tips a list would leaves the same commits
         let mut want = vec!["rev-list", tip.as_str(), "--not"];
@@ -567,4 +582,47 @@ fn how_a_count_was_got_is_said() {
     for (how, text) in said {
         assert_eq!(how.to_string(), text);
     }
+}
+
+/// Unpushed counts are kept in the repo's file too, so the next run (here,
+/// with what's in memory forgotten) has them without walking; another
+/// set of remote branches is counted afresh.
+#[test]
+fn unpushed_counts_are_kept_for_the_next_run() {
+    use argus_core::remember::{forget, keep_in};
+    let sb = Sandbox::new();
+    let r = with_old_branches(&sb);
+    two_more(&r);
+    let dir = sb.path("cache");
+    keep_in(&dir);
+    let feat = |r: &Path| {
+        let s = status(r, StatusOptions::default()).unwrap();
+        s.branches
+            .iter()
+            .find(|b| b.name == "feat")
+            .unwrap()
+            .unpushed
+    };
+    assert_eq!(feat(&r), Some(2));
+    let files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    let text = std::fs::read_to_string(&files[0]).unwrap();
+    let tip = id(&r, "feat");
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with(&format!("unpushed {tip} ")) && l.ends_with(" 2")),
+        "{text}"
+    );
+    forget();
+    let walks = reach::walks();
+    assert_eq!(feat(&r), Some(2));
+    assert_eq!(reach::walks(), walks, "read, not walked");
+    // inverse: a remote branch moved, so the others aren't the same
+    git(&r, &["push", "-q", "origin", "feat~1:refs/heads/side"]);
+    git(&r, &["fetch", "-q"]);
+    forget();
+    assert_eq!(feat(&r), Some(1));
+    assert!(reach::walks() > walks);
 }
