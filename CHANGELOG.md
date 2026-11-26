@@ -9,6 +9,10 @@ Releasing).
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+**Full Changelog**: https://github.com/sambrightman/argus/compare/v0.4.0...HEAD
+
+## 0.4.0 - 2026-11-26
+
 ### New
 
 - Whether each branch is merged (squashed, rebased or not), how far it's ahead of and behind its upstream, and how many of its commits are on no remote, is kept between runs (a file per repo in `~/.cache/argus/repos/`), so with many old branches only the first load pays for working it out; `argus paths` shows the folder.
@@ -22,7 +26,7 @@ Releasing).
 - `url` 2.5.9, for RUSTSEC-2026-0592 (a stack overflow on deeply nested `blob:` URLs).
 - With `-v`, a branch's `unpushed` and a repo's `remote tips` steps say which branch and repo they're of.
 
-**Full Changelog**: https://github.com/sambrightman/argus/compare/v0.3.0...HEAD
+**Full Changelog**: https://github.com/sambrightman/argus/compare/v0.3.0...v0.4.0
 
 ## 0.3.0 - 2026-11-22
 
