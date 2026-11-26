@@ -328,6 +328,10 @@ pub fn subprocess_env(home: &Path) -> Vec<(String, String)> {
             "XDG_STATE_HOME".into(),
             home.join(".state").display().to_string(),
         ),
+        (
+            "XDG_CACHE_HOME".into(),
+            home.join(".cache").display().to_string(),
+        ),
         ("NO_COLOR".into(), "1".into()),
         ("GH_TOKEN".into(), String::new()),
     ]

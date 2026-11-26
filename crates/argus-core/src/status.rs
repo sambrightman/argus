@@ -932,29 +932,108 @@ fn default_tip(refs: &Refs, remote: Option<&str>, default: &str) -> Option<(gix:
 fn absorbed(repo: &gix::Repository, tip: gix::ObjectId, default: gix::ObjectId) -> bool {
     // the answer is the two commits' alone, and commits don't change:
     // worked out once for a pair, not at every status (a repo with many
-    // stale branches would pay for each of them every time)
-    static KNOWN: std::sync::OnceLock<
-        std::sync::Mutex<HashMap<(gix::ObjectId, gix::ObjectId), bool>>,
-    > = std::sync::OnceLock::new();
-    let known = KNOWN.get_or_init(Default::default);
-    if let Some(answer) = known
-        .lock()
-        .ok()
-        .and_then(|k| k.get(&(tip, default)).copied())
-    {
+    // stale branches would pay for each of them every time), and kept
+    // for the next run when there's a file for it
+    if let Some(answer) = known().lock().ok().and_then(|k| k.get(tip, default)) {
         return answer;
     }
     TRIAL_MERGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let answer = trial_merge(repo, tip, default);
     // (a merge that couldn't be tried at all, objects missing say, isn't
     // an answer to keep)
-    if let (Some(answer), Ok(mut known)) = (answer, known.lock()) {
-        if known.len() >= 100_000 {
-            known.clear();
-        }
-        known.insert((tip, default), answer);
+    if let (Some(answer), Ok(mut known)) = (answer, known().lock()) {
+        known.insert(tip, default, answer);
     }
     answer.unwrap_or(false)
+}
+
+/// [`absorbed`]'s answers: in memory, and in a file once
+/// [`keep_absorbed_in`] names one.
+fn known() -> &'static std::sync::Mutex<Known> {
+    static KNOWN: std::sync::OnceLock<std::sync::Mutex<Known>> = std::sync::OnceLock::new();
+    KNOWN.get_or_init(Default::default)
+}
+
+/// Most answers kept: in memory before it starts again, and in the file
+/// when it's read (it's cut to the latest this many when it has twice).
+const KEEP: usize = 100_000;
+
+#[derive(Default)]
+struct Known {
+    answers: HashMap<(gix::ObjectId, gix::ObjectId), bool>,
+    /// Where new answers are added, a line each.
+    file: Option<std::fs::File>,
+}
+
+impl Known {
+    fn get(&self, tip: gix::ObjectId, default: gix::ObjectId) -> Option<bool> {
+        self.answers.get(&(tip, default)).copied()
+    }
+
+    fn insert(&mut self, tip: gix::ObjectId, default: gix::ObjectId, answer: bool) {
+        if self.answers.len() >= KEEP {
+            self.answers.clear();
+        }
+        self.answers.insert((tip, default), answer);
+        if let Some(f) = &mut self.file {
+            // one write a line, appended: two runs at once don't mix
+            // theirs (and a failed write only loses the answer)
+            let line = format!("{tip} {default} {}\n", u8::from(answer));
+            let _ = std::io::Write::write_all(f, line.as_bytes());
+        }
+    }
+}
+
+/// Keep the squash-merge check's answers ([`BranchInfo::absorbed`]) in
+/// `file` from now on, and take those it holds: a line each, `<branch
+/// tip> <default branch tip> <1|0>`. Lines that aren't answers are passed
+/// over. Returns how many answers it held.
+pub fn keep_absorbed_in(file: &Path) -> std::io::Result<usize> {
+    keep_in(file, KEEP)
+}
+
+fn keep_in(file: &Path, keep: usize) -> std::io::Result<usize> {
+    let text = match std::fs::read_to_string(file) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    let mut lines: Vec<(gix::ObjectId, gix::ObjectId, bool)> = text
+        .lines()
+        .filter_map(|l| {
+            let mut words = l.split(' ');
+            let tip = gix::ObjectId::from_hex(words.next()?.as_bytes()).ok()?;
+            let default = gix::ObjectId::from_hex(words.next()?.as_bytes()).ok()?;
+            let answer = match words.next()? {
+                "1" => true,
+                "0" => false,
+                _ => return None,
+            };
+            words.next().is_none().then_some((tip, default, answer))
+        })
+        .collect();
+    if lines.len() >= 2 * keep {
+        // the latest only (the next answers follow it)
+        lines.drain(..lines.len() - keep);
+        let text: String = lines
+            .iter()
+            .map(|(t, d, a)| format!("{t} {d} {}\n", u8::from(*a)))
+            .collect();
+        crate::paths::write_atomically(file, &text)?;
+    }
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let append = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file)?;
+    let mut known = known().lock().unwrap_or_else(|e| e.into_inner());
+    for &(t, d, a) in &lines {
+        known.answers.insert((t, d), a);
+    }
+    known.file = Some(append);
+    Ok(lines.len())
 }
 
 static TRIAL_MERGES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -1904,6 +1983,36 @@ mod tests {
         ] {
             assert_eq!(without_path(msg, p), want, "{msg}");
         }
+    }
+
+    /// The file of answers is cut to the latest `keep` when it holds twice
+    /// as many, and left as it is below that; the answers are taken either way.
+    #[test]
+    fn the_absorbed_file_is_cut_to_the_latest_answers_when_it_has_twice_too_many() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("absorbed");
+        let id = |n: u8| gix::ObjectId::from_bytes_or_panic(&[n; 20]);
+        let line = |n: u8| format!("{} {} {}\n", id(n), id(n + 100), n % 2);
+        let three: String = (1..=3).map(line).collect();
+        std::fs::write(&file, &three).unwrap();
+        assert_eq!(keep_in(&file, 2).unwrap(), 3);
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            three,
+            "under twice: kept"
+        );
+        let four: String = (1..=4).map(line).collect();
+        std::fs::write(&file, &four).unwrap();
+        assert_eq!(keep_in(&file, 2).unwrap(), 2);
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            format!("{}{}", line(3), line(4))
+        );
+        let k = known().lock().unwrap();
+        assert_eq!(
+            (k.get(id(3), id(103)), k.get(id(4), id(104))),
+            (Some(true), Some(false))
+        );
     }
 
     #[test]

@@ -11,6 +11,7 @@ Releasing).
 
 ### New
 
+- Whether each branch is squash- or rebase-merged is kept between runs (in `~/.cache/argus/absorbed`), so with many old branches only the first load pays for working it out.
 - In the message history, `o` sorts the steps by their own time (when none of the steps they took ran) instead of all they took, slowest first or by kind.
 
 **Full Changelog**: https://github.com/sambrightman/argus/compare/v0.3.0...HEAD

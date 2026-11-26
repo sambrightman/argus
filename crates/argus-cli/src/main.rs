@@ -409,6 +409,16 @@ fn run() -> Result<()> {
             paths::contract_tilde(&ctx.config_path)
         );
     }
+    if !writes_nothing {
+        // (without it, each run works the answers out again)
+        let file = paths::absorbed_file();
+        if let Err(e) = argus_core::status::keep_absorbed_in(&file) {
+            eprintln!(
+                "argus: can't keep squash-merge answers in {}: {e}",
+                paths::contract_tilde(&file)
+            );
+        }
+    }
     let json = cli.json;
     if json {
         match &cli.cmd {
@@ -427,10 +437,12 @@ fn run() -> Result<()> {
                 return print_json(&serde_json::json!({
                     "config": ctx.config_path,
                     "state": ctx.state_path,
+                    "cache": paths::absorbed_file(),
                 }));
             }
             println!("config: {}", ctx.config_path.display());
             println!("state:  {}", ctx.state_path.display());
+            println!("cache:  {}", paths::absorbed_file().display());
             return Ok(());
         }
         Some(Cmd::Forge { cmd }) => return forge_cmd(cmd, json),

@@ -494,9 +494,15 @@ Two findings:
   (`Workspace::update_statuses`, `App::on_statuses`): a refresh of every
   repo is one pass over the workspace and one rebuild, not one each.
   Whether a branch is absorbed (squash-merged) is worked out once for a
-  pair of commits and remembered for the process: the answer is theirs
-  alone, and a repo with many stale branches no longer pays for each at
-  every status. Forge requests from the TUI go through a gate as wide as
+  pair of commits and remembered: the answer is theirs alone, and a repo
+  with many stale branches no longer pays for each at every status. The
+  CLI and TUI keep the answers in a file too (`$XDG_CACHE_HOME/argus/
+  absorbed`, a line each: `<tip> <default tip> <1|0>`), so the next run
+  starts with them: appended one write a line, so two runs at once don't
+  mix theirs, and cut to the latest 100,000 when it's read holding twice
+  that. A merge that couldn't be tried isn't kept. The answer could
+  differ under other merge settings (`merge.renames`); it's kept as the
+  first run found it. Forge requests from the TUI go through a gate as wide as
   `concurrency.network`.
 * **A question from the background waits its turn.** A forge's answer or
   a job's end may have something to ask (a renamed repo's remote, an

@@ -2369,3 +2369,64 @@ fn the_squash_merge_check_is_done_once_for_the_same_two_commits() {
     assert!(absorbed(&r));
     assert_eq!(trial_merges(), before + 2);
 }
+
+/// The two commits of `r`'s branch `feat` and its default, as written in
+/// the file of answers kept between runs.
+fn feat_pair(r: &std::path::Path) -> String {
+    let id = |rev: &str| git(r, &["rev-parse", rev]).trim().to_string();
+    format!("{} {}", id("feat"), id("origin/main"))
+}
+
+/// The squash-merge check's answers are kept in a file, so the next run
+/// (the next process) has them without merging again.
+#[test]
+fn squash_merge_answers_are_kept_in_a_file_for_the_next_run() {
+    use argus_core::status::{keep_absorbed_in, trial_merges};
+    let sb = Sandbox::new();
+    let r = squash_merged(&sb, "main");
+    let file = sb.path("cache/absorbed");
+    assert_eq!(keep_absorbed_in(&file).unwrap(), 0, "none yet, and no file");
+    let before = trial_merges();
+    let absorbed = |r: &std::path::Path| st(r).branches.iter().any(|b| b.absorbed);
+    assert!(absorbed(&r));
+    assert_eq!(trial_merges(), before + 1);
+    let kept = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(kept, format!("{} 1\n", feat_pair(&r)));
+    // asked again: remembered, and not written twice
+    assert!(absorbed(&r));
+    assert_eq!(trial_merges(), before + 1);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), kept);
+    // a no is kept too
+    git(&r, &["switch", "-q", "feat"]);
+    write(&r, "h", "not in main\n");
+    commit(&r, "more work");
+    git(&r, &["switch", "-q", "main"]);
+    assert!(!absorbed(&r));
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        format!("{kept}{} 0\n", feat_pair(&r))
+    );
+}
+
+/// What the file says is taken as the answer, without a merge: here it
+/// says no, though the branch is squash-merged. Lines that aren't answers
+/// are passed over.
+#[test]
+fn a_squash_merge_answer_in_the_file_is_taken_without_merging() {
+    use argus_core::status::{keep_absorbed_in, trial_merges};
+    let sb = Sandbox::new();
+    let r = squash_merged(&sb, "main");
+    let file = sb.path("absorbed");
+    let pair = feat_pair(&r);
+    let lines = format!("junk\n{pair} 0\n{pair} 2\n{pair} 1 more\nab cd 1\n");
+    std::fs::write(&file, &lines).unwrap();
+    assert_eq!(keep_absorbed_in(&file).unwrap(), 1);
+    let before = trial_merges();
+    assert!(!st(&r).branches.iter().any(|b| b.absorbed));
+    assert_eq!(trial_merges(), before, "not merged");
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        lines,
+        "nothing added"
+    );
+}

@@ -2915,3 +2915,33 @@ fn text_from_a_repo_never_reaches_the_terminal_as_escape_sequences() {
     assert!(out.contains("evil\u{fffd}]0;pwned\u{fffd}.txt"), "{out}");
     assert!(out.contains("stash\u{fffd}[2J"), "{out}");
 }
+
+/// The squash-merge check's answers are kept in the cache for the next
+/// run; `argus paths` says where, and keeps nothing itself.
+#[test]
+fn squash_merge_answers_are_kept_in_the_cache() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "dev/w");
+    git(&r, &["switch", "-q", "-c", "feat"]);
+    write(&r, "f", "feature\n");
+    commit(&r, "feat");
+    git(&r, &["switch", "-q", "main"]);
+    git(&r, &["merge", "-q", "--squash", "feat"]);
+    git(&r, &["commit", "-q", "-m", "feat (#1)"]);
+    git(&r, &["push", "-q"]);
+    let file = sb.root().join(".cache/argus/absorbed");
+    let paths = argus(&sb).arg("paths").output().unwrap();
+    let out = String::from_utf8(paths.stdout).unwrap();
+    assert!(
+        out.contains(&format!("cache:  {}", file.display())),
+        "{out}"
+    );
+    assert!(!file.exists(), "paths keeps nothing");
+    argus(&sb).args(["status", "-a"]).assert().success();
+    let id = |rev: &str| git(&r, &["rev-parse", rev]).trim().to_string();
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        format!("{} {} 1\n", id("feat"), id("origin/main"))
+    );
+}
