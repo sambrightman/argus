@@ -784,8 +784,11 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         .and_then(|bi| bi.upstream.clone());
 
     let bare = repo.workdir().is_none();
+    // (one read of the submodules for both: it costs about as much as a
+    // small repo's whole status)
+    let (submodules, shown) = checked_out_submodules(repo);
     let submodules_shown = match opts.submodules && opts.submodule_content_from_own && !bare {
-        true => submodules_shown(repo),
+        true => shown,
         false => vec![],
     };
     let changes = if bare {
@@ -857,7 +860,7 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         worktrees: worktrees.0,
         stale_worktrees: worktrees.1,
         missing_submodules,
-        submodules: submodules(repo),
+        submodules,
         submodules_shown,
         own_changes,
         moved_submodules,
@@ -1949,32 +1952,29 @@ fn moved_submodules(repo: &gix::Repository, moved: &[String]) -> Vec<MovedSubmod
     v
 }
 
-/// Each checked-out submodule, where it is and how its changes show.
-fn submodules_shown(repo: &gix::Repository) -> Vec<SubmoduleShown> {
+/// Each checked-out submodule's work tree, sorted, and of those, where
+/// each is in the parent's and how its changes show.
+fn checked_out_submodules(repo: &gix::Repository) -> (Vec<PathBuf>, Vec<SubmoduleShown>) {
     let Ok(Some(sms)) = repo.submodules() else {
-        return vec![];
+        return (vec![], vec![]);
     };
-    sms.filter(|sm| sm.state().is_ok_and(|s| s.worktree_checkout))
-        .filter_map(|sm| {
-            Some(SubmoduleShown {
-                path: sm.work_dir().ok().flatten()?,
-                rela: sm.path().ok()?.to_str_lossy().into_owned(),
+    let mut paths = vec![];
+    let mut shown = vec![];
+    for sm in sms.filter(|sm| sm.state().is_ok_and(|s| s.worktree_checkout)) {
+        let Some(path) = sm.work_dir().ok().flatten() else {
+            continue;
+        };
+        if let Ok(rela) = sm.path() {
+            shown.push(SubmoduleShown {
+                path: path.clone(),
+                rela: rela.to_str_lossy().into_owned(),
                 ignore: sm.ignore().ok().flatten().unwrap_or_default(),
-            })
-        })
-        .collect()
-}
-
-fn submodules(repo: &gix::Repository) -> Vec<PathBuf> {
-    let Ok(Some(sms)) = repo.submodules() else {
-        return vec![];
-    };
-    let mut v: Vec<PathBuf> = sms
-        .filter(|sm| sm.state().is_ok_and(|s| s.worktree_checkout))
-        .filter_map(|sm| sm.work_dir().ok().flatten())
-        .collect();
-    v.sort();
-    v
+            });
+        }
+        paths.push(path);
+    }
+    paths.sort();
+    (paths, shown)
 }
 
 fn mtime(p: &Path) -> Option<Timestamp> {

@@ -485,15 +485,34 @@ fn submodule_status_can_be_skipped() {
     );
     commit(&r, "add sub");
     write(&r.join("lib"), "README", "changed");
-    let s = status(
-        &r,
-        StatusOptions {
-            submodules: false,
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    let with = |submodules, submodule_content_from_own| {
+        status(
+            &r,
+            StatusOptions {
+                submodules,
+                submodule_content_from_own,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    let s = with(false, false);
     assert!(s.changes.is_clean());
+    // nor are submodules listed for their own statuses to fill in, unless
+    // both asked for
+    for (submodules, from_own) in [(false, false), (false, true), (true, false)] {
+        let s = with(submodules, from_own);
+        assert_eq!(
+            (s.submodules_shown.len(), s.own_changes.is_some()),
+            (0, false),
+            "{submodules} {from_own}"
+        );
+    }
+    let s = with(true, true);
+    assert_eq!(
+        (s.submodules_shown.len(), s.own_changes.is_some()),
+        (1, true)
+    );
 }
 
 /// Fork workflow seen in the wild: the branch tracks `upstream/master` but
@@ -1016,6 +1035,33 @@ fn files_are_listed_up_to_the_cap_and_all_counted() {
     assert_eq!((c.files.len(), c.untracked), (MAX_FILES, MAX_FILES + 1));
 }
 
+/// A submodule shown from its own status is listed like any change, up
+/// to the cap, and counted past it.
+#[test]
+fn submodule_content_is_listed_up_to_the_cap_and_all_counted() {
+    use argus_core::status::{Changes, FileChange, MAX_FILES, PathKind};
+    let filled = |n: usize| {
+        let mut c = Changes::default();
+        c.files = (0..n)
+            .map(|i| FileChange {
+                path: format!("f{i:04}"),
+                index: ' ',
+                worktree: 'M',
+                kind: PathKind::File,
+            })
+            .collect();
+        c
+    };
+    let mut c = filled(MAX_FILES - 1);
+    c.add_submodule_content("sub", 'm');
+    assert_eq!((c.files.len(), c.submodule_content), (MAX_FILES, 1));
+    assert_eq!(c.files.last().map(|f| f.path.as_str()), Some("sub"));
+    let mut c = filled(MAX_FILES);
+    c.add_submodule_content("sub", 'm');
+    assert_eq!((c.files.len(), c.submodule_content), (MAX_FILES, 1));
+    assert!(c.files.iter().all(|f| f.path != "sub"));
+}
+
 /// A clone with `f` (20 lines) on main, and a pushed branch `feat` that
 /// changes line 10.
 fn feature_changing_line_10(sb: &Sandbox) -> std::path::PathBuf {
@@ -1420,9 +1466,11 @@ fn ahead_behind_and_merged_counts_are_kept_for_the_next_run() {
         .collect();
     let text = std::fs::read_to_string(&files[0]).unwrap();
     let id = |rev: &str| git(&r, &["rev-parse", rev]).trim().to_string();
-    let line = format!("between {} {} 1", id("main"), id("origin/main"));
+    let pair = format!("between {} {}", id("main"), id("origin/main"));
+    let line = format!("{pair} 1");
     assert!(text.lines().any(|l| l == line), "{text}");
-    std::fs::write(&files[0], text.replace(&line, &line.replace(" 1", " 7"))).unwrap();
+    // (the count alone changed: an id may hold " 1" too)
+    std::fs::write(&files[0], text.replace(&line, &format!("{pair} 7"))).unwrap();
     forget();
     assert_eq!(ahead(&r), 7, "taken from the file");
     // inverse: once the branch moves, worked out afresh
