@@ -1311,3 +1311,85 @@ fn a_file_taken_out_of_the_index_but_kept_is_a_staged_deletion_and_an_untracked_
         (1, 0, 1)
     );
 }
+
+/// What each status's `files` step says, while `f` runs, without its repo.
+fn files_said(f: impl FnOnce()) -> Vec<String> {
+    use std::sync::{Arc, Mutex};
+    let got: Arc<Mutex<Vec<String>>> = Arc::default();
+    let into = got.clone();
+    argus_core::trace::set_sink(Some((
+        argus_core::trace::Form::Each,
+        Arc::new(move |s: argus_core::trace::Step| {
+            // (said with its repo: `status ~/r: files: …`)
+            if let Some(at) = s.what.find(": files:") {
+                into.lock().unwrap().push(s.what[at + 2..].to_string());
+            }
+        }),
+    )));
+    f();
+    argus_core::trace::set_sink(None);
+    got.lock().unwrap().clone()
+}
+
+/// The `files` step says what the status read: files whose details on
+/// disk no longer match the index's are read again, those unchanged after
+/// all counted (they stay so, as argus doesn't write the index), as are
+/// those the index can't vouch for, being as new as it; and how far the
+/// walk for untracked files went.
+#[test]
+fn the_files_step_says_what_was_read_to_find_changes() {
+    let sb = Sandbox::new();
+    let r = sb.path("r");
+    std::fs::create_dir_all(&r).unwrap();
+    git(&r, &["init", "-q", "-b", "main"]);
+    write(&r, "a", "aaaa\n");
+    write(&r, "b", "bb\n");
+    write(&r, "c", "c\n");
+    commit(&r, "three");
+    let at = |f: &str, year: u64| {
+        let t =
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs((year - 1970) * 365 * 86_400);
+        std::fs::File::options()
+            .write(true)
+            .open(r.join(f))
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    };
+    // all older than the index, which then says so: nothing to read
+    for f in ["a", "b", "c"] {
+        at(f, 2001);
+    }
+    git(&r, &["update-index", "-q", "--refresh"]);
+    let said = || files_said(|| drop(st(&r)));
+    assert_eq!(
+        said(),
+        [
+            "files: 3 tracked, 0 read (0 bytes): 0 unchanged, 0 too new to trust; 1 folders walked, 4 entries"
+        ]
+    );
+    // a touched: read again, unchanged, and so at every status
+    at("a", 2002);
+    let touched = "files: 3 tracked, 1 read (5 bytes): 1 unchanged, 0 too new to trust; 1 folders walked, 4 entries";
+    assert_eq!(said(), [touched]);
+    assert_eq!(said(), [touched]);
+    // c as the index has it, but newer than the index: read, untrusted
+    at("c", 2099);
+    git(&r, &["update-index", "-q", "--refresh"]);
+    assert_eq!(
+        said(),
+        [
+            "files: 3 tracked, 1 read (2 bytes): 1 unchanged, 1 too new to trust; 1 folders walked, 4 entries"
+        ]
+    );
+    // untracked folders walked
+    at("c", 2001);
+    git(&r, &["update-index", "-q", "--refresh"]);
+    write(&r.join("u/v"), "x", "");
+    assert_eq!(
+        said(),
+        [
+            "files: 3 tracked, 0 read (0 bytes): 0 unchanged, 0 too new to trust; 3 folders walked, 5 entries"
+        ]
+    );
+}

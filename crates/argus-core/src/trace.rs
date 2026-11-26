@@ -122,11 +122,16 @@ impl Step {
         }
     }
 
-    /// What it did, a part (said by its kind alone) named with the step
-    /// it's in, `of`: `status ~/dev/argus: files`.
+    /// What it did, a part (said by its kind, alone or followed by `: `
+    /// and more) named with the step it's in, `of`: `status ~/dev/argus:
+    /// files`, `branch x in ~/dev/argus: unpushed: 0, remembered`.
     pub fn named_in(&self, of: Option<&str>) -> String {
+        let part = match self.what.strip_prefix(self.kind.as_str()) {
+            Some(rest) => rest.is_empty() || rest.starts_with(": "),
+            None => false,
+        };
         match of.filter(|of| !of.is_empty()) {
-            Some(of) if self.what == self.kind => format!("{of}: {}", self.what),
+            Some(of) if part => format!("{of}: {}", self.what),
             _ => self.what.clone(),
         }
     }
@@ -600,6 +605,17 @@ mod tests {
         );
         assert_eq!(part.said_in(None), "    3ms  files");
         assert_eq!(part.said_in(Some("")), "    3ms  files");
+        // said with more after its kind, still a part
+        let counted = Step::new("unpushed", "unpushed: 2, remembered", Some(ms(3)));
+        assert_eq!(
+            counted.said_in(Some("branch x")),
+            "    3ms  branch x: unpushed: 2, remembered"
+        );
+        // inverse: its kind only begins a word of it, or has no colon after
+        let begun = Step::new("files", "filesystem ~/a", Some(ms(3)));
+        assert_eq!(begun.said_in(Some("status ~/a")), "    3ms  filesystem ~/a");
+        let spaced = Step::new("files", "files 3", Some(ms(3)));
+        assert_eq!(spaced.said_in(Some("status ~/a")), "    3ms  files 3");
         let status = Step::new("status", "status ~/b", Some(ms(5)));
         assert_eq!(status.said_in(Some("scan")), "    5ms  status ~/b");
         assert_eq!(Step::new("note", "n", None).said_in(None), "         n");

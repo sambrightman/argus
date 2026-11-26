@@ -1392,7 +1392,7 @@ fn changes(
     if let Some(t) = head_tree {
         platform = platform.head_tree(t.detach());
     }
-    let iter = platform
+    let mut iter = platform
         // Per-file, then collapsed below like git does. gix's own collapsing
         // reports directories holding only ignored files/empty dirs as untracked.
         .untracked_files(gix::status::UntrackedFiles::Files)
@@ -1405,7 +1405,7 @@ fn changes(
     let mut kinds: HashMap<String, PathKind> = HashMap::new();
     let mut moved = vec![];
     let mut missing = vec![];
-    for item in iter {
+    for item in iter.by_ref() {
         let item = item.map_err(err)?;
         match item {
             gix::status::Item::TreeIndex(change) => {
@@ -1492,6 +1492,9 @@ fn changes(
         }
     }
 
+    if let Some(out) = iter.outcome_mut() {
+        crate::trace::amend(|| files_read(&out.index_worktree));
+    }
     collapse_untracked(repo, &mut files, &mut kinds)?;
     let mut c = Changes {
         moved,
@@ -1537,6 +1540,40 @@ fn changes(
         }
     }
     Ok(c)
+}
+
+/// What a status had to do, said as its `files` step: the files it read
+/// (the rest it took as unchanged from what the index says of them), of
+/// those the ones that hadn't changed after all, though the index said
+/// they might have (and still will: argus doesn't write the index), and
+/// how far it walked for untracked files.
+fn files_read(out: &gix::status::plumbing::index_as_worktree_with_renames::Outcome) -> String {
+    let tracked = &out.tracked_file_modification;
+    let mut said = format!(
+        "files: {} tracked, {} read ({}): {} unchanged, {} too new to trust",
+        tracked.entries_to_process,
+        tracked.worktree_files_read,
+        size(tracked.worktree_bytes),
+        tracked.entries_to_update,
+        tracked.racy_clean,
+    );
+    if let Some(walk) = &out.dirwalk {
+        said += &format!(
+            "; {} folders walked, {} entries",
+            walk.read_dir_calls, walk.seen_entries
+        );
+    }
+    said
+}
+
+/// `bytes` in the largest unit that leaves at least 1 of it.
+fn size(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1 << 30 => format!("{}GB", b >> 30),
+        b if b >= 1 << 20 => format!("{}MB", b >> 20),
+        b if b >= 1 << 10 => format!("{}KB", b >> 10),
+        b => format!("{b} bytes"),
+    }
 }
 
 /// Replace untracked files inside directories with no tracked content by the
@@ -1983,6 +2020,18 @@ mod tests {
         ] {
             assert_eq!(without_path(msg, p), want, "{msg}");
         }
+    }
+
+    #[test]
+    fn sizes_are_in_the_largest_unit_with_one_of_it() {
+        let said: Vec<String> = [0, 1023, 1024, (1 << 20) - 1, 1 << 20, 5 << 30]
+            .into_iter()
+            .map(size)
+            .collect();
+        assert_eq!(
+            said,
+            ["0 bytes", "1023 bytes", "1KB", "1023KB", "1MB", "5GB"]
+        );
     }
 
     /// The file of answers is cut to the latest `keep` when it holds twice

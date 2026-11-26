@@ -931,12 +931,18 @@ rendering is snapshot-tested via `TestBackend`.
   with `trace::within`): a scan holds each repo's status, a status its
   parts (`open`, `branches`, `files`, …), `branches` a step per branch,
   that its checks (`upstream`, `merged`, `absorbed`, `unpushed`, saying
-  how it was counted). A layer of ours turns them into `Step`s for one
+  how it was counted), `files` what it read: files whose details on
+  disk differ from the index's are read again, and those unchanged after
+  all are counted, as argus never writes the index and they're read at
+  every status until git does; so are entries as new as the index, which
+  it can't vouch for, and the folders and entries walked for untracked
+  files. A layer of ours turns them into `Step`s for one
   global, replaceable sink; nothing else in argus touches `tracing`, and
   other crates' spans are never made. Off by default, and then no span
   is made and a step's text never built. The CLI asks for each step by
   itself as it ends, flat, a part named with what it's in (`status
-  ~/dev/r: open`); the TUI for each outermost one whole, as a message
+  ~/dev/r: open`; a part is a step said by its kind, alone or followed
+  by `: ` and more, as `unpushed: 0, remembered`); the TUI for each outermost one whole, as a message
   of its history. Rows rebuilt and frames drawn are said only when they
   took a frame (16ms) or more, as they happen on most keys. `tracing`
   over our own module: it carries a span into another thread, and a

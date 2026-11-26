@@ -12,7 +12,12 @@ Releasing).
 ### New
 
 - Whether each branch is squash- or rebase-merged is kept between runs (in `~/.cache/argus/absorbed`), so with many old branches only the first load pays for working it out.
+- With `-v`, each repo's `files` step says what it read to find changes: files read again because their details on disk no longer match the index (and how many of those hadn't changed), and the folders walked for untracked files.
 - In the message history, `o` sorts the steps by their own time (when none of the steps they took ran) instead of all they took, slowest first or by kind.
+
+### Fixed
+
+- With `-v`, a branch's `unpushed` and a repo's `remote tips` steps say which branch and repo they're of.
 
 **Full Changelog**: https://github.com/sambrightman/argus/compare/v0.3.0...HEAD
 
