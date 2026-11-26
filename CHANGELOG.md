@@ -11,7 +11,7 @@ Releasing).
 
 ### New
 
-- Whether each branch is merged (squashed, rebased or not), how far it's ahead of and behind its upstream, and how many of its commits are on no remote, is kept between runs (a file per repo in `~/.cache/argus/repos/`), so with many old branches only the first load pays for working it out.
+- Whether each branch is merged (squashed, rebased or not), how far it's ahead of and behind its upstream, and how many of its commits are on no remote, is kept between runs (a file per repo in `~/.cache/argus/repos/`), so with many old branches only the first load pays for working it out; `argus paths` shows the folder.
 - With `-v`, each repo's `files` step says what it read to find changes: files read again because their details on disk no longer match the index (and how many of those hadn't changed), and the folders walked for untracked files.
 - The TUI shows its rows sooner in repos with many branches: a status checks HEAD's branch, the default branch and the 10 with the newest commits at once, and the rest in the background, after the rows show (a branch says "checking…" in a repo's details until then). The CLI still checks every branch before it answers.
 - A repo's status no longer reads its submodules' files again: what's changed inside each comes from the submodule's own status, which argus reads anyway.
@@ -19,6 +19,7 @@ Releasing).
 
 ### Fixed
 
+- `url` 2.5.9, for RUSTSEC-2026-0592 (a stack overflow on deeply nested `blob:` URLs).
 - With `-v`, a branch's `unpushed` and a repo's `remote tips` steps say which branch and repo they're of.
 
 **Full Changelog**: https://github.com/sambrightman/argus/compare/v0.3.0...HEAD
