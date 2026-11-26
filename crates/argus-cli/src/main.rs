@@ -411,13 +411,7 @@ fn run() -> Result<()> {
     }
     if !writes_nothing {
         // (without it, each run works the answers out again)
-        let file = paths::absorbed_file();
-        if let Err(e) = argus_core::status::keep_absorbed_in(&file) {
-            eprintln!(
-                "argus: can't keep squash-merge answers in {}: {e}",
-                paths::contract_tilde(&file)
-            );
-        }
+        argus_core::status::keep_absorbed_in(&paths::absorbed_dir());
     }
     let json = cli.json;
     if json {
@@ -437,12 +431,12 @@ fn run() -> Result<()> {
                 return print_json(&serde_json::json!({
                     "config": ctx.config_path,
                     "state": ctx.state_path,
-                    "cache": paths::absorbed_file(),
+                    "cache": paths::absorbed_dir(),
                 }));
             }
             println!("config: {}", ctx.config_path.display());
             println!("state:  {}", ctx.state_path.display());
-            println!("cache:  {}", paths::absorbed_file().display());
+            println!("cache:  {}", paths::absorbed_dir().display());
             return Ok(());
         }
         Some(Cmd::Forge { cmd }) => return forge_cmd(cmd, json),

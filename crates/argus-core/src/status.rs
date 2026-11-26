@@ -708,9 +708,11 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         .as_deref()
         .and_then(|d| default_tip(&refs, remote.as_deref(), d));
 
+    let mut answers = Answers::of(repo);
     let branches = crate::trace::part("branches", || {
-        branches(repo, &refs, head.branch(), default_tip)
+        branches(repo, &refs, head.branch(), default_tip, &mut answers)
     })?;
+    answers.keep();
     let upstream = head
         .branch()
         .and_then(|b| branches.iter().find(|bi| bi.name == b))
@@ -929,77 +931,124 @@ fn default_tip(refs: &Refs, remote: Option<&str>, default: &str) -> Option<(gix:
 /// the repo. A conflict, or any failure, is a no; so is a branch with no
 /// net change since it split off (empty commits, a change and its
 /// revert), which nothing absorbed.
-fn absorbed(repo: &gix::Repository, tip: gix::ObjectId, default: gix::ObjectId) -> bool {
-    // the answer is the two commits' alone, and commits don't change:
-    // worked out once for a pair, not at every status (a repo with many
-    // stale branches would pay for each of them every time), and kept
-    // for the next run when there's a file for it
-    if let Some(answer) = known().lock().ok().and_then(|k| k.get(tip, default)) {
-        return answer;
-    }
-    TRIAL_MERGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let answer = trial_merge(repo, tip, default);
-    // (a merge that couldn't be tried at all, objects missing say, isn't
-    // an answer to keep)
-    if let (Some(answer), Ok(mut known)) = (answer, known().lock()) {
-        known.insert(tip, default, answer);
-    }
-    answer.unwrap_or(false)
+///
+/// The answer is the two commits' alone, and commits don't change, so
+/// it's worked out once for a pair: a repo with many stale branches would
+/// pay for each of them at every status. A repo's answers are those its
+/// last status asked for (a branch moved or gone, or the default branch
+/// moved, leaves its old one behind), kept in memory and, once
+/// [`keep_absorbed_in`] names a folder, in a file of the repo's own there,
+/// read when the repo is first statused.
+struct Answers {
+    /// The repo's common dir (its worktrees share the answers; reached
+    /// by another path, through a link, it has a file of its own).
+    repo: PathBuf,
+    had: HashMap<(gix::ObjectId, gix::ObjectId), bool>,
+    asked: HashMap<(gix::ObjectId, gix::ObjectId), bool>,
 }
 
-/// [`absorbed`]'s answers: in memory, and in a file once
-/// [`keep_absorbed_in`] names one.
+/// Each repo's answers, by its common dir: as its last status left them.
+type Known = HashMap<PathBuf, HashMap<(gix::ObjectId, gix::ObjectId), bool>>;
+
 fn known() -> &'static std::sync::Mutex<Known> {
     static KNOWN: std::sync::OnceLock<std::sync::Mutex<Known>> = std::sync::OnceLock::new();
     KNOWN.get_or_init(Default::default)
 }
 
-/// Most answers kept: in memory before it starts again, and in the file
-/// when it's read (it's cut to the latest this many when it has twice).
-const KEEP: usize = 100_000;
-
-#[derive(Default)]
-struct Known {
-    answers: HashMap<(gix::ObjectId, gix::ObjectId), bool>,
-    /// Where new answers are added, a line each.
-    file: Option<std::fs::File>,
-}
-
-impl Known {
-    fn get(&self, tip: gix::ObjectId, default: gix::ObjectId) -> Option<bool> {
-        self.answers.get(&(tip, default)).copied()
-    }
-
-    fn insert(&mut self, tip: gix::ObjectId, default: gix::ObjectId, answer: bool) {
-        if self.answers.len() >= KEEP {
-            self.answers.clear();
-        }
-        self.answers.insert((tip, default), answer);
-        if let Some(f) = &mut self.file {
-            // one write a line, appended: two runs at once don't mix
-            // theirs (and a failed write only loses the answer)
-            let line = format!("{tip} {default} {}\n", u8::from(answer));
-            let _ = std::io::Write::write_all(f, line.as_bytes());
-        }
-    }
+/// The folder [`keep_absorbed_in`] named.
+fn kept_in() -> &'static std::sync::Mutex<Option<PathBuf>> {
+    static DIR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+    &DIR
 }
 
 /// Keep the squash-merge check's answers ([`BranchInfo::absorbed`]) in
-/// `file` from now on, and take those it holds: a line each, `<branch
-/// tip> <default branch tip> <1|0>`. Lines that aren't answers are passed
-/// over. Returns how many answers it held.
-pub fn keep_absorbed_in(file: &Path) -> std::io::Result<usize> {
-    keep_in(file, KEEP)
+/// `dir` from now on, a file for each repo, so later runs needn't work
+/// them out again. A repo's file is read when it's first statused, and
+/// written when a status asks for other answers than it holds.
+pub fn keep_absorbed_in(dir: &Path) {
+    *kept_in().lock().unwrap_or_else(|e| e.into_inner()) = Some(dir.to_path_buf());
 }
 
-fn keep_in(file: &Path, keep: usize) -> std::io::Result<usize> {
-    let text = match std::fs::read_to_string(file) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e),
+impl Answers {
+    fn of(repo: &gix::Repository) -> Self {
+        let path = repo.common_dir().to_path_buf();
+        let had = known().lock().ok().and_then(|k| k.get(&path).cloned());
+        let had = had.unwrap_or_else(|| match Self::file(&path) {
+            Some(file) => read_answers(&file),
+            None => HashMap::new(),
+        });
+        Answers {
+            repo: path,
+            had,
+            asked: HashMap::new(),
+        }
+    }
+
+    /// The repo's file, in the folder [`keep_absorbed_in`] named: named
+    /// for its path (which its first line says).
+    fn file(repo: &Path) -> Option<PathBuf> {
+        let dir = kept_in().lock().ok()?.clone()?;
+        let id = gix::objs::compute_hash(
+            gix::hash::Kind::Sha1,
+            gix::objs::Kind::Blob,
+            repo.as_os_str().as_encoded_bytes(),
+        )
+        .ok()?;
+        Some(dir.join(id.to_string()))
+    }
+
+    fn absorbed(
+        &mut self,
+        repo: &gix::Repository,
+        tip: gix::ObjectId,
+        default: gix::ObjectId,
+    ) -> bool {
+        let pair = (tip, default);
+        if let Some(&answer) = self.had.get(&pair) {
+            self.asked.insert(pair, answer);
+            return answer;
+        }
+        TRIAL_MERGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // (a merge that couldn't be tried at all, objects missing say, isn't
+        // an answer to keep)
+        match trial_merge(repo, tip, default) {
+            Some(answer) => {
+                self.asked.insert(pair, answer);
+                answer
+            }
+            None => false,
+        }
+    }
+
+    /// Keep what this status asked for, if that's not what was kept.
+    fn keep(self) {
+        if self.asked == self.had {
+            return;
+        }
+        if let Some(file) = Self::file(&self.repo) {
+            let mut text = format!("# {}\n", self.repo.display());
+            let mut lines: Vec<_> = self.asked.iter().collect();
+            lines.sort();
+            for ((tip, default), answer) in lines {
+                text += &format!("{tip} {default} {}\n", u8::from(*answer));
+            }
+            // (one that can't be written is worked out again next run)
+            let _ = crate::paths::write_atomically(&file, &text);
+        }
+        if let Ok(mut known) = known().lock() {
+            known.insert(self.repo, self.asked);
+        }
+    }
+}
+
+/// The answers in `file`, a line each: `<branch tip> <default branch tip>
+/// <1|0>`. Other lines (the first, saying the repo) are passed over, and
+/// a file that can't be read holds none.
+fn read_answers(file: &Path) -> HashMap<(gix::ObjectId, gix::ObjectId), bool> {
+    let Ok(text) = std::fs::read_to_string(file) else {
+        return HashMap::new();
     };
-    let mut lines: Vec<(gix::ObjectId, gix::ObjectId, bool)> = text
-        .lines()
+    text.lines()
         .filter_map(|l| {
             let mut words = l.split(' ');
             let tip = gix::ObjectId::from_hex(words.next()?.as_bytes()).ok()?;
@@ -1009,31 +1058,9 @@ fn keep_in(file: &Path, keep: usize) -> std::io::Result<usize> {
                 "0" => false,
                 _ => return None,
             };
-            words.next().is_none().then_some((tip, default, answer))
+            words.next().is_none().then_some(((tip, default), answer))
         })
-        .collect();
-    if lines.len() >= 2 * keep {
-        // the latest only (the next answers follow it)
-        lines.drain(..lines.len() - keep);
-        let text: String = lines
-            .iter()
-            .map(|(t, d, a)| format!("{t} {d} {}\n", u8::from(*a)))
-            .collect();
-        crate::paths::write_atomically(file, &text)?;
-    }
-    if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let append = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(file)?;
-    let mut known = known().lock().unwrap_or_else(|e| e.into_inner());
-    for &(t, d, a) in &lines {
-        known.answers.insert((t, d), a);
-    }
-    known.file = Some(append);
-    Ok(lines.len())
+        .collect()
 }
 
 static TRIAL_MERGES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -1042,6 +1069,15 @@ static TRIAL_MERGES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicU
 #[doc(hidden)]
 pub fn trial_merges() -> usize {
     TRIAL_MERGES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Forget the squash-merge answers held in memory, as a new process
+/// starts without them (for tests of the files they're kept in).
+#[doc(hidden)]
+pub fn forget_absorbed() {
+    if let Ok(mut known) = known().lock() {
+        known.clear();
+    }
 }
 
 /// [`absorbed`], worked out: `None` when the merge couldn't be tried.
@@ -1109,6 +1145,7 @@ fn branches(
     refs: &Refs,
     head_branch: Option<&str>,
     default_tip: Option<(gix::ObjectId, bool)>,
+    answers: &mut Answers,
 ) -> Result<Vec<BranchInfo>, StatusError> {
     let remote_tips = crate::trace::timed(
         "remote tips",
@@ -1215,7 +1252,7 @@ fn branches(
                 })?;
                 let absorbed = !merged
                     && crate::trace::part("absorbed", || {
-                        default_tip.is_some_and(|(d, _)| absorbed(repo, tip, d))
+                        default_tip.is_some_and(|(d, _)| answers.absorbed(repo, tip, d))
                     });
                 // merged into the remote's default branch: all on a remote
                 if let Some((d, true)) = default_tip {
@@ -2034,45 +2071,26 @@ mod tests {
         );
     }
 
-    /// The file of answers is cut to the latest `keep` when it holds twice
-    /// as many, and left as it is below that; the answers are taken either way.
+    /// A repo's file of answers: a line each, others passed over (its
+    /// first, saying the repo); no file, or one that can't be read, holds
+    /// none.
     #[test]
-    fn the_absorbed_file_is_cut_to_the_latest_answers_when_it_has_twice_too_many() {
+    fn answers_are_read_a_line_each_passing_over_others() {
         let d = tempfile::tempdir().unwrap();
-        let file = d.path().join("absorbed");
+        let file = d.path().join("f");
         let id = |n: u8| gix::ObjectId::from_bytes_or_panic(&[n; 20]);
-        let line = |n: u8| format!("{} {} {}\n", id(n), id(n + 100), n % 2);
-        let five: String = (1..=5).map(line).collect();
-        std::fs::write(&file, &five).unwrap();
-        assert_eq!(keep_in(&file, 3).unwrap(), 5);
-        assert_eq!(
-            std::fs::read_to_string(&file).unwrap(),
-            five,
-            "under twice: kept"
+        let text = format!(
+            "# /some/repo\n{a} {b} 1\n{b} {a} 0\njunk\n{a} {a} 2\n{b} {b} 1 more\nab cd 1\n",
+            a = id(1),
+            b = id(2)
         );
-        let six: String = (1..=6).map(line).collect();
-        std::fs::write(&file, &six).unwrap();
-        assert_eq!(keep_in(&file, 3).unwrap(), 3);
+        std::fs::write(&file, text).unwrap();
         assert_eq!(
-            std::fs::read_to_string(&file).unwrap(),
-            format!("{}{}{}", line(4), line(5), line(6))
+            read_answers(&file),
+            HashMap::from([((id(1), id(2)), true), ((id(2), id(1)), false)])
         );
-        // no file is none yet; one that can't be read, an error
-        assert_eq!(keep_in(&d.path().join("new"), 3).unwrap(), 0);
-        #[cfg(unix)]
-        {
-            // (write-only: it could be added to, but its answers are lost)
-            use std::os::unix::fs::PermissionsExt;
-            let unread = d.path().join("unread");
-            std::fs::write(&unread, line(9)).unwrap();
-            std::fs::set_permissions(&unread, std::fs::Permissions::from_mode(0o200)).unwrap();
-            assert!(keep_in(&unread, 3).is_err());
-        }
-        let k = known().lock().unwrap();
-        assert_eq!(
-            (k.get(id(5), id(105)), k.get(id(6), id(106))),
-            (Some(true), Some(false))
-        );
+        assert!(read_answers(&d.path().join("none")).is_empty());
+        assert!(read_answers(d.path()).is_empty());
     }
 
     #[test]

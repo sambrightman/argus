@@ -401,8 +401,9 @@ Nothing is offered during a conflict.
   branch isn't "unpushed work" or "upstream gone with unmerged commits",
   can be left with `switch-default`, shows as `merged (squashed or
   rebased)`, and is offered to `b x`. Trying those merges is slow for
-  many old branches, so each answer is kept for later runs in
-  `~/.cache/argus/absorbed` (`$XDG_CACHE_HOME`), safe to delete. Not when the default branch has
+  many old branches, so each answer is kept for later runs, a file per
+  repo in `~/.cache/argus/squash-merged/` (`$XDG_CACHE_HOME`), safe to
+  delete. Not when the default branch has
   since changed the same lines again or reverted them, nor for a branch
   with no net change of its own: those stay as they were. So `b x` may
   offer too little, never a branch whose changes argus hasn't found in

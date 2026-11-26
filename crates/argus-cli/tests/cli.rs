@@ -2930,18 +2930,21 @@ fn squash_merge_answers_are_kept_in_the_cache() {
     git(&r, &["merge", "-q", "--squash", "feat"]);
     git(&r, &["commit", "-q", "-m", "feat (#1)"]);
     git(&r, &["push", "-q"]);
-    let file = sb.root().join(".cache/argus/absorbed");
+    let dir = sb.root().join(".cache/argus/squash-merged");
     let paths = argus(&sb).arg("paths").output().unwrap();
     let out = String::from_utf8(paths.stdout).unwrap();
-    assert!(
-        out.contains(&format!("cache:  {}", file.display())),
-        "{out}"
-    );
-    assert!(!file.exists(), "paths keeps nothing");
+    assert!(out.contains(&format!("cache:  {}", dir.display())), "{out}");
+    assert!(!dir.exists(), "paths keeps nothing");
     argus(&sb).args(["status", "-a"]).assert().success();
     let id = |rev: &str| git(&r, &["rev-parse", rev]).trim().to_string();
-    assert_eq!(
-        std::fs::read_to_string(&file).unwrap(),
-        format!("{} {} 1\n", id("feat"), id("origin/main"))
+    let files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1, "a file for the repo: {files:?}");
+    let text = std::fs::read_to_string(&files[0]).unwrap();
+    assert!(
+        text.ends_with(&format!("\n{} {} 1\n", id("feat"), id("origin/main"))),
+        "{text}"
     );
 }

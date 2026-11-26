@@ -72,13 +72,14 @@ fn state_file_in(env: Env) -> PathBuf {
 }
 
 /// Answers worked out once and kept between runs: those of the
-/// squash-merge check (`$XDG_CACHE_HOME/argus/absorbed`).
-pub fn absorbed_file() -> PathBuf {
-    absorbed_file_in(&real)
+/// squash-merge check, a file for each repo
+/// (`$XDG_CACHE_HOME/argus/squash-merged`).
+pub fn absorbed_dir() -> PathBuf {
+    absorbed_dir_in(&real)
 }
 
-fn absorbed_file_in(env: Env) -> PathBuf {
-    xdg(env, "XDG_CACHE_HOME", ".cache").join("argus/absorbed")
+fn absorbed_dir_in(env: Env) -> PathBuf {
+    xdg(env, "XDG_CACHE_HOME", ".cache").join("argus/squash-merged")
 }
 
 /// Replace `path`'s contents with `text` in one step (a temporary file
@@ -154,7 +155,7 @@ mod tests {
             ("XDG_CACHE_HOME", "/xk"),
             ("HOME", "/h"),
         ]);
-        assert_eq!(absorbed_file_in(&all), p("/xk/argus/absorbed"));
+        assert_eq!(absorbed_dir_in(&all), p("/xk/argus/squash-merged"));
         assert_eq!(
             (config_file_in(&all), state_file_in(&all)),
             (p("/c.toml"), p("/s.toml"))
@@ -176,7 +177,10 @@ mod tests {
             state_file_in(&under_home),
             p("/h/.local/state/argus/state.toml")
         );
-        assert_eq!(absorbed_file_in(&under_home), p("/h/.cache/argus/absorbed"));
+        assert_eq!(
+            absorbed_dir_in(&under_home),
+            p("/h/.cache/argus/squash-merged")
+        );
         assert_eq!(home_in(&under_home), Some(p("/h")));
         let none = env(&[("HOME", "")]);
         assert_eq!(home_in(&none), None);
@@ -191,7 +195,7 @@ mod tests {
         assert_eq!(real("ARGUS_NO_SUCH_VARIABLE"), None);
         assert_eq!(config_file(), config_file_in(&real));
         assert_eq!(state_file(), state_file_in(&real));
-        assert_eq!(absorbed_file(), absorbed_file_in(&real));
+        assert_eq!(absorbed_dir(), absorbed_dir_in(&real));
         assert_eq!(home(), home_in(&real));
     }
 

@@ -2364,10 +2364,11 @@ fn the_squash_merge_check_is_done_once_for_the_same_two_commits() {
     assert_eq!(trial_merges(), before + 2);
     assert!(!absorbed(&r));
     assert_eq!(trial_merges(), before + 2);
-    // and back: the first pair is still remembered beside the second
+    // and back: only what the last status asked for is kept, so checked
+    // again
     git(&r, &["branch", "-q", "-f", "feat", was.trim()]);
     assert!(absorbed(&r));
-    assert_eq!(trial_merges(), before + 2);
+    assert_eq!(trial_merges(), before + 3);
 }
 
 /// The two commits of `r`'s branch `feat` and its default, as written in
@@ -2377,56 +2378,80 @@ fn feat_pair(r: &std::path::Path) -> String {
     format!("{} {}", id("feat"), id("origin/main"))
 }
 
-/// The squash-merge check's answers are kept in a file, so the next run
-/// (the next process) has them without merging again.
+/// The one file in `dir`, and what it says.
+fn only_file(dir: &std::path::Path) -> (std::path::PathBuf, String) {
+    let files: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1, "{files:?}");
+    let text = std::fs::read_to_string(&files[0]).unwrap();
+    (files[0].clone(), text)
+}
+
+/// The squash-merge check's answers are kept in a file of the repo's own,
+/// so the next run (here, with what's in memory forgotten) has them
+/// without merging again. It holds what the last status asked for, and is
+/// written only when that changes.
 #[test]
 fn squash_merge_answers_are_kept_in_a_file_for_the_next_run() {
-    use argus_core::status::{keep_absorbed_in, trial_merges};
+    use argus_core::status::{forget_absorbed, keep_absorbed_in, trial_merges};
     let sb = Sandbox::new();
     let r = squash_merged(&sb, "main");
-    let file = sb.path("cache/absorbed");
-    assert_eq!(keep_absorbed_in(&file).unwrap(), 0, "none yet, and no file");
-    let before = trial_merges();
+    let dir = sb.path("cache");
+    keep_absorbed_in(&dir);
     let absorbed = |r: &std::path::Path| st(r).branches.iter().any(|b| b.absorbed);
+    let before = trial_merges();
     assert!(absorbed(&r));
     assert_eq!(trial_merges(), before + 1);
-    let kept = std::fs::read_to_string(&file).unwrap();
-    assert_eq!(kept, format!("{} 1\n", feat_pair(&r)));
-    // asked again: remembered, and not written twice
+    let repo = std::fs::canonicalize(r.join(".git")).unwrap();
+    let (file, text) = only_file(&dir);
+    assert_eq!(text, format!("# {}\n{} 1\n", repo.display(), feat_pair(&r)));
+    // the next run reads it: no merge
+    forget_absorbed();
     assert!(absorbed(&r));
     assert_eq!(trial_merges(), before + 1);
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), kept);
-    // a no is kept too
+    // nothing changed: not written again (what's added by hand stays)
+    std::fs::write(&file, format!("{text}# by hand\n")).unwrap();
+    forget_absorbed();
+    assert!(absorbed(&r));
+    assert!(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .ends_with("# by hand\n")
+    );
+    // the branch moves: the new answer, a no, replaces the old
     git(&r, &["switch", "-q", "feat"]);
     write(&r, "h", "not in main\n");
     commit(&r, "more work");
     git(&r, &["switch", "-q", "main"]);
     assert!(!absorbed(&r));
+    assert_eq!(trial_merges(), before + 2);
     assert_eq!(
-        std::fs::read_to_string(&file).unwrap(),
-        format!("{kept}{} 0\n", feat_pair(&r))
+        only_file(&dir).1,
+        format!("# {}\n{} 0\n", repo.display(), feat_pair(&r))
     );
+    // and gone: nothing to keep
+    git(&r, &["branch", "-q", "-D", "feat"]);
+    assert!(!absorbed(&r));
+    assert_eq!(only_file(&dir).1, format!("# {}\n", repo.display()));
 }
 
-/// What the file says is taken as the answer, without a merge: here it
-/// says no, though the branch is squash-merged. Lines that aren't answers
-/// are passed over.
+/// What a repo's file says is taken as the answer, without a merge: here
+/// it says no, though the branch is squash-merged.
 #[test]
 fn a_squash_merge_answer_in_the_file_is_taken_without_merging() {
-    use argus_core::status::{keep_absorbed_in, trial_merges};
+    use argus_core::status::{forget_absorbed, keep_absorbed_in, trial_merges};
     let sb = Sandbox::new();
     let r = squash_merged(&sb, "main");
-    let file = sb.path("absorbed");
-    let pair = feat_pair(&r);
-    let lines = format!("junk\n{pair} 0\n{pair} 2\n{pair} 1 more\nab cd 1\n");
-    std::fs::write(&file, &lines).unwrap();
-    assert_eq!(keep_absorbed_in(&file).unwrap(), 1);
+    let dir = sb.path("cache");
+    keep_absorbed_in(&dir);
+    let absorbed = |r: &std::path::Path| st(r).branches.iter().any(|b| b.absorbed);
+    assert!(absorbed(&r));
+    let (file, _) = only_file(&dir);
+    std::fs::write(&file, format!("{} 0\n", feat_pair(&r))).unwrap();
+    forget_absorbed();
     let before = trial_merges();
-    assert!(!st(&r).branches.iter().any(|b| b.absorbed));
+    assert!(!absorbed(&r));
     assert_eq!(trial_merges(), before, "not merged");
-    assert_eq!(
-        std::fs::read_to_string(&file).unwrap(),
-        lines,
-        "nothing added"
-    );
 }

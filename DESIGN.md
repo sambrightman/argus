@@ -495,14 +495,19 @@ Two findings:
   repo is one pass over the workspace and one rebuild, not one each.
   Whether a branch is absorbed (squash-merged) is worked out once for a
   pair of commits and remembered: the answer is theirs alone, and a repo
-  with many stale branches no longer pays for each at every status. The
-  CLI and TUI keep the answers in a file too (`$XDG_CACHE_HOME/argus/
-  absorbed`, a line each: `<tip> <default tip> <1|0>`), so the next run
-  starts with them: appended one write a line, so two runs at once don't
-  mix theirs, and cut to the latest 100,000 when it's read holding twice
-  that. A merge that couldn't be tried isn't kept. The answer could
-  differ under other merge settings (`merge.renames`); it's kept as the
-  first run found it. Forge requests from the TUI go through a gate as wide as
+  with many stale branches no longer pays for each at every status. A
+  repo's answers are those its last status asked for, so they never
+  outgrow its branches: a branch moved or gone, or the default branch
+  moved, leaves its old answer behind. The CLI and TUI keep them in a
+  file for each repo too (`$XDG_CACHE_HOME/argus/squash-merged/`, named
+  for the repo's path, which its first line says; then a line each,
+  `<tip> <default tip> <1|0>`), read when the repo is first statused and
+  written, whole and atomically, only when a status asks for other
+  answers than it holds. Nothing is loaded at start, so hundreds of repos
+  cost nothing until each is statused, and a run over some repos leaves
+  the others' files alone. A merge that couldn't be tried isn't kept.
+  The answer could differ under other merge settings (`merge.renames`);
+  it's kept as the first run found it. Forge requests from the TUI go through a gate as wide as
   `concurrency.network`.
 * **A question from the background waits its turn.** A forge's answer or
   a job's end may have something to ask (a renamed repo's remote, an
@@ -639,8 +644,8 @@ rendering is snapshot-tested via `TestBackend`.
   delete-branches, finished worktrees. When the default tip is a remote's,
   an absorbed branch's `unpushed` is 0, so it raises no unpushed, gone-
   upstream or no-upstream issue and no publish fix. Only unmerged
-  branches get the trial merge (in process, no git spawned); it isn't
-  cached. Pull requests weren't needed for this: a PR's head rarely
+  branches get the trial merge (in process, no git spawned), remembered
+  for its two commits (see "Results show within a frame"). Pull requests weren't needed for this: a PR's head rarely
   equals a local tip once the branch was updated on the forge, which is
   the same case a content check handles.
 * **Absorbed stops at the check against the tip, by decision.** It
