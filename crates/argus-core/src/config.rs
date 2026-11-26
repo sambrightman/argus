@@ -988,6 +988,8 @@ impl Config {
     pub fn status_options(&self) -> crate::status::StatusOptions {
         crate::status::StatusOptions {
             describe_limit: self.describe_limit,
+            // (the workspace reads each submodule's status anyway)
+            submodule_content_from_own: true,
             ..Default::default()
         }
     }

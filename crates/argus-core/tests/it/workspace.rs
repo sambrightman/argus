@@ -2193,3 +2193,144 @@ fn a_nested_entry_is_found_by_its_place_in_its_parent() {
     assert!(!mid.nested);
     assert_eq!(w.nested_index(&top, "mid"), None, "listed, so not nested");
 }
+
+/// A parent's lines for what's changed inside its submodules come from
+/// the submodules' own statuses, which the workspace reads anyway, so the
+/// parent's status doesn't look inside them again. What it shows is what
+/// looking inside shows: compared, in each state, with statuses that do.
+#[test]
+fn a_parents_submodule_lines_come_from_the_submodules_own_statuses() {
+    use argus_core::status::{Changes, StatusOptions, status};
+    let sb = Sandbox::new();
+    let top = std::fs::canonicalize(sb.nested_submodules()).unwrap();
+    let (mid, leaf) = (top.join("mid"), top.join("mid/leaf"));
+    let looking_inside = |p: &std::path::Path| status(p, StatusOptions::default()).unwrap().changes;
+    let shown = |w: &Workspace, p: &std::path::Path| -> Changes {
+        let i = w.index_of(p).unwrap();
+        w.entries[i].status().unwrap().changes.clone()
+    };
+    let scanned = || {
+        let cfg = format!("roots = ['{}']\n", top.display());
+        let mut w = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+        w.scan();
+        w
+    };
+    let same = |state: &str| {
+        let w = scanned();
+        for p in [&top, &mid] {
+            assert_eq!(shown(&w, p), looking_inside(p), "{state}: {}", p.display());
+        }
+    };
+    same("clean");
+    write(&leaf, "README", "changed\n");
+    same("leaf's tracked file changed");
+    let w = scanned();
+    let line = |c: &Changes, path: &str| {
+        c.files
+            .iter()
+            .find(|f| f.path == path)
+            .map(|f| (f.index, f.worktree))
+    };
+    assert_eq!(line(&shown(&w, &mid), "leaf"), Some((' ', 'm')));
+    assert_eq!(line(&shown(&w, &top), "mid"), Some((' ', 'm')));
+    // the parent's own status doesn't look inside: nothing there for mid
+    let own = StatusOptions {
+        submodule_content_from_own: true,
+        ..Default::default()
+    };
+    assert_eq!(line(&status(&top, own).unwrap().changes, "mid"), None);
+    git(&leaf, &["checkout", "-q", "README"]);
+    write(&leaf, "new", "x\n");
+    same("leaf: only an untracked file");
+    std::fs::remove_file(leaf.join("new")).unwrap();
+    write(&mid, "new", "x\n");
+    same("mid: only an untracked file");
+    for ignore in ["untracked", "dirty", "all", "none"] {
+        git(
+            &top,
+            &[
+                "config",
+                "-f",
+                ".gitmodules",
+                "submodule.mid.ignore",
+                ignore,
+            ],
+        );
+        same(&format!("mid: only an untracked file; ignore = {ignore}"));
+    }
+    git(
+        &top,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "--unset",
+            "submodule.mid.ignore",
+        ],
+    );
+    write(&mid, "README", "changed\n");
+    same("mid: both");
+    for ignore in ["untracked", "dirty", "all", "none"] {
+        git(
+            &top,
+            &[
+                "config",
+                "-f",
+                ".gitmodules",
+                "submodule.mid.ignore",
+                ignore,
+            ],
+        );
+        same(&format!("ignore = {ignore}"));
+    }
+    git(
+        &top,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "--unset",
+            "submodule.mid.ignore",
+        ],
+    );
+    git(&mid, &["checkout", "-q", "README"]);
+    std::fs::remove_file(mid.join("new")).unwrap();
+    // at another commit: the parent's own to say
+    write(&mid, "more", "x\n");
+    commit(&mid, "more");
+    same("mid at another commit");
+    git(
+        &top,
+        &["config", "-f", ".gitmodules", "submodule.mid.ignore", "all"],
+    );
+    same("mid at another commit, ignoring all");
+    git(
+        &top,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "--unset",
+            "submodule.mid.ignore",
+        ],
+    );
+    write(&mid, "README", "changed\n");
+    same("mid at another commit and changed");
+    git(&mid, &["checkout", "-q", "README"]);
+    git(&top, &["add", "mid"]);
+    same("mid's new commit staged");
+    write(&mid, "README", "changed\n");
+    same("mid's new commit staged, and changed");
+    git(&mid, &["checkout", "-q", "README"]);
+    git(&top, &["commit", "-q", "-m", "mid moved"]);
+    // a refresh of the submodule alone shows in its parents
+    let mut w = scanned();
+    assert_eq!(line(&shown(&w, &top), "mid"), None);
+    write(&leaf, "README", "again\n");
+    w.refresh(&leaf);
+    assert_eq!(line(&shown(&w, &mid), "leaf"), Some((' ', 'm')));
+    assert_eq!(line(&shown(&w, &top), "mid"), Some((' ', 'm')));
+    git(&leaf, &["checkout", "-q", "README"]);
+    w.refresh(&leaf);
+    assert_eq!(line(&shown(&w, &top), "mid"), None, "and gone again");
+}

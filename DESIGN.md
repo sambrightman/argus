@@ -697,10 +697,20 @@ rendering is snapshot-tested via `TestBackend`.
 * **A submodule's entry in its parent says which change it is**, as `git
   status --short` does: `M` (at another commit than recorded: the parent
   commits it) or ` m` / ` ?` (changes inside: the submodule's own row fixes
-  them). gix's walk stops at a submodule's first change, which may be an
-  untracked file while tracked ones changed too, so ` ?` is confirmed by
-  asking again for tracked changes alone (no second look for untracked
-  files). Fixes are planned from that, so the preview and the auto-fix agree;
+  them). In the workspace, ` m` and ` ?` come from the submodule's own
+  status, which it reads anyway for the submodule's row: the parent's
+  asks gix only whether each submodule is at another commit (`Given {
+  ignore: Dirty }`, leaving out those configured to ignore all), keeps
+  its changes as read, and after every update has the submodules'
+  added (`show_submodule_content`, deepest first), as far as each one's
+  `submodule.<name>.ignore` lets them show. So a submodule's work tree
+  is read once, not again for each repo it's in (a parent of five
+  5,000-file submodules: 17ms to 1ms); a test compares the result with
+  a status that looks inside, in each state. Alone (`status()`), a
+  status still looks inside: gix's walk stops at a submodule's first
+  change, which may be an untracked file while tracked ones changed
+  too, so ` ?` is confirmed by asking again for tracked changes alone
+  (no second look for untracked files). Fixes are planned from that, so the preview and the auto-fix agree;
   git's stash takes neither. A submodule whose folder is gone shows as
   ` D` and is still a submodule (the index entry's mode says so), listed
   in `missing_submodules`: `submodule-update` puts it back, never blocked.

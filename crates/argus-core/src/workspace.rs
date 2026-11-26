@@ -559,6 +559,7 @@ impl Workspace {
         }
         self.add_children();
         self.link_parents();
+        self.show_submodule_content();
         self.resolve_flags();
     }
 
@@ -596,6 +597,7 @@ impl Workspace {
         }
         self.add_children();
         self.link_parents();
+        self.show_submodule_content();
         self.resolve_flags();
     }
 
@@ -710,6 +712,54 @@ impl Workspace {
         self.entries.sort_by(|a, b| a.path.cmp(&b.path));
         // Submodules may themselves have submodules.
         self.add_children();
+    }
+
+    /// Add to each parent's changes what's changed inside its submodules,
+    /// from their own statuses (see
+    /// [`StatusOptions::submodule_content_from_own`]), and work out its
+    /// issues again: after every update, as either may have changed.
+    /// Deepest first, as a submodule's changes include its own
+    /// submodules'.
+    ///
+    /// [`StatusOptions::submodule_content_from_own`]: status::StatusOptions::submodule_content_from_own
+    fn show_submodule_content(&mut self) {
+        let mut parents: Vec<usize> = (0..self.entries.len())
+            .filter(|&i| {
+                self.entries[i]
+                    .status()
+                    .is_some_and(|s| s.own_changes.is_some())
+            })
+            .collect();
+        parents.sort_by_key(|&i| std::cmp::Reverse(self.entries[i].path.components().count()));
+        for i in parents {
+            let Some(s) = self.entries[i].status() else {
+                continue;
+            };
+            let Some(mut changes) = s.own_changes.clone() else {
+                continue;
+            };
+            for sm in &s.submodules_shown {
+                // (its path is the parent's, canonical as entries' are, and
+                // where it is in it)
+                let inside = self
+                    .index_of(&sm.path)
+                    .and_then(|j| self.entries[j].status())
+                    .and_then(|sub| sub.changes.as_submodule(sm.ignore));
+                if let Some(code) = inside {
+                    changes.add_submodule_content(&sm.rela, code);
+                }
+            }
+            let e = &mut self.entries[i];
+            if let Some(Ok(s)) = &mut e.status
+                && s.changes != changes
+            {
+                s.changes = changes;
+                // (none of today's issues counts what's inside a submodule,
+                // but they're worked out from the status as shown)
+                e.all_issues = attention::issues(s);
+                e.issues = e.all_issues.clone();
+            }
+        }
     }
 
     fn link_parents(&mut self) {

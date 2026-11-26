@@ -152,6 +152,45 @@ pub struct Changes {
 pub const MAX_FILES: usize = 500;
 
 impl Changes {
+    /// What a parent's status shows for a submodule with these changes
+    /// inside, as far as `ignore` lets them show: `m`, tracked content
+    /// changed (its own, or a submodule's of its); `?`, only untracked
+    /// files; or nothing.
+    pub fn as_submodule(&self, ignore: gix::submodule::config::Ignore) -> Option<char> {
+        use gix::submodule::config::Ignore;
+        let tracked = self.staged + self.unstaged + self.conflicted + self.submodule_content > 0;
+        match ignore {
+            Ignore::All | Ignore::Dirty => None,
+            _ if tracked => Some('m'),
+            Ignore::Untracked => None,
+            Ignore::None => (self.untracked > 0).then_some('?'),
+        }
+    }
+
+    /// Show the submodule at `rela` with `code` ([`Self::as_submodule`]),
+    /// as a status looking inside it would have: beside a staged change,
+    /// and not over one that says more (another commit, deleted).
+    pub fn add_submodule_content(&mut self, rela: &str, code: char) {
+        match self.files.binary_search_by(|f| f.path.as_str().cmp(rela)) {
+            Ok(i) if self.files[i].worktree == ' ' => self.files[i].worktree = code,
+            Ok(_) => {}
+            Err(i) => {
+                self.submodule_content += 1;
+                if self.files.len() < MAX_FILES {
+                    self.files.insert(
+                        i,
+                        FileChange {
+                            path: rela.to_string(),
+                            index: ' ',
+                            worktree: code,
+                            kind: PathKind::Submodule,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     /// The entry for `path`: its own, or for a file in an untracked
     /// directory listed collapsed (`build/`), that directory's.
     pub fn entry(&self, path: &str) -> Option<&FileChange> {
@@ -206,6 +245,18 @@ impl InProgress {
             InProgress::Am => "am",
         }
     }
+}
+
+/// A submodule as its parent's status shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmoduleShown {
+    /// Its work tree.
+    pub path: PathBuf,
+    /// Where it is in the parent's, as the parent's changes name it.
+    pub rela: String,
+    /// What of its changes the parent's status leaves out
+    /// (`submodule.<name>.ignore`).
+    pub ignore: gix::submodule::config::Ignore,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,6 +314,14 @@ pub struct RepoStatus {
     pub missing_submodules: Vec<String>,
     /// Checked-out submodule work trees.
     pub submodules: Vec<PathBuf>,
+    /// With [`StatusOptions::submodule_content_from_own`]: each checked-out
+    /// submodule, where it is and how its changes show.
+    #[serde(skip)]
+    pub submodules_shown: Vec<SubmoduleShown>,
+    /// With [`StatusOptions::submodule_content_from_own`] and submodules:
+    /// the changes as read, before any submodule's were added to them.
+    #[serde(skip)]
+    pub own_changes: Option<Changes>,
     pub last_fetch: Option<Timestamp>,
     pub last_commit: Option<Timestamp>,
     pub bare: bool,
@@ -349,6 +408,12 @@ fn err(e: impl std::fmt::Display) -> StatusError {
 pub struct StatusOptions {
     /// Compute dirty state of submodules (slower).
     pub submodules: bool,
+    /// With `submodules`, leave what's changed inside each submodule for
+    /// its own status to say (the workspace reads it anyway): the status
+    /// shows only a submodule at another commit, and says where each one
+    /// is and how its changes show ([`RepoStatus::submodules_shown`]), for
+    /// [`Changes::add_submodule_content`].
+    pub submodule_content_from_own: bool,
     /// How far back to look for a tag to describe a detached HEAD by (see
     /// `describe_limit` in the config).
     pub describe_limit: usize,
@@ -358,6 +423,7 @@ impl Default for StatusOptions {
     fn default() -> Self {
         Self {
             submodules: true,
+            submodule_content_from_own: false,
             describe_limit: crate::config::DESCRIBE_LIMIT,
         }
     }
@@ -718,6 +784,10 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         .and_then(|bi| bi.upstream.clone());
 
     let bare = repo.workdir().is_none();
+    let submodules_shown = match opts.submodules && opts.submodule_content_from_own && !bare {
+        true => submodules_shown(repo),
+        false => vec![],
+    };
     let changes = if bare {
         Changes::default()
     } else {
@@ -726,9 +796,11 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
                 repo,
                 opts,
                 head_commit.as_ref().and_then(|c| c.tree_id().ok()),
+                &submodules_shown,
             )
         })?
     };
+    let own_changes = (!submodules_shown.is_empty()).then(|| changes.clone());
     let moved_submodules = crate::trace::part("moved submodules", || {
         moved_submodules(repo, &changes.moved)
     });
@@ -786,6 +858,8 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         stale_worktrees: worktrees.1,
         missing_submodules,
         submodules: submodules(repo),
+        submodules_shown,
+        own_changes,
         moved_submodules,
         last_fetch: mtime(&repo.git_dir().join("FETCH_HEAD")).or_else(|| {
             (repo.common_dir() != repo.git_dir())
@@ -1292,16 +1366,32 @@ fn tracked_content_changed(repo: &gix::Repository, path: &str) -> bool {
         .is_some_and(|st| st.changes.is_some_and(|c| !c.is_empty()))
 }
 
-/// `head_tree`, when known, saves gix reading HEAD again.
+/// `head_tree`, when known, saves gix reading HEAD again; `shown`, the
+/// submodules when their own statuses say what's changed inside them
+/// ([`StatusOptions::submodule_content_from_own`]).
 fn changes(
     repo: &gix::Repository,
     opts: StatusOptions,
     head_tree: Option<gix::Id<'_>>,
+    shown: &[SubmoduleShown],
 ) -> Result<Changes, StatusError> {
     use gix::status::index_worktree::Item as IW;
     use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
 
-    let submodules = if opts.submodules {
+    use gix::submodule::config::Ignore;
+    // what's changed inside each submodule is its own status's to say: only
+    // one at another commit shows here, and not one that ignores all
+    let ignoring_all: std::collections::HashSet<&str> = shown
+        .iter()
+        .filter(|sm| sm.ignore == Ignore::All)
+        .map(|sm| sm.rela.as_str())
+        .collect();
+    let submodules = if opts.submodules && opts.submodule_content_from_own {
+        gix::status::Submodule::Given {
+            ignore: Ignore::Dirty,
+            check_dirty: true,
+        }
+    } else if opts.submodules {
         gix::status::Submodule::AsConfigured { check_dirty: true }
     } else {
         gix::status::Submodule::Given {
@@ -1356,6 +1446,9 @@ fn changes(
                     IW::Modification { status, .. } => match status {
                         EntryStatus::Conflict { .. } => 'U',
                         EntryStatus::Change(Change::SubmoduleModification(sm)) => {
+                            if ignoring_all.contains(path.as_str()) {
+                                continue;
+                            }
                             kinds.insert(path.clone(), PathKind::Submodule);
                             let code = if sm.checked_out_head_id != sm.index_id {
                                 moved.push(path.clone());
@@ -1854,6 +1947,22 @@ fn moved_submodules(repo: &gix::Repository, moved: &[String]) -> Vec<MovedSubmod
         .collect();
     v.sort_by(|a, b| a.path.cmp(&b.path));
     v
+}
+
+/// Each checked-out submodule, where it is and how its changes show.
+fn submodules_shown(repo: &gix::Repository) -> Vec<SubmoduleShown> {
+    let Ok(Some(sms)) = repo.submodules() else {
+        return vec![];
+    };
+    sms.filter(|sm| sm.state().is_ok_and(|s| s.worktree_checkout))
+        .filter_map(|sm| {
+            Some(SubmoduleShown {
+                path: sm.work_dir().ok().flatten()?,
+                rela: sm.path().ok()?.to_str_lossy().into_owned(),
+                ignore: sm.ignore().ok().flatten().unwrap_or_default(),
+            })
+        })
+        .collect()
 }
 
 fn submodules(repo: &gix::Repository) -> Vec<PathBuf> {
