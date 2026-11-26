@@ -1701,7 +1701,7 @@ fn submodule_heads(dir: &Path) -> Vec<(PathBuf, String)> {
         if !sm.state().is_ok_and(|s| s.worktree_checkout) {
             continue;
         }
-        let (Ok(path), Ok(Some(r))) = (sm.work_dir(), sm.open()) else {
+        let (Ok(Some(path)), Ok(Some(r))) = (sm.work_dir(), sm.open()) else {
             continue;
         };
         if let Ok(id) = r.head_id() {

@@ -880,10 +880,11 @@ fn pull_by(repo: &gix::Repository, branch: &str) -> Result<PullBy, String> {
 }
 
 fn head_of(head: &gix::Head<'_>) -> Head {
-    match &head.kind {
-        gix::head::Kind::Symbolic(r) => Head::Branch(r.name.shorten().to_str_lossy().into_owned()),
-        gix::head::Kind::Unborn(name) => Head::Unborn(name.shorten().to_str_lossy().into_owned()),
-        gix::head::Kind::Detached { .. } => Head::Detached(
+    let short = |name: &gix::refs::FullNameRef| name.shorten().to_str_lossy().into_owned();
+    match head.referent_name() {
+        Some(name) if head.is_unborn() => Head::Unborn(short(name)),
+        Some(name) => Head::Branch(short(name)),
+        None => Head::Detached(
             head.id()
                 .map(|id| id.shorten_or_id().to_string())
                 .unwrap_or_default(),
@@ -1550,10 +1551,10 @@ fn head_tags(repo: &gix::Repository, refs: &Refs, head: Option<gix::ObjectId>) -
     let mut found: Vec<(bool, String)> = vec![];
     for i in refs.prefixed("refs/tags/") {
         let r = &refs.refs[i];
-        let gix::refs::Target::Object(target) = r.inner.target.clone() else {
+        let gix::refs::Target::Object(target) = r.inner().target.clone() else {
             continue;
         };
-        let peeled = match r.inner.peeled {
+        let peeled = match r.inner().peeled {
             Some(p) => p,
             None if target == head => head,
             None => match repo.find_header(target) {
@@ -1855,7 +1856,7 @@ fn submodules(repo: &gix::Repository) -> Vec<PathBuf> {
     };
     let mut v: Vec<PathBuf> = sms
         .filter(|sm| sm.state().is_ok_and(|s| s.worktree_checkout))
-        .filter_map(|sm| sm.work_dir().ok())
+        .filter_map(|sm| sm.work_dir().ok().flatten())
         .collect();
     v.sort();
     v

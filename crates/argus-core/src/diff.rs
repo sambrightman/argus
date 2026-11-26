@@ -364,9 +364,15 @@ fn blob_diff(
             new_root,
         },
     )?;
-    cache.set_resource(old.0, old.1, rela, ResourceKind::OldOrSource, &repo.objects)?;
     cache.set_resource(
-        new.0,
+        Some(old.0),
+        old.1,
+        rela,
+        ResourceKind::OldOrSource,
+        &repo.objects,
+    )?;
+    cache.set_resource(
+        Some(new.0),
         new.1,
         rela,
         ResourceKind::NewOrDestination,
@@ -374,14 +380,17 @@ fn blob_diff(
     )?;
     let outcome = cache.prepare_diff()?;
     let converted = outcome.old_or_new_is_derived;
-    let algorithm = match outcome.operation {
-        Operation::InternalDiff { algorithm } => algorithm,
+    let (algorithm, change) = match outcome.operation {
+        Operation::InternalDiff { algorithm, change } => (algorithm, change),
         Operation::SourceOrDestinationIsBinary => return Ok(FileDiff::Binary),
+        // (both sides are always given: nothing on either is no change)
+        Operation::NeitherExists => return Ok(FileDiff::Text(vec![])),
         Operation::ExternalCommand { .. } => return Ok(FileDiff::External),
     };
     // lines keep their endings, as git compares them: a file losing its
     // last newline changes its last line
-    let input = blob::InternedInput::new(outcome.old.intern_source(), outcome.new.intern_source());
+    let (old_text, new_text) = change.patch_data();
+    let input = blob::InternedInput::new(old_text, new_text);
     let diff = blob::diff_with_slider_heuristics(algorithm, &input);
     let collect = Collect {
         hunks: vec![],
