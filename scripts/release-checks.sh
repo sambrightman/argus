@@ -18,4 +18,5 @@ cargo nextest run --workspace --locked
 # (cargo release runs this before committing the new version: dirty then)
 dirty=()
 if [ -n "${NEW_VERSION:-}" ]; then dirty=(--allow-dirty); fi
-cargo publish --workspace --locked --dry-run "${dirty[@]}"
+# (empty, an array is unset to bash 3.2, macOS's, under set -u)
+cargo publish --workspace --locked --dry-run ${dirty[@]+"${dirty[@]}"}
