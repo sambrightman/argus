@@ -71,6 +71,8 @@ pub fn check_terminal() -> Result<(), Error> {
 pub fn run(mut ws: Workspace, opts: Options) -> Result<(), Error> {
     // refreshes reuse repos rather than reopening them each time
     ws.keep_repos_open();
+    // the rows first: a repo's older branches are checked after
+    ws.check_branches_later();
     check_terminal()?;
     let (mut theme, mut warnings) = theme::Theme::for_config(&ws.config);
     warnings.extend(menu::tag_key_clashes(&ws.config));
@@ -383,6 +385,8 @@ impl Runtime {
         // statuses that came in together are applied together: a refresh
         // of every repo is one rebuild, not one each
         let mut statuses = vec![];
+        // and so are branches checked together
+        let mut branches = vec![];
         for _ in 0..512 {
             let Ok(m) = self.rx.try_recv() else { break };
             received = true;
@@ -391,9 +395,14 @@ impl Runtime {
                     statuses.push((path, *st));
                     continue;
                 }
+                Msg::Branches(path, b) => {
+                    branches.push((path, b));
+                    continue;
+                }
                 other => other,
             };
             // (in the order they came: those before another message first)
+            app.on_branches(std::mem::take(&mut branches));
             for e in app.on_statuses(std::mem::take(&mut statuses)) {
                 left.extend(self.exec(app, e));
             }
@@ -401,6 +410,7 @@ impl Runtime {
                 left.extend(self.exec(app, e));
             }
         }
+        app.on_branches(branches);
         if !statuses.is_empty() {
             for e in app.on_statuses(statuses) {
                 left.extend(self.exec(app, e));
@@ -537,6 +547,33 @@ impl Runtime {
                                 paths.into_par_iter().for_each(|p| {
                                     let r = here.run(|| reader.read(&p));
                                     let _ = tx.send(Msg::Status(p, Box::new(r)));
+                                });
+                            })
+                        },
+                    )
+                });
+            }
+            Effect::CheckBranches(paths) => {
+                let n = app.ws.config.disk_jobs();
+                let reader = app.ws.status_reader();
+                self.spawn(move |tx| {
+                    let what = match &paths[..] {
+                        [one] => format!(
+                            "check branches of {}",
+                            argus_core::paths::contract_tilde(one)
+                        ),
+                        many => format!("check branches of {} repos", many.len()),
+                    };
+                    argus_core::trace::step(
+                        "check branches",
+                        || what,
+                        || {
+                            argus_core::workspace::in_pool(n, || {
+                                use rayon::prelude::*;
+                                let here = argus_core::trace::within();
+                                paths.into_par_iter().for_each(|p| {
+                                    let r = here.run(|| reader.branches(&p));
+                                    let _ = tx.send(Msg::Branches(p, r));
                                 });
                             })
                         },

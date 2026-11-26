@@ -67,13 +67,18 @@ pub struct BranchInfo {
     /// exist there yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub own: Option<Tracking>,
+    /// Not checked yet ([`StatusOptions::branches_first`]): only its name,
+    /// tip and whether it's HEAD's are known, and nothing is said of it.
+    #[serde(skip)]
+    pub unchecked: bool,
 }
 
 impl BranchInfo {
     /// Has commits that exist on no remote we know of. (Being merged into
     /// the default branch doesn't count: that may be only the local one.)
+    /// Not one unchecked: that's not known yet.
     pub fn is_unpushed(&self) -> bool {
-        self.unpushed.is_none_or(|n| n > 0)
+        !self.unchecked && self.unpushed.is_none_or(|n| n > 0)
     }
 
     /// Its changes are in the default branch: merged, or absorbed.
@@ -417,6 +422,11 @@ pub struct StatusOptions {
     /// How far back to look for a tag to describe a detached HEAD by (see
     /// `describe_limit` in the config).
     pub describe_limit: usize,
+    /// Check only HEAD's branch, the default branch and this many others,
+    /// those with the newest tips: the rest are listed
+    /// [unchecked](BranchInfo::unchecked), for [`branches_of`] to check.
+    /// `None` checks every branch.
+    pub branches_first: Option<usize>,
 }
 
 impl Default for StatusOptions {
@@ -425,6 +435,7 @@ impl Default for StatusOptions {
             submodules: true,
             submodule_content_from_own: false,
             describe_limit: crate::config::DESCRIBE_LIMIT,
+            branches_first: None,
         }
     }
 }
@@ -573,6 +584,15 @@ impl KeptRepos {
                 .and_then(|repo| status_of(&repo, opts))
         })
         .map_err(|e| StatusError(without_path(&e.0, path)))
+    }
+
+    /// [`branches_of`], through the kept repo.
+    pub fn branches(&self, path: &Path) -> Result<Vec<BranchInfo>, StatusError> {
+        traced_branches(path, || {
+            self.open(path)
+                .map_err(err)
+                .and_then(|repo| all_branches(&repo))
+        })
     }
 
     /// Close every kept repo: the next status of each opens it afresh.
@@ -776,7 +796,15 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
 
     let mut remembered = crate::remember::Remembered::of(repo);
     let branches = crate::trace::part("branches", || {
-        branches(repo, &refs, head.branch(), default_tip, &mut remembered)
+        branches(
+            repo,
+            &refs,
+            head.branch(),
+            default_branch.as_deref(),
+            default_tip,
+            opts.branches_first,
+            &mut remembered,
+        )
     })?;
     let upstream = head
         .branch()
@@ -818,6 +846,9 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
         }
         _ => 0,
     };
+    if branches.iter().any(|b| b.unchecked) {
+        remembered.keep_had_too();
+    }
     remembered.keep();
     let at_head = match (&head, head_id) {
         (Head::Detached(_), Some(id)) => refs
@@ -1099,13 +1130,18 @@ fn own_push_ref(
         .ok()
 }
 
+/// Every branch, all checked or (with `first`, see
+/// [`StatusOptions::branches_first`]) some.
 fn branches(
     repo: &gix::Repository,
     refs: &Refs,
     head_branch: Option<&str>,
+    default_branch: Option<&str>,
     default_tip: Option<(gix::ObjectId, bool)>,
+    first: Option<usize>,
     remembered: &mut crate::remember::Remembered,
 ) -> Result<Vec<BranchInfo>, StatusError> {
+    let checked = first.map(|n| checked_first(repo, refs, [head_branch, default_branch], n));
     let remote_tips = crate::trace::timed(
         "remote tips",
         |tips: &Vec<gix::ObjectId>| format!("remote tips: {}", tips.len()),
@@ -1130,6 +1166,21 @@ fn branches(
         let name = full.shorten().to_str_lossy().into_owned();
         let said = name.clone();
         let Some(tip) = refs.peel_at(i) else { continue };
+        let is_head = head_branch == Some(name.as_str());
+        if checked.as_ref().is_some_and(|c| !c.contains(&i)) {
+            out.push(BranchInfo {
+                is_head,
+                name,
+                tip: tip.to_string(),
+                upstream: None,
+                merged: false,
+                absorbed: false,
+                unpushed: None,
+                own: None,
+                unchecked: true,
+            });
+            continue;
+        }
         let info = crate::trace::step(
             "branch",
             || {
@@ -1254,7 +1305,7 @@ fn branches(
                     _ => unpushed,
                 };
                 Ok(BranchInfo {
-                    is_head: head_branch == Some(name.as_str()),
+                    is_head,
                     name,
                     tip: tip.to_string(),
                     upstream,
@@ -1262,6 +1313,7 @@ fn branches(
                     absorbed,
                     unpushed,
                     own,
+                    unchecked: false,
                 })
             },
         )?;
@@ -1269,6 +1321,77 @@ fn branches(
     }
     out.sort_by(|a, b| b.is_head.cmp(&a.is_head).then_with(|| a.name.cmp(&b.name)));
     Ok(out)
+}
+
+/// The branches (indices into `refs`) to check first: those named in
+/// `always` (HEAD's, the default), and `n` of the rest, the newest tips.
+fn checked_first(
+    repo: &gix::Repository,
+    refs: &Refs,
+    always: [Option<&str>; 2],
+    n: usize,
+) -> std::collections::HashSet<usize> {
+    let mut first = std::collections::HashSet::new();
+    let mut rest = vec![];
+    for i in refs.prefixed("refs/heads/") {
+        let name = refs.refs[i].name().shorten();
+        if always.iter().flatten().any(|a| name == a.as_bytes()) {
+            first.insert(i);
+            continue;
+        }
+        // (a tip that's no commit, or can't be read, counts as oldest)
+        let when = refs
+            .peel_at(i)
+            .and_then(|id| repo.find_commit(id).ok())
+            .and_then(|c| c.time().ok())
+            .map_or(i64::MIN, |t| t.seconds);
+        rest.push((std::cmp::Reverse(when), i));
+    }
+    rest.sort();
+    first.extend(rest.into_iter().take(n).map(|(_, i)| i));
+    first
+}
+
+/// Every branch of the repo at `path`, checked: those a status with
+/// [`StatusOptions::branches_first`] left unchecked, for one to show.
+pub fn branches_of(path: &Path) -> Result<Vec<BranchInfo>, StatusError> {
+    traced_branches(path, || {
+        crate::isolation::open(path)
+            .map_err(err)
+            .and_then(|repo| all_branches(&repo))
+    })
+}
+
+/// `read` as a step.
+fn traced_branches(
+    path: &Path,
+    read: impl FnOnce() -> Result<Vec<BranchInfo>, StatusError>,
+) -> Result<Vec<BranchInfo>, StatusError> {
+    let what = || format!("branches {}", crate::paths::contract_tilde(path));
+    crate::trace::step("branches", what, read).map_err(|e| StatusError(without_path(&e.0, path)))
+}
+
+fn all_branches(repo: &gix::Repository) -> Result<Vec<BranchInfo>, StatusError> {
+    let h = repo.head().map_err(err)?;
+    let head = head_of(&h);
+    let refs = Refs::read(repo)?;
+    let (remote, _) = remote_and_url(repo);
+    let default_branch = default_branch(repo, &refs, remote.as_deref());
+    let default_tip = default_branch
+        .as_deref()
+        .and_then(|d| default_tip(&refs, remote.as_deref(), d));
+    let mut remembered = crate::remember::Remembered::of(repo);
+    let branches = branches(
+        repo,
+        &refs,
+        head.branch(),
+        default_branch.as_deref(),
+        default_tip,
+        None,
+        &mut remembered,
+    )?;
+    remembered.keep();
+    Ok(branches)
 }
 
 /// The untracked files in `dir` (repo-relative, ending in `/`), which

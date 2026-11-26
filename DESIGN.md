@@ -512,7 +512,17 @@ Two findings:
   hundreds of repos cost nothing until each is statused, and a run over
   some repos leaves the others' files alone. A merge that couldn't be
   tried isn't kept. The absorbed answer could differ under other merge
-  settings (`merge.renames`); it's kept as the first run found it. Forge requests from the TUI go through a gate as wide as
+  settings (`merge.renames`); it's kept as the first run found it.
+  The TUI's statuses check only HEAD's branch, the default branch and
+  the newest `BRANCHES_FIRST` (10) others, by tip commit date
+  (`Workspace::check_branches_later`, `StatusOptions::branches_first`);
+  the rest are listed `unchecked`, counted by no issue and offered by no
+  fix, until `Effect::CheckBranches` checks them all after the rows show
+  (`status::branches_of`) and `Workspace::update_branches` puts them in
+  place, unless the branches moved (or HEAD did) since: the newer
+  status asks for its own. A status leaving some unchecked keeps the
+  answers it didn't ask for, for that check. The CLI checks every branch
+  at once. Forge requests from the TUI go through a gate as wide as
   `concurrency.network`.
 * **A question from the background waits its turn.** A forge's answer or
   a job's end may have something to ask (a renamed repo's remote, an

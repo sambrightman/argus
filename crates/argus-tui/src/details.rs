@@ -698,34 +698,39 @@ pub fn details(
                     b.name.clone(),
                 ),
             ];
-            match &b.upstream {
-                Some(t) if t.gone => {
-                    parts.push(styled(Role::Warning, format!("  {} gone", t.name)))
-                }
-                Some(t) => {
-                    parts.push(styled(Role::Dim, format!("  {}", t.name)));
-                    if t.ahead > 0 {
-                        parts.push(styled(Role::Ahead, format!(" {}{}", icons.ahead, t.ahead)));
-                    }
-                    if t.behind > 0 {
-                        parts.push(styled(
-                            Role::Behind,
-                            format!(" {}{}", icons.behind, t.behind),
-                        ));
-                    }
-                }
-                None => parts.push(styled(Role::Dim, "  (no upstream)")),
-            }
-            if b.merged && s.default_branch.as_deref() != Some(&b.name) {
-                parts.push(styled(Role::Dim, "  merged"));
-            } else if b.absorbed {
-                parts.push(styled(Role::Dim, "  merged (squashed or rebased)"));
-            }
+            // (none for one unchecked)
             let unpushed = b.unpushed.filter(|&n| n > 0);
-            // unless ↑ already says it
-            let ahead = b.upstream.as_ref().filter(|t| !t.gone).map(|t| t.ahead);
-            if let Some(n) = unpushed.filter(|&n| ahead != Some(n)) {
-                parts.push(styled(Role::Dim, format!("  {n} on no remote")));
+            if b.unchecked {
+                parts.push(styled(Role::Dim, "  checking…"));
+            } else {
+                match &b.upstream {
+                    Some(t) if t.gone => {
+                        parts.push(styled(Role::Warning, format!("  {} gone", t.name)))
+                    }
+                    Some(t) => {
+                        parts.push(styled(Role::Dim, format!("  {}", t.name)));
+                        if t.ahead > 0 {
+                            parts.push(styled(Role::Ahead, format!(" {}{}", icons.ahead, t.ahead)));
+                        }
+                        if t.behind > 0 {
+                            parts.push(styled(
+                                Role::Behind,
+                                format!(" {}{}", icons.behind, t.behind),
+                            ));
+                        }
+                    }
+                    None => parts.push(styled(Role::Dim, "  (no upstream)")),
+                }
+                if b.merged && s.default_branch.as_deref() != Some(&b.name) {
+                    parts.push(styled(Role::Dim, "  merged"));
+                } else if b.absorbed {
+                    parts.push(styled(Role::Dim, "  merged (squashed or rebased)"));
+                }
+                // unless ↑ already says it
+                let ahead = b.upstream.as_ref().filter(|t| !t.gone).map(|t| t.ahead);
+                if let Some(n) = unpushed.filter(|&n| ahead != Some(n)) {
+                    parts.push(styled(Role::Dim, format!("  {n} on no remote")));
+                }
             }
             let pull = match forge {
                 Some(ForgeView::Info(i)) => i.pull(&b.name),

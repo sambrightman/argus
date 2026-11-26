@@ -1478,3 +1478,124 @@ fn ahead_behind_and_merged_counts_are_kept_for_the_next_run() {
     commit(&r, "more");
     assert_eq!(ahead(&r), 2);
 }
+
+/// A branch `name` in `r` off `main`, its one commit dated `secs`.
+fn dated_branch(r: &std::path::Path, name: &str, secs: u64) {
+    let tree = git(r, &["rev-parse", "main^{tree}"]);
+    let parent = git(r, &["rev-parse", "main"]);
+    let text = format!(
+        "tree {}\nparent {}\nauthor A <a@example.com> {secs} +0000\n\
+         committer A <a@example.com> {secs} +0000\n\n{name}\n",
+        tree.trim(),
+        parent.trim()
+    );
+    let id = argus_core::testkit::git_with_input(
+        r,
+        &["hash-object", "-t", "commit", "-w", "--stdin"],
+        &text,
+    );
+    git(r, &["branch", name, id.trim()]);
+}
+
+/// With a limit, a status checks HEAD's branch, the default branch and
+/// that many of the others, newest first; the rest are listed, in their
+/// place, unchecked: no issue counts them (as unpushed, here) until
+/// [`branches_of`] has checked every one, as a status without a limit does.
+#[test]
+fn with_a_limit_the_newest_branches_are_checked_and_the_rest_later() {
+    use argus_core::status::branches_of;
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "w");
+    for (name, secs) in [
+        ("b-old", 1000),
+        ("c-older", 900),
+        ("d-new", 3000),
+        ("e-newer", 4000),
+    ] {
+        dated_branch(&r, name, secs);
+    }
+    // HEAD on the oldest: checked all the same
+    dated_branch(&r, "a-oldest", 100);
+    git(&r, &["switch", "-q", "a-oldest"]);
+    let limited = status(
+        &r,
+        StatusOptions {
+            branches_first: Some(2),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let unchecked = |s: &RepoStatus| -> Vec<(String, bool)> {
+        s.branches
+            .iter()
+            .map(|b| (b.name.clone(), b.unchecked))
+            .collect()
+    };
+    assert_eq!(
+        unchecked(&limited),
+        [
+            ("a-oldest".to_string(), false),
+            ("b-old".to_string(), true),
+            ("c-older".to_string(), true),
+            ("d-new".to_string(), false),
+            ("e-newer".to_string(), false),
+            ("main".to_string(), false),
+        ]
+    );
+    let left = limited.branches.iter().find(|b| b.name == "b-old").unwrap();
+    assert_eq!(
+        (
+            left.upstream.is_some(),
+            left.merged,
+            left.unpushed,
+            left.is_unpushed()
+        ),
+        (false, false, None, false),
+        "nothing said of it"
+    );
+    let unpushed = |s: &RepoStatus| {
+        issues(s).into_iter().find_map(|i| match i {
+            Issue::UnpushedBranches(n) => Some(n),
+            _ => None,
+        })
+    };
+    assert_eq!(unpushed(&limited), Some(2));
+    // all of them checked: as a status without a limit has them
+    let full = st(&r);
+    assert!(full.branches.iter().all(|b| !b.unchecked));
+    assert_eq!(unpushed(&full), Some(4));
+    assert_eq!(branches_of(&r).unwrap(), full.branches);
+    // the answers worked out for those left unchecked are kept: what a
+    // full check left in the repo's file, a status with a limit leaves too
+    let dir = sb.path("cache");
+    argus_core::remember::keep_in(&dir);
+    argus_core::remember::forget();
+    st(&r);
+    let file = std::fs::read_dir(&dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let kept = std::fs::read_to_string(&file).unwrap();
+    let b_old = git(&r, &["rev-parse", "b-old"]);
+    assert!(kept.contains(b_old.trim()), "{kept}");
+    argus_core::remember::forget();
+    let limit = |n| StatusOptions {
+        branches_first: Some(n),
+        ..Default::default()
+    };
+    status(&r, limit(2)).unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), kept);
+    // a limit past the branches leaves none unchecked
+    let all = status(
+        &r,
+        StatusOptions {
+            branches_first: Some(10),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(all.branches, full.branches);
+}

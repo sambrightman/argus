@@ -536,6 +536,9 @@ pub enum Effect {
     Scan,
     /// Re-status these repos.
     Refresh(Vec<PathBuf>),
+    /// Check the branches these repos' statuses left unchecked; answer
+    /// with [`Msg::Branches`].
+    CheckBranches(Vec<PathBuf>),
     /// List forges and plan clones/pulls; answer with [`Msg::PullPlanned`].
     PlanPullAndClone,
     /// Describe a detached HEAD however far back its tag is; answer with
@@ -613,6 +616,8 @@ pub enum Msg {
         barren: Vec<(PathBuf, usize)>,
     },
     Status(PathBuf, Box<Result<RepoStatus, String>>),
+    /// A repo's branches, all checked (see [`Effect::CheckBranches`]).
+    Branches(PathBuf, Result<Vec<argus_core::status::BranchInfo>, String>),
     JobStarted {
         path: PathBuf,
         label: String,
@@ -5703,6 +5708,29 @@ impl App {
         fx
     }
 
+    /// Branches checked together: all shown, then the rows rebuilt once.
+    pub fn on_branches(
+        &mut self,
+        batch: Vec<(PathBuf, Result<Vec<argus_core::status::BranchInfo>, String>)>,
+    ) {
+        if batch.is_empty() {
+            return;
+        }
+        self.ws.update_branches(batch);
+        self.rebuild();
+    }
+
+    /// Checking the branches left unchecked in `paths`' statuses, if any.
+    fn check_branches(&self, paths: &[PathBuf]) -> Option<Effect> {
+        let left: Vec<PathBuf> = self
+            .ws
+            .unchecked()
+            .into_iter()
+            .filter(|p| paths.contains(p))
+            .collect();
+        (!left.is_empty()).then_some(Effect::CheckBranches(left))
+    }
+
     fn statuses(&mut self, batch: Vec<(PathBuf, Result<RepoStatus, String>)>) -> Vec<Effect> {
         let paths: Vec<PathBuf> = batch.iter().map(|(p, _)| p.clone()).collect();
         self.ws.update_statuses(batch);
@@ -5713,6 +5741,7 @@ impl App {
         }
         self.rebuild();
         let mut fx = self.opened();
+        fx.extend(self.check_branches(&paths));
         for path in &paths {
             fx.extend(self.continue_chain(path));
         }
@@ -5772,10 +5801,13 @@ impl App {
                 if let Some(here) = self.start_in.take() {
                     self.start_on_repo_holding(&here);
                 }
+                let all: Vec<PathBuf> = self.ws.entries.iter().map(|e| e.path.clone()).collect();
+                return self.check_branches(&all).into_iter().collect();
             }
             Msg::Status(path, st) => {
                 return self.statuses(vec![(path, *st)]);
             }
+            Msg::Branches(path, branches) => self.on_branches(vec![(path, branches)]),
             Msg::Forge {
                 path,
                 branches,

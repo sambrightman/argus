@@ -832,3 +832,51 @@ fn statuses_arriving_together_are_one_rebuild() {
     assert!(app.on_statuses(vec![]).is_empty());
     assert_eq!(app.rebuilds, before + 1, "no statuses, nothing to do");
 }
+
+/// The TUI's scan checks each repo's newest branches; the rest are
+/// checked after, in the background, and counted once they are: after a
+/// refresh too, those arriving together shown at once.
+#[test]
+fn older_branches_are_checked_after_the_rows_show() {
+    let (sb, mut app, mut rt) = setup("");
+    let c = sb.path("dev/clean");
+    for n in 0..12 {
+        git(&c, &["switch", "-q", "-c", &format!("b{n:02}"), "main"]);
+        write(&c, "f", &format!("{n}\n"));
+        commit(&c, &format!("b{n}"));
+    }
+    git(&c, &["switch", "-q", "main"]);
+    app.ws.check_branches_later();
+    run(&mut app, &mut rt, vec![Effect::Scan]);
+    let c = c.canonicalize().unwrap();
+    let unpushed = |app: &App| {
+        app.ws.get(&c).unwrap().issues.iter().find_map(|i| match i {
+            argus_core::attention::Issue::UnpushedBranches(n) => Some(*n),
+            _ => None,
+        })
+    };
+    assert_eq!(app.ws.unchecked(), Vec::<PathBuf>::new());
+    assert_eq!(unpushed(&app), Some(12));
+    // refreshed, through the loop's batches
+    git(&c, &["branch", "b12", "b00"]);
+    rt.exec(&mut app, Effect::Refresh(vec![c.clone()]));
+    let deadline = std::time::Instant::now() + WAIT;
+    while app.ws.unchecked().is_empty() && std::time::Instant::now() < deadline {
+        rt.drain(&mut app);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        app.ws.unchecked(),
+        std::slice::from_ref(&c),
+        "the status in, unchecked"
+    );
+    while rt.working() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let before = app.rebuilds;
+    let (_, received) = rt.drain(&mut app);
+    assert!(received);
+    assert_eq!(app.rebuilds, before + 1);
+    assert_eq!(app.ws.unchecked(), Vec::<PathBuf>::new());
+    assert_eq!(unpushed(&app), Some(13));
+}

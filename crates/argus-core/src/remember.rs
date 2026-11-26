@@ -6,7 +6,8 @@
 //!
 //! A repo's answers are those its last status asked for: a branch moved
 //! or gone, or a remote branch moved, leaves its old answers behind, so
-//! they never outgrow its branches and need no cap. They're kept in
+//! they never outgrow its branches and need no cap. (A status leaving
+//! branches unchecked keeps the rest too, for the check that follows.) They're kept in
 //! memory and, once [`keep_in`] names a folder, in a file of the repo's
 //! own there, read when the repo is first statused (nothing at start) and
 //! written, whole, only when a status asks for other answers than it has.
@@ -144,6 +145,21 @@ impl Remembered {
         };
         self.asked.between.insert((a, b), n);
         Ok(n)
+    }
+
+    /// Keep what was had besides what this status asked for: it didn't
+    /// ask about everything (branches left unchecked, see
+    /// [`crate::status::StatusOptions::branches_first`]), so what it didn't
+    /// ask for may yet be asked, by the check that follows.
+    pub(crate) fn keep_had_too(&mut self) {
+        fn add<V: Copy>(to: &mut HashMap<Pair, V>, from: &HashMap<Pair, V>) {
+            for (k, v) in from {
+                to.entry(*k).or_insert(*v);
+            }
+        }
+        add(&mut self.asked.absorbed, &self.had.absorbed);
+        add(&mut self.asked.unpushed, &self.had.unpushed);
+        add(&mut self.asked.between, &self.had.between);
     }
 
     /// Keep what this status asked for, if that's not what was kept.

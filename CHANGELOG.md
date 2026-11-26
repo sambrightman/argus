@@ -13,6 +13,7 @@ Releasing).
 
 - Whether each branch is merged (squashed, rebased or not), how far it's ahead of and behind its upstream, and how many of its commits are on no remote, is kept between runs (a file per repo in `~/.cache/argus/repos/`), so with many old branches only the first load pays for working it out.
 - With `-v`, each repo's `files` step says what it read to find changes: files read again because their details on disk no longer match the index (and how many of those hadn't changed), and the folders walked for untracked files.
+- The TUI shows its rows sooner in repos with many branches: a status checks HEAD's branch, the default branch and the 10 with the newest commits at once, and the rest in the background, after the rows show (a branch says "checking…" in a repo's details until then). The CLI still checks every branch before it answers.
 - A repo's status no longer reads its submodules' files again: what's changed inside each comes from the submodule's own status, which argus reads anyway.
 - In the message history, `o` sorts the steps by their own time (when none of the steps they took ran) instead of all they took, slowest first or by kind.
 

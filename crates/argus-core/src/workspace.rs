@@ -168,7 +168,14 @@ pub struct Workspace {
     pub barren: Vec<(PathBuf, usize)>,
     /// Repos kept open between status reads, if wanted (shared by clones).
     kept: Option<Arc<status::KeptRepos>>,
+    /// See [`Self::check_branches_later`].
+    branches_first: Option<usize>,
 }
+
+/// How many branches besides HEAD's and the default a status checks at
+/// once, the newest, when the rest are checked later (see
+/// [`Workspace::check_branches_later`]).
+pub const BRANCHES_FIRST: usize = 10;
 
 /// Reads repos' status the way the workspace does: through its kept repos,
 /// if any, with its config's options. Cheap to clone and send to workers.
@@ -183,6 +190,16 @@ impl StatusReader {
         match &self.kept {
             Some(k) => k.status(path, self.opts),
             None => status::status(path, self.opts),
+        }
+        .map_err(|e| e.to_string())
+    }
+
+    /// Every branch of a repo, checked (see [`status::branches_of`]), for
+    /// [`Workspace::update_branches`].
+    pub fn branches(&self, path: &Path) -> Result<Vec<status::BranchInfo>, String> {
+        match &self.kept {
+            Some(k) => k.branches(path),
+            None => status::branches_of(path),
         }
         .map_err(|e| e.to_string())
     }
@@ -202,6 +219,7 @@ impl Workspace {
             truncated: vec![],
             barren: vec![],
             kept: None,
+            branches_first: None,
         })
     }
 
@@ -224,10 +242,69 @@ impl Workspace {
         self.kept.as_ref().map(|k| k.opens())
     }
 
+    /// Have each status check only the newest [`BRANCHES_FIRST`] branches
+    /// and HEAD's and the default, leaving the rest
+    /// [unchecked](status::BranchInfo::unchecked) for a front-end to check
+    /// after showing the statuses ([`Self::unchecked`],
+    /// [`StatusReader::branches`], [`Self::update_branches`]).
+    pub fn check_branches_later(&mut self) {
+        self.branches_first = Some(BRANCHES_FIRST);
+    }
+
     pub fn status_reader(&self) -> StatusReader {
         StatusReader {
             kept: self.kept.clone(),
-            opts: self.config.status_options(),
+            opts: status::StatusOptions {
+                branches_first: self.branches_first,
+                ..self.config.status_options()
+            },
+        }
+    }
+
+    /// The repos whose statuses have branches left unchecked.
+    pub fn unchecked(&self) -> Vec<PathBuf> {
+        self.entries
+            .iter()
+            .filter(|e| {
+                e.status()
+                    .is_some_and(|s| s.branches.iter().any(|b| b.unchecked))
+            })
+            .map(|e| e.path.clone())
+            .collect()
+    }
+
+    /// Show each repo's branches, all checked ([`StatusReader::branches`]),
+    /// in place of those its status has, and what follows from them: unless
+    /// they've moved since (another status has its own), or couldn't be
+    /// checked (they stay unchecked).
+    pub fn update_branches(
+        &mut self,
+        checked: impl IntoIterator<Item = (PathBuf, Result<Vec<status::BranchInfo>, String>)>,
+    ) {
+        let mut any = false;
+        for (path, r) in checked {
+            let (Some(i), Ok(branches)) = (self.index_of(&path), r) else {
+                continue;
+            };
+            let e = &mut self.entries[i];
+            let Some(Ok(s)) = &mut e.status else {
+                continue;
+            };
+            let same = |a: &status::BranchInfo, b: &status::BranchInfo| {
+                (&a.name, &a.tip, a.is_head) == (&b.name, &b.tip, b.is_head)
+            };
+            let moved = s.branches.len() != branches.len()
+                || s.branches.iter().zip(&branches).any(|(a, b)| !same(a, b));
+            if moved || s.branches == branches {
+                continue;
+            }
+            s.branches = branches;
+            e.all_issues = attention::issues(s);
+            e.issues = e.all_issues.clone();
+            any = true;
+        }
+        if any {
+            self.resolve_flags();
         }
     }
 

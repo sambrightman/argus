@@ -12282,3 +12282,57 @@ fn two_fix_actions_running_together_finish_as_one() {
     done(&mut app, "clean");
     assert_eq!(msg(&app), "fixes: done");
 }
+
+/// Twelve branches in `dev/clean`, each a commit of its own off `main`.
+fn twelve_branches(sb: &Sandbox) {
+    let c = sb.path("dev/clean");
+    for n in 0..12 {
+        git(&c, &["switch", "-q", "-c", &format!("b{n:02}"), "main"]);
+        write(&c, "f", &format!("{n}\n"));
+        commit(&c, &format!("b{n}"));
+    }
+    git(&c, &["switch", "-q", "main"]);
+}
+
+/// A status leaving branches unchecked asks for them to be checked, and
+/// meanwhile they say they're being checked; checked, they say what they
+/// are. A status with none left asks nothing.
+#[test]
+fn branches_left_unchecked_say_so_until_checked() {
+    let (_sb, mut app) = setup_with("", twelve_branches);
+    app.ws.check_branches_later();
+    let at = |app: &App, name: &str| {
+        app.ws
+            .entries
+            .iter()
+            .find(|e| e.path.ends_with(name))
+            .unwrap()
+            .path
+            .clone()
+    };
+    let (c, d) = (at(&app, "clean"), at(&app, "dirty"));
+    let reader = app.ws.status_reader();
+    let fx = app.on_statuses(vec![(c.clone(), reader.read(&c))]);
+    assert!(
+        fx.contains(&Effect::CheckBranches(vec![c.clone()])),
+        "{fx:?}"
+    );
+    let checking = |app: &mut App| {
+        cursor_on_detail(app, "clean", "branches");
+        app.rows
+            .iter()
+            .filter(|r| match r {
+                Row::Detail { line, .. } => line.parts.iter().any(|p| p.1 == "  checking…"),
+                _ => false,
+            })
+            .count()
+    };
+    assert_eq!(checking(&mut app), 2);
+    let fx = app.on_statuses(vec![(d.clone(), reader.read(&d))]);
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::CheckBranches(_))),
+        "{fx:?}"
+    );
+    app.on_msg(Msg::Branches(c.clone(), reader.branches(&c)));
+    assert_eq!(checking(&mut app), 0);
+}

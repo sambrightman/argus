@@ -2334,3 +2334,84 @@ fn a_parents_submodule_lines_come_from_the_submodules_own_statuses() {
     w.refresh(&leaf);
     assert_eq!(line(&shown(&w, &top), "mid"), None, "and gone again");
 }
+
+/// A workspace that checks branches later (the TUI) has each status
+/// check the newest ten others and HEAD's and the default branch: the rest
+/// are left for [`Workspace::update_branches`], with what follows (issues).
+/// What was checked before the branches moved isn't taken. Without it
+/// (the CLI) every branch is checked at once.
+#[test]
+fn branches_left_unchecked_are_checked_later_unless_they_moved() {
+    let sb = Sandbox::new();
+    sb.remote("acme", "w");
+    let r = sb.clone_as_github("acme", "w", "dev/w");
+    let r = r.canonicalize().unwrap();
+    for n in 0..12 {
+        git(&r, &["switch", "-q", "-c", &format!("b{n:02}"), "main"]);
+        write(&r, "f", &format!("{n}\n"));
+        commit(&r, &format!("b{n}"));
+    }
+    git(&r, &["switch", "-q", "main"]);
+    let cfg = format!("roots = ['{}']", sb.path("dev").display());
+    let unpushed = |w: &Workspace| {
+        w.get(&r).unwrap().issues.iter().find_map(|i| match i {
+            Issue::UnpushedBranches(n) => Some(*n),
+            _ => None,
+        })
+    };
+    let left = |w: &Workspace| {
+        w.get(&r)
+            .and_then(|e| e.status())
+            .map_or(0, |s| s.branches.iter().filter(|b| b.unchecked).count())
+    };
+    let mut w = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    w.check_branches_later();
+    w.scan();
+    assert_eq!((left(&w), unpushed(&w)), (2, Some(10)));
+    assert_eq!(w.unchecked(), std::slice::from_ref(&r));
+    // checked on b00, then detached there (no branch moved, and in the
+    // same order, b00 first) and the repo refreshed: that's stale too
+    let head = |w: &Workspace| {
+        let s = w.get(&r).unwrap().status().unwrap();
+        s.branches
+            .iter()
+            .find(|b| b.is_head)
+            .map(|b| b.name.clone())
+    };
+    git(&r, &["switch", "-q", "b00"]);
+    w.refresh(&r);
+    let early = w.status_reader().branches(&r);
+    git(&r, &["switch", "-q", "--detach", "b00"]);
+    w.refresh(&r);
+    w.update_branches([(r.clone(), early)]);
+    assert_eq!((head(&w), left(&w)), (None, 2));
+    git(&r, &["switch", "-q", "main"]);
+    w.refresh(&r);
+    // checked, then a branch made and the repo refreshed: that's stale
+    let early = w.status_reader().branches(&r);
+    git(&r, &["branch", "b12", "b00"]);
+    w.refresh(&r);
+    assert_eq!(left(&w), 3);
+    w.update_branches([(r.clone(), early)]);
+    assert_eq!((left(&w), unpushed(&w)), (3, Some(10)));
+    // checked now: all of them, and counted
+    let now = w.status_reader().branches(&r);
+    w.update_branches([(r.clone(), now)]);
+    assert_eq!((left(&w), unpushed(&w)), (0, Some(13)));
+    assert_eq!(w.unchecked(), Vec::<std::path::PathBuf>::new());
+    // inverse: checked at once
+    let w = ws(&sb, "");
+    assert_eq!((left(&w), unpushed(&w)), (0, Some(13)));
+    // and an issue ignored stays ignored once they're checked
+    let cfg = format!("{cfg}\n[tags.ignore.issues]\nunpushed_branches = ['acme/w']");
+    let mut w = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    w.check_branches_later();
+    w.scan();
+    let now = w.status_reader().branches(&r);
+    w.update_branches([(r.clone(), now)]);
+    let e = w.get(&r).unwrap();
+    assert_eq!(
+        (unpushed(&w), e.ignored_issues.clone()),
+        (None, vec![Issue::UnpushedBranches(13)])
+    );
+}

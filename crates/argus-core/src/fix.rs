@@ -829,6 +829,7 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
                     absorbed: false,
                     unpushed: s.remote.as_ref().map(|_| s.detached_orphans),
                     own: None,
+                    unchecked: false,
                 },
             );
             s.head = Head::Branch(name.clone());
@@ -889,6 +890,7 @@ pub fn simulate(s: &RepoStatus, f: &Fix) -> RepoStatus {
                     absorbed: false,
                     unpushed: Some(0),
                     own: None,
+                    unchecked: false,
                 });
             }
             for b in &mut s.branches {
