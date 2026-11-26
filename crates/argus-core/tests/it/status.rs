@@ -1035,6 +1035,36 @@ fn files_are_listed_up_to_the_cap_and_all_counted() {
     assert_eq!((c.files.len(), c.untracked), (MAX_FILES, MAX_FILES + 1));
 }
 
+/// A submodule shows as changed (`m`) for any tracked change inside it,
+/// a conflict alone too, and not for one ignored; untracked files alone
+/// show as `?`, unless those are ignored too.
+#[test]
+fn a_submodules_own_changes_show_as_one_code() {
+    use argus_core::status::Changes;
+    use gix::submodule::config::Ignore;
+    let with = |set: fn(&mut Changes)| {
+        let mut c = Changes::default();
+        set(&mut c);
+        c
+    };
+    let tracked: [fn(&mut Changes); 4] = [
+        |c| c.staged = 1,
+        |c| c.unstaged = 1,
+        |c| c.conflicted = 1,
+        |c| c.submodule_content = 1,
+    ];
+    for set in tracked {
+        let c = with(set);
+        assert_eq!(c.as_submodule(Ignore::None), Some('m'), "{c:?}");
+        assert_eq!(c.as_submodule(Ignore::Untracked), Some('m'), "{c:?}");
+        assert_eq!(c.as_submodule(Ignore::Dirty), None, "{c:?}");
+    }
+    let untracked = with(|c| c.untracked = 1);
+    assert_eq!(untracked.as_submodule(Ignore::None), Some('?'));
+    assert_eq!(untracked.as_submodule(Ignore::Untracked), None);
+    assert_eq!(Changes::default().as_submodule(Ignore::None), None);
+}
+
 /// A submodule shown from its own status is listed like any change, up
 /// to the cap, and counted past it.
 #[test]

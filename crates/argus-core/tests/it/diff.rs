@@ -985,3 +985,28 @@ fn a_line_ending_in_several_carriage_returns_keeps_them() {
     apply_lines(&r, "f", Side::Unstaged, &["+a\r"], true, false);
     assert_eq!(in_index(&r), "x\na\r\r\n");
 }
+
+/// A patch of some of a change's lines has them as git writes a change:
+/// the removed lines first, then the added ones coming in, after the last
+/// removed line taken (forwards) or before the first added one (backwards).
+#[test]
+fn a_patch_of_lines_has_removals_before_additions() {
+    let sb = Sandbox::new();
+    let r = repo_with(&sb, "a", "a\nb\n", "A\nB\n");
+    let h = hunks(&r, "f", Side::Unstaged);
+    let kinds: Vec<LineKind> = h[0].lines.iter().map(|l| l.kind).collect();
+    use LineKind::{Add, Remove};
+    assert_eq!(kinds, [Remove, Remove, Add, Add]);
+    // a taken, and A: b stays (forwards), B stays (backwards)
+    let body = |reverse| {
+        let p = argus_core::diff::patch("f", &h[0], Some(&[0, 2]), reverse);
+        let at = p.find("@@ ").unwrap();
+        p[at..]
+            .lines()
+            .skip(1)
+            .map(String::from)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(body(false), ["-a", "+A", " b"]);
+    assert_eq!(body(true), ["-a", "+A", " B"]);
+}
