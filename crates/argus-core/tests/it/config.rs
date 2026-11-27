@@ -160,6 +160,29 @@ fn extend_errors_name_the_file() {
     assert!(e.contains("extend"), "{e}");
 }
 
+/// A top-level setting under a section in a file (the main one or one it
+/// extends) is said with the file's name, and where it belongs.
+#[test]
+fn a_top_level_setting_under_a_section_names_the_file() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path();
+    let shared = write(
+        d,
+        "shared.toml",
+        "[ui]\ntheme = 'light'\nexclude_paths = ['x']\n",
+    );
+    let main = write(d, "config.toml", "extend = ['shared.toml']\n");
+    let e = err(Config::load(&main));
+    assert_eq!(
+        e,
+        format!(
+            "{}: `exclude_paths` is under [ui]: it's a top-level setting, so move it above \
+             the first [section]",
+            shared.display()
+        )
+    );
+}
+
 #[test]
 fn tags_are_saved_to_the_file_holding_them() {
     let t = tempfile::tempdir().unwrap();

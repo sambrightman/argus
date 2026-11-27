@@ -55,6 +55,19 @@ impl From<crate::config::ConfigError> for EditError {
 const WIDTH: usize = 78;
 
 /// The complete example config.
+/// The names of the settings that aren't sections (`roots`,
+/// `exclude_paths`…), as the example lists them first.
+pub(crate) fn top_level_settings() -> Vec<String> {
+    let schema = serde_json::to_value(schemars::schema_for!(Config)).expect("schema serializes");
+    let defs = schema.get("$defs").cloned().unwrap_or_default();
+    let g = Gen { defs: &defs };
+    properties(&schema)
+        .into_iter()
+        .filter(|(_, p)| g.kind(p) == Kind::Value)
+        .map(|(name, _)| name)
+        .collect()
+}
+
 pub fn example() -> String {
     let schema = serde_json::to_value(schemars::schema_for!(Config)).expect("schema serializes");
     let defs = schema.get("$defs").cloned().unwrap_or_default();
@@ -555,20 +568,166 @@ fn extend_path(path: &str) -> String {
 }
 
 /// The table at `tables` (`[tags.ignore]`, or dotted keys `tags.ignore.x = …`),
-/// created when `create`.
+/// created when `create` (see [`create_table`]).
 fn table_mut<'a>(
     doc: &'a mut toml_edit::DocumentMut,
     tables: &[&str],
     create: bool,
 ) -> Option<&'a mut dyn toml_edit::TableLike> {
+    if create {
+        create_table(doc, tables);
+    }
     let mut t: &mut dyn toml_edit::TableLike = doc.as_table_mut();
     for name in tables {
-        if create && !t.contains_key(name) {
-            t.insert(name, toml_edit::table());
-        }
         t = t.get_mut(name)?.as_table_like_mut()?;
     }
     Some(t)
+}
+
+/// Make the table at `tables` if it isn't there, where the example has
+/// it: at its own commented-out header (`# [tags.favourite]`), taking the
+/// commented-out text up to there in front of it, whether that text ends
+/// the file or comes before a table written since; with no such header
+/// (a tag of your own), at the end. toml_edit would put it before all
+/// that text, the document's trailing comments, so straight after the
+/// last setting written: the top-level settings still commented out
+/// below would be the new table's once uncommented. Tables made on the
+/// way (`[tags]`) get no header of their own.
+fn create_table(doc: &mut toml_edit::DocumentMut, tables: &[&str]) {
+    use toml_edit::{Item, Table};
+    /// Where `text` has the line `header`: the bytes before it.
+    fn before(text: &str, header: &str) -> Option<usize> {
+        let n = text.lines().position(|l| l == header)?;
+        Some(text.split_inclusive('\n').take(n).map(str::len).sum())
+    }
+    /// The tables in `t`, nested ones too, and those in lists of tables
+    /// (`[[track]]`): each one's place (its keys, and its index in such a
+    /// list), and the table.
+    type Place = (Vec<String>, Option<usize>);
+    fn tables_in<'a>(t: &'a Table, at: &mut Vec<String>, out: &mut Vec<(Place, &'a Table)>) {
+        for (k, item) in t.iter() {
+            at.push(k.to_string());
+            match item {
+                Item::Table(inner) => {
+                    out.push(((at.clone(), None), inner));
+                    tables_in(inner, at, out);
+                }
+                Item::ArrayOfTables(list) => {
+                    for (i, inner) in list.iter().enumerate() {
+                        out.push(((at.clone(), Some(i)), inner));
+                    }
+                }
+                _ => {}
+            }
+            at.pop();
+        }
+    }
+    /// The last position of any table, those in lists of tables too.
+    fn last_position(t: &Table) -> isize {
+        let mut last = 0;
+        for (_, item) in t.iter() {
+            let inner: Vec<&Table> = match item {
+                Item::Table(inner) => vec![inner],
+                Item::ArrayOfTables(list) => list.iter().collect(),
+                _ => vec![],
+            };
+            for inner in inner {
+                last = last
+                    .max(inner.position().unwrap_or(0))
+                    .max(last_position(inner));
+            }
+        }
+        last
+    }
+    /// Every table at position `from` or later one later.
+    fn shift(t: &mut Table, from: isize) {
+        for (_, item) in t.iter_mut() {
+            let inner: Vec<&mut Table> = match item {
+                Item::Table(inner) => vec![inner],
+                Item::ArrayOfTables(list) => list.iter_mut().collect(),
+                _ => vec![],
+            };
+            for inner in inner {
+                if let Some(p) = inner.position().filter(|p| *p >= from) {
+                    inner.set_position(Some(p + 1));
+                }
+                shift(inner, from);
+            }
+        }
+    }
+    fn get<'a>(t: &'a mut Table, (at, index): &Place) -> Option<&'a mut Table> {
+        let (last, keys) = at.split_last()?;
+        let t = keys
+            .iter()
+            .try_fold(t, |t, k| t.get_mut(k)?.as_table_mut())?;
+        match index {
+            Some(i) => t.get_mut(last)?.as_array_of_tables_mut()?.get_mut(*i),
+            None => t.get_mut(last)?.as_table_mut(),
+        }
+    }
+    if table_exists(doc, tables) {
+        return;
+    }
+    let header = format!("# [{}]", tables.join("."));
+    let mut all = vec![];
+    tables_in(doc.as_table(), &mut vec![], &mut all);
+    let found = all.into_iter().find_map(|(at, t)| {
+        let text = t.decor().prefix().and_then(|p| p.as_str())?;
+        Some((at, t.position()?, before(text, &header)?))
+    });
+    // the new table's position, and the text to go in front of it
+    let (position, prefix) = match found {
+        Some((at, position, split)) => {
+            shift(doc.as_table_mut(), position);
+            let Some(next) = get(doc.as_table_mut(), &at) else {
+                return;
+            };
+            let text = next
+                .decor()
+                .prefix()
+                .and_then(|p| p.as_str())
+                .unwrap_or_default()
+                .to_string();
+            next.decor_mut().set_prefix(&text[split..]);
+            (position, text[..split].to_string())
+        }
+        None => {
+            let trailing = doc.trailing().as_str().unwrap_or_default().to_string();
+            let split = before(&trailing, &header).unwrap_or(trailing.len());
+            doc.set_trailing(&trailing[split..]);
+            (
+                last_position(doc.as_table()) + 1,
+                trailing[..split].to_string(),
+            )
+        }
+    };
+    let mut t: &mut Table = doc.as_table_mut();
+    for name in tables {
+        if !t.contains_key(name) {
+            let mut new = Table::new();
+            new.set_implicit(true);
+            t.insert(name, Item::Table(new));
+        }
+        let Some(next) = t.get_mut(name).and_then(|i| i.as_table_mut()) else {
+            // (dotted keys, or not a table: left to the caller to find)
+            return;
+        };
+        t = next;
+    }
+    t.set_position(Some(position));
+    t.decor_mut().set_prefix(prefix);
+}
+
+/// Whether the table at `tables` is there (as a table or dotted keys).
+fn table_exists(doc: &toml_edit::DocumentMut, tables: &[&str]) -> bool {
+    let mut t: &dyn toml_edit::TableLike = doc.as_table();
+    for name in tables {
+        match t.get(name).and_then(|i| i.as_table_like()) {
+            Some(next) => t = next,
+            None => return false,
+        }
+    }
+    true
 }
 
 fn item<'a>(doc: &'a toml_edit::DocumentMut, path: &str) -> Option<&'a toml_edit::Item> {
@@ -1299,6 +1458,207 @@ mod tests {
         assert_eq!(
             (c.ui.theme.as_str(), c.max_depth),
             ("light", Config::default().max_depth)
+        );
+    }
+
+    /// Tables argus adds to the config (a tag's list, a `[ui]` choice) go
+    /// where the example has them, below the top-level settings, so those
+    /// still commented out stay top-level when uncommented; and no empty
+    /// `[tags]` header comes with them.
+    #[test]
+    fn tables_added_go_below_the_top_level_settings() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        let mut after = Config::default();
+        after.tags["favourite"].repos = vec!["acme/w".into()];
+        update_tag_lists(&p, &Config::default(), &after).unwrap();
+        set_ui(&p, "theme", "light").unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(!text.lines().any(|l| l == "[tags]"), "{text}");
+        // the example's top-level settings, commented out above its first
+        // section, are all above the first table now
+        let example = example();
+        let top: Vec<&str> = example
+            .lines()
+            .take_while(|l| !l.starts_with("# ["))
+            .filter(|l| l.starts_with("# ") && l.contains(" = "))
+            .collect();
+        assert!(top.iter().any(|l| l.starts_with("# exclude_paths")));
+        let first_table = text.lines().position(|l| l.starts_with('[')).unwrap();
+        for setting in &top {
+            let at = text.lines().position(|l| l == *setting).unwrap();
+            assert!(at < first_table, "{setting} below a table:\n{text}");
+        }
+        // and uncommented, they're settings of their own
+        let mut above = true;
+        let uncommented: Vec<&str> = text
+            .lines()
+            .map(|l| {
+                above &= !l.starts_with('[') && !l.starts_with("# [");
+                match above {
+                    true => l.strip_prefix("# ").unwrap_or(l),
+                    false => l,
+                }
+            })
+            .collect();
+        let c = Config::parse(&uncommented.join("\n")).unwrap_or_else(|e| panic!("{e}\n{text}"));
+        assert_eq!(c.exclude_paths, Config::default().exclude_paths);
+        assert_eq!(c.ui.theme, "light");
+        assert_eq!(c.tags["favourite"].repos, ["acme/w"]);
+        // each where the example documents it: [tags.favourite] at its own
+        // commented header, after [ui]'s
+        let at = |line: &str| text.lines().position(|l| l == line).unwrap();
+        assert_eq!(
+            at("[tags.favourite]") + 2,
+            at("# [tags.favourite]"),
+            "{text}"
+        );
+        assert!(at("[ui]") < at("[tags.favourite]"), "{text}");
+    }
+
+    /// With tables there already, one added still goes where the example
+    /// has it, though its commented header is now in front of one of them:
+    /// tagged `pull`, a theme set, then `favourite`, the three are in the
+    /// example's order, below the top-level settings, each with the
+    /// commented-out text of its own (its settings documented below it),
+    /// and the file a valid config with all three.
+    #[test]
+    fn tables_added_after_others_go_where_the_example_has_them() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        let mut pull = Config::default();
+        pull.tags["pull"].repos = vec!["acme/p".into()];
+        update_tag_lists(&p, &Config::default(), &pull).unwrap();
+        set_ui(&p, "theme", "light").unwrap();
+        let mut both = pull.clone();
+        both.tags["favourite"].repos = vec!["acme/f".into()];
+        update_tag_lists(&p, &pull, &both).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        let c = Config::parse(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
+        assert_eq!(
+            (
+                c.tags["pull"].repos.clone(),
+                c.tags["favourite"].repos.clone(),
+                c.ui.theme.as_str()
+            ),
+            (
+                vec!["acme/p".to_string()],
+                vec!["acme/f".to_string()],
+                "light"
+            )
+        );
+        let at = |line: &str| text.lines().position(|l| l == line).unwrap();
+        let first_table = text.lines().position(|l| l.starts_with('[')).unwrap();
+        assert!(at("# clone_protocol = \"ssh\"") < first_table, "{text}");
+        let tables: Vec<&str> = text.lines().filter(|l| l.starts_with('[')).collect();
+        assert_eq!(
+            tables,
+            ["[ui]", "[tags.favourite]", "[tags.pull]"],
+            "{text}"
+        );
+        for name in ["ui", "tags.favourite", "tags.pull"] {
+            let (real, commented) = (at(&format!("[{name}]")), at(&format!("# [{name}]")));
+            assert!(real < commented && commented - real <= 2, "{name}:\n{text}");
+        }
+        // another for a list already there: only that list changes
+        let mut more = both.clone();
+        more.tags["favourite"].repos.push("acme/g".into());
+        update_tag_lists(&p, &both, &more).unwrap();
+        let again = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(
+            again,
+            text.replace("repos = [\"acme/f\"]", "repos = [\"acme/f\", \"acme/g\"]")
+        );
+    }
+
+    /// A table put in front of another goes in front of what follows it
+    /// too, `[[track]]` lists included: the example with a track of its
+    /// own at the end, tagged `pull`, then a theme set, `[ui]` (before
+    /// `[tags.pull]` in the example) goes before both.
+    #[test]
+    fn a_table_put_in_front_goes_before_the_tracks_too() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        std::fs::write(&p, format!("{}\n[[track]]\nowner = \"acme\"\n", example())).unwrap();
+        let before = Config::load(&p).unwrap();
+        let mut pull = before.clone();
+        pull.tags["pull"].repos = vec!["acme/p".into()];
+        update_tag_lists(&p, &before, &pull).unwrap();
+        set_ui(&p, "theme", "light").unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        let tables: Vec<&str> = text.lines().filter(|l| l.starts_with('[')).collect();
+        assert_eq!(tables, ["[ui]", "[tags.pull]", "[[track]]"], "{text}");
+        let c = Config::parse(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
+        assert_eq!((c.ui.theme.as_str(), c.tracks.len()), ("light", 1));
+    }
+
+    /// However a file of your own ends (a nested table, a track), a table
+    /// it doesn't have goes after it; and one whose commented header you
+    /// kept in front of a later track goes there.
+    #[test]
+    fn tables_added_go_after_however_a_file_ends() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        let favourite = |text: &str| -> String {
+            std::fs::write(&p, text).unwrap();
+            let before = Config::load(&p).unwrap();
+            let mut after = before.clone();
+            after.tags["favourite"].repos = vec!["acme/f".into()];
+            update_tag_lists(&p, &before, &after).unwrap();
+            let text = std::fs::read_to_string(&p).unwrap();
+            Config::parse(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
+            text.lines()
+                .filter(|l| l.starts_with('['))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert_eq!(
+            favourite(
+                "[tags.pull]\nrepos = []\n[ui]\ntheme = \"light\"\n[ui.colors]\ntag = \"red\"\n"
+            ),
+            "[tags.pull] [ui] [ui.colors] [tags.favourite]"
+        );
+        assert_eq!(
+            favourite(
+                "[tags.pull]\nrepos = []\n[ui]\ntheme = \"light\"\n[[track]]\nowner = \"a\"\n"
+            ),
+            "[tags.pull] [ui] [[track]] [tags.favourite]"
+        );
+        assert_eq!(
+            favourite(
+                "[[track]]\nowner = \"a\"\n# mine\n# [tags.favourite]\n[[track]]\nowner = \"b\"\n"
+            ),
+            "[[track]] [tags.favourite] [[track]]"
+        );
+        // what came before its header, in front of it; the header after
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "[[track]]\nowner = \"a\"\n# mine\n[tags.favourite]\nrepos = [\"acme/f\"]\n\
+             # [tags.favourite]\n[[track]]\nowner = \"b\"\n"
+        );
+    }
+
+    /// In a file without the example's comments, a table it doesn't have
+    /// goes at the end, after every table there, though written in a
+    /// group (`[tags.…]`) that comes first.
+    #[test]
+    fn tables_added_to_a_file_of_your_own_go_at_the_end() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        std::fs::write(
+            &p,
+            "roots = []\n\n[tags.pull]\nrepos = [\"acme/p\"]\n\n[[track]]\nowner = \"acme\"\n\n\
+             [ui]\ntheme = \"light\"\n# the end\n",
+        )
+        .unwrap();
+        let before = Config::load(&p).unwrap();
+        let mut after = before.clone();
+        after.tags["favourite"].repos = vec!["acme/f".into()];
+        update_tag_lists(&p, &before, &after).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "roots = []\n\n[tags.pull]\nrepos = [\"acme/p\"]\n\n[[track]]\nowner = \"acme\"\n\n\
+             [ui]\ntheme = \"light\"\n# the end\n[tags.favourite]\nrepos = [\"acme/f\"]\n"
         );
     }
 

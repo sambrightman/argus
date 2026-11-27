@@ -612,6 +612,7 @@ impl Layers {
         let bases = take_extend(&mut layer, path)?;
         moved_keys(&layer, Some(path))?;
         renamed_keys(&layer, Some(path))?;
+        misplaced_keys(&layer, Some(path))?;
         chain.push(real);
         let dir = path.parent().unwrap_or(Path::new("."));
         for inc in &bases {
@@ -773,6 +774,45 @@ pub enum ConfigError {
     TagIssues(String),
     #[error("{key} is now `{to}`: move its entries there")]
     Moved { key: String, to: String },
+    #[error(
+        "{key} is under [{section}]: it's a top-level setting, so move it above the first [section]"
+    )]
+    Misplaced { key: String, section: String },
+}
+
+/// A top-level setting (or its `extend_` form) found in a section, said
+/// plainly instead of "unknown field": TOML gives a line below a
+/// `[section]` header to that section, so one written there by mistake,
+/// or uncommented below a table, is the section's. `file` names where.
+fn misplaced_keys(layer: &toml::Table, file: Option<&Path>) -> Result<(), ConfigError> {
+    fn top_level() -> &'static Vec<String> {
+        static TOP: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+        TOP.get_or_init(crate::configfile::top_level_settings)
+    }
+    fn find(t: &toml::Table, section: &str) -> Option<(String, String)> {
+        for (k, v) in t {
+            let plain = k.strip_prefix("extend_").unwrap_or(k);
+            if !section.is_empty() && top_level().iter().any(|top| top == plain) {
+                return Some((k.clone(), section.to_string()));
+            }
+            if let Some(inner) = v.as_table()
+                && let Some(found) = find(inner, &dotted(section, k))
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+    match find(layer, "") {
+        Some((key, section)) => Err(ConfigError::Misplaced {
+            key: match file {
+                Some(f) => format!("{}: `{key}`", f.display()),
+                None => format!("`{key}`"),
+            },
+            section,
+        }),
+        None => Ok(()),
+    }
 }
 
 /// Settings that moved, said plainly instead of "unknown field"; `file`
@@ -883,6 +923,7 @@ impl Config {
         let extend = take_extend(&mut layer, Path::new("config"))?;
         moved_keys(&layer, None)?;
         renamed_keys(&layer, None)?;
+        misplaced_keys(&layer, None)?;
         let mut layers = Layers::defaults();
         layers.merge(layer)?;
         let mut c: Config = toml::Value::Table(layers.table).try_into()?;
@@ -1320,6 +1361,33 @@ mod tests {
             let e = Config::parse(old).unwrap_err().to_string();
             assert!(e.starts_with(to), "{old}: {e}");
         }
+        // a top-level setting below a section header is that section's in
+        // TOML: said, with where it belongs
+        for (text, said) in [
+            (
+                "[ui]\ntheme = 'terminal'\nextend_exclude_paths = ['x']",
+                "`extend_exclude_paths` is under [ui]: it's a top-level setting, \
+                 so move it above the first [section]",
+            ),
+            (
+                "[ui]\nclone_protocol = 'ssh'",
+                "`clone_protocol` is under [ui]: it's a top-level setting, \
+                 so move it above the first [section]",
+            ),
+            (
+                "[tags.favourite]\nrepos = []\nexclude_paths = ['x']",
+                "`exclude_paths` is under [tags.favourite]: it's a top-level setting, \
+                 so move it above the first [section]",
+            ),
+        ] {
+            let e = Config::parse(text).unwrap_err().to_string();
+            assert_eq!(e, said, "{text}");
+        }
+        // a key no section has stays unknown
+        let e = Config::parse("[ui]\nnot_a_setting = 1")
+            .unwrap_err()
+            .to_string();
+        assert!(!e.contains("top-level"), "{e}");
         // inverse: the new names
         let c = Config::parse("[tags.ignore.issues]\nnon_default_branch = ['a/b']").unwrap();
         assert_eq!(c.ignore_issues().non_default_branch, ["a/b"]);
