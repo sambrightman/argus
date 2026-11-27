@@ -3,7 +3,7 @@
 # packaging as crates.io will take them, and notes for the new version in
 # CHANGELOG.md. Run by `cargo release` before it commits (NEW_VERSION is
 # the version being released); by hand, it checks Unreleased has notes.
-# A pre-release (`1.2.0-beta.1`) leaves Unreleased as it is (cargo-release
+# A pre-release (`1.2.0-pre.1`, any label) leaves Unreleased as it is (cargo-release
 # skips the changelog's replacements for one), so its notes are those.
 set -euo pipefail
 cd "$(dirname "$0")/.."

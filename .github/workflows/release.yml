@@ -3,7 +3,7 @@ name: Release
 # A tag `v1.2.3` (matching the version in Cargo.toml) builds argus for
 # Apple silicon macOS and Linux, publishes a GitHub release with the archives and their
 # SHA-256 sums and CHANGELOG.md's notes for the version, and publishes the
-# crates to crates.io. A pre-release, `v1.2.3-beta.1`, is published as one
+# crates to crates.io. A pre-release, `v1.2.3-pre.1`, is published as one
 # (not the latest release; crates.io installs it only when asked for by
 # version), its notes Unreleased's: everything since the last release.
 # Run by hand, it builds and packages everything but publishes nothing.
