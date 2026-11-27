@@ -1725,9 +1725,9 @@ fn files_read(out: &gix::status::Outcome) -> String {
             )
         })
     };
-    let staged = checks(out.tree_index.as_ref().and_then(|t| t.rewrite.as_ref()));
-    let unstaged = checks(out.index_worktree.rewrites.as_ref());
-    let (compared, skipped) = (staged.0 + unstaged.0, staged.1 + unstaged.1);
+    // (renames among staged changes only: gix looks for unstaged ones
+    // only when asked, and argus doesn't ask)
+    let (compared, skipped) = checks(out.tree_index.as_ref().and_then(|t| t.rewrite.as_ref()));
     if compared > 0 {
         said += &format!("; {compared} compared for renames");
     }

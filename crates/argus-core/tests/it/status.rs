@@ -1492,6 +1492,18 @@ fn the_files_step_says_what_was_read_to_find_changes() {
         limited[0].ends_with("entries; 4 left uncompared (rename limit)"),
         "{limited:?}"
     );
+    // looking for copies too, from a changed file as well: those left
+    // past the limit are counted with the rest
+    git(&r, &["config", "diff.renames", "copies"]);
+    git(&r, &["config", "diff.renameLimit", "2"]);
+    write(&r, "b", "bb\nchanged\n");
+    git(&r, &["add", "b"]);
+    let copies = said();
+    assert_eq!(copies.len(), 1);
+    assert!(
+        copies[0].ends_with("entries; 6 left uncompared (rename limit)"),
+        "{copies:?}"
+    );
 }
 
 /// How far a branch is ahead of and behind its upstream, and whether

@@ -75,6 +75,21 @@ deferred.
   from 120-170ms to 85-110ms); and an issue on peeling reading whole
   objects where a header lookup would do, which isn't free with the
   object cache on.
+  - **Status with many submodules is quadratic.** For each submodule,
+    `BuiltinSubmoduleStatus::status` (`gix/src/status/index_worktree.rs`)
+    calls `repo.submodules()` and searches the whole list by path: a
+    repo of 25,000 checked-out submodules took 140s in its `files` step
+    (1,000: 273ms; 2,000: 806ms), `git status` 30ms. Building the
+    path-to-submodule map once would fix it.
+  - **Writing the index after a status** (`Outcome::write_changes()`):
+    it locks the index only to write, from the copy read when the
+    status began, so what's staged meanwhile is lost, and the caller
+    can't hold the lock across both; it invalidates the tree and
+    untracked caches though only stats changed; it drops the
+    resolve-undo records, fsmonitor's state and the split-index link;
+    gix writes no index version 4; and whether it smudges racily clean
+    entries as git does on write is unchecked. argus refreshes with
+    `git update-index --refresh` meanwhile.
 
 ## Known gaps
 
