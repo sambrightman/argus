@@ -1287,30 +1287,36 @@ fn stale_indexes(ws: &Workspace, write: bool) {
         }
         return;
     }
-    let files: usize = stale
-        .iter()
-        .filter_map(|p| ws.get(p)?.status())
-        .map(|s| s.changes.stale)
-        .sum();
-    let files = format!("{files} {}", plural(files, "file", "files"));
+    let count = |p: &PathBuf| {
+        ws.get(p)
+            .and_then(|e| e.status())
+            .map_or(0, |s| s.changes.stale)
+    };
+    let files = |n: usize| format!("{n} {}", plural(n, "file", "files"));
     match &stale[..] {
         [one] => {
             let repo = paths::contract_tilde(one);
             eprintln!(
-                "argus: the index of {repo} is stale ({files}): every status reads them \
-                 again until it's refreshed, by `argus status --write` or `git -C {repo} status`"
+                "argus: the index of {repo} is stale ({}): every status reads them again \
+                 until it's refreshed, by `argus status --write` or `git -C {repo} status`",
+                files(count(one))
             );
         }
-        many => eprintln!(
-            "argus: the indexes of {} repos are stale ({files}): every status reads them \
-             again until they're refreshed, by `argus status --write` or `git -C <repo> \
-             status` in each: {}",
-            many.len(),
-            many.iter()
-                .map(|p| paths::contract_tilde(p))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+        many => {
+            eprintln!(
+                "argus: the indexes of {} repos are stale ({}): every status reads them again \
+                 until they're refreshed, by `argus status --write` or git in each:",
+                many.len(),
+                files(many.iter().map(count).sum())
+            );
+            for p in many {
+                let repo = paths::contract_tilde(p);
+                eprintln!(
+                    "argus:   {repo} ({}): `git -C {repo} status`",
+                    files(count(p))
+                );
+            }
+        }
     }
 }
 

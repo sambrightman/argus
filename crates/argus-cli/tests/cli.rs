@@ -2971,16 +2971,21 @@ fn stale_indexes_are_warned_of_or_refreshed_with_write() {
     let warned = argus(&sb).args(["status", "--all"]).output().unwrap();
     assert!(warned.status.success());
     let said = String::from_utf8(warned.stderr).unwrap();
-    assert!(
-        said.contains("the indexes of 2 repos are stale (2 files)"),
-        "{said}"
-    );
-    assert!(said.contains("argus status --write"), "{said}");
-    assert!(said.contains("git -C <repo> status"), "{said}");
-    assert!(
-        said.contains("dev/clean") && said.contains("dev/feature"),
-        "{said}"
-    );
+    let lines: Vec<&str> = said.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.contains("the indexes of 2 repos are stale (2 files)"))
+        .unwrap_or_else(|| panic!("{said}"));
+    assert!(lines[at].contains("argus status --write"), "{said}");
+    // then a line for each, with its count and the git that refreshes it
+    for (i, name) in [(1, "clean"), (2, "feature")] {
+        let line = lines.get(at + i).unwrap_or_else(|| panic!("{said}"));
+        assert!(line.starts_with("argus:   "), "{said}");
+        assert!(line.contains(&format!("dev/{name} (1 file)")), "{said}");
+        assert!(line.ends_with(&format!("dev/{name} status`")), "{said}");
+        assert!(line.contains("`git -C "), "{said}");
+    }
+    assert_eq!(lines.len(), at + 3, "nothing more: {said}");
     assert!(!said.contains("dev/dirty"), "{said}");
     // refreshed as the warning says git does it, one is left
     git(&f, &["status", "--short"]);
