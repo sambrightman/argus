@@ -1136,7 +1136,10 @@ on upgrading, what's new, what's fixed. Then:
    with.
 2. `scripts/release-checks.sh`: Unreleased has notes, and CI's lint, docs
    and tests pass, and every crate packages (`cargo publish --workspace
-   --dry-run`).
+   --dry-run`, built in `target/release-checks.noindex`). It first clears
+   cargo's unpacked copies and builds of argus's crates from earlier dry
+   runs, which cargo would otherwise reuse at the same version, building
+   the TUI against an older core.
 3. `cargo release minor --execute` (or `patch`, `major`; release.toml):
    bumps the version all four crates share, their pins on each other and
    Cargo.lock; renames Unreleased to the version and date and starts a
