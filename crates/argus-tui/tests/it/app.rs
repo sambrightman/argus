@@ -962,7 +962,8 @@ fn on_line(app: &App) -> String {
 
 /// Another view (`s`, `o`), or another search, keeps the cursor on its
 /// line where that's shown; else it goes to the slowest (by time) or the
-/// newest (as they happened). By kind, there are no such lines to keep.
+/// newest (as they happened). By kind, there are no such lines: the one
+/// it was on before is kept for after.
 #[test]
 fn another_view_keeps_the_cursor_on_its_line() {
     let (_sb, mut app) = setup("");
@@ -991,11 +992,18 @@ fn another_view_keeps_the_cursor_on_its_line() {
     assert_eq!(on_line(&app), "status ~/dev/b", "by own time");
     app.on_key(key('s'));
     assert_eq!(on_line(&app), "status ~/dev/b", "every step");
-    // by kind: the most, first
+    // by kind: the most, first (o and searching there change nothing
+    // kept)
     app.on_key(key('s'));
     assert_eq!(on_line(&app), "files");
-    // as they happened: the newest
+    app.on_key(key('o'));
+    app.on_key(key('o'));
+    // as they happened: back on the line it was on before by kind, the
+    // whole way round
     app.on_key(key('s'));
+    assert_eq!(on_line(&app), "status ~/dev/b", "round again");
+    // on what was said, the newest
+    app.on_key(alt('>'));
     assert_eq!(on_line(&app), "could not save");
     // shown sorted too (after what took time); by time, untimed, it isn't:
     // the most instead (by own time still, b's files)
@@ -1370,6 +1378,30 @@ fn what_is_unfolded_stays_unfolded_past_the_cap() {
     assert!(screen.contains("status ~/dev/b"), "{screen}");
     // inverse: nothing else unfolded
     assert!(screen.contains("▸     9ms  refresh"), "{screen}");
+}
+
+/// The line kept from before by kind is still found after the oldest
+/// messages are dropped meanwhile.
+#[test]
+fn the_line_kept_by_kind_is_found_past_the_cap() {
+    let (_sb, mut app) = setup("");
+    for n in 0..4990 {
+        app.report_error(format!("message {n}"));
+    }
+    steps_taken(&mut app);
+    open_history(&mut app);
+    app.on_key(code(KeyCode::End));
+    app.on_key(key('k'));
+    assert_eq!(on_line(&app), "scan: 2 repos");
+    for _ in 0..3 {
+        app.on_key(key('s'));
+    }
+    for n in 0..20 {
+        app.report_error(format!("later {n}"));
+    }
+    assert_eq!(app.history.len(), 4512);
+    app.on_key(key('s'));
+    assert_eq!(on_line(&app), "scan: 2 repos");
 }
 
 /// The history and the process log are in the View menu (`v m`, `v $`),

@@ -41,7 +41,8 @@ impl By {
 /// The window's state: how it's shown, sorted by own time rather than all
 /// a step took (by time, by kind), the line the cursor's on (past the
 /// last: on the newest, following), the first line shown, the messages
-/// folded the other way from how they'd be, and the search.
+/// folded the other way from how they'd be, the search, and, by kind (no
+/// line of the history being shown), the line the cursor was on before.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Messages {
     pub by: By,
@@ -51,6 +52,7 @@ pub struct Messages {
     pub flipped: HashSet<Vec<usize>>,
     pub query: String,
     pub searching: Option<LineEditor>,
+    pub before_kinds: Option<Vec<usize>>,
 }
 
 impl Default for Messages {
@@ -63,6 +65,7 @@ impl Default for Messages {
             flipped: HashSet::new(),
             query: String::new(),
             searching: None,
+            before_kinds: None,
         }
     }
 }
@@ -455,13 +458,20 @@ fn on(history: &[Event], m: &Messages) -> Option<Vec<usize>> {
 
 /// The cursor, after the view changed from `from`: on the line it was on
 /// (`was`) where that's shown, else on the slowest (by time) or the
-/// newest, following (as they happened). By kind, lines are kinds: none
-/// is kept, to or from.
+/// newest, following (as they happened). By kind, lines are kinds: the
+/// line it was on before is kept for after.
 fn place(history: &[Event], m: &mut Messages, was: Option<Vec<usize>>, from: By) {
+    let was = match (from == By::Kinds, m.by == By::Kinds) {
+        (false, true) => {
+            m.before_kinds = was;
+            None
+        }
+        (true, true) => None,
+        (true, false) => m.before_kinds.take(),
+        (false, false) => was,
+    };
     let lines = lines(history, m);
-    let kept = was
-        .filter(|_| from != By::Kinds && m.by != By::Kinds)
-        .and_then(|p| lines.iter().position(|l| l.path == p));
+    let kept = was.and_then(|p| lines.iter().position(|l| l.path == p));
     let newest = lines.len().saturating_sub(1);
     m.cursor = match (kept, m.by) {
         // (on the newest as they happened: following it)
@@ -480,14 +490,17 @@ pub fn dropped(m: &mut Messages, n: usize, lines: usize) {
         m.cursor = m.cursor.saturating_sub(lines);
     }
     m.top = m.top.saturating_sub(lines);
-    m.flipped = std::mem::take(&mut m.flipped)
-        .into_iter()
-        .filter(|p| p[0] >= n)
-        .map(|mut p| {
+    let moved = |mut p: Vec<usize>| {
+        (p[0] >= n).then(|| {
             p[0] -= n;
             p
         })
+    };
+    m.flipped = std::mem::take(&mut m.flipped)
+        .into_iter()
+        .filter_map(moved)
         .collect();
+    m.before_kinds = m.before_kinds.take().and_then(moved);
 }
 
 /// The time `s` took that none of its steps ran in: all of it, if it took

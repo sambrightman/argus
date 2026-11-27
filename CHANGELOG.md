@@ -12,7 +12,7 @@ Releasing).
 ### New
 
 - In the TUI's messages (`v m`), `s` first sorts the tree: each level slowest first (`o` by own time), what took no time after it; then every step slowest first and time by kind, as before. What's folded stays folded.
-- Another view of the messages (`s`, `o`) or another search keeps the cursor on its line where it's shown, else puts it on the slowest (or, as they happened, the newest); it used to go to the bottom every time.
+- Another view of the messages (`s`, `o`) or another search keeps the cursor on its line where it's shown, else puts it on the slowest (or, as they happened, the newest); it used to go to the bottom every time. By kind, the line it was on before is kept for after, so a whole round of `s` comes back to it.
 - With `-v`, the TUI's messages start with a `startup` step holding everything until the first scan's rows are in: reading the config and state, the scan, and whatever else ran meanwhile, so none of that time goes unsaid.
 
 ### Fixed
