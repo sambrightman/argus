@@ -345,6 +345,22 @@ pub struct Runtime {
     forges: pull::Clients,
 }
 
+/// Refresh `repo`'s index ([`argus_core::ops::refresh_index`]), as a
+/// step of its own, timed, saying whether it failed and why.
+fn refresh_index(repo: &Path) -> Result<(), String> {
+    argus_core::trace::timed(
+        "refresh index",
+        |r: &Result<(), String>| {
+            let repo = argus_core::paths::contract_tilde(repo);
+            match r {
+                Ok(()) => format!("refresh index of {repo}"),
+                Err(e) => format!("refresh index of {repo}, failed: {e}"),
+            }
+        },
+        || argus_core::ops::refresh_index(repo),
+    )
+}
+
 impl Runtime {
     pub fn new(opts: Options) -> Self {
         let (tx, rx) = unbounded::<Msg>();
@@ -583,29 +599,28 @@ impl Runtime {
             Effect::RefreshIndexes(paths) => {
                 let n = app.ws.config.disk_jobs();
                 self.spawn(move |_| {
-                    argus_core::workspace::in_pool(n, || {
-                        use rayon::prelude::*;
-                        let here = argus_core::trace::within();
-                        paths.into_par_iter().for_each(|p| {
-                            // (one that fails is traced, and tried again
-                            // after a later status finds it stale)
-                            let _ = here.run(|| {
-                                argus_core::trace::timed(
-                                    "refresh index",
-                                    |r: &Result<(), String>| {
-                                        let repo = argus_core::paths::contract_tilde(&p);
-                                        match r {
-                                            Ok(()) => format!("refresh index of {repo}"),
-                                            Err(e) => {
-                                                format!("refresh index of {repo}, failed: {e}")
-                                            }
-                                        }
-                                    },
-                                    || argus_core::ops::refresh_index(&p),
-                                )
-                            });
-                        });
-                    })
+                    let what = match &paths[..] {
+                        [one] => format!(
+                            "refresh index of {}",
+                            argus_core::paths::contract_tilde(one)
+                        ),
+                        many => format!("refresh indexes of {} repos", many.len()),
+                    };
+                    argus_core::trace::step(
+                        "refresh indexes",
+                        || what,
+                        || {
+                            argus_core::workspace::in_pool(n, || {
+                                use rayon::prelude::*;
+                                let here = argus_core::trace::within();
+                                paths.into_par_iter().for_each(|p| {
+                                    // (one that fails says why, and is tried
+                                    // again once a later status finds it stale)
+                                    let _ = here.run(|| refresh_index(&p));
+                                });
+                            })
+                        },
+                    )
                 });
             }
             Effect::Jobs(jobs) => {

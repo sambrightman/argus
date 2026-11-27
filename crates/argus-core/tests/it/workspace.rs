@@ -2420,7 +2420,8 @@ fn branches_left_unchecked_are_checked_later_unless_they_moved() {
 
 /// The repos whose status found files stale are listed to refresh, and
 /// those whose status found none aren't; refreshed, and statused again,
-/// a repo leaves the list.
+/// a repo leaves the list. One that can't be refreshed (another git
+/// holding its index's lock) is said, with why.
 #[test]
 fn repos_with_stale_files_are_listed_to_refresh() {
     let sb = Sandbox::new();
@@ -2433,7 +2434,14 @@ fn repos_with_stale_files_are_listed_to_refresh() {
     touch_back(&touched.join("README"), 1);
     let mut w = ws(&sb, "");
     assert_eq!(w.stale(), std::slice::from_ref(&touched));
-    argus_core::ops::refresh_index(&touched).unwrap();
+    let lock = touched.join(".git/index.lock");
+    std::fs::write(&lock, "").unwrap();
+    let failed = w.refresh_stale();
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert_eq!(failed[0].0, touched);
+    assert!(failed[0].1.contains("locked"), "{failed:?}");
+    std::fs::remove_file(&lock).unwrap();
+    assert_eq!(w.refresh_stale(), []);
     w.refresh(&touched);
     assert_eq!(w.stale(), Vec::<std::path::PathBuf>::new());
 }

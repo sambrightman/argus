@@ -905,3 +905,61 @@ fn stale_indexes_are_refreshed_in_the_background() {
     run(&mut app, &mut rt, vec![Effect::Refresh(vec![c.clone()])]);
     assert_eq!(stale(&c), 0, "and after a status");
 }
+
+/// With `-v`, the background refreshes of stale indexes go to the
+/// history as one step, timed, each repo's refresh in it with the git
+/// it ran; one that fails says why.
+#[test]
+fn index_refreshes_go_to_the_history() {
+    use argus_core::trace::Step;
+    use argus_tui::app::Happened;
+    let (sb, mut app, _) = setup("");
+    let mut rt = Runtime::new(Options {
+        verbose: true,
+        ..options(&sb)
+    });
+    rt.log_steps(&mut app);
+    let (c, d) = (sb.path("dev/clean"), sb.path("dev/dirty"));
+    touch_back(&c.join("README"), 1);
+    std::fs::write(d.join(".git/index.lock"), "").unwrap();
+    run(
+        &mut app,
+        &mut rt,
+        vec![Effect::RefreshIndexes(vec![c.clone(), d.clone()])],
+    );
+    argus_core::trace::set_sink(None);
+    let tops: Vec<&Step> = app
+        .history
+        .iter()
+        .filter_map(|e| match &e.what {
+            Happened::Step(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    let all = tops
+        .iter()
+        .find(|s| s.kind == "refresh indexes")
+        .expect("the refreshes");
+    assert_eq!(all.what, "refresh indexes of 2 repos");
+    assert!(all.took.is_some());
+    let of = |name: &str| {
+        all.steps
+            .iter()
+            .find(|s| s.kind == "refresh index" && s.what.contains(name))
+            .unwrap_or_else(|| panic!("{name}'s: {all:?}"))
+    };
+    let clean = of("dev/clean");
+    assert!(
+        clean.took.is_some() && !clean.what.contains("failed"),
+        "{clean:?}"
+    );
+    assert!(
+        clean.steps.iter().any(|s| s.what.contains("update-index")),
+        "{clean:?}"
+    );
+    let dirty = of("dev/dirty");
+    assert!(
+        dirty.what.contains("failed: the index is locked"),
+        "{dirty:?}"
+    );
+}

@@ -1785,7 +1785,8 @@ pub fn refresh_index(repo: &Path) -> Result<(), String> {
         lock.push(".lock");
         PathBuf::from(lock)
     });
-    let mut wait = Duration::from_millis(25);
+    // waits before trying again, about 1.5s in all
+    let mut waits = [25, 50, 100, 200, 400, 800].into_iter();
     loop {
         // (-q: files changed are no failure; --unmerged: nor conflicts)
         let out = git_in(repo, &["update-index", "-q", "--unmerged", "--refresh"]);
@@ -1799,11 +1800,10 @@ pub fn refresh_index(repo: &Path) -> Result<(), String> {
                 false => out.output,
             });
         }
-        if wait > Duration::from_millis(800) {
+        let Some(ms) = waits.next() else {
             return Err("the index is locked: another git is using it".into());
-        }
-        std::thread::sleep(wait);
-        wait *= 2;
+        };
+        std::thread::sleep(Duration::from_millis(ms));
     }
 }
 
