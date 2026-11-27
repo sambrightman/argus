@@ -91,8 +91,17 @@ deferred.
     can't hold the lock across both; it invalidates the tree and
     untracked caches though only stats changed; it drops the
     resolve-undo records, fsmonitor's state and the split-index link;
-    gix writes no index version 4; and whether it smudges racily clean
-    entries as git does on write is unchecked. argus refreshes with
+    gix writes no index version 4; and it smudges only the racily clean
+    entries the status itself read. A status over the whole work tree
+    reads every racy entry, so that's as git does (checked: a modified
+    entry with an unchanged stat is written with size 0, and shows as
+    modified after); but limited to some paths, it writes the index with
+    the rest unchecked under a newer timestamp, so a racy change outside
+    them is hidden from then on (`git status -- g` smudges `f`; gix's
+    `write_changes()` after a status of `g` leaves `f` looking clean).
+    Git smudges on every index write instead (`do_write_index`). It also
+    rewrites the index on every status while such an entry is there,
+    with nothing new to write. argus refreshes with
     `git update-index --refresh` meanwhile.
 
 ## Known gaps
