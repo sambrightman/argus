@@ -848,6 +848,37 @@ fn the_runtime_is_working_while_results_are_still_to_come() {
     assert!(!rt.working() && !rt.has_results(), "all in");
 }
 
+/// A frame drawn slowly goes to the history, but doesn't itself ask for
+/// the screen to be drawn again: with the history open, that would draw
+/// another (slow) frame, and so on. Any other step does.
+#[test]
+fn a_slow_frame_alone_asks_for_no_frame() {
+    use argus_tui::app::Happened;
+    let (sb, mut app, _) = setup("");
+    let mut rt = Runtime::new(Options {
+        verbose: true,
+        ..options(&sb)
+    });
+    rt.log_steps(&mut app);
+    let ms = Duration::from_millis;
+    let steps = |app: &App| {
+        app.history
+            .iter()
+            .filter(|e| matches!(&e.what, Happened::Step(_)))
+            .count()
+    };
+    argus_core::trace::took("frame", || "frame drawn, slowly".into(), ms(40));
+    let (_, received) = rt.drain(&mut app);
+    assert!(!received, "nothing to draw for it");
+    assert_eq!(steps(&app), 1, "kept, for the next frame");
+    // inverse: another step, drawn
+    argus_core::trace::took("git", || "git status".into(), ms(5));
+    let (_, received) = rt.drain(&mut app);
+    argus_core::trace::set_sink(None);
+    assert!(received);
+    assert_eq!(steps(&app), 2);
+}
+
 #[test]
 fn statuses_arriving_together_are_one_rebuild() {
     let (sb, mut app, mut rt) = setup("");

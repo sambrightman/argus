@@ -408,7 +408,10 @@ impl Runtime {
         let mut branches = vec![];
         for _ in 0..512 {
             let Ok(m) = self.rx.try_recv() else { break };
-            received = true;
+            // (a frame drawn slowly is kept, but asks for no frame of its
+            // own: with the history open, that frame would be slow too,
+            // and say so, and so on)
+            received |= !matches!(&m, Msg::Step(s) if s.kind == "frame");
             let m = match m {
                 Msg::Status(path, st) => {
                     statuses.push((path, *st));

@@ -207,7 +207,7 @@ pub fn lines<'a>(history: &'a [Event], m: &Messages) -> Vec<MessageLine<'a>> {
                     || matches!(l.what, Shown::Step { step, of } if step.named_in(of).to_lowercase().contains(&q))
             });
             // (stable: of those as slow, the earlier first)
-            all.sort_by_key(|l| match l.what {
+            all.sort_by_cached_key(|l| match l.what {
                 Shown::Step { step, .. } if m.own => std::cmp::Reverse(own_time(step)),
                 Shown::Step { step, .. } => std::cmp::Reverse(step.took),
                 _ => std::cmp::Reverse(None),
@@ -313,7 +313,7 @@ fn in_order<'a>(mut nodes: Vec<(usize, Node<'a>)>, m: &Messages) -> Vec<(usize, 
             };
             if m.own { own_time(s) } else { s.took }
         };
-        nodes.sort_by_key(|(_, n)| std::cmp::Reverse(time(n)));
+        nodes.sort_by_cached_key(|(_, n)| std::cmp::Reverse(time(n)));
     }
     nodes
 }
