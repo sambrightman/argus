@@ -1481,6 +1481,36 @@ fn untracked(path: &Path, dir: Option<&str>) -> Result<Vec<(String, PathKind)>, 
     Ok(v)
 }
 
+/// What a status reported of one path, from several threads in no order:
+/// what's staged, what's changed in its tracked file (or submodule),
+/// whether there's something untracked there, whether it's conflicted.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct Seen {
+    index: char,
+    worktree: char,
+    untracked: bool,
+    conflicted: bool,
+}
+
+impl Seen {
+    /// Its (index, worktree) codes: conflicted is `U` both; a change to
+    /// what's tracked shows over something untracked in its place (a file
+    /// deleted, a folder there); untracked shows beside what's staged (a
+    /// file staged for deletion and still there, `git rm --cached`), else
+    /// is `?` both.
+    fn codes(self) -> (char, char) {
+        let blank = |c: char| if c == '\0' { ' ' } else { c };
+        let (index, worktree) = (blank(self.index), blank(self.worktree));
+        match self {
+            _ if self.conflicted => ('U', 'U'),
+            _ if worktree != ' ' => (index, worktree),
+            _ if self.untracked && index != ' ' => (index, '?'),
+            _ if self.untracked => ('?', '?'),
+            _ => (index, worktree),
+        }
+    }
+}
+
 /// Of the checked-out submodules `shown` (but those `ignoring_all`), the
 /// paths of those at another commit than `index` records, as git finds
 /// them for a parent's status: from each one's HEAD, through its refs
@@ -1595,8 +1625,8 @@ fn changes(
         .into_iter(None)
         .map_err(err)?;
 
-    // path -> (index code, worktree code)
-    let mut files: BTreeMap<String, (char, char)> = BTreeMap::new();
+    // what's reported of each path, in whatever order: its codes after
+    let mut seen: BTreeMap<String, Seen> = BTreeMap::new();
     let mut kinds: HashMap<String, PathKind> = HashMap::new();
     let mut moved = vec![];
     let mut missing = vec![];
@@ -1616,7 +1646,7 @@ fn changes(
                 if change.entry_mode().is_submodule() {
                     kinds.insert(path.clone(), PathKind::Submodule);
                 }
-                files.entry(path).or_insert((' ', ' ')).0 = code;
+                seen.entry(path).or_default().index = code;
             }
             gix::status::Item::IndexWorktree(iw) => {
                 let path = iw.rela_path().to_str_lossy().into_owned();
@@ -1648,7 +1678,7 @@ fn changes(
                             } else {
                                 '?'
                             };
-                            files.entry(path).or_insert((' ', ' ')).1 = code;
+                            seen.entry(path).or_default().worktree = code;
                             continue;
                         }
                         EntryStatus::Change(Change::Removed) => {
@@ -1674,17 +1704,11 @@ fn changes(
                     }
                     IW::Rewrite { .. } => 'R',
                 };
-                let e = files.entry(path).or_insert((' ', ' '));
-                if code == '?' && e.0 != ' ' {
-                    // there, and staged for deletion (`git rm --cached`):
-                    // both, whichever is reported first
-                    e.1 = '?';
-                } else if code == '?' {
-                    *e = ('?', '?');
-                } else if code == 'U' {
-                    *e = ('U', 'U');
-                } else {
-                    e.1 = code;
+                let s = seen.entry(path).or_default();
+                match code {
+                    '?' => s.untracked = true,
+                    'U' => s.conflicted = true,
+                    c => s.worktree = c,
                 }
             }
         }
@@ -1696,7 +1720,7 @@ fn changes(
             for path in moved_submodules_of(&out.worktree_index, shown, &ignoring_all) {
                 kinds.insert(path.clone(), PathKind::Submodule);
                 moved.push(path.clone());
-                files.entry(path).or_insert((' ', ' ')).1 = 'M';
+                seen.entry(path).or_default().worktree = 'M';
             }
         }
         stale = out
@@ -1705,6 +1729,9 @@ fn changes(
             .entries_to_update;
         crate::trace::amend(|| files_read(out));
     }
+    // path -> (index code, worktree code)
+    let mut files: BTreeMap<String, (char, char)> =
+        seen.into_iter().map(|(p, s)| (p, s.codes())).collect();
     collapse_untracked(repo, &mut files, &mut kinds)?;
     let mut c = Changes {
         moved,
@@ -2279,6 +2306,34 @@ mod tests {
             said,
             ["0 bytes", "1023 bytes", "1KB", "1023KB", "1MB", "5GB"]
         );
+    }
+
+    /// A path's codes follow from what was reported of it, in whatever
+    /// order: conflicted over all; a tracked change over something
+    /// untracked in its place; untracked beside what's staged, else alone.
+    #[test]
+    fn a_paths_codes_follow_from_what_was_seen_of_it() {
+        let seen = |index, worktree, untracked, conflicted| {
+            Seen {
+                index,
+                worktree,
+                untracked,
+                conflicted,
+            }
+            .codes()
+        };
+        let none = '\0';
+        assert_eq!(seen('M', 'D', true, true), ('U', 'U'));
+        // a tracked file deleted, a folder in its place: with what's
+        // staged, and without
+        assert_eq!(seen('M', 'D', true, false), ('M', 'D'));
+        assert_eq!(seen(none, 'D', true, false), (' ', 'D'));
+        // staged for deletion and still there
+        assert_eq!(seen('D', none, true, false), ('D', '?'));
+        assert_eq!(seen(none, none, true, false), ('?', '?'));
+        assert_eq!(seen('A', 'M', false, false), ('A', 'M'));
+        assert_eq!(seen('A', none, false, false), ('A', ' '));
+        assert_eq!(seen(none, 'M', false, false), (' ', 'M'));
     }
 
     /// A work tree's checked-out commit is read through its `.git`,
