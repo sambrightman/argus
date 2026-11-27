@@ -886,6 +886,10 @@ fn message_lines_line_up() {
 fn s_first_sorts_the_tree_at_each_level() {
     let (_sb, mut app) = setup("");
     steps_taken(&mut app);
+    // the slowest of all, last to happen
+    let pull =
+        argus_core::trace::Step::new("pull", "pull", Some(std::time::Duration::from_millis(40)));
+    app.on_msg(Msg::Step(pull));
     open_history(&mut app);
     // the scan (the first message) unfolded, as it happened: its note,
     // a, then b
@@ -906,10 +910,12 @@ fn s_first_sorts_the_tree_at_each_level() {
         screen.contains("messages, each level slowest first (Tab folds; o by own time"),
         "{screen}"
     );
-    // the scan before the refresh, b (25) before a (20), the note last
+    // the pull, then the scan, then the refresh; in the scan b (25)
+    // before a (20), the note last
     in_order(
         &screen,
         &[
+            "40ms  pull",
             "30ms  scan: 2 repos",
             "25ms  status ~/dev/b",
             "20ms  status ~/dev/a",
