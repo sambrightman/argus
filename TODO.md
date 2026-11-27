@@ -85,6 +85,14 @@ deferred.
     submodules and reads each one's HEAD itself, as git does (4,000:
     3.1s to 0.37s). Once gix is fixed, remove that and go back to
     `Submodule::Given { ignore: Dirty, check_dirty: true }`.
+  - **`Submodule::state()` is quadratic too:** for its
+    `superproject_configuration` it collects every `submodule` section
+    of the config and searches them for its own name
+    (`gix/src/submodule/mod.rs`, `state_inner`), so asking it of each
+    submodule in a parent whose config has them all (after `git
+    submodule init`) took 2.6s at 4,000. argus checks for the checkout's
+    `.git` itself meanwhile (`has_checkout` in `status.rs`, used by
+    `ops.rs` too); once fixed, `sm.state()?.worktree_checkout` again.
   - **Writing the index after a status** (`Outcome::write_changes()`):
     it locks the index only to write, from the copy read when the
     status began, so what's staged meanwhile is lost, and the caller

@@ -819,7 +819,11 @@ pub fn status_of(repo: &gix::Repository, opts: StatusOptions) -> Result<RepoStat
     let bare = repo.workdir().is_none();
     // (one read of the submodules for both: it costs about as much as a
     // small repo's whole status)
-    let (submodules, shown) = checked_out_submodules(repo);
+    let (submodules, shown) = crate::trace::timed(
+        "submodules",
+        |(paths, _): &(Vec<PathBuf>, _)| format!("submodules: {} checked out", paths.len()),
+        || checked_out_submodules(repo),
+    );
     let submodules_shown = match opts.submodules && opts.submodule_content_from_own && !bare {
         true => shown,
         false => vec![],
@@ -2201,7 +2205,9 @@ fn checked_out_submodules(repo: &gix::Repository) -> (Vec<PathBuf>, Vec<Submodul
     };
     let mut paths = vec![];
     let mut shown = vec![];
-    for sm in sms.filter(|sm| sm.state().is_ok_and(|s| s.worktree_checkout)) {
+    // (not `sm.state()`: it searches every submodule's config section for
+    // each, so a parent of thousands took seconds; TODO.md)
+    for sm in sms.filter(|sm| has_checkout(repo, sm)) {
         let Some(path) = sm.work_dir().ok().flatten() else {
             continue;
         };
@@ -2216,6 +2222,35 @@ fn checked_out_submodules(repo: &gix::Repository) -> (Vec<PathBuf>, Vec<Submodul
     }
     paths.sort();
     (paths, shown)
+}
+
+/// Whether `sm` is checked out: its folder in the parent's work tree, no
+/// symbolic link on the way, holds its `.git` (as gix's
+/// `State::worktree_checkout`).
+pub(crate) fn has_checkout(repo: &gix::Repository, sm: &gix::Submodule<'_>) -> bool {
+    use gix::bstr::ByteSlice;
+    use std::path::Component;
+    let (Some(work_dir), Ok(rela)) = (repo.workdir(), sm.path()) else {
+        return false;
+    };
+    let Ok(rela) = gix::path::from_bstr(rela.as_bstr()) else {
+        return false;
+    };
+    let mut dir = work_dir.to_path_buf();
+    for c in rela.components() {
+        let Component::Normal(name) = c else {
+            // (`..`, `/`: out of the work tree)
+            return false;
+        };
+        dir.push(name);
+        if dir
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return false;
+        }
+    }
+    dir.join(".git").exists()
 }
 
 fn mtime(p: &Path) -> Option<Timestamp> {

@@ -224,3 +224,37 @@ fn a_scan_holds_what_follows_the_statuses_too() {
         "{children:#?}"
     );
 }
+
+/// Looking up a repo's submodules is a part of its status (in a parent
+/// of thousands it's no small part).
+#[test]
+fn a_status_says_its_submodules_looked_up() {
+    let sb = Sandbox::new();
+    let top = std::fs::canonicalize(sb.nested_submodules()).unwrap();
+    let got: Arc<Mutex<Vec<Step>>> = Arc::default();
+    let into = got.clone();
+    trace::set_sink(Some((
+        argus_core::trace::Form::Whole,
+        Arc::new(move |s: Step| {
+            if s.kind == "status" {
+                into.lock().unwrap().push(s);
+            }
+        }),
+    )));
+    let status = argus_core::status::status(&top, Default::default());
+    trace::set_sink(None);
+    assert!(status.is_ok());
+    let got = got.lock().unwrap().clone();
+    let [status] = &got[..] else {
+        panic!("one status in {got:?}");
+    };
+    let parts: Vec<&Step> = status
+        .steps
+        .iter()
+        .filter(|s| s.kind == "submodules")
+        .collect();
+    let [part] = &parts[..] else {
+        panic!("a submodules part in {status:#?}");
+    };
+    assert_eq!(part.what, "submodules: 1 checked out", "{part:?}");
+}

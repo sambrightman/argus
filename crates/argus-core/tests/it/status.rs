@@ -384,6 +384,38 @@ fn rebase_in_progress() {
     assert_eq!(st(&r).in_progress, Some(InProgress::Rebase));
 }
 
+/// A submodule is listed as checked out where its folder has its `.git`:
+/// not one deinitialized (its folder left empty), nor one whose folder is
+/// a symbolic link.
+#[test]
+fn submodules_are_checked_out_where_their_git_is() {
+    let sb = Sandbox::new();
+    let lib = sb.init("lib");
+    let r = sb.init("r");
+    for at in ["a", "b"] {
+        git(
+            &r,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                lib.to_str().unwrap(),
+                at,
+            ],
+        );
+    }
+    commit(&r, "subs");
+    git(&r, &["submodule", "deinit", "-q", "-f", "b"]);
+    assert_eq!(st(&r).submodules, vec![r.join("a")]);
+    // nor one reached through a symbolic link (a checkout elsewhere)
+    let elsewhere = sb.path("elsewhere-a");
+    std::fs::rename(r.join("a"), &elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, r.join("a")).unwrap();
+    assert_eq!(st(&r).submodules, Vec::<std::path::PathBuf>::new());
+}
+
 #[test]
 fn worktrees_and_submodules_listed() {
     let sb = Sandbox::new();

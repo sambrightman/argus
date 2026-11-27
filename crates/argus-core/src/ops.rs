@@ -1698,7 +1698,8 @@ fn submodule_heads(dir: &Path) -> Vec<(PathBuf, String)> {
         return v;
     };
     for sm in sms {
-        if !sm.state().is_ok_and(|s| s.worktree_checkout) {
+        // (not `sm.state()`: quadratic in the submodules, see has_checkout)
+        if !crate::status::has_checkout(&repo, &sm) {
             continue;
         }
         let (Ok(Some(path)), Ok(Some(r))) = (sm.work_dir(), sm.open()) else {
