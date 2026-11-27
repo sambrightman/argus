@@ -228,6 +228,7 @@ again runs it.
 argus status [-a|--all] [--hidden] [--filter QUERY] [--tag TAG]…   # repos needing attention; -a: the rest too; QUERY as `/` takes it
 argus status --details   # under each repo, what the TUI's details show: issues, fixes (with the command for each), branches, changes, stashes
 argus status --forge     # the details, with what GitHub says: open issues and pull requests, and each branch's pull request (asks now, once per repo listed)
+argus status --write     # afterwards, refresh the index of repos whose status found files stale (times changed, content not), as `git status` does; without it, a warning names them
 argus pull [-n] [--no-clone] [PATTERNS…]
 argus fix [-n] [-F] [--auto] [-k KINDS]… [PATTERNS…]   # -k push,stash -k pull: lists combine; -F fetches first; --auto: keep fixing each repo until nothing more applies
 argus tag TAG PATTERNS… [--owner]   # TAG: favourite, one of yours, pull or ignore

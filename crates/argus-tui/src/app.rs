@@ -539,6 +539,10 @@ pub enum Effect {
     /// Check the branches these repos' statuses left unchecked; answer
     /// with [`Msg::Branches`].
     CheckBranches(Vec<PathBuf>),
+    /// Refresh these repos' indexes, whose statuses found files stale
+    /// ([`argus_core::ops::refresh_index`]), so their next statuses needn't
+    /// read them; nothing to answer (what's shown is so already).
+    RefreshIndexes(Vec<PathBuf>),
     /// List forges and plan clones/pulls; answer with [`Msg::PullPlanned`].
     PlanPullAndClone,
     /// Describe a detached HEAD however far back its tag is; answer with
@@ -5731,6 +5735,17 @@ impl App {
         (!left.is_empty()).then_some(Effect::CheckBranches(left))
     }
 
+    /// Refreshing the indexes `paths`' statuses found stale, if any.
+    fn refresh_indexes(&self, paths: &[PathBuf]) -> Option<Effect> {
+        let stale: Vec<PathBuf> = self
+            .ws
+            .stale()
+            .into_iter()
+            .filter(|p| paths.contains(p))
+            .collect();
+        (!stale.is_empty()).then_some(Effect::RefreshIndexes(stale))
+    }
+
     fn statuses(&mut self, batch: Vec<(PathBuf, Result<RepoStatus, String>)>) -> Vec<Effect> {
         let paths: Vec<PathBuf> = batch.iter().map(|(p, _)| p.clone()).collect();
         self.ws.update_statuses(batch);
@@ -5742,6 +5757,7 @@ impl App {
         self.rebuild();
         let mut fx = self.opened();
         fx.extend(self.check_branches(&paths));
+        fx.extend(self.refresh_indexes(&paths));
         for path in &paths {
             fx.extend(self.continue_chain(path));
         }
@@ -5802,7 +5818,11 @@ impl App {
                     self.start_on_repo_holding(&here);
                 }
                 let all: Vec<PathBuf> = self.ws.entries.iter().map(|e| e.path.clone()).collect();
-                return self.check_branches(&all).into_iter().collect();
+                return self
+                    .check_branches(&all)
+                    .into_iter()
+                    .chain(self.refresh_indexes(&all))
+                    .collect();
             }
             Msg::Status(path, st) => {
                 return self.statuses(vec![(path, *st)]);

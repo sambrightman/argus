@@ -9,7 +9,7 @@ use argus_core::config::Config;
 use argus_core::forge::{Forge, ForgeError, RemoteRepo};
 use argus_core::identity::RepoId;
 use argus_core::status::Head;
-use argus_core::testkit::{Sandbox, commit, git, write};
+use argus_core::testkit::{Sandbox, commit, git, touch_back, write};
 use argus_core::{State, Workspace};
 use argus_tui::app::{Action, App, Effect, Scope};
 use argus_tui::{Options, Runtime, run_suspended};
@@ -879,4 +879,29 @@ fn older_branches_are_checked_after_the_rows_show() {
     assert_eq!(app.rebuilds, before + 1);
     assert_eq!(app.ws.unchecked(), Vec::<PathBuf>::new());
     assert_eq!(unpushed(&app), Some(13));
+}
+
+/// The indexes of repos whose statuses found files stale are refreshed in
+/// the background, after the scan and after a status: their next statuses
+/// read nothing again. Those of the others are left as they were.
+#[test]
+fn stale_indexes_are_refreshed_in_the_background() {
+    let (sb, mut app, mut rt) = setup("");
+    let (c, d) = (sb.path("dev/clean"), sb.path("dev/dirty"));
+    let stale = |p: &Path| {
+        argus_core::status::status(p, Default::default())
+            .unwrap()
+            .changes
+            .stale
+    };
+    touch_back(&c.join("README"), 1);
+    assert_eq!(stale(&c), 1);
+    let dirty_index = std::fs::read(d.join(".git/index")).unwrap();
+    run(&mut app, &mut rt, vec![Effect::Scan]);
+    assert_eq!(stale(&c), 0, "refreshed after the scan");
+    assert_eq!(std::fs::read(d.join(".git/index")).unwrap(), dirty_index);
+    touch_back(&c.join("README"), 2);
+    let c = c.canonicalize().unwrap();
+    run(&mut app, &mut rt, vec![Effect::Refresh(vec![c.clone()])]);
+    assert_eq!(stale(&c), 0, "and after a status");
 }

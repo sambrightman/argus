@@ -273,6 +273,33 @@ impl Workspace {
             .collect()
     }
 
+    /// The repos whose last status found their index stale
+    /// ([`crate::status::Changes::stale`]), to refresh
+    /// ([`crate::ops::refresh_index`]).
+    pub fn stale(&self) -> Vec<PathBuf> {
+        self.entries
+            .iter()
+            .filter(|e| e.status().is_some_and(|s| s.changes.stale > 0))
+            .map(|e| e.path.clone())
+            .collect()
+    }
+
+    /// Refresh the indexes of the repos [`stale`](Self::stale) lists, a few
+    /// at a time: those that couldn't be, and why.
+    pub fn refresh_stale(&self) -> Vec<(PathBuf, String)> {
+        use rayon::prelude::*;
+        let stale = self.stale();
+        in_pool(self.config.disk_jobs(), || {
+            stale
+                .into_par_iter()
+                .filter_map(|p| {
+                    let e = crate::ops::refresh_index(&p).err()?;
+                    Some((p, e))
+                })
+                .collect()
+        })
+    }
+
     /// Show each repo's branches, all checked ([`StatusReader::branches`]),
     /// in place of those its status has, and what follows from them: unless
     /// they've moved since (another status has its own), or couldn't be

@@ -1,7 +1,7 @@
 //! End-to-end CLI tests: the real binary against sandbox repositories.
 
 use argus_core::icons::{ASCII, NERD, UNICODE};
-use argus_core::testkit::{Sandbox, commit, git, git_may_fail, subprocess_env, write};
+use argus_core::testkit::{Sandbox, commit, git, git_may_fail, subprocess_env, touch_back, write};
 use assert_cmd::Command;
 use predicates::prelude::*;
 
@@ -2951,4 +2951,56 @@ fn squash_merge_answers_are_kept_in_the_cache() {
         )),
         "{text}"
     );
+}
+
+/// A status that finds repos' indexes stale says so, on stderr, naming
+/// them and how to refresh them (others go unnamed); with `--write` it
+/// refreshes them instead, after the status, and the next says nothing.
+#[test]
+fn stale_indexes_are_warned_of_or_refreshed_with_write() {
+    let sb = Sandbox::new();
+    three(&sb);
+    for n in ["clean", "dirty", "feature"] {
+        let r = sb.path(&format!("dev/{n}"));
+        touch_back(&r.join("README"), 2);
+        git(&r, &["status", "--short"]);
+    }
+    let (c, f) = (sb.path("dev/clean"), sb.path("dev/feature"));
+    touch_back(&c.join("README"), 1);
+    touch_back(&f.join("README"), 1);
+    let warned = argus(&sb).args(["status", "--all"]).output().unwrap();
+    assert!(warned.status.success());
+    let said = String::from_utf8(warned.stderr).unwrap();
+    assert!(
+        said.contains("the indexes of 2 repos are stale (2 files)"),
+        "{said}"
+    );
+    assert!(said.contains("argus status --write"), "{said}");
+    assert!(said.contains("git -C <repo> status"), "{said}");
+    assert!(
+        said.contains("dev/clean") && said.contains("dev/feature"),
+        "{said}"
+    );
+    assert!(!said.contains("dev/dirty"), "{said}");
+    // refreshed as the warning says git does it, one is left
+    git(&f, &["status", "--short"]);
+    let one = argus(&sb).args(["status"]).output().unwrap();
+    let said = String::from_utf8(one.stderr).unwrap();
+    assert!(said.contains("the index of "), "{said}");
+    assert!(said.contains("dev/clean is stale (1 file)"), "{said}");
+    assert!(
+        said.contains("git -C ") && said.contains("dev/clean status"),
+        "{said}"
+    );
+    assert!(!said.contains("dev/feature"), "{said}");
+    argus(&sb)
+        .args(["status", "--write"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("stale").not());
+    argus(&sb)
+        .args(["status"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("stale").not());
 }

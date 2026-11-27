@@ -3,7 +3,7 @@
 
 use argus_core::attention::{Issue, issues};
 use argus_core::status::{Head, InProgress, RepoStatus, StatusOptions, status};
-use argus_core::testkit::{Sandbox, commit, git, git_may_fail, write};
+use argus_core::testkit::{Sandbox, commit, git, git_may_fail, touch_back, write};
 use pretty_assertions::assert_eq;
 
 fn st(p: &std::path::Path) -> RepoStatus {
@@ -1628,4 +1628,96 @@ fn with_a_limit_the_newest_branches_are_checked_and_the_rest_later() {
     )
     .unwrap();
     assert_eq!(all.branches, full.branches);
+}
+
+/// A file whose times changed but whose content didn't is stale: every
+/// status reads it again, finding it unchanged, until the index is
+/// refreshed, after which none is. A changed file is no stale one, before
+/// or after, and the refresh leaves what's staged as it was.
+#[test]
+fn touched_files_are_stale_until_the_index_is_refreshed() {
+    use argus_core::ops::refresh_index;
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    for f in ["a", "b", "c", "d"] {
+        write(&r, f, &format!("{f}\n"));
+    }
+    // (none as new as the index, as the first commit's file was)
+    for f in ["README", "a", "b", "c", "d"] {
+        touch_back(&r.join(f), 2);
+    }
+    commit(&r, "files");
+    write(&r, "d", "staged\n");
+    touch_back(&r.join("d"), 2);
+    git(&r, &["add", "d"]);
+    let staged = git(&r, &["ls-files", "-s"]);
+    touch_back(&r.join("a"), 1);
+    touch_back(&r.join("b"), 1);
+    write(&r, "c", "changed\n");
+    let s = st(&r);
+    assert_eq!(
+        (s.changes.stale, s.changes.unstaged, s.changes.staged),
+        (2, 1, 1)
+    );
+    let index = std::fs::read(r.join(".git/index")).unwrap();
+    refresh_index(&r).unwrap();
+    assert_ne!(std::fs::read(r.join(".git/index")).unwrap(), index);
+    let s = st(&r);
+    assert_eq!(
+        (s.changes.stale, s.changes.unstaged, s.changes.staged),
+        (0, 1, 1)
+    );
+    assert_eq!(git(&r, &["ls-files", "-s"]), staged);
+}
+
+/// A repo in the middle of a conflict is refreshed all the same: its
+/// unmerged files are left to the merge.
+#[test]
+fn an_index_with_conflicts_is_refreshed_too() {
+    use argus_core::ops::refresh_index;
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "other-file", "x\n");
+    commit(&r, "other file");
+    git(&r, &["switch", "-q", "-c", "other"]);
+    write(&r, "README", "other\n");
+    commit(&r, "other");
+    git(&r, &["switch", "-q", "main"]);
+    write(&r, "README", "main\n");
+    commit(&r, "main");
+    assert!(!git_may_fail(&r, &["merge", "other"]));
+    touch_back(&r.join("other-file"), 1);
+    assert_eq!(st(&r).changes.stale, 1);
+    refresh_index(&r).unwrap();
+    let s = st(&r);
+    assert_eq!((s.changes.stale, s.changes.conflicted), (0, 1));
+}
+
+/// Another git holding the index's lock is waited for, a little: the
+/// refresh goes ahead once it's let go, and if it isn't, gives up,
+/// leaving the index (and the lock) as they were. What isn't a repo
+/// can't be refreshed.
+#[test]
+fn a_refresh_waits_a_little_for_the_index_lock() {
+    use argus_core::ops::refresh_index;
+    let sb = Sandbox::new();
+    let r = sb.init("r");
+    write(&r, "a", "a\n");
+    commit(&r, "a");
+    touch_back(&r.join("a"), 1);
+    let lock = r.join(".git/index.lock");
+    std::fs::write(&lock, "").unwrap();
+    let index = std::fs::read(r.join(".git/index")).unwrap();
+    assert!(refresh_index(&r).is_err());
+    assert_eq!(std::fs::read(r.join(".git/index")).unwrap(), index);
+    assert!(lock.exists());
+    let held = lock.clone();
+    let letting_go = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        std::fs::remove_file(held).unwrap();
+    });
+    refresh_index(&r).unwrap();
+    letting_go.join().unwrap();
+    assert_eq!(st(&r).changes.stale, 0);
+    assert!(refresh_index(&sb.root().join("nowhere")).is_err());
 }

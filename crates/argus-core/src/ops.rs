@@ -1770,6 +1770,43 @@ fn traced<S: AsRef<str>>(cwd: &Path, args: &[S], ok: bool, started: Instant) {
     );
 }
 
+/// Bring `repo`'s index up to date with its files' times, as `git status`
+/// does in passing: the files whose times it has wrong ([stale], their
+/// content unchanged) git reads once more and records, so later statuses
+/// needn't read them. Git takes the index's lock before reading it, so
+/// what's staged meanwhile isn't lost; if another git holds that lock,
+/// it's waited for a little (a status reads the stale files again until
+/// a later refresh).
+///
+/// [stale]: crate::status::Changes::stale
+pub fn refresh_index(repo: &Path) -> Result<(), String> {
+    let lock = gix::open(repo).ok().map(|r| {
+        let mut lock = r.index_path().into_os_string();
+        lock.push(".lock");
+        PathBuf::from(lock)
+    });
+    let mut wait = Duration::from_millis(25);
+    loop {
+        // (-q: files changed are no failure; --unmerged: nor conflicts)
+        let out = git_in(repo, &["update-index", "-q", "--unmerged", "--refresh"]);
+        if out.success {
+            return Ok(());
+        }
+        let locked = lock.as_deref().is_some_and(Path::exists);
+        if !locked {
+            return Err(match out.output.is_empty() {
+                true => format!("git update-index failed ({:?})", out.code),
+                false => out.output,
+            });
+        }
+        if wait > Duration::from_millis(800) {
+            return Err("the index is locked: another git is using it".into());
+        }
+        std::thread::sleep(wait);
+        wait *= 2;
+    }
+}
+
 /// Run a read-only git command for status (no network, no prompts).
 pub(crate) fn git_in(cwd: &Path, args: &[&str]) -> OpOutcome {
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();

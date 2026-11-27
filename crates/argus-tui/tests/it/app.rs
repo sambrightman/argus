@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use argus_core::config::Config;
 use argus_core::ops::{Op, ResetMode};
-use argus_core::testkit::{Sandbox, commit, git, write};
+use argus_core::testkit::{Sandbox, commit, git, touch_back, write};
 use argus_core::{State, Workspace};
 use argus_tui::app::{Action, App, Effect, Happened, Mode, Msg, Prompt, Row, Scope, StashKind};
 use argus_tui::details::Seg;
@@ -9978,7 +9978,29 @@ fn run_fix(app: &mut App, fx: Vec<Effect>) -> Vec<Effect> {
     });
     assert!(matches!(fx.as_slice(), [Effect::Refresh(_)]), "{fx:?}");
     let st = argus_core::status::status(&path, Default::default());
-    app.on_msg(Msg::Status(path, Box::new(st.map_err(|e| e.to_string()))))
+    let fx = app.on_msg(Msg::Status(path, Box::new(st.map_err(|e| e.to_string()))));
+    but_index_refreshes(fx)
+}
+
+/// What `app` does with a status (`m`), but for refreshing indexes.
+fn on_status(app: &mut App, m: Msg) -> Vec<Effect> {
+    but_index_refreshes(app.on_msg(m))
+}
+
+/// What `app` does with statuses, but for refreshing indexes.
+fn on_statuses(
+    app: &mut App,
+    batch: Vec<(PathBuf, Result<argus_core::status::RepoStatus, String>)>,
+) -> Vec<Effect> {
+    but_index_refreshes(app.on_statuses(batch))
+}
+
+/// `fx` but for refreshing indexes: a fix's files, as new as the index it
+/// leaves, are read by every status until the index is refreshed.
+fn but_index_refreshes(fx: Vec<Effect>) -> Vec<Effect> {
+    fx.into_iter()
+        .filter(|e| !matches!(e, Effect::RefreshIndexes(_)))
+        .collect()
 }
 
 #[test]
@@ -10014,10 +10036,7 @@ fn fix_auto_goes_on_to_the_next_fix_until_none_applies() {
     assert!(!app.running.contains_key(&f));
     // and a later refresh starts nothing
     let st = argus_core::status::status(&f, Default::default()).unwrap();
-    assert!(
-        app.on_msg(Msg::Status(f.clone(), Box::new(Ok(st))))
-            .is_empty()
-    );
+    assert!(on_status(&mut app, Msg::Status(f.clone(), Box::new(Ok(st)))).is_empty());
 }
 
 #[test]
@@ -10055,7 +10074,7 @@ fn fix_auto_stops_at_a_failure_and_waits_for_a_running_fix() {
     };
     // a refresh arriving while the fix runs doesn't start another
     assert!(
-        !app.on_msg(Msg::Status(f.clone(), status()))
+        !on_status(&mut app, Msg::Status(f.clone(), status()))
             .iter()
             .any(|e| matches!(e, Effect::Fix { .. }))
     );
@@ -10080,7 +10099,7 @@ fn fix_auto_stops_at_a_failure_and_waits_for_a_running_fix() {
     });
     assert!(app.message.as_ref().unwrap().0.contains("push failed"));
     assert!(
-        !app.on_msg(Msg::Status(f.clone(), status()))
+        !on_status(&mut app, Msg::Status(f.clone(), status()))
             .iter()
             .any(|e| matches!(e, Effect::Fix { .. }))
     );
@@ -10201,7 +10220,7 @@ fn opening_details_asks_the_forge_once_and_shows_what_it_says() {
             argus_core::status::status(&f, Default::default()).unwrap()
         ))
     };
-    assert!(app.on_msg(Msg::Status(f.clone(), st())).is_empty());
+    assert!(on_status(&mut app, Msg::Status(f.clone(), st())).is_empty());
     let info = argus_core::forge::RepoInfo {
         open_issues: 1,
         open_pulls: 3,
@@ -10226,14 +10245,14 @@ fn opening_details_asks_the_forge_once_and_shows_what_it_says() {
     // inverse: a branch with no pull request says nothing of one
     let old = texts.iter().find(|t| t.starts_with("    old")).unwrap();
     assert!(!old.contains('#'), "{old}");
-    assert!(app.on_msg(Msg::Status(f.clone(), st())).is_empty());
+    assert!(on_status(&mut app, Msg::Status(f.clone(), st())).is_empty());
     // folding and opening again doesn't ask again either
     app.act(Action::ToggleExpand);
     assert!(app.act(Action::ToggleExpand).is_empty());
     // a new branch is one it hasn't been asked about: asked again, what's
     // known shown meanwhile
     git(&f, &["branch", "-q", "newer"]);
-    let fx = app.on_msg(Msg::Status(f.clone(), st()));
+    let fx = on_status(&mut app, Msg::Status(f.clone(), st()));
     assert!(
         matches!(fx.as_slice(), [Effect::Forge { branches, .. }] if branches == &["feat", "newer", "old"]),
         "{fx:?}"
@@ -12202,7 +12221,10 @@ fn fix_auto_reads_again_when_a_status_still_wants_the_fix_just_applied() {
         path: f.clone(),
         applied: Ok(applied),
     });
-    let fx = app.on_msg(Msg::Status(f.clone(), Box::new(Ok(stale.clone()))));
+    let fx = on_status(
+        &mut app,
+        Msg::Status(f.clone(), Box::new(Ok(stale.clone()))),
+    );
     // not taken as the end: read again, the chain still going
     assert!(
         matches!(fx.as_slice(), [Effect::Refresh(p)] if p == &vec![f.clone()]),
@@ -12211,7 +12233,7 @@ fn fix_auto_reads_again_when_a_status_still_wants_the_fix_just_applied() {
     assert!(!app.message.as_ref().unwrap().0.ends_with("done"));
     // the true status goes on to the next fix
     let fresh = argus_core::status::status(&f, Default::default()).unwrap();
-    let fx = app.on_msg(Msg::Status(f.clone(), Box::new(Ok(fresh))));
+    let fx = on_status(&mut app, Msg::Status(f.clone(), Box::new(Ok(fresh))));
     assert!(fx.iter().any(|e| matches!(e, Effect::Fix { .. })), "{fx:?}");
     // inverse: wanted again a second time, it isn't making progress: done
     let (sb, mut app) = setup_with("", two_step);
@@ -12239,10 +12261,10 @@ fn fix_auto_reads_again_when_a_status_still_wants_the_fix_just_applied() {
     });
     let again = || Msg::Status(f.clone(), Box::new(Ok(before.clone())));
     assert!(matches!(
-        app.on_msg(again()).as_slice(),
+        on_status(&mut app, again()).as_slice(),
         [Effect::Refresh(_)]
     ));
-    assert!(app.on_msg(again()).is_empty());
+    assert!(on_status(&mut app, again()).is_empty());
     assert!(app.message.as_ref().unwrap().0.ends_with(": done"));
     assert!(!app.running.contains_key(&f));
 }
@@ -12312,7 +12334,7 @@ fn branches_left_unchecked_say_so_until_checked() {
     };
     let (c, d) = (at(&app, "clean"), at(&app, "dirty"));
     let reader = app.ws.status_reader();
-    let fx = app.on_statuses(vec![(c.clone(), reader.read(&c))]);
+    let fx = on_statuses(&mut app, vec![(c.clone(), reader.read(&c))]);
     assert!(
         fx.contains(&Effect::CheckBranches(vec![c.clone()])),
         "{fx:?}"
@@ -12328,11 +12350,50 @@ fn branches_left_unchecked_say_so_until_checked() {
             .count()
     };
     assert_eq!(checking(&mut app), 2);
-    let fx = app.on_statuses(vec![(d.clone(), reader.read(&d))]);
+    let fx = on_statuses(&mut app, vec![(d.clone(), reader.read(&d))]);
     assert!(
         !fx.iter().any(|e| matches!(e, Effect::CheckBranches(_))),
         "{fx:?}"
     );
     app.on_msg(Msg::Branches(c.clone(), reader.branches(&c)));
     assert_eq!(checking(&mut app), 0);
+}
+
+/// A status that finds files stale has its repo's index refreshed, and
+/// only its: another repo found stale before isn't refreshed again for
+/// it, and one found with none stale isn't refreshed at all.
+#[test]
+fn a_status_finding_files_stale_refreshes_that_repos_index_alone() {
+    let (_sb, mut app) = setup_with("", |sb| {
+        for n in ["clean", "feature"] {
+            touch_back(&sb.path(&format!("dev/{n}")).join("README"), 1);
+        }
+    });
+    let at = |app: &App, name: &str| {
+        app.ws
+            .entries
+            .iter()
+            .find(|e| e.path.ends_with(name))
+            .unwrap()
+            .path
+            .clone()
+    };
+    let (c, d, f) = (at(&app, "clean"), at(&app, "dirty"), at(&app, "feature"));
+    assert_eq!(app.ws.stale(), [c.clone(), f.clone()]);
+    let reader = app.ws.status_reader();
+    let fx = app.on_msg(Msg::Status(c.clone(), Box::new(reader.read(&c))));
+    assert!(
+        fx.contains(&Effect::RefreshIndexes(vec![c.clone()])),
+        "{fx:?}"
+    );
+    assert!(
+        !fx.iter()
+            .any(|e| matches!(e, Effect::RefreshIndexes(p) if p.contains(&f))),
+        "{fx:?}"
+    );
+    let fx = app.on_msg(Msg::Status(d.clone(), Box::new(reader.read(&d))));
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::RefreshIndexes(_))),
+        "{fx:?}"
+    );
 }

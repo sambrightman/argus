@@ -15,7 +15,7 @@ use argus_core::paths::contract_tilde;
 use argus_core::pull::{plan_tracks, plan_updates};
 use argus_core::runner::{Event, run_jobs};
 use argus_core::state::State;
-use argus_core::testkit::{Sandbox, commit, git, write};
+use argus_core::testkit::{Sandbox, commit, git, touch_back, write};
 use argus_core::{ViewFilter, Workspace};
 
 fn ws(sb: &Sandbox, extra: &str) -> Workspace {
@@ -2416,4 +2416,24 @@ fn branches_left_unchecked_are_checked_later_unless_they_moved() {
         (unpushed(&w), e.ignored_issues.clone()),
         (None, vec![Issue::UnpushedBranches(13)])
     );
+}
+
+/// The repos whose status found files stale are listed to refresh, and
+/// those whose status found none aren't; refreshed, and statused again,
+/// a repo leaves the list.
+#[test]
+fn repos_with_stale_files_are_listed_to_refresh() {
+    let sb = Sandbox::new();
+    let touched = sb.init("dev/touched").canonicalize().unwrap();
+    sb.init("dev/fresh");
+    for r in [&touched, &sb.path("dev/fresh")] {
+        touch_back(&r.join("README"), 2);
+        git(r, &["add", "README"]);
+    }
+    touch_back(&touched.join("README"), 1);
+    let mut w = ws(&sb, "");
+    assert_eq!(w.stale(), std::slice::from_ref(&touched));
+    argus_core::ops::refresh_index(&touched).unwrap();
+    w.refresh(&touched);
+    assert_eq!(w.stale(), Vec::<std::path::PathBuf>::new());
 }

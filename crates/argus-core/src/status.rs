@@ -152,6 +152,11 @@ pub struct Changes {
     pub(crate) missing: Vec<String>,
     /// Up to [`MAX_FILES`] entries, sorted by path.
     pub files: Vec<FileChange>,
+    /// Files whose times the index has wrong, read and found unchanged:
+    /// every status reads them again, until the index is refreshed
+    /// ([`crate::ops::refresh_index`]).
+    #[serde(skip)]
+    pub stale: usize,
 }
 
 pub const MAX_FILES: usize = 500;
@@ -1632,13 +1637,19 @@ fn changes(
         }
     }
 
+    let mut stale = 0;
     if let Some(out) = iter.outcome_mut() {
+        stale = out
+            .index_worktree
+            .tracked_file_modification
+            .entries_to_update;
         crate::trace::amend(|| files_read(&out.index_worktree));
     }
     collapse_untracked(repo, &mut files, &mut kinds)?;
     let mut c = Changes {
         moved,
         missing,
+        stale,
         ..Default::default()
     };
     for (path, (x, y)) in files {
@@ -1685,8 +1696,8 @@ fn changes(
 /// What a status had to do, said as its `files` step: the files it read
 /// (the rest it took as unchanged from what the index says of them), of
 /// those the ones that hadn't changed after all, though the index said
-/// they might have (and still will: argus doesn't write the index), and
-/// how far it walked for untracked files.
+/// they might have (stale: see [`Changes::stale`]), and how far it walked
+/// for untracked files.
 fn files_read(out: &gix::status::plumbing::index_as_worktree_with_renames::Outcome) -> String {
     let tracked = &out.tracked_file_modification;
     let mut said = format!(

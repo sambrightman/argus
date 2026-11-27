@@ -580,6 +580,34 @@ impl Runtime {
                     )
                 });
             }
+            Effect::RefreshIndexes(paths) => {
+                let n = app.ws.config.disk_jobs();
+                self.spawn(move |_| {
+                    argus_core::workspace::in_pool(n, || {
+                        use rayon::prelude::*;
+                        let here = argus_core::trace::within();
+                        paths.into_par_iter().for_each(|p| {
+                            // (one that fails is traced, and tried again
+                            // after a later status finds it stale)
+                            let _ = here.run(|| {
+                                argus_core::trace::timed(
+                                    "refresh index",
+                                    |r: &Result<(), String>| {
+                                        let repo = argus_core::paths::contract_tilde(&p);
+                                        match r {
+                                            Ok(()) => format!("refresh index of {repo}"),
+                                            Err(e) => {
+                                                format!("refresh index of {repo}, failed: {e}")
+                                            }
+                                        }
+                                    },
+                                    || argus_core::ops::refresh_index(&p),
+                                )
+                            });
+                        });
+                    })
+                });
+            }
             Effect::Jobs(jobs) => {
                 let n = app.ws.config.network_jobs();
                 let cancel = self.cancel.clone();

@@ -111,6 +111,20 @@ pub fn write(dir: &Path, rel: &str, content: &str) {
     std::fs::write(p, content).unwrap();
 }
 
+/// Gives `file` a time `hours` back, its content as it was: what the
+/// index has of it no longer matches, so a status reads it to see. (A
+/// file as new as the index is read too, as it may have changed since,
+/// in the same instant.)
+pub fn touch_back(file: &Path, hours: u64) {
+    let then = std::time::SystemTime::now() - std::time::Duration::from_secs(3600 * hours);
+    std::fs::File::options()
+        .write(true)
+        .open(file)
+        .unwrap()
+        .set_modified(then)
+        .unwrap();
+}
+
 pub fn commit(dir: &Path, msg: &str) {
     git(dir, &["add", "-A"]);
     git(dir, &["commit", "-q", "--allow-empty", "-m", msg]);

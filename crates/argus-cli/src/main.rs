@@ -107,6 +107,11 @@ enum Cmd {
         /// `gh` or `GH_TOKEN` gives).
         #[arg(long)]
         forge: bool,
+        /// After the status, refresh the index of each repo whose files it
+        /// found stale (their times changed, their content not), as `git
+        /// status` does, so the next status needn't read them again.
+        #[arg(long)]
+        write: bool,
     },
     /// Pull the repos tagged for pull; list tracked owners and clone their
     /// new repos.
@@ -499,6 +504,7 @@ fn run() -> Result<()> {
             tag,
             details,
             forge,
+            write,
         } => {
             if forge && json {
                 bail!("--forge isn't part of --json output yet: leave one of them out");
@@ -514,6 +520,7 @@ fn run() -> Result<()> {
                 .collect::<Vec<_>>()
                 .join(" ");
             status(&ws, view.into(), &query, json, details || forge, forge)?;
+            stale_indexes(&ws, write);
         }
         Cmd::Pull {
             dry_run,
@@ -1263,6 +1270,50 @@ fn ask_forges(ws: &Workspace, order: &[usize]) -> HashMap<PathBuf, Said> {
 }
 
 /// Footer counts, naming the flag that shows whatever the filter left out.
+/// The repos whose statuses found their indexes stale: with `write`,
+/// refreshed (saying which couldn't be), else named, with how to refresh
+/// them.
+fn stale_indexes(ws: &Workspace, write: bool) {
+    let stale = ws.stale();
+    if stale.is_empty() {
+        return;
+    }
+    if write {
+        for (p, e) in ws.refresh_stale() {
+            eprintln!(
+                "argus: couldn't refresh the index of {}: {e}",
+                paths::contract_tilde(&p)
+            );
+        }
+        return;
+    }
+    let files: usize = stale
+        .iter()
+        .filter_map(|p| ws.get(p)?.status())
+        .map(|s| s.changes.stale)
+        .sum();
+    let files = format!("{files} {}", plural(files, "file", "files"));
+    match &stale[..] {
+        [one] => {
+            let repo = paths::contract_tilde(one);
+            eprintln!(
+                "argus: the index of {repo} is stale ({files}): every status reads them \
+                 again until it's refreshed, by `argus status --write` or `git -C {repo} status`"
+            );
+        }
+        many => eprintln!(
+            "argus: the indexes of {} repos are stale ({files}): every status reads them \
+             again until they're refreshed, by `argus status --write` or `git -C <repo> \
+             status` in each: {}",
+            many.len(),
+            many.iter()
+                .map(|p| paths::contract_tilde(p))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
 fn status_summary(ws: &Workspace, filter: ViewFilter) -> String {
     let shown = |e: &&argus_core::Entry| filter.show_hidden || !e.flags.hidden();
     let total = ws.entries.iter().filter(shown).count();
