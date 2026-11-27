@@ -72,9 +72,12 @@ deferred.
 - **Upstream to gix:** peeling packed refs without reading their objects
   where `packed-refs` says `fully-peeled` (written and tested locally:
   emacs's 259 remote branches cold went from 45ms to 1ms, its status
-  from 120-170ms to 85-110ms); and an issue on peeling reading whole
-  objects where a header lookup would do, which isn't free with the
-  object cache on.
+  from 120-170ms to 85-110ms; GitoxideLabs/gitoxide#3254, open); and an
+  issue on peeling reading whole objects where a header lookup would do,
+  which isn't free with the object cache on. Meanwhile argus peels from
+  `packed-refs` itself (`fully_peeled` and `Refs::peel_at` in
+  `status.rs`): a ref still where the file has it takes the file's
+  answer. Once #3254 is released, remove that and let gix peel.
   - **Status with many submodules is quadratic.** For each submodule,
     `BuiltinSubmoduleStatus::status` (`gix/src/status/index_worktree.rs`)
     calls `repo.submodules()` and searches the whole list by path: a

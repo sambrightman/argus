@@ -720,6 +720,9 @@ struct Refs<'r> {
     refs: Vec<gix::Reference<'r>>,
     by_name: HashMap<String, usize>,
     peeled: RefCell<HashMap<usize, Option<gix::ObjectId>>>,
+    /// What `packed-refs` holds, by name: each ref's target and what it
+    /// peels to, where the file says it's fully peeled (else empty).
+    packed: HashMap<String, (gix::ObjectId, gix::ObjectId)>,
 }
 
 impl<'r> Refs<'r> {
@@ -751,6 +754,7 @@ impl<'r> Refs<'r> {
             refs,
             by_name,
             peeled: RefCell::default(),
+            packed: fully_peeled(repo),
         })
     }
 
@@ -776,6 +780,16 @@ impl<'r> Refs<'r> {
         if let Some(&id) = self.peeled.borrow().get(&i) {
             return id;
         }
+        // where it's where packed-refs has it, peeled as that says: no
+        // object read (gix reads it, though the file says: TODO.md)
+        let r = &self.refs[i];
+        if let gix::refs::TargetRef::Object(target) = r.target()
+            && let Some(&(packed, peeled)) =
+                self.packed.get(r.name().as_bstr().to_str_lossy().as_ref())
+            && packed == target
+        {
+            return Some(peeled);
+        }
         let id = self.refs[i].clone().peel_to_id().ok().map(|id| id.detach());
         self.peeled.borrow_mut().insert(i, id);
         id
@@ -784,6 +798,39 @@ impl<'r> Refs<'r> {
     fn peel(&self, name: &str) -> Option<gix::ObjectId> {
         self.by_name.get(name).and_then(|&i| self.peel_at(i))
     }
+}
+
+/// What `repo`'s `packed-refs` holds, by name: each ref's target and what
+/// it peels to, if the file says it's fully peeled (`# pack-refs with:
+/// … fully-peeled`, as git writes it: a ref to a tag has its peeled line,
+/// so one without points at no tag). Else, or unreadable, nothing.
+fn fully_peeled(repo: &gix::Repository) -> HashMap<String, (gix::ObjectId, gix::ObjectId)> {
+    use gix::bstr::ByteSlice;
+    let Ok(bytes) = std::fs::read(repo.common_dir().join("packed-refs")) else {
+        return HashMap::new();
+    };
+    let header = bytes.lines().next().unwrap_or_default();
+    let fully = header
+        .strip_prefix(b"# pack-refs with: ")
+        .is_some_and(|traits| traits.split_str(" ").any(|t| t.trim() == b"fully-peeled"));
+    if !fully {
+        return HashMap::new();
+    }
+    let Ok(buffer) = gix::refs::packed::Buffer::from_bytes(&bytes, repo.object_hash()) else {
+        return HashMap::new();
+    };
+    let Ok(entries) = buffer.iter() else {
+        return HashMap::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|r| {
+            (
+                r.name.as_bstr().to_str_lossy().into_owned(),
+                (r.target(), r.object()),
+            )
+        })
+        .collect()
 }
 
 /// A repo's status, each part of it a step.
@@ -2374,6 +2421,55 @@ mod tests {
     /// A work tree's checked-out commit is read through its `.git`,
     /// whether a folder or a file naming one: on a branch, detached, and
     /// none while its branch has no commit yet, nor where there's no repo.
+    /// Where `packed-refs` says it's fully peeled, a ref it holds that
+    /// hasn't moved since is peeled from it, no object read: shown here by
+    /// its commit's object being gone. Moved since, or a file not saying
+    /// so, the object is read (so, gone, it can't be peeled).
+    #[test]
+    fn packed_refs_fully_peeled_are_peeled_without_reading_objects() {
+        use crate::testkit::{Sandbox, commit, git};
+        let sb = Sandbox::new();
+        let r = sb.init("r");
+        commit(&r, "one");
+        // a commit of its own, loose, to delete: on a remote branch, and
+        // an annotated tag of it
+        let tree = git(&r, &["rev-parse", "HEAD^{tree}"]).trim().to_string();
+        let lone = git(&r, &["commit-tree", &tree, "-m", "lone"])
+            .trim()
+            .to_string();
+        git(&r, &["update-ref", "refs/remotes/origin/lone", &lone]);
+        git(&r, &["tag", "-a", "-m", "t", "t-lone", &lone]);
+        git(&r, &["pack-refs", "--all"]);
+        let packed = std::fs::read_to_string(r.join(".git/packed-refs")).unwrap();
+        assert!(
+            packed.starts_with("# pack-refs with:") && packed.contains(" fully-peeled"),
+            "{packed}"
+        );
+        let object = r.join(".git/objects").join(&lone[..2]).join(&lone[2..]);
+        std::fs::remove_file(&object).unwrap();
+        let peeled = |names: &[&str]| -> Vec<Option<String>> {
+            let repo = gix::open(&r).unwrap();
+            let refs = Refs::read(&repo).unwrap();
+            names
+                .iter()
+                .map(|n| refs.peel(n).map(|id| id.to_string()))
+                .collect()
+        };
+        let names = ["refs/remotes/origin/lone", "refs/tags/t-lone"];
+        assert_eq!(peeled(&names), [Some(lone.clone()), Some(lone.clone())]);
+        // moved since (a loose file over the packed entry): read, so gone
+        let head = git(&r, &["rev-parse", "HEAD"]).trim().to_string();
+        git(&r, &["update-ref", "refs/remotes/origin/lone", &head]);
+        assert_eq!(peeled(&names[..1]), [Some(head.clone())], "moved, found");
+        // (back where packed-refs has it: the loose file gone)
+        std::fs::remove_file(r.join(".git/refs/remotes/origin/lone")).unwrap();
+        assert_eq!(peeled(&names[..1]), [Some(lone.clone())], "back");
+        // a file not saying it's fully peeled: the object read, gone
+        let unsaid = packed.replacen(" fully-peeled", "", 1);
+        std::fs::write(r.join(".git/packed-refs"), unsaid).unwrap();
+        assert_eq!(peeled(&names[..1]), [None]);
+    }
+
     #[test]
     fn the_commit_a_work_tree_has_checked_out_is_read_from_its_refs() {
         use crate::testkit::{Sandbox, commit, git};

@@ -18,6 +18,7 @@ Releasing).
 
 ### Fixed
 
+- Statuses read their remote branches' and tags' commits from `packed-refs` where it says them (as git writes it, `fully-peeled`), rather than reading each commit: repos with many remote branches are quicker, cold most of all (2,000 remote branches: 4ms to under 1ms with the files cached).
 - The TUI's messages sorted by own time, with a big history (after a scan of thousands of repos or submodules), could take a quarter of a second a frame, and each slow frame, said in the messages, drew another: the list kept moving and frames stayed slow. A step's time is worked out once per sort (by own time, 252ms to 54ms for 325,000 steps), and a slow frame no longer asks for a frame of its own.
 - A repo with thousands of submodules is quicker to list and to refresh: listing them took time growing with the square of their number after their statuses were read (seconds at 25,000), and so did applying a refresh of them in the TUI, on the thread drawing the screen (4,000: 890ms, now 48ms).
 - A repo with thousands of submodules set up with `git submodule init` (as a clone with `--recurse-submodules` has them) no longer spends seconds in its own status finding which are checked out (4,000: 2.6s, now 28ms), nor before a pull; with `-v` that's its `submodules` step.
