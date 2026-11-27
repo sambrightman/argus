@@ -1734,6 +1734,32 @@ fn repos_gone_together_leave_together() {
     assert_eq!(left, ["a", "c", "e"]);
 }
 
+/// A parent's status read while its worktree was there, applied after
+/// the worktree was removed and its row let go: the row isn't brought
+/// back from what the status listed.
+#[test]
+fn a_worktree_removed_since_its_parents_status_stays_gone() {
+    let sb = Sandbox::new();
+    let app = sb.init("dev/app");
+    let wt = sb.path("dev/app-wt");
+    git(
+        &app,
+        &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()],
+    );
+    let mut w = ws(&sb, "");
+    let (app, wt) = (app.canonicalize().unwrap(), wt.canonicalize().unwrap());
+    assert!(w.get(&wt).is_some(), "listed while it's there");
+    let before = w.status_reader().read(&app);
+    assert!(
+        before.as_ref().is_ok_and(|s| s.worktrees.contains(&wt)),
+        "{before:?}"
+    );
+    git(&app, &["worktree", "remove", wt.to_str().unwrap()]);
+    w.forget(&wt);
+    w.update_statuses([(app.clone(), before)]);
+    assert!(w.get(&wt).is_none(), "not brought back");
+}
+
 /// A repo whose folder is gone (deleted outside argus) shows its error
 /// at the next refresh, and leaves the list at the one after: seen once.
 #[test]
