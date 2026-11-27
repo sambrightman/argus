@@ -1643,7 +1643,7 @@ fn changes(
             .index_worktree
             .tracked_file_modification
             .entries_to_update;
-        crate::trace::amend(|| files_read(&out.index_worktree));
+        crate::trace::amend(|| files_read(out));
     }
     collapse_untracked(repo, &mut files, &mut kinds)?;
     let mut c = Changes {
@@ -1697,9 +1697,11 @@ fn changes(
 /// (the rest it took as unchanged from what the index says of them), of
 /// those the ones that hadn't changed after all, though the index said
 /// they might have (stale: see [`Changes::stale`]), and how far it walked
-/// for untracked files.
-fn files_read(out: &gix::status::plumbing::index_as_worktree_with_renames::Outcome) -> String {
-    let tracked = &out.tracked_file_modification;
+/// for untracked files; and, when it looked for renames, how many pairs
+/// of files it compared, and how many it left uncompared, past the limit
+/// (`diff.renameLimit`), where it compares none.
+fn files_read(out: &gix::status::Outcome) -> String {
+    let tracked = &out.index_worktree.tracked_file_modification;
     let mut said = format!(
         "files: {} tracked, {} read ({}): {} unchanged, {} too new to trust",
         tracked.entries_to_process,
@@ -1708,11 +1710,29 @@ fn files_read(out: &gix::status::plumbing::index_as_worktree_with_renames::Outco
         tracked.entries_to_update,
         tracked.racy_clean,
     );
-    if let Some(walk) = &out.dirwalk {
+    if let Some(walk) = &out.index_worktree.dirwalk {
         said += &format!(
             "; {} folders walked, {} entries",
             walk.read_dir_calls, walk.seen_entries
         );
+    }
+    let checks = |r: Option<&gix::diff::rewrites::Outcome>| {
+        r.map_or((0, 0), |r| {
+            (
+                r.num_similarity_checks,
+                r.num_similarity_checks_skipped_for_rename_tracking_due_to_limit
+                    + r.num_similarity_checks_skipped_for_copy_tracking_due_to_limit,
+            )
+        })
+    };
+    let staged = checks(out.tree_index.as_ref().and_then(|t| t.rewrite.as_ref()));
+    let unstaged = checks(out.index_worktree.rewrites.as_ref());
+    let (compared, skipped) = (staged.0 + unstaged.0, staged.1 + unstaged.1);
+    if compared > 0 {
+        said += &format!("; {compared} compared for renames");
+    }
+    if skipped > 0 {
+        said += &format!("; {skipped} left uncompared (rename limit)");
     }
     said
 }

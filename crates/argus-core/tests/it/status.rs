@@ -1409,9 +1409,10 @@ fn files_said(f: impl FnOnce()) -> Vec<String> {
 
 /// The `files` step says what the status read: files whose details on
 /// disk no longer match the index's are read again, those unchanged after
-/// all counted (they stay so, as argus doesn't write the index), as are
-/// those the index can't vouch for, being as new as it; and how far the
-/// walk for untracked files went.
+/// all counted (they stay so until the index is refreshed), as are those
+/// the index can't vouch for, being as new as it; how far the walk for
+/// untracked files went; and, looking for renames, how many pairs of
+/// files were compared, said only when some were.
 #[test]
 fn the_files_step_says_what_was_read_to_find_changes() {
     let sb = Sandbox::new();
@@ -1467,6 +1468,29 @@ fn the_files_step_says_what_was_read_to_find_changes() {
         [
             "files: 3 tracked, 0 read (0 bytes): 0 unchanged, 0 too new to trust; 3 folders walked, 5 entries"
         ]
+    );
+    // a renamed and changed, staged: compared with what's gone
+    std::fs::remove_dir_all(r.join("u")).unwrap();
+    git(&r, &["mv", "a", "a2"]);
+    write(&r, "a2", "aaaa\naaab\n");
+    git(&r, &["add", "a2"]);
+    git(&r, &["update-index", "-q", "--refresh"]);
+    let renamed = said();
+    assert_eq!(renamed.len(), 1);
+    assert!(
+        renamed[0].ends_with("; 1 compared for renames"),
+        "{renamed:?}"
+    );
+    // past the limit, none compared and those left said
+    git(&r, &["config", "diff.renameLimit", "1"]);
+    git(&r, &["mv", "c", "c2"]);
+    write(&r, "c2", "c\nd\n");
+    git(&r, &["add", "c2"]);
+    let limited = said();
+    assert_eq!(limited.len(), 1);
+    assert!(
+        limited[0].ends_with("entries; 4 left uncompared (rename limit)"),
+        "{limited:?}"
     );
 }
 

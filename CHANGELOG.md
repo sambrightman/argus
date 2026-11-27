@@ -12,6 +12,7 @@ Releasing).
 ### New
 
 - Repos whose index has the wrong times for files that haven't changed (after a checkout, a build that touches files, or a copy of the repo) no longer have those files read by every status. The TUI refreshes such a repo's index in the background, as `git status` does, once a status finds them. The CLI warns of them, naming the repos; `argus status --write` refreshes them after the status, as does `git -C <repo> status`.
+- With `-v`, a repo's `files` step also says how many pairs of files it compared looking for renames, and how many it left uncompared past `diff.renameLimit`, when there were any.
 
 **Full Changelog**: https://github.com/sambrightman/argus/compare/v0.4.0...HEAD
 
