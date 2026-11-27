@@ -1023,7 +1023,7 @@ fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
         shown.push(Line::from(Span::styled(
             format!(
                 "{:<20} {:>6}  {:>7}  {:>7}  {:>7}  {:>9}  {:>10}",
-                "kind", "steps", "time", "slowest", "own", "sub-steps", "from total"
+                "kind", "steps", "time", "slowest", "own", "sub-steps", "summed"
             ),
             t.ui(Ui::Dim),
         )));
@@ -1063,7 +1063,14 @@ fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
                 ));
                 spans.push(Span::raw(label.to_string()));
             }
-            Shown::Step { step, of } => spans.push(Span::styled(step.said_in(*of), t.ui(Ui::Dim))),
+            Shown::Step { step, of } => {
+                // (sorted by own time, that first)
+                let said = match m.own && matches!(m.by, By::Sorted | By::Slowest) {
+                    true => step.own_first_in(*of),
+                    false => step.said_in(*of),
+                };
+                spans.push(Span::styled(said, t.ui(Ui::Dim)));
+            }
             Shown::Output(s) => spans.push(Span::styled(s.to_string(), t.ui(Ui::Dim))),
             Shown::Kind { kind, tally } => {
                 let d = argus_core::trace::duration;

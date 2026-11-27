@@ -769,11 +769,11 @@ fn steps_unfold_into_the_steps_they_took() {
     assert!(!screen.contains("status ~/dev/b"), "{screen}");
     // 3ms its own, 27 the statuses', side by side, of their 45
     assert!(
-        screen.contains("30ms  scan: 2 repos (own 3ms, sub-steps 27ms from 45ms total)"),
+        screen.contains("30ms  scan: 2 repos (own 3ms, sub-steps 27ms overlapping, 45ms summed)"),
         "{screen}"
     );
     assert!(
-        screen.contains("9ms  refresh ~/dev/a (own <1ms, sub-steps 9ms from 9ms total)"),
+        screen.contains("9ms  refresh ~/dev/a (own <1ms, sub-steps 9ms overlapping, 9ms summed)"),
         "{screen}"
     );
     app.on_key(key('k'));
@@ -791,7 +791,9 @@ fn steps_unfold_into_the_steps_they_took() {
     let screen = render(&mut app, 100, 30);
     // one after another: as much from as by them
     assert!(
-        screen.contains("▾    25ms  status ~/dev/b (own 2ms, sub-steps 23ms from 23ms total)"),
+        screen.contains(
+            "▾    25ms  status ~/dev/b (own 2ms, sub-steps 23ms overlapping, 23ms summed)"
+        ),
         "{screen}"
     );
     // a step that took none: by itself
@@ -923,9 +925,9 @@ fn s_first_sorts_the_tree_at_each_level() {
             "9ms  refresh",
         ],
     );
-    // by own time: a's 4 before b's 2
+    // by own time, said first: a's 4 before b's 2
     app.on_key(key('o'));
-    let screen = render(&mut app, 100, 30);
+    let screen = render(&mut app, 140, 30);
     assert!(
         screen.contains("each level by most own time (Tab folds; o by all of it"),
         "{screen}"
@@ -933,14 +935,24 @@ fn s_first_sorts_the_tree_at_each_level() {
     in_order(
         &screen,
         &[
-            "20ms  status ~/dev/a",
-            "25ms  status ~/dev/b",
+            "4ms  status ~/dev/a (total 20ms, sub-steps 16ms overlapping, 16ms summed)",
+            "2ms  status ~/dev/b (total 25ms",
             "roots ~/dev",
         ],
     );
     // then every step, slowest first
     app.on_key(key('s'));
     assert!(render(&mut app, 100, 30).contains("most own time first"));
+    // round to as they happened, by own time still: not sorted by it, so
+    // each said by its total
+    app.on_key(key('s'));
+    app.on_key(key('s'));
+    let screen = render(&mut app, 140, 30);
+    assert!(
+        screen.contains("25ms  status ~/dev/b (own 2ms, sub-steps 23ms overlapping")
+            && !screen.contains("(total "),
+        "{screen}"
+    );
 }
 
 /// The line the cursor's on in the messages: a step's, what was said, or a
@@ -1069,9 +1081,10 @@ fn s_sorts_the_steps_by_time_then_totals_them_by_kind() {
     );
     // o: by own time instead, when none of a step's own steps ran (a step
     // that took none is all its own): the files first, then a's status (4
-    // of its 20 its own), the scan (3 of 30), b's (2 of 25)
+    // of its 20 its own), the scan (3 of 30), b's (2 of 25); each said by
+    // its own time, its total after
     app.on_key(key('o'));
-    let screen = render(&mut app, 100, 30);
+    let screen = render(&mut app, 130, 30);
     assert!(
         screen.contains("most own time first (o by all of it"),
         "{screen}"
@@ -1082,11 +1095,11 @@ fn s_sorts_the_steps_by_time_then_totals_them_by_kind() {
             "22ms  status ~/dev/b: files",
             "15ms  status ~/dev/a: files",
             "7ms  status ~/dev/a: files",
-            "20ms  status ~/dev/a",
-            "30ms  scan",
-            "25ms  status ~/dev/b",
-            "9ms  status ~/dev/a",
-            "9ms  refresh",
+            "4ms  status ~/dev/a (total 20ms, sub-steps 16ms overlapping, 16ms summed)",
+            "3ms  scan: 2 repos (total 30ms, sub-steps 27ms overlapping, 45ms summed)",
+            "2ms  status ~/dev/b (total 25ms",
+            "1ms  status ~/dev/a (total 9ms",
+            "<1ms  refresh ~/dev/a (total 9ms",
         ],
     );
     // and by kind: the files' 44, the statuses' 7, the opens' and the
@@ -1108,7 +1121,7 @@ fn s_sorts_the_steps_by_time_then_totals_them_by_kind() {
     // their parts'; files took none: all their own
     assert!(
         screen.contains(
-            "kind                  steps     time  slowest      own  sub-steps  from total"
+            "kind                  steps     time  slowest      own  sub-steps      summed"
         ),
         "{screen}"
     );

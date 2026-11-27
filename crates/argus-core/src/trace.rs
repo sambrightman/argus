@@ -98,7 +98,9 @@ impl Step {
     }
 
     /// Its time and, if it took steps, how that divides: `30ms  scan: 2
-    /// repos (own 5ms, sub-steps 25ms from 45ms total)`.
+    /// repos (own 5ms, sub-steps 25ms overlapping, 45ms summed)`: its own, when
+    /// none of its steps ran; theirs, overlapping ones counted once; and
+    /// theirs summed, more than that where they ran side by side.
     pub fn with_split(&self) -> String {
         self.said_in(None)
     }
@@ -113,13 +115,31 @@ impl Step {
         let said = format!("{time:>7}  {}", self.named_in(of));
         match self.split() {
             Some(s) => format!(
-                "{said} (own {}, sub-steps {} from {} total)",
+                "{said} (own {}, sub-steps {} overlapping, {} summed)",
                 duration(s.own),
                 duration(s.sub_steps),
                 duration(s.total)
             ),
             None => said,
         }
+    }
+
+    /// [`Step::said_in`] with its own time first, as the views sorted by
+    /// it show it: `2ms  scan (total 10ms, sub-steps 8ms overlapping, 10ms
+    /// summed)`. One that took no timed steps is all its own: said as by
+    /// `said_in`.
+    pub fn own_first_in(&self, of: Option<&str>) -> String {
+        let Some(s) = self.split() else {
+            return self.said_in(of);
+        };
+        format!(
+            "{:>7}  {} (total {}, sub-steps {} overlapping, {} summed)",
+            duration(s.own),
+            self.named_in(of),
+            self.took.map(duration).unwrap_or_default(),
+            duration(s.sub_steps),
+            duration(s.total)
+        )
     }
 
     /// What it did, a part (said by its kind, alone or followed by `: `
@@ -638,10 +658,26 @@ mod tests {
         assert_eq!(spaced.said_in(Some("status ~/a")), "    3ms  files 3");
         let status = Step::new("status", "status ~/b", Some(ms(5)));
         assert_eq!(status.said_in(Some("scan")), "    5ms  status ~/b");
+        // own time first (sorted by it): all it took with the rest; one
+        // that took no steps is all its own, said as before
+        let scan = with(10, vec![step(8, 1), step(2, 3)]);
+        assert_eq!(
+            scan.said_in(None),
+            "   10ms  x (own 2ms, sub-steps 8ms overlapping, 10ms summed)"
+        );
+        assert_eq!(
+            scan.own_first_in(None),
+            "    2ms  x (total 10ms, sub-steps 8ms overlapping, 10ms summed)"
+        );
+        assert_eq!(
+            part.own_first_in(Some("status ~/a")),
+            part.said_in(Some("status ~/a"))
+        );
+        assert_eq!(noted.own_first_in(None), noted.said_in(None));
         assert_eq!(Step::new("note", "n", None).said_in(None), "         n");
         assert_eq!(
             pairs.with_split(),
-            "    4ms  x (own 1ms, sub-steps 3ms from 8ms total)"
+            "    4ms  x (own 1ms, sub-steps 3ms overlapping, 8ms summed)"
         );
         // untimed: nothing
         assert_eq!(Step::new("note", "n", None).split(), None);

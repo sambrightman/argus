@@ -1015,10 +1015,12 @@ rendering is snapshot-tested via `TestBackend`.
   as in htop, isn't a tree (a step's place among the slowest says more
   than its place in the scan), then totals them by kind; no threshold,
   as sorted the quick ones are at the bottom. A step that took steps says
-  how its time divides: `30ms  scan (own 3ms, sub-steps 27ms from 45ms
-  total)`. Its own is when none of them ran; theirs, when any did (the
-  union of their spans, clipped to its), so the two add up to its time;
-  and their total, more than theirs where they ran side by side. A
+  how its time divides: `30ms  scan (own 3ms, sub-steps 27ms
+  overlapping, 45ms summed)`. Its own is when none of them ran; theirs,
+  when any did (the union of their spans, clipped to its, overlapping
+  ones counted once), so the two add up to its time; and theirs summed,
+  more than that where they ran side by side. Sorted by own time, that
+  leads instead, its total in its place: `3ms  scan (total 30ms, …)`. A
   step's total alone mixes its own time with how its steps overlapped:
   10s of its own and steps fully side by side looks like little overlap.
   Totals by kind add each kind's own and sub-step time too, so a
