@@ -206,6 +206,26 @@ pub fn step<T>(kind: &'static str, what: impl FnOnce() -> String, f: impl FnOnce
     span.in_scope(f)
 }
 
+/// A step begun, ending when this is dropped (or [`Begun::end`]): for one
+/// that spans more than a call, such as the TUI's startup until its first
+/// scan is in. Steps taken on this thread meanwhile are its, and on others
+/// through [`within`].
+pub struct Begun(#[allow(dead_code)] tracing::span::EnteredSpan);
+
+/// Begin a step of `kind`, said as `what`.
+pub fn begin(kind: &'static str, what: impl FnOnce() -> String) -> Begun {
+    let span = open(kind);
+    if !span.is_disabled() {
+        span.record("what", what().as_str());
+    }
+    Begun(span.entered())
+}
+
+impl Begun {
+    /// End it now.
+    pub fn end(self) {}
+}
+
 /// Run `f` as a step of `kind`, said from its result (e.g. how many repos
 /// a scan found).
 pub fn timed<T>(kind: &'static str, what: impl FnOnce(&T) -> String, f: impl FnOnce() -> T) -> T {

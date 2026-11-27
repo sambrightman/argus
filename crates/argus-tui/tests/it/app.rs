@@ -943,6 +943,71 @@ fn s_first_sorts_the_tree_at_each_level() {
     assert!(render(&mut app, 100, 30).contains("most own time first"));
 }
 
+/// The line the cursor's on in the messages: a step's, what was said, or a
+/// kind.
+fn on_line(app: &App) -> String {
+    use argus_tui::messages::{Shown, lines};
+    let Mode::History { messages } = &app.mode else {
+        panic!("the history open");
+    };
+    let lines = lines(&app.history, messages);
+    let at = messages.cursor.min(lines.len().saturating_sub(1));
+    match &lines[at].what {
+        Shown::Step { step, .. } => step.what.clone(),
+        Shown::Said(s) | Shown::Failed(s) => s.to_string(),
+        Shown::Kind { kind, .. } => kind.to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
+/// Another view (`s`, `o`), or another search, keeps the cursor on its
+/// line where that's shown; else it goes to the slowest (by time) or the
+/// newest (as they happened). By kind, there are no such lines to keep.
+#[test]
+fn another_view_keeps_the_cursor_on_its_line() {
+    let (_sb, mut app) = setup("");
+    steps_taken(&mut app);
+    app.report_error("could not save");
+    open_history(&mut app);
+    // b's status, in the scan unfolded
+    app.on_key(alt('<'));
+    app.on_key(code(KeyCode::Tab));
+    while on_line(&app) != "status ~/dev/b" {
+        app.on_key(key('j'));
+    }
+    app.on_key(key('s'));
+    assert_eq!(on_line(&app), "status ~/dev/b", "sorted");
+    app.on_key(key('o'));
+    assert_eq!(on_line(&app), "status ~/dev/b", "by own time");
+    app.on_key(key('s'));
+    assert_eq!(on_line(&app), "status ~/dev/b", "every step");
+    // by kind: the most, first
+    app.on_key(key('s'));
+    assert_eq!(on_line(&app), "files");
+    // as they happened: the newest
+    app.on_key(key('s'));
+    assert_eq!(on_line(&app), "could not save");
+    // shown sorted too (after what took time); by time, untimed, it isn't:
+    // the most instead (by own time still, b's files)
+    app.on_key(key('s'));
+    assert_eq!(on_line(&app), "could not save", "sorted");
+    app.on_key(key('s'));
+    assert_eq!(on_line(&app), "files", "slowest first");
+    app.on_key(key('o'));
+    // searching: kept while it matches, else the slowest that does
+    while on_line(&app) != "status ~/dev/a" {
+        app.on_key(key('j'));
+    }
+    app.on_key(key('/'));
+    for c in "dev/a".chars() {
+        app.on_key(key(c));
+    }
+    assert_eq!(on_line(&app), "status ~/dev/a", "still shown");
+    app.on_key(code(KeyCode::Backspace));
+    app.on_key(key('b'));
+    assert_eq!(on_line(&app), "status ~/dev/b", "the slowest found");
+}
+
 /// `s` shows every timed step, slowest first and not as a tree, as htop
 /// does when sorted; then their time by kind; then as they happened.
 #[test]
@@ -1077,8 +1142,8 @@ fn s_sorts_the_steps_by_time_then_totals_them_by_kind() {
     );
 }
 
-/// By kind, more kinds than fit: the cursor's, the last, in view below
-/// the row naming the columns.
+/// By kind, more kinds than fit: the cursor's, moved to the last, in view
+/// below the row naming the columns.
 #[test]
 fn kinds_past_the_window_scroll_under_their_header() {
     use argus_core::trace::Step;
@@ -1095,6 +1160,10 @@ fn kinds_past_the_window_scroll_under_their_header() {
     for _ in 0..3 {
         app.on_key(key('s'));
     }
+    // the most first, the cursor on it
+    let screen = render(&mut app, 100, 20);
+    assert!(screen.contains("kind00 "), "{screen}");
+    app.on_key(code(KeyCode::End));
     let screen = render(&mut app, 100, 20);
     assert!(screen.contains("kind                  steps"), "{screen}");
     // the least, last

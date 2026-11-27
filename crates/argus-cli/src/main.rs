@@ -403,6 +403,8 @@ fn run() -> Result<()> {
         }));
     }
     let early_steps = || std::mem::take(&mut *early_steps.lock().unwrap());
+    // the TUI's startup, as a step: until its first scan's rows are in
+    let mut startup = tui.then(|| trace::begin("startup", || "startup".into()));
     let ctx = Ctx {
         config_path: cli.config.clone().unwrap_or_else(paths::config_file),
         state_path: cli.state.clone().unwrap_or_else(paths::state_file),
@@ -465,7 +467,14 @@ fn run() -> Result<()> {
         Some(Cmd::Demo { glyphs: true, .. }) => return demo_glyphs(&ctx, json),
         Some(Cmd::Demo { theme, icons, .. }) => {
             argus_tui::check_terminal().map_err(|e| anyhow::anyhow!(e))?;
-            return demo(&ctx, theme, icons, cli.verbose, early_steps());
+            return demo(
+                &ctx,
+                theme,
+                icons,
+                cli.verbose,
+                early_steps(),
+                startup.take(),
+            );
         }
         None | Some(Cmd::Tui) => argus_tui::check_terminal().map_err(|e| anyhow::anyhow!(e))?,
         _ => {}
@@ -495,6 +504,7 @@ fn run() -> Result<()> {
                 start_in: std::env::current_dir().and_then(std::fs::canonicalize).ok(),
                 verbose: cli.verbose,
                 early_steps: early_steps(),
+                startup: startup.take(),
             };
             argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))?;
         }
@@ -1586,6 +1596,7 @@ fn demo(
     icons: Option<String>,
     verbose: bool,
     early_steps: Vec<trace::Step>,
+    startup: Option<trace::Begun>,
 ) -> Result<()> {
     eprintln!("argus: building sample repos…");
     let d = argus_core::demo::build();
@@ -1607,6 +1618,7 @@ fn demo(
         start_in: None,
         verbose,
         early_steps,
+        startup,
     };
     argus_tui::run(ws, opts).map_err(|e| anyhow::anyhow!(e))
 }

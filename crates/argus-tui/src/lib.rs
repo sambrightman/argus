@@ -44,6 +44,9 @@ pub struct Options {
     pub verbose: bool,
     /// Steps taken before the TUI started, for the history.
     pub early_steps: Vec<argus_core::trace::Step>,
+    /// The startup step, begun before the TUI: it ends once the first
+    /// scan's rows are in, holding everything until then (the scan too).
+    pub startup: Option<argus_core::trace::Begun>,
 }
 
 /// `open` on macOS, `xdg-open` elsewhere.
@@ -422,9 +425,7 @@ impl Runtime {
             for e in app.on_statuses(std::mem::take(&mut statuses)) {
                 left.extend(self.exec(app, e));
             }
-            for e in app.on_msg(m) {
-                left.extend(self.exec(app, e));
-            }
+            left.extend(self.handle(app, m));
         }
         app.on_branches(branches);
         if !statuses.is_empty() {
@@ -438,14 +439,26 @@ impl Runtime {
     /// Handle messages until no background work is left, or `timeout`
     /// passes; returns whether it settled. Effects needing the terminal
     /// are dropped (for tests and headless use).
+    /// `m` handled, and what follows run: the effects needing the
+    /// terminal returned. The first scan's rows in, startup's over.
+    fn handle(&mut self, app: &mut App, m: Msg) -> Vec<Effect> {
+        let scanned = matches!(m, Msg::Scanned { .. });
+        let mut left = vec![];
+        for e in app.on_msg(m) {
+            left.extend(self.exec(app, e));
+        }
+        if scanned && let Some(startup) = self.opts.startup.take() {
+            startup.end();
+        }
+        left
+    }
+
     pub fn settle(&mut self, app: &mut App, timeout: Duration) -> bool {
         let until = std::time::Instant::now() + timeout;
         loop {
             match self.rx.recv_timeout(Duration::from_millis(10)) {
                 Ok(m) => {
-                    for e in app.on_msg(m) {
-                        self.exec(app, e);
-                    }
+                    self.handle(app, m);
                 }
                 Err(_) if self.pending.load(Ordering::SeqCst) == 0 && self.rx.is_empty() => {
                     return true;
@@ -535,9 +548,11 @@ impl Runtime {
             }
             Effect::Scan => {
                 let mut ws = app.ws.clone();
+                // (the first, in the startup step)
+                let here = argus_core::trace::within();
                 self.spawn(move |tx| {
                     ws.entries.clear();
-                    ws.scan();
+                    here.run(|| ws.scan());
                     let _ = tx.send(Msg::Scanned {
                         entries: ws.entries,
                         truncated: ws.truncated,

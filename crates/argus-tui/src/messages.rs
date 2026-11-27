@@ -357,8 +357,10 @@ pub fn key(history: &[Event], m: &mut Messages, k: KeyEvent, page: usize) -> Key
                 m.query.clear();
             }
             Edit::Changed => {
-                m.query = editor.text();
-                m.cursor = usize::MAX;
+                let text = editor.text();
+                let was = on(history, m);
+                m.query = text;
+                place(history, m, was, m.by);
             }
             Edit::Moved | Edit::Ignored => {}
         }
@@ -420,25 +422,54 @@ pub fn key(history: &[Event], m: &mut Messages, k: KeyEvent, page: usize) -> Key
             None => {}
         },
         KeyCode::Char('s') => {
+            let (was, from) = (on(history, m), m.by);
             m.by = m.by.next();
-            m.cursor = usize::MAX;
             m.top = 0;
+            place(history, m, was, from);
         }
         // sorted by own time, or by all a step took
         KeyCode::Char('o') if m.by != By::Tree => {
+            let was = on(history, m);
             m.own = !m.own;
-            m.cursor = usize::MAX;
             m.top = 0;
+            place(history, m, was, m.by);
         }
         KeyCode::Char('/') => m.searching = Some(LineEditor::new(&m.query)),
         KeyCode::Esc if !m.query.is_empty() => {
+            let was = on(history, m);
             m.query.clear();
-            m.cursor = usize::MAX;
+            place(history, m, was, m.by);
         }
         KeyCode::Esc | KeyCode::Char('q') => return Keyed::Close,
         _ => {}
     }
     Keyed::Stay
+}
+
+/// Where the cursor is in the lines `m` shows: the line's place.
+fn on(history: &[Event], m: &Messages) -> Option<Vec<usize>> {
+    let lines = lines(history, m);
+    let at = m.cursor.min(lines.len().checked_sub(1)?);
+    Some(lines[at].path.clone())
+}
+
+/// The cursor, after the view changed from `from`: on the line it was on
+/// (`was`) where that's shown, else on the slowest (by time) or the
+/// newest, following (as they happened). By kind, lines are kinds: none
+/// is kept, to or from.
+fn place(history: &[Event], m: &mut Messages, was: Option<Vec<usize>>, from: By) {
+    let lines = lines(history, m);
+    let kept = was
+        .filter(|_| from != By::Kinds && m.by != By::Kinds)
+        .and_then(|p| lines.iter().position(|l| l.path == p));
+    let newest = lines.len().saturating_sub(1);
+    m.cursor = match (kept, m.by) {
+        // (on the newest as they happened: following it)
+        (Some(i), By::Tree) if i >= newest => usize::MAX,
+        (Some(i), _) => i,
+        (None, By::Tree) => usize::MAX,
+        (None, _) => 0,
+    };
 }
 
 /// After the history's oldest `n` messages are dropped, `lines` lines of

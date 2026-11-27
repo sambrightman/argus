@@ -67,6 +67,7 @@ fn options(sb: &Sandbox) -> Options {
         start_in: None,
         verbose: false,
         early_steps: vec![],
+        startup: None,
     }
 }
 
@@ -97,6 +98,49 @@ fn path(app: &App, name: &str) -> PathBuf {
         .position(|e| e.display_name() == name)
         .unwrap();
     app.ws.entries[i].path.clone()
+}
+
+/// The startup step, begun before the TUI, holds everything until the
+/// first scan's rows are in: the scan in it. What's started once they're
+/// in (the stale indexes refreshed), and a scan after, are steps of their
+/// own.
+#[test]
+fn startup_holds_everything_until_the_first_scan_is_in() {
+    use argus_core::trace::{self, Step};
+    use std::sync::{Arc, Mutex};
+    let (sb, mut app, _) = setup("");
+    let got: Arc<Mutex<Vec<Step>>> = Arc::default();
+    let into = got.clone();
+    trace::set_sink(Some((
+        trace::Form::Whole,
+        Arc::new(move |s: Step| into.lock().unwrap().push(s)),
+    )));
+    let startup = trace::begin("startup", || "startup".into());
+    let mut rt = Runtime::new(Options {
+        startup: Some(startup),
+        ..options(&sb)
+    });
+    run(&mut app, &mut rt, vec![Effect::Scan]);
+    // (the fixture's indexes are refreshed after the scan: not counted)
+    let kinds = |got: &[Step]| {
+        got.iter()
+            .map(|s| s.kind.clone())
+            .filter(|k| k != "refresh indexes")
+            .collect::<Vec<_>>()
+    };
+    let tops = got.lock().unwrap().clone();
+    assert_eq!(kinds(&tops), ["startup"], "{tops:#?}");
+    let startup = &tops[0];
+    let scan = startup
+        .steps
+        .iter()
+        .find(|s| s.kind == "scan")
+        .unwrap_or_else(|| panic!("the scan in {startup:#?}"));
+    assert!(startup.took.unwrap() >= scan.took.unwrap());
+    // inverse: the next scan by itself
+    run(&mut app, &mut rt, vec![Effect::Scan]);
+    trace::set_sink(None);
+    assert_eq!(kinds(&got.lock().unwrap()), ["startup", "scan"]);
 }
 
 /// With `-v`, each step goes to the history: those taken before the TUI
