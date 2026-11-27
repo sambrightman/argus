@@ -1156,6 +1156,22 @@ on upgrading, what's new, what's fixed. Then:
    is built if it has none; builds; makes the GitHub release; and
    publishes the crates.
 
+**A beta** (`1.2.0-beta.1`, and `-beta.2` after it): the same steps,
+with `cargo release 1.2.0-beta.1 --execute` (a version named, as
+`cargo release beta` from a release bumps the patch) and the tag
+`v1.2.0-beta.1`. cargo-release leaves the changelog alone for a
+pre-release (its replacements run for one only if marked `prerelease =
+true`), the checks want notes under Unreleased instead, and the
+workflow takes Unreleased's as the release's notes, its "Full Changelog"
+link compared up to the tag. So each beta's notes are everything since
+the last release, a second beta's the first's and what's come since:
+what someone trying it needs, without a section per beta to fold back
+in. The GitHub release is marked a pre-release (not the latest), and
+crates.io installs it only when asked for by version (`cargo install
+argus-git --version 1.2.0-beta.1`). The release after names
+Unreleased as usual, its version named too (`cargo release 1.2.0
+--execute`).
+
 cargo-release over doing it by hand: the version is in five places plus
 Cargo.lock, and the changelog's heading, date and links follow from it.
 Its generated changelogs (and release-plz's, git-cliff's) come from

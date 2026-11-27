@@ -3,8 +3,10 @@ name: Release
 # A tag `v1.2.3` (matching the version in Cargo.toml) builds argus for
 # Apple silicon macOS and Linux, publishes a GitHub release with the archives and their
 # SHA-256 sums and CHANGELOG.md's notes for the version, and publishes the
-# crates to crates.io. Run by hand, it builds and packages everything but
-# publishes nothing.
+# crates to crates.io. A pre-release, `v1.2.3-beta.1`, is published as one
+# (not the latest release; crates.io installs it only when asked for by
+# version), its notes Unreleased's: everything since the last release.
+# Run by hand, it builds and packages everything but publishes nothing.
 on:
   push:
     tags: ["v*"]
@@ -18,8 +20,9 @@ env:
 
 jobs:
   # The version's section of CHANGELOG.md, the release's notes: without
-  # notes there, nothing is built or published. Run by hand, Unreleased's
-  # section (which may be empty) is shown.
+  # notes there, nothing is built or published. A pre-release's are
+  # Unreleased's, its changes compared up to its tag. Run by hand,
+  # Unreleased's section (which may be empty) is shown.
   notes:
     runs-on: ubuntu-latest
     steps:
@@ -31,7 +34,13 @@ jobs:
         run: |
           version=Unreleased
           if [ "$GITHUB_REF_TYPE" = tag ]; then version=${GITHUB_REF_NAME#v}; fi
-          parse-changelog CHANGELOG.md "$version" > notes.md
+          case $version in
+            *-*)
+              parse-changelog CHANGELOG.md Unreleased \
+                | sed "s|\.\.\.HEAD\$|...$GITHUB_REF_NAME|" > notes.md
+              ;;
+            *) parse-changelog CHANGELOG.md "$version" > notes.md ;;
+          esac
           cat notes.md
           if [ "$GITHUB_REF_TYPE" = tag ] \
               && ! grep -v '^\*\*Full Changelog\*\*' notes.md | grep -q .; then
@@ -107,8 +116,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          pre=()
+          case $GITHUB_REF_NAME in *-*) pre=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* \
-            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --repo "$GITHUB_REPOSITORY" --verify-tag ${pre[@]+"${pre[@]}"} \
             --title "argus $GITHUB_REF_NAME" --notes-file notes.md
 
   # crates.io by trusted publishing (a short-lived token; no secret), which
