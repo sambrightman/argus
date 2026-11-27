@@ -80,7 +80,11 @@ deferred.
     calls `repo.submodules()` and searches the whole list by path: a
     repo of 25,000 checked-out submodules took 140s in its `files` step
     (1,000: 273ms; 2,000: 806ms), `git status` 30ms. Building the
-    path-to-submodule map once would fix it.
+    path-to-submodule map once would fix it. Meanwhile argus works
+    around it (`moved_submodules_of` in `status.rs`): it has gix skip
+    submodules and reads each one's HEAD itself, as git does (4,000:
+    3.1s to 0.37s). Once gix is fixed, remove that and go back to
+    `Submodule::Given { ignore: Dirty, check_dirty: true }`.
   - **Writing the index after a status** (`Outcome::write_changes()`):
     it locks the index only to write, from the copy read when the
     status began, so what's staged meanwhile is lost, and the caller

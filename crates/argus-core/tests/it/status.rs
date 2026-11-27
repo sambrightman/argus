@@ -515,6 +515,57 @@ fn submodule_status_can_be_skipped() {
     );
 }
 
+/// A path `.gitmodules` lists as a submodule, checked out, that the index
+/// now has as a file is no submodule at another commit: its line says the
+/// type changed, as it does without the submodules' own statuses.
+#[test]
+fn a_submodule_path_the_index_has_as_a_file_is_not_a_moved_submodule() {
+    let sb = Sandbox::new();
+    let lib = sb.init("lib");
+    let r = sb.init("r");
+    git(
+        &r,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            lib.to_str().unwrap(),
+            "lib",
+        ],
+    );
+    commit(&r, "add sub");
+    let blob = git(&r, &["hash-object", "-w", "--stdin"]);
+    git(&r, &["rm", "-q", "--cached", "lib"]);
+    git(
+        &r,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{},lib", blob.trim()),
+        ],
+    );
+    let line = |from_own| {
+        let s = status(
+            &r,
+            StatusOptions {
+                submodule_content_from_own: from_own,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.changes
+            .files
+            .iter()
+            .find(|f| f.path == "lib")
+            .map(|f| f.worktree)
+    };
+    assert_eq!(line(true), line(false));
+    assert_ne!(line(true), Some('M'));
+}
+
 /// Fork workflow seen in the wild: the branch tracks `upstream/master` but
 /// was pushed to `origin/<branch>`. That work is safe on a remote.
 fn fork_setup(sb: &Sandbox) -> std::path::PathBuf {

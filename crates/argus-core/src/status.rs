@@ -1481,6 +1481,55 @@ fn untracked(path: &Path, dir: Option<&str>) -> Result<Vec<(String, PathKind)>, 
     Ok(v)
 }
 
+/// Of the checked-out submodules `shown` (but those `ignoring_all`), the
+/// paths of those at another commit than `index` records, as git finds
+/// them for a parent's status: from each one's HEAD, through its refs
+/// alone. One whose HEAD can't be read is taken as where it should be, as
+/// git takes it.
+fn moved_submodules_of(
+    index: &gix::index::File,
+    shown: &[SubmoduleShown],
+    ignoring_all: &std::collections::HashSet<&str>,
+) -> Vec<String> {
+    use gix::bstr::ByteSlice;
+    use rayon::prelude::*;
+    let hash = index.object_hash();
+    let mut moved: Vec<String> = shown
+        .par_iter()
+        .filter(|sm| !ignoring_all.contains(sm.rela.as_str()))
+        .filter_map(|sm| {
+            let entry = index.entry_by_path(sm.rela.as_bytes().as_bstr())?;
+            let head = checked_out(&sm.path, hash)?;
+            (entry.mode.is_submodule() && head != entry.id).then(|| sm.rela.clone())
+        })
+        .collect();
+    moved.sort();
+    moved
+}
+
+/// The commit the work tree at `worktree` has checked out, read from its
+/// refs alone (not opening it as a repo): `None` if that can't be read.
+fn checked_out(worktree: &Path, hash: gix::hash::Kind) -> Option<gix::ObjectId> {
+    let dot_git = worktree.join(".git");
+    let git_dir = match dot_git.is_dir() {
+        true => dot_git,
+        false => {
+            let text = std::fs::read_to_string(&dot_git).ok()?;
+            worktree.join(text.strip_prefix("gitdir:")?.trim())
+        }
+    };
+    let refs = gix::refs::file::Store::at(git_dir, hash);
+    let mut r = refs.find("HEAD").ok()?;
+    // (HEAD to a branch, at most a few names deep)
+    for _ in 0..5 {
+        match r.target {
+            gix::refs::Target::Object(id) => return Some(id),
+            gix::refs::Target::Symbolic(name) => r = refs.find(name.as_ref()).ok()?,
+        }
+    }
+    None
+}
+
 /// Whether the submodule at `path` has changes to tracked content. The
 /// status walk stops at a submodule's first change (`check_dirty`), and
 /// that may be an untracked file while tracked ones changed too: asked
@@ -1517,10 +1566,14 @@ fn changes(
         .filter(|sm| sm.ignore == Ignore::All)
         .map(|sm| sm.rela.as_str())
         .collect();
-    let submodules = if opts.submodules && opts.submodule_content_from_own {
+    // the commit each submodule is at, argus reads itself (below): gix's
+    // check searches every submodule's config for each, so a parent of
+    // thousands takes minutes (TODO.md: to remove once gix is fixed)
+    let heads_ours = opts.submodules && opts.submodule_content_from_own;
+    let submodules = if heads_ours {
         gix::status::Submodule::Given {
-            ignore: Ignore::Dirty,
-            check_dirty: true,
+            ignore: Ignore::All,
+            check_dirty: false,
         }
     } else if opts.submodules {
         gix::status::Submodule::AsConfigured { check_dirty: true }
@@ -1639,6 +1692,13 @@ fn changes(
 
     let mut stale = 0;
     if let Some(out) = iter.outcome_mut() {
+        if heads_ours {
+            for path in moved_submodules_of(&out.worktree_index, shown, &ignoring_all) {
+                kinds.insert(path.clone(), PathKind::Submodule);
+                moved.push(path.clone());
+                files.entry(path).or_insert((' ', ' ')).1 = 'M';
+            }
+        }
         stale = out
             .index_worktree
             .tracked_file_modification
@@ -2219,6 +2279,40 @@ mod tests {
             said,
             ["0 bytes", "1023 bytes", "1KB", "1023KB", "1MB", "5GB"]
         );
+    }
+
+    /// A work tree's checked-out commit is read through its `.git`,
+    /// whether a folder or a file naming one: on a branch, detached, and
+    /// none while its branch has no commit yet, nor where there's no repo.
+    #[test]
+    fn the_commit_a_work_tree_has_checked_out_is_read_from_its_refs() {
+        use crate::testkit::{Sandbox, commit, git};
+        let sb = Sandbox::new();
+        let r = sb.init("r");
+        commit(&r, "one");
+        let head = || git(&r, &["rev-parse", "HEAD"]).trim().to_string();
+        let sha1 = gix::hash::Kind::Sha1;
+        let read = |p: &Path| checked_out(p, sha1).map(|id| id.to_string());
+        assert_eq!(read(&r), Some(head()), "on a branch, .git a folder");
+        let first = head();
+        commit(&r, "two");
+        git(&r, &["switch", "-q", "--detach", &first]);
+        assert_eq!(read(&r), Some(first.clone()), "detached");
+        git(&r, &["switch", "-q", "--orphan", "unborn"]);
+        assert_eq!(read(&r), None, "a branch with no commit yet");
+        git(&r, &["switch", "-q", "main"]);
+        // a work tree whose .git is a file naming the repo's folder
+        let w = sb.path("w");
+        std::fs::create_dir_all(&w).unwrap();
+        std::fs::write(
+            w.join(".git"),
+            format!("gitdir: {}\n", r.join(".git").display()),
+        )
+        .unwrap();
+        assert_eq!(read(&w), Some(head()), ".git a file");
+        std::fs::write(w.join(".git"), "not a gitdir line\n").unwrap();
+        assert_eq!(read(&w), None);
+        assert_eq!(read(&sb.path("nowhere")), None);
     }
 
     #[test]
