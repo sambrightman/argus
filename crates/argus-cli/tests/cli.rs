@@ -2974,16 +2974,18 @@ fn stale_indexes_are_warned_of_or_refreshed_with_write() {
     let lines: Vec<&str> = said.lines().collect();
     let at = lines
         .iter()
-        .position(|l| l.contains("the indexes of 2 repos are stale (2 files)"))
+        .position(|l| {
+            l == &"argus: stale indexes in 2 repos (2 files); use argus status --write or \
+                   individual git status commands to update:"
+        })
         .unwrap_or_else(|| panic!("{said}"));
-    assert!(lines[at].contains("argus status --write"), "{said}");
     // then a line for each, with its count and the git that refreshes it
     for (i, name) in [(1, "clean"), (2, "feature")] {
         let line = lines.get(at + i).unwrap_or_else(|| panic!("{said}"));
         assert!(line.starts_with("argus:   "), "{said}");
         assert!(line.contains(&format!("dev/{name} (1 file)")), "{said}");
-        assert!(line.ends_with(&format!("dev/{name} status`")), "{said}");
-        assert!(line.contains("`git -C "), "{said}");
+        assert!(line.ends_with(&format!("dev/{name} status")), "{said}");
+        assert!(line.contains("): git -C "), "{said}");
     }
     assert_eq!(lines.len(), at + 3, "nothing more: {said}");
     assert!(!said.contains("dev/dirty"), "{said}");
@@ -2991,12 +2993,12 @@ fn stale_indexes_are_warned_of_or_refreshed_with_write() {
     git(&f, &["status", "--short"]);
     let one = argus(&sb).args(["status"]).output().unwrap();
     let said = String::from_utf8(one.stderr).unwrap();
-    assert!(said.contains("the index of "), "{said}");
-    assert!(said.contains("dev/clean is stale (1 file)"), "{said}");
+    assert!(said.contains("argus: stale index in "), "{said}");
     assert!(
-        said.contains("git -C ") && said.contains("dev/clean status"),
+        said.contains("dev/clean (1 file); use argus status --write or git -C "),
         "{said}"
     );
+    assert!(said.contains("dev/clean status to update\n"), "{said}");
     assert!(!said.contains("dev/feature"), "{said}");
     argus(&sb)
         .args(["status", "--write"])

@@ -1297,22 +1297,22 @@ fn stale_indexes(ws: &Workspace, write: bool) {
         [one] => {
             let repo = paths::contract_tilde(one);
             eprintln!(
-                "argus: the index of {repo} is stale ({}): every status reads them again \
-                 until it's refreshed, by `argus status --write` or `git -C {repo} status`",
+                "argus: stale index in {repo} ({}); use argus status --write or \
+                 git -C {repo} status to update",
                 files(count(one))
             );
         }
         many => {
             eprintln!(
-                "argus: the indexes of {} repos are stale ({}): every status reads them again \
-                 until they're refreshed, by `argus status --write` or git in each:",
+                "argus: stale indexes in {} repos ({}); use argus status --write or \
+                 individual git status commands to update:",
                 many.len(),
                 files(many.iter().map(count).sum())
             );
             for p in many {
                 let repo = paths::contract_tilde(p);
                 eprintln!(
-                    "argus:   {repo} ({}): `git -C {repo} status`",
+                    "argus:   {repo} ({}): git -C {repo} status",
                     files(count(p))
                 );
             }
