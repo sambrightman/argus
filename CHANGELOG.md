@@ -9,6 +9,10 @@ Releasing).
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### New
+
+- In the TUI's messages (`v m`), `s` first sorts the tree: each level slowest first (`o` by own time), what took no time after it; then every step slowest first and time by kind, as before. What's folded stays folded.
+
 ### Fixed
 
 - A repo with thousands of submodules is quicker to list and to refresh: listing them took time growing with the square of their number after their statuses were read (seconds at 25,000), and so did applying a refresh of them in the TUI, on the thread drawing the screen (4,000: 890ms, now 48ms).

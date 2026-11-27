@@ -992,7 +992,13 @@ fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
     let top = top.min(lines.len().saturating_sub(height));
     let title = {
         let by = match (m.by, m.own) {
-            (By::Tree, _) => "messages (Tab folds; s slowest first",
+            (By::Tree, _) => "messages (Tab folds; s each level slowest first",
+            (By::Sorted, false) => {
+                "messages, each level slowest first (Tab folds; o by own time; s every step slowest first"
+            }
+            (By::Sorted, true) => {
+                "messages, each level by most own time (Tab folds; o by all of it; s every step slowest first"
+            }
             (By::Slowest, false) => "messages, slowest first (o by own time; s time by kind",
             (By::Slowest, true) => "messages, most own time first (o by all of it; s time by kind",
             (By::Kinds, false) => "messages, time by kind (o by own time; s as they happened",
@@ -1032,7 +1038,7 @@ fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
         let mark = match l.fold {
             Some(true) => format!("{} ", v.icons.unfolded.trim_end()),
             Some(false) => format!("{} ", v.icons.folded.trim_end()),
-            None if m.by == By::Tree => "  ".into(),
+            None if matches!(m.by, By::Tree | By::Sorted) => "  ".into(),
             None => String::new(),
         };
         let mut spans = vec![
@@ -1083,7 +1089,7 @@ fn draw_history(f: &mut Frame, app: &mut App, v: &View, area: Rect) {
     if shown.is_empty() {
         let none = match (m.by, m.query.is_empty()) {
             (_, false) => " nothing matches",
-            (By::Tree, true) => " nothing yet",
+            (By::Tree | By::Sorted, true) => " nothing yet",
             // (steps are kept with -v)
             (_, true) => " no steps timed: argus -v keeps them",
         };

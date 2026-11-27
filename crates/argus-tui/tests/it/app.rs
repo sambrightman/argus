@@ -871,12 +871,70 @@ fn message_lines_line_up() {
     );
     assert!(!buf[(b as u16, row("scan: 2 repos"))].modifier.contains(sel));
     app.on_key(key('s'));
+    app.on_key(key('s'));
     let screen = render(&mut app, 120, 30);
     assert_eq!(column(&screen, "scan: 2 repos"), scan - 2, "{screen}");
     app.on_key(key('s'));
     let screen = render(&mut app, 120, 30);
     assert_eq!(column(&screen, "status    "), 2, "{screen}");
     assert_eq!(column(&screen, "kind    "), 2, "{screen}");
+}
+
+/// `s` first sorts the tree: each level slowest first, what took no time
+/// (a note) after; `o` by own time instead. What's unfolded stays so.
+#[test]
+fn s_first_sorts_the_tree_at_each_level() {
+    let (_sb, mut app) = setup("");
+    steps_taken(&mut app);
+    open_history(&mut app);
+    // the scan (the first message) unfolded, as it happened: its note,
+    // a, then b
+    app.on_key(alt('<'));
+    app.on_key(code(KeyCode::Tab));
+    let screen = render(&mut app, 100, 30);
+    in_order(
+        &screen,
+        &[
+            "roots ~/dev",
+            "20ms  status ~/dev/a",
+            "25ms  status ~/dev/b",
+        ],
+    );
+    app.on_key(key('s'));
+    let screen = render(&mut app, 100, 30);
+    assert!(
+        screen.contains("messages, each level slowest first (Tab folds; o by own time"),
+        "{screen}"
+    );
+    // the scan before the refresh, b (25) before a (20), the note last
+    in_order(
+        &screen,
+        &[
+            "30ms  scan: 2 repos",
+            "25ms  status ~/dev/b",
+            "20ms  status ~/dev/a",
+            "roots ~/dev",
+            "9ms  refresh",
+        ],
+    );
+    // by own time: a's 4 before b's 2
+    app.on_key(key('o'));
+    let screen = render(&mut app, 100, 30);
+    assert!(
+        screen.contains("each level by most own time (Tab folds; o by all of it"),
+        "{screen}"
+    );
+    in_order(
+        &screen,
+        &[
+            "20ms  status ~/dev/a",
+            "25ms  status ~/dev/b",
+            "roots ~/dev",
+        ],
+    );
+    // then every step, slowest first
+    app.on_key(key('s'));
+    assert!(render(&mut app, 100, 30).contains("most own time first"));
 }
 
 /// `s` shows every timed step, slowest first and not as a tree, as htop
@@ -886,6 +944,8 @@ fn s_sorts_the_steps_by_time_then_totals_them_by_kind() {
     let (_sb, mut app) = setup("");
     steps_taken(&mut app);
     open_history(&mut app);
+    // (past the tree sorted)
+    app.on_key(key('s'));
     app.on_key(key('s'));
     let screen = render(&mut app, 100, 30);
     assert!(screen.contains("messages, slowest first"), "{screen}");
@@ -988,8 +1048,13 @@ fn s_sorts_the_steps_by_time_then_totals_them_by_kind() {
     assert_eq!(render(&mut app, 100, 30), screen);
     app.on_key(key('s'));
     let screen = render(&mut app, 100, 30);
-    assert!(screen.contains("slowest first (o by own time"), "{screen}");
+    assert!(
+        screen.contains("each level slowest first (Tab folds; o by own time"),
+        "{screen}"
+    );
     app.on_key(key('s'));
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("slowest first (o by own time"), "{screen}");
     app.on_key(key('s'));
     // by kind, searched by kind
     app.on_key(key('/'));
@@ -1021,8 +1086,9 @@ fn kinds_past_the_window_scroll_under_their_header() {
         .collect();
     app.on_msg(Msg::Step(scan));
     open_history(&mut app);
-    app.on_key(key('s'));
-    app.on_key(key('s'));
+    for _ in 0..3 {
+        app.on_key(key('s'));
+    }
     let screen = render(&mut app, 100, 20);
     assert!(screen.contains("kind                  steps"), "{screen}");
     // the least, last
@@ -1036,6 +1102,9 @@ fn the_views_by_time_say_steps_need_v() {
     let (_sb, mut app) = setup("");
     app.report_error("could not save");
     open_history(&mut app);
+    // (the tree sorted still shows what was said)
+    app.on_key(key('s'));
+    assert!(render(&mut app, 100, 30).contains("could not save"));
     app.on_key(key('s'));
     assert!(render(&mut app, 100, 30).contains("no steps timed: argus -v keeps them"));
     app.on_key(key('s'));
@@ -1083,7 +1152,10 @@ fn slash_searches_the_messages() {
     app.on_key(alt('<'));
     app.on_key(code(KeyCode::Tab));
     assert!(!render(&mut app, 100, 30).contains("status ~/dev/b"));
-    // kept by time too, b's parts found by the repo in their names
+    // sorted, folded as it was; by time, b's parts found by the repo in
+    // their names
+    app.on_key(key('s'));
+    assert!(!render(&mut app, 100, 30).contains("status ~/dev/b"));
     app.on_key(key('s'));
     let screen = render(&mut app, 100, 30);
     assert!(screen.contains("25ms  status ~/dev/b"), "{screen}");

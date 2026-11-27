@@ -18,6 +18,9 @@ pub enum By {
     /// As they happened, each holding what it did.
     #[default]
     Tree,
+    /// The same tree, each level slowest first (what took no time, a
+    /// message or a note, after, as it happened).
+    Sorted,
     /// Every timed step, slowest first.
     Slowest,
     /// The steps' time by kind, most first.
@@ -27,7 +30,8 @@ pub enum By {
 impl By {
     fn next(self) -> Self {
         match self {
-            By::Tree => By::Slowest,
+            By::Tree => By::Sorted,
+            By::Sorted => By::Slowest,
             By::Slowest => By::Kinds,
             By::Kinds => By::Tree,
         }
@@ -180,11 +184,11 @@ pub fn lines<'a>(history: &'a [Event], m: &Messages) -> Vec<MessageLine<'a>> {
     let q = m.query.to_lowercase();
     let mut out = vec![];
     match m.by {
-        By::Tree => {
-            for (i, e) in history.iter().enumerate() {
-                let node = Node::Event(e);
+        By::Tree | By::Sorted => {
+            let events: Vec<(usize, Node)> = history.iter().map(Node::Event).enumerate().collect();
+            for (i, node) in in_order(events, m) {
                 if q.is_empty() || node.found(&q) {
-                    tree(&mut out, node, vec![i], Some(e.at), m, &q, false);
+                    tree(&mut out, node, vec![i], Some(history[i].at), m, &q, false);
                 }
             }
         }
@@ -280,7 +284,7 @@ fn tree<'a>(
         what: node.shown(),
     });
     if open {
-        for (i, n) in held.into_iter().enumerate() {
+        for (i, n) in in_order(held.into_iter().enumerate().collect(), m) {
             if under || n.found(q) {
                 let mut p = path.clone();
                 p.push(i);
@@ -288,6 +292,27 @@ fn tree<'a>(
             }
         }
     }
+}
+
+/// `nodes` (each by its place among them) as the tree shows them: as they
+/// came, or sorted, slowest first (by own time, `m.own`); what took no
+/// time after, as it came.
+fn in_order<'a>(mut nodes: Vec<(usize, Node<'a>)>, m: &Messages) -> Vec<(usize, Node<'a>)> {
+    if m.by == By::Sorted {
+        let time = |n: &Node| -> Option<Duration> {
+            let s: &Step = match *n {
+                Node::Event(Event {
+                    what: Happened::Step(s),
+                    ..
+                }) => s,
+                Node::Step(s) => s,
+                _ => return None,
+            };
+            if m.own { own_time(s) } else { s.took }
+        };
+        nodes.sort_by_key(|(_, n)| std::cmp::Reverse(time(n)));
+    }
+    nodes
 }
 
 /// `s` and every step in it that was timed, each a line; `of`, what `s`
