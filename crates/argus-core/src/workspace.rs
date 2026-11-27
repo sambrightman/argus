@@ -309,8 +309,9 @@ impl Workspace {
         checked: impl IntoIterator<Item = (PathBuf, Result<Vec<status::BranchInfo>, String>)>,
     ) {
         let mut any = false;
+        let at = self.positions();
         for (path, r) in checked {
-            let (Some(i), Ok(branches)) = (self.index_of(&path), r) else {
+            let (Some(&i), Ok(branches)) = (at.get(&path), r) else {
                 continue;
             };
             let e = &mut self.entries[i];
@@ -381,12 +382,14 @@ impl Workspace {
 
     /// Discover repos and compute every status in parallel.
     pub fn scan(&mut self) {
-        crate::trace::timed(
+        // (named from the start, so its parts are said as its: `scan: flags`)
+        crate::trace::step(
             "scan",
-            |n: &usize| format!("scan: {n} {}", crate::plural(*n, "repo", "repos")),
+            || "scan".into(),
             || {
                 self.scan_untimed();
-                self.entries.len()
+                let n = self.entries.len();
+                crate::trace::amend(|| format!("scan: {n} {}", crate::plural(n, "repo", "repos")));
             },
         );
     }
@@ -661,10 +664,33 @@ impl Workspace {
         for (e, r) in self.entries.iter_mut().zip(results) {
             e.set_status(r, &ids);
         }
-        self.add_children();
-        self.link_parents();
-        self.show_submodule_content();
-        self.resolve_flags();
+        let all = self.entries.iter().map(|e| e.path.clone()).collect();
+        self.follow_statuses(all);
+    }
+
+    /// What follows from the statuses of `read`: the submodules and
+    /// worktrees they name, listed with statuses of their own; each one's
+    /// parent; a parent's lines for what's changed inside its submodules;
+    /// flags.
+    fn follow_statuses(&mut self, read: Vec<PathBuf>) {
+        crate::trace::timed(
+            "children",
+            |n: &usize| format!("children: {n} found"),
+            || self.add_children(read),
+        );
+        crate::trace::part("parents", || self.link_parents());
+        crate::trace::part("submodule content", || self.show_submodule_content());
+        crate::trace::part("flags", || self.resolve_flags());
+    }
+
+    /// Each entry's position by its path, for many lookups at once
+    /// ([`Self::index_of`] searches them all).
+    fn positions(&self) -> HashMap<PathBuf, usize> {
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.path.clone(), i))
+            .collect()
     }
 
     /// Re-read one repo's status (after an operation on it).
@@ -688,21 +714,33 @@ impl Workspace {
         statuses: impl IntoIterator<Item = (PathBuf, Result<RepoStatus, String>)>,
     ) {
         let ids = self.config.local_forges();
+        let at = self.positions();
+        let (mut gone, mut read) = (vec![], vec![]);
         for (path, r) in statuses {
-            let Some(i) = self.index_of(&path) else {
+            let Some(&i) = at.get(&path) else {
                 continue;
             };
-            let gone = r.is_err() && path.symlink_metadata().is_err();
-            if gone && self.entries[i].error().is_some() {
-                self.entries.remove(i);
+            if r.is_err() && path.symlink_metadata().is_err() && self.entries[i].error().is_some() {
+                gone.push(i);
             } else {
                 self.entries[i].set_status(r, &ids);
+                read.push(i);
             }
         }
-        self.add_children();
-        self.link_parents();
-        self.show_submodule_content();
-        self.resolve_flags();
+        gone.sort_unstable();
+        gone.dedup();
+        // (in the entries' order, as a scan takes them)
+        read.sort_unstable();
+        read.dedup();
+        let read: Vec<PathBuf> = read
+            .into_iter()
+            .filter(|i| gone.binary_search(i).is_err())
+            .map(|i| self.entries[i].path.clone())
+            .collect();
+        for i in gone.into_iter().rev() {
+            self.entries.remove(i);
+        }
+        self.follow_statuses(read);
     }
 
     /// Add an entry (e.g. a fresh clone) and compute its status.
@@ -771,51 +809,72 @@ impl Workspace {
     }
 
     /// Worktrees and submodules living outside the roots (or not walked into)
-    /// are learnt from their main repo's status.
-    fn add_children(&mut self) {
-        let mut extra: BTreeMap<PathBuf, Entry> = BTreeMap::new();
-        for e in self.entries.iter().filter(|e| !e.nested) {
-            let Some(s) = e.status() else { continue };
-            let kids = s.worktrees.iter().map(|p| (p, RepoKind::Worktree, false));
-            let kids = kids.chain(s.submodules.iter().map(|p| (p, RepoKind::Submodule, false)));
-            // a stale record's folder too: its row shows it's gone
-            let kids = kids.chain(
-                s.stale_worktrees
-                    .iter()
-                    .map(|p| (p, RepoKind::Worktree, true)),
-            );
-            for (p, kind, stale) in kids {
-                let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
-                // listed as there, gone since the parent's status was read
-                // (a worktree just removed): not brought back
-                let removed = !stale && p.symlink_metadata().is_err();
-                if self.index_of(&p).is_none() && !removed {
-                    extra.entry(p.clone()).or_insert_with(|| {
-                        let mut child = Entry::new(p, kind);
-                        child.parent = Some(e.path.clone());
-                        child
-                    });
+    /// are learnt from their main repo's status, of those `read`; then
+    /// theirs from theirs (submodules may have submodules). How many were
+    /// added.
+    fn add_children(&mut self, read: Vec<PathBuf>) -> usize {
+        let mut known: std::collections::HashSet<PathBuf> =
+            self.entries.iter().map(|e| e.path.clone()).collect();
+        // whose children to look for: those read, then those just added
+        // (in path order, as the first to name a child is its parent)
+        let mut parents = read;
+        let mut added = 0;
+        loop {
+            let at = self.positions();
+            let mut extra: BTreeMap<PathBuf, Entry> = BTreeMap::new();
+            for parent in &parents {
+                let Some(&i) = at.get(parent) else { continue };
+                let e = &self.entries[i];
+                if e.nested {
+                    continue;
+                }
+                let Some(s) = e.status() else { continue };
+                let kids = s.worktrees.iter().map(|p| (p, RepoKind::Worktree, false));
+                let kids = kids.chain(s.submodules.iter().map(|p| (p, RepoKind::Submodule, false)));
+                // a stale record's folder too: its row shows it's gone
+                let kids = kids.chain(
+                    s.stale_worktrees
+                        .iter()
+                        .map(|p| (p, RepoKind::Worktree, true)),
+                );
+                for (p, kind, stale) in kids {
+                    // (listed already as it's named: no need to canonicalize)
+                    if known.contains(p) {
+                        continue;
+                    }
+                    let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+                    // listed as there, gone since the parent's status was read
+                    // (a worktree just removed): not brought back
+                    let removed = !stale && p.symlink_metadata().is_err();
+                    if !known.contains(&p) && !removed {
+                        extra.entry(p.clone()).or_insert_with(|| {
+                            let mut child = Entry::new(p, kind);
+                            child.parent = Some(e.path.clone());
+                            child
+                        });
+                    }
                 }
             }
+            if extra.is_empty() {
+                return added;
+            }
+            let extra: Vec<Entry> = extra.into_values().collect();
+            let n = extra.len();
+            let results = crate::trace::timed(
+                "statuses",
+                |_| format!("statuses of {n} more (submodules and worktrees of those before)"),
+                || self.statuses(extra.iter().map(|e| e.path.as_path())),
+            );
+            let ids = self.config.local_forges();
+            parents = extra.iter().map(|e| e.path.clone()).collect();
+            for (mut e, r) in extra.into_iter().zip(results) {
+                e.set_status(r, &ids);
+                known.insert(e.path.clone());
+                self.entries.push(e);
+            }
+            added += n;
+            self.entries.sort_by(|a, b| a.path.cmp(&b.path));
         }
-        if extra.is_empty() {
-            return;
-        }
-        let extra: Vec<Entry> = extra.into_values().collect();
-        let n = extra.len();
-        let results = crate::trace::timed(
-            "statuses",
-            |_| format!("statuses of {n} more (submodules and worktrees of those before)"),
-            || self.statuses(extra.iter().map(|e| e.path.as_path())),
-        );
-        let ids = self.config.local_forges();
-        for (mut e, r) in extra.into_iter().zip(results) {
-            e.set_status(r, &ids);
-            self.entries.push(e);
-        }
-        self.entries.sort_by(|a, b| a.path.cmp(&b.path));
-        // Submodules may themselves have submodules.
-        self.add_children();
     }
 
     /// Add to each parent's changes what's changed inside its submodules,
@@ -827,6 +886,7 @@ impl Workspace {
     ///
     /// [`StatusOptions::submodule_content_from_own`]: status::StatusOptions::submodule_content_from_own
     fn show_submodule_content(&mut self) {
+        let at = self.positions();
         let mut parents: Vec<usize> = (0..self.entries.len())
             .filter(|&i| {
                 self.entries[i]
@@ -845,9 +905,9 @@ impl Workspace {
             for sm in &s.submodules_shown {
                 // (its path is the parent's, canonical as entries' are, and
                 // where it is in it)
-                let inside = self
-                    .index_of(&sm.path)
-                    .and_then(|j| self.entries[j].status())
+                let inside = at
+                    .get(&sm.path)
+                    .and_then(|&j| self.entries[j].status())
                     .and_then(|sub| sub.changes.as_submodule(sm.ignore));
                 if let Some(code) = inside {
                     changes.add_submodule_content(&sm.rela, code);
@@ -867,11 +927,17 @@ impl Workspace {
     }
 
     fn link_parents(&mut self) {
+        let listed: std::collections::HashSet<&Path> =
+            self.entries.iter().map(|e| e.path.as_path()).collect();
         let mut parent_of: HashMap<PathBuf, PathBuf> = HashMap::new();
         for e in &self.entries {
             if let Some(s) = e.status() {
                 for c in s.worktrees.iter().chain(&s.submodules) {
-                    let c = std::fs::canonicalize(c).unwrap_or_else(|_| c.clone());
+                    // (listed as it's named: canonical already)
+                    let c = match listed.contains(c.as_path()) {
+                        true => c.clone(),
+                        false => std::fs::canonicalize(c).unwrap_or_else(|_| c.clone()),
+                    };
                     if c != e.path {
                         parent_of.insert(c, e.path.clone());
                     }

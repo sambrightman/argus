@@ -1697,6 +1697,43 @@ fn an_owner_can_be_tagged_as_a_whole() {
     assert_eq!(w.owner_tagged(at(&w, "local"), Tag::Label(0)), None);
 }
 
+/// Several gone at once, read together (a refresh of everything), leave
+/// together: each of them, none of the others, though one is named twice.
+#[test]
+fn repos_gone_together_leave_together() {
+    let sb = Sandbox::new();
+    for n in ["a", "b", "c", "d", "e"] {
+        sb.init(&format!("dev/{n}"));
+    }
+    let mut w = ws(&sb, "");
+    let path = |w: &Workspace, n: &str| {
+        let i = w.entries.iter().position(|e| e.path.ends_with(n)).unwrap();
+        w.entries[i].path.clone()
+    };
+    let (b, d) = (path(&w, "b"), path(&w, "d"));
+    std::fs::remove_dir_all(&b).unwrap();
+    std::fs::remove_dir_all(&d).unwrap();
+    let read = |w: &Workspace, paths: &[&std::path::PathBuf]| {
+        let reader = w.status_reader();
+        paths
+            .iter()
+            .map(|p| ((*p).clone(), reader.read(p)))
+            .collect::<Vec<_>>()
+    };
+    let first = read(&w, &[&b, &d]);
+    w.update_statuses(first);
+    assert_eq!(w.entries.len(), 5, "shown first, as errors");
+    let second = read(&w, &[&b, &d, &b]);
+    w.update_statuses(second);
+    let mut left: Vec<String> = w
+        .entries
+        .iter()
+        .map(|e| e.path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["a", "c", "e"]);
+}
+
 /// A repo whose folder is gone (deleted outside argus) shows its error
 /// at the next refresh, and leaves the list at the one after: seen once.
 #[test]
@@ -2192,6 +2229,63 @@ fn a_nested_entry_is_found_by_its_place_in_its_parent() {
     assert_eq!(mid.parent.as_deref(), Some(top.as_path()));
     assert!(!mid.nested);
     assert_eq!(w.nested_index(&top, "mid"), None, "listed, so not nested");
+}
+
+/// A repo named by several (a submodule, and again by a linked worktree
+/// of it, as its main one) is listed once, under the first to name it.
+#[test]
+fn a_repo_found_from_several_is_listed_once() {
+    let sb = Sandbox::new();
+    let top = std::fs::canonicalize(sb.nested_submodules()).unwrap();
+    let mid = top.join("mid");
+    let wt = sb.path("elsewhere/mid-wt");
+    git(&mid, &["worktree", "add", "-q", wt.to_str().unwrap()]);
+    let cfg = format!("roots = ['{}']", top.display());
+    let mut w = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    w.scan();
+    let wt = std::fs::canonicalize(&wt).unwrap();
+    let paths: Vec<&std::path::Path> = w.entries.iter().map(|e| e.path.as_path()).collect();
+    for p in [&top, &mid, &mid.join("leaf"), &wt] {
+        let n = paths.iter().filter(|q| **q == p.as_path()).count();
+        assert_eq!(n, 1, "{} in {paths:#?}", p.display());
+    }
+    assert_eq!(w.get(&mid).unwrap().parent.as_deref(), Some(top.as_path()));
+    assert_eq!(w.get(&wt).unwrap().parent.as_deref(), Some(mid.as_path()));
+}
+
+/// A repo opened nested in another's work tree (not listed for itself)
+/// doesn't bring its own submodules into the list.
+#[test]
+fn a_nested_repos_submodules_stay_out_of_the_list() {
+    let sb = Sandbox::new();
+    let top = std::fs::canonicalize(sb.nested_submodules()).unwrap();
+    let clone = top.join("scratch/clone");
+    let leaf = sb.path("src/leaf");
+    git(
+        &clone,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            leaf.to_str().unwrap(),
+            "sub",
+        ],
+    );
+    commit(&clone, "sub");
+    let cfg = format!("roots = ['{}']", top.display());
+    let mut w = Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    w.scan();
+    let i = w.nested(&top, "scratch/clone").expect("the nested repo");
+    assert!(w.entries[i].nested);
+    assert!(
+        w.entries[i]
+            .status()
+            .is_some_and(|s| !s.submodules.is_empty()),
+        "it has a submodule"
+    );
+    assert_eq!(w.index_of(&clone.join("sub")), None);
 }
 
 /// A parent's lines for what's changed inside its submodules come from

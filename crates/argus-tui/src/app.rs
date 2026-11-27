@@ -5094,6 +5094,11 @@ impl App {
     /// any other. `path` is the repo whose status is new: its listed
     /// repo's lines are looked over, a nested repo's among them.
     fn forget_gone(&mut self, path: &std::path::Path) {
+        // (nothing toggled, nothing to forget: no lookups, a refresh of
+        // thousands of repos calls this for each)
+        if self.toggled.is_empty() {
+            return;
+        }
         let mut root = self.ws.get(path);
         while let Some(e) = root.filter(|e| e.nested) {
             root = e.parent.as_ref().and_then(|p| self.ws.get(p));

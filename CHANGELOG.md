@@ -9,6 +9,11 @@ Releasing).
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Fixed
+
+- A repo with thousands of submodules is quicker to list and to refresh: listing them took time growing with the square of their number after their statuses were read (seconds at 25,000), and so did applying a refresh of them in the TUI, on the thread drawing the screen (4,000: 890ms, now 48ms).
+- With `-v`, a scan's time is all said: after the statuses, finding the submodules and worktrees they name (the submodules' own statuses in it), linking each to its parent, a parent's lines for what's inside its submodules, and the flags, each as `scan: …`. That work was in the scan's total but in none of its steps.
+
 **Full Changelog**: https://github.com/sambrightman/argus/compare/v0.5.1...HEAD
 
 ## 0.5.1 - 2026-11-27

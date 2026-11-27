@@ -170,3 +170,57 @@ fn jobs_are_steps_holding_their_commands() {
         "{got:?}"
     );
 }
+
+/// A scan's time is all in its parts: after the statuses, finding the
+/// submodules (their statuses in it, theirs again within), linking
+/// parents, a parent's lines for its submodules' content, and the flags.
+#[test]
+fn a_scan_holds_what_follows_the_statuses_too() {
+    use argus_core::config::Config;
+    use argus_core::state::State;
+    let sb = Sandbox::new();
+    let top = std::fs::canonicalize(sb.nested_submodules()).unwrap();
+    let cfg = format!("roots = ['{}']", top.display());
+    let mut w = argus_core::Workspace::new(Config::parse(&cfg).unwrap(), State::default()).unwrap();
+    let got: Arc<Mutex<Vec<Step>>> = Arc::default();
+    let into = got.clone();
+    trace::set_sink(Some((
+        argus_core::trace::Form::Whole,
+        Arc::new(move |s: Step| {
+            if s.kind == "scan" {
+                into.lock().unwrap().push(s);
+            }
+        }),
+    )));
+    w.scan();
+    trace::set_sink(None);
+    let got = got.lock().unwrap().clone();
+    let [scan] = &got[..] else {
+        panic!("one scan in {got:?}");
+    };
+    let kinds = |s: &Step| s.steps.iter().map(|s| s.kind.clone()).collect::<Vec<_>>();
+    assert_eq!(
+        kinds(scan),
+        [
+            "discover",
+            "statuses",
+            "children",
+            "parents",
+            "submodule content",
+            "flags"
+        ],
+        "{scan:#?}"
+    );
+    let children = &scan.steps[2];
+    assert_eq!(children.what, "children: 2 found", "{children:?}");
+    // mid, found from top; then leaf, found from mid
+    let more: Vec<&str> = children.steps.iter().map(|s| s.what.as_str()).collect();
+    assert_eq!(
+        more,
+        [
+            "statuses of 1 more (submodules and worktrees of those before)",
+            "statuses of 1 more (submodules and worktrees of those before)",
+        ],
+        "{children:#?}"
+    );
+}
