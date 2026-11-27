@@ -9,6 +9,11 @@ Releasing).
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Fixed
+
+- A repo with thousands of submodules no longer takes minutes to status (25,000 took 140s): argus checks which commit each submodule is at by reading its HEAD, as git does, rather than through gix, whose check grows with the square of their number.
+- Tables argus adds to the config (`argus tag`'s `[tags.…]`, a theme picked in the TUI) go where the example has them, below the top-level settings. They used to go straight after `roots`, so a top-level setting uncommented below them, `exclude_paths` say, was taken as theirs and refused. A top-level setting found under a section now says so, and where to move it.
+
 **Full Changelog**: https://github.com/sambrightman/argus/compare/v0.5.0...HEAD
 
 ## 0.5.0 - 2026-11-27
