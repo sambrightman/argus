@@ -258,3 +258,33 @@ fn a_status_says_its_submodules_looked_up() {
     };
     assert_eq!(part.what, "submodules: 1 checked out", "{part:?}");
 }
+
+/// A step begun holds the steps taken until it ends, said as it was
+/// named; one begun without steps kept costs nothing and says nothing.
+#[test]
+fn a_step_begun_holds_what_follows_until_it_ends() {
+    let got: Arc<Mutex<Vec<Step>>> = Arc::default();
+    let into = got.clone();
+    trace::set_sink(Some((
+        argus_core::trace::Form::Whole,
+        Arc::new(move |s: Step| into.lock().unwrap().push(s)),
+    )));
+    let begun = trace::begin("startup", || "startup of the test".into());
+    trace::part("config", || ());
+    trace::part("state", || ());
+    begun.end();
+    trace::set_sink(None);
+    let off = trace::begin("startup", || panic!("not asked to say it"));
+    off.end();
+    let got = got.lock().unwrap().clone();
+    let [startup] = &got[..] else {
+        panic!("one step in {got:?}");
+    };
+    assert_eq!(
+        (startup.kind.as_str(), startup.what.as_str()),
+        ("startup", "startup of the test")
+    );
+    assert!(startup.took.is_some());
+    let kinds: Vec<&str> = startup.steps.iter().map(|s| s.kind.as_str()).collect();
+    assert_eq!(kinds, ["config", "state"]);
+}

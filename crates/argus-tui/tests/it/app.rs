@@ -969,6 +969,16 @@ fn another_view_keeps_the_cursor_on_its_line() {
     steps_taken(&mut app);
     app.report_error("could not save");
     open_history(&mut app);
+    // as they happened, searching keeps it too: on the scan (holding
+    // what's found), not the newest line found
+    app.on_key(alt('<'));
+    app.on_key(key('/'));
+    for c in "status".chars() {
+        app.on_key(key(c));
+    }
+    assert_eq!(on_line(&app), "scan: 2 repos");
+    // (out of the search, and it cleared)
+    app.on_key(code(KeyCode::Esc));
     // b's status, in the scan unfolded
     app.on_key(alt('<'));
     app.on_key(code(KeyCode::Tab));
