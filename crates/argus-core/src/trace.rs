@@ -747,6 +747,15 @@ mod tests {
             ..step(10, 0)
         };
         assert_eq!(alone.said_in(None), "   10ms  x (CPU 5ms, 0.5 cores busy)");
+        // (no time to divide by: none busy, not infinitely many)
+        let instant = Step {
+            cpu: Some(ms(1)),
+            ..step(0, 0)
+        };
+        assert_eq!(
+            instant.said_in(None),
+            "   <1ms  x (CPU 1ms, 0.0 cores busy)"
+        );
         assert_eq!(Step::new("note", "n", None).said_in(None), "         n");
         assert_eq!(
             pairs.with_split(),
