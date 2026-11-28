@@ -565,7 +565,7 @@ impl Runtime {
             }
             Effect::Refresh(paths) => {
                 let n = app.ws.config.disk_jobs();
-                let reader = app.ws.status_reader();
+                let reader = app.ws.status_reader().together(paths.len());
                 self.spawn(move |tx| {
                     let what = match &paths[..] {
                         [one] => format!("refresh {}", argus_core::paths::contract_tilde(one)),

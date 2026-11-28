@@ -432,6 +432,10 @@ pub struct StatusOptions {
     /// [unchecked](BranchInfo::unchecked), for [`branches_of`] to check.
     /// `None` checks every branch.
     pub branches_first: Option<usize>,
+    /// How many threads gix may use for the files (`None`: as many as it
+    /// likes, every core for a big repo). Statuses read side by side take
+    /// one each: they're parallel already, and more only waited.
+    pub threads: Option<usize>,
 }
 
 impl Default for StatusOptions {
@@ -441,6 +445,7 @@ impl Default for StatusOptions {
             submodule_content_from_own: false,
             describe_limit: crate::config::DESCRIBE_LIMIT,
             branches_first: None,
+            threads: None,
         }
     }
 }
@@ -1673,6 +1678,7 @@ fn changes(
         // reports directories holding only ignored files/empty dirs as untracked.
         .untracked_files(gix::status::UntrackedFiles::Files)
         .index_worktree_submodules(submodules)
+        .index_worktree_options_mut(|o| o.thread_limit = opts.threads)
         .into_iter(None)
         .map_err(err)?;
 

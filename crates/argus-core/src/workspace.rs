@@ -194,6 +194,16 @@ impl StatusReader {
         .map_err(|e| e.to_string())
     }
 
+    /// Reading `n` statuses side by side: each takes one thread for its
+    /// files, rather than every core, the statuses being parallel already
+    /// (with them all, a scan waited on its own threads).
+    pub fn together(mut self, n: usize) -> Self {
+        if n > 1 {
+            self.opts.threads = Some(1);
+        }
+        self
+    }
+
     /// Every branch of a repo, checked (see [`status::branches_of`]), for
     /// [`Workspace::update_branches`].
     pub fn branches(&self, path: &Path) -> Result<Vec<status::BranchInfo>, String> {
@@ -1217,7 +1227,7 @@ impl Workspace {
         paths: impl Iterator<Item = &'a Path>,
     ) -> Vec<Result<RepoStatus, String>> {
         let paths: Vec<&Path> = paths.collect();
-        let reader = self.status_reader();
+        let reader = self.status_reader().together(paths.len());
         in_pool(self.config.disk_jobs(), || {
             let here = crate::trace::within();
             paths
@@ -1225,5 +1235,20 @@ impl Workspace {
                 .map(|p| here.run(|| reader.read(p)))
                 .collect()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Statuses read side by side take a thread each for their files; one
+    /// read alone takes what gix likes (every core, for a big repo).
+    #[test]
+    fn statuses_read_together_take_a_thread_each() {
+        let ws = Workspace::new(Config::default(), State::default()).unwrap();
+        assert_eq!(ws.status_reader().opts.threads, None);
+        assert_eq!(ws.status_reader().together(1).opts.threads, None);
+        assert_eq!(ws.status_reader().together(2).opts.threads, Some(1));
     }
 }
