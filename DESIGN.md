@@ -1020,7 +1020,17 @@ rendering is snapshot-tested via `TestBackend`.
   when any did (the union of their spans, clipped to its, overlapping
   ones counted once), so the two add up to its time; and theirs summed,
   more than that where they ran side by side. Sorted by own time, that
-  leads instead, its total in its place: `3ms  scan (total 30ms, …)`. A
+  leads instead, its total in its place: `3ms  scan (total 30ms, …)`.
+  An outermost step that took steps (a scan, `startup`, a refresh)
+  also says the process's CPU time over it, all threads', and how many
+  cores that kept busy: `scan: 520 repos (…; CPU 31.2s, 6.3 cores
+  busy)`, for whether a run waited or worked. Only there: within one,
+  others run beside it, so the process's time isn't its own, and a
+  thread's own time would miss what it handed to others (gix checks a
+  repo's files on threads of its own). In the TUI, top-level steps can
+  overlap (indexes refreshed during a scan): each one's counts the
+  other's. Read with `clock_gettime` through rustix (already in the
+  tree), without `unsafe`. A
   step's total alone mixes its own time with how its steps overlapped:
   10s of its own and steps fully side by side looks like little overlap.
   Totals by kind add each kind's own and sub-step time too, so a

@@ -26,6 +26,10 @@ pub struct Step {
     pub what: String,
     pub took: Option<Duration>,
     pub steps: Vec<Step>,
+    /// The process's CPU time over it, all threads': kept for the
+    /// outermost steps that took steps only (in one, others run beside:
+    /// not its own; and a lone one, a git command say, ran elsewhere).
+    pub cpu: Option<Duration>,
     started: Instant,
 }
 
@@ -36,6 +40,7 @@ impl Step {
             what: what.into(),
             took,
             steps: vec![],
+            cpu: None,
             started: Instant::now() - took.unwrap_or_default(),
         }
     }
@@ -112,15 +117,33 @@ impl Step {
             Some(d) => duration(d),
             None => String::new(),
         };
-        let said = format!("{time:>7}  {}", self.named_in(of));
-        match self.split() {
-            Some(s) => format!(
-                "{said} (own {}, sub-steps {} overlapping, {} summed)",
+        let split = self.split().map(|s| {
+            format!(
+                "own {}, sub-steps {} overlapping, {} summed",
                 duration(s.own),
                 duration(s.sub_steps),
                 duration(s.total)
-            ),
-            None => said,
+            )
+        });
+        self.with_more(format!("{time:>7}  {}", self.named_in(of)), split)
+    }
+
+    /// `said` with, in parentheses, `split` (how its time divides) and its
+    /// CPU time, where it has them.
+    fn with_more(&self, said: String, split: Option<String>) -> String {
+        let cpu = self.cpu.map(|cpu| {
+            let took = self.took.unwrap_or_default().as_secs_f64();
+            let cores = if took > 0.0 {
+                cpu.as_secs_f64() / took
+            } else {
+                0.0
+            };
+            format!("CPU {}, {cores:.1} cores busy", duration(cpu))
+        });
+        let more: Vec<String> = split.into_iter().chain(cpu).collect();
+        match more.is_empty() {
+            true => said,
+            false => format!("{said} ({})", more.join("; ")),
         }
     }
 
@@ -132,14 +155,14 @@ impl Step {
         let Some(s) = self.split() else {
             return self.said_in(of);
         };
-        format!(
-            "{:>7}  {} (total {}, sub-steps {} overlapping, {} summed)",
-            duration(s.own),
-            self.named_in(of),
+        let split = format!(
+            "total {}, sub-steps {} overlapping, {} summed",
             self.took.map(duration).unwrap_or_default(),
             duration(s.sub_steps),
             duration(s.total)
-        )
+        );
+        let said = format!("{:>7}  {}", duration(s.own), self.named_in(of));
+        self.with_more(said, Some(split))
     }
 
     /// What it did, a part (said by its kind, alone or followed by `: `
@@ -157,12 +180,13 @@ impl Step {
     }
 }
 
+/// As `-v` says it: its time, what it did, and its CPU time if kept (its
+/// steps, said by themselves, aren't in it to divide its time).
 impl std::fmt::Display for Step {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.took {
-            Some(d) => write!(f, "{:>7}  {}", duration(d), self.what),
-            None => write!(f, "{:>7}  {}", "", self.what),
-        }
+        let time = self.took.map(duration).unwrap_or_default();
+        let said = format!("{time:>7}  {}", self.what);
+        f.write_str(&self.with_more(said, None))
     }
 }
 
@@ -324,6 +348,10 @@ struct Open {
     what: String,
     started: Instant,
     steps: Vec<Step>,
+    /// The process's CPU time at its start, if it's outermost.
+    cpu_at: Option<Duration>,
+    /// Whether it took steps (said in it or, each by itself, as they ended).
+    took_steps: bool,
 }
 
 /// `kind`, `what` and `took` of a step or event.
@@ -376,11 +404,14 @@ where
         let mut fields = Fields::default();
         attrs.record(&mut fields);
         if let Some(span) = ctx.span(id) {
+            let cpu_at = span.parent().is_none().then(process_cpu);
             span.extensions_mut().insert(Open {
                 kind: fields.kind.unwrap_or_default(),
                 what: fields.what.unwrap_or_default(),
                 started: Instant::now(),
                 steps: vec![],
+                cpu_at,
+                took_steps: false,
             });
         }
     }
@@ -401,14 +432,16 @@ where
         let kind = fields.kind.unwrap_or_default();
         let step = Step::new(&kind, fields.what.unwrap_or_default(), fields.took);
         let held = form() == Some(Form::Whole);
-        match ctx.event_span(event).filter(|_| held) {
-            Some(span) => {
-                if let Some(open) = span.extensions_mut().get_mut::<Open>() {
-                    open.steps.push(step);
-                }
+        if let Some(span) = ctx.event_span(event)
+            && let Some(open) = span.extensions_mut().get_mut::<Open>()
+        {
+            open.took_steps = true;
+            if held {
+                open.steps.push(step);
+                return;
             }
-            None => emit(step),
         }
+        emit(step);
     }
 
     fn on_close(&self, id: Id, ctx: Context<'_, S>) {
@@ -419,12 +452,24 @@ where
             return;
         };
         let mut steps = open.steps;
+        // (one that took none says nothing by it: a git command's time is
+        // git's, another process's)
+        let cpu = open
+            .cpu_at
+            .filter(|_| open.took_steps)
+            .map(|at| process_cpu().saturating_sub(at));
+        if let Some(parent) = span.parent()
+            && let Some(open) = parent.extensions_mut().get_mut::<Open>()
+        {
+            open.took_steps = true;
+        }
         steps.sort_by_key(|s| s.started);
         let step = Step {
             kind: open.kind,
             what: open.what,
             took: Some(open.started.elapsed()),
             steps,
+            cpu,
             started: open.started,
         };
         match form() {
@@ -448,6 +493,15 @@ where
             None => {}
         }
     }
+}
+
+/// The CPU time the process (all its threads) has used.
+fn process_cpu() -> Duration {
+    let t = rustix::time::clock_gettime(rustix::time::ClockId::ProcessCPUTime);
+    Duration::new(
+        u64::try_from(t.tv_sec).unwrap_or_default(),
+        u32::try_from(t.tv_nsec).unwrap_or_default(),
+    )
 }
 
 /// `d` in a few characters: `<1ms`, `12ms`, `1.23s`.
@@ -674,6 +728,25 @@ mod tests {
             part.said_in(Some("status ~/a"))
         );
         assert_eq!(noted.own_first_in(None), noted.said_in(None));
+        // the process's CPU time over it, where kept (the outermost
+        // steps): with how many cores that kept busy
+        let busy = Step {
+            cpu: Some(ms(25)),
+            ..with(10, vec![step(8, 1)])
+        };
+        assert_eq!(
+            busy.said_in(None),
+            "   10ms  x (own 2ms, sub-steps 8ms overlapping, 8ms summed; CPU 25ms, 2.5 cores busy)"
+        );
+        assert_eq!(
+            busy.own_first_in(None),
+            "    2ms  x (total 10ms, sub-steps 8ms overlapping, 8ms summed; CPU 25ms, 2.5 cores busy)"
+        );
+        let alone = Step {
+            cpu: Some(ms(5)),
+            ..step(10, 0)
+        };
+        assert_eq!(alone.said_in(None), "   10ms  x (CPU 5ms, 0.5 cores busy)");
         assert_eq!(Step::new("note", "n", None).said_in(None), "         n");
         assert_eq!(
             pairs.with_split(),

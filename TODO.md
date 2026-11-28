@@ -28,10 +28,11 @@ deferred.
 
 - **A review of the wording** of messages, prompts and the help
   (paused partway).
-- **Contention, from each step's CPU time** beside its wall time: a step
-  that waited on threads or the disk shows more wall than CPU time. Not
-  yet: wall time alone says how much ran side by side, not whether it
-  waited.
+- **Contention for each step, not just the outermost:** a scan says
+  its CPU time and how many cores it kept busy; a step within one can't
+  (the process's time isn't its own, and its thread's misses what gix
+  does on threads of its own). Would need gix's threads attributed to
+  the step that started them.
 
 - **Terminals drawing ambiguous-width symbols two cells wide** (CJK
   setting): detect it and swap those icons. Today `demo --glyphs` marks

@@ -288,3 +288,86 @@ fn a_step_begun_holds_what_follows_until_it_ends() {
     let kinds: Vec<&str> = startup.steps.iter().map(|s| s.kind.as_str()).collect();
     assert_eq!(kinds, ["config", "state"]);
 }
+
+/// An outermost step keeps the process's CPU time over it (all threads'),
+/// for how busy the cores were; the steps in it don't (others ran beside
+/// them: it wouldn't be theirs), nor one that took none.
+#[test]
+fn an_outermost_step_keeps_the_cpu_time_over_it() {
+    let got: Arc<Mutex<Vec<Step>>> = Arc::default();
+    let into = got.clone();
+    trace::set_sink(Some((
+        argus_core::trace::Form::Whole,
+        Arc::new(move |s: Step| into.lock().unwrap().push(s)),
+    )));
+    trace::step(
+        "scan",
+        || "scan".into(),
+        || {
+            trace::part("files", || {
+                // (busy, not asleep: CPU time to count)
+                let until = std::time::Instant::now() + std::time::Duration::from_millis(20);
+                let mut n = 0u64;
+                while std::time::Instant::now() < until {
+                    n = n.wrapping_add(1);
+                }
+                std::hint::black_box(n);
+            })
+        },
+    );
+    // inverse: one that took no steps keeps none, and one inside another
+    // none though it took steps; one holding only what's said by time (a
+    // job's git commands) took steps
+    trace::part("config", || ());
+    trace::step(
+        "refresh",
+        || "refresh".into(),
+        || trace::step("status", || "status".into(), || trace::part("files", || ())),
+    );
+    trace::step(
+        "job",
+        || "job".into(),
+        || {
+            trace::took(
+                "git",
+                || "git fetch".into(),
+                std::time::Duration::from_millis(3),
+            )
+        },
+    );
+    trace::set_sink(None);
+    let got = got.lock().unwrap().clone();
+    let [scan, config, refresh, job] = &got[..] else {
+        panic!("four steps in {got:?}");
+    };
+    assert_eq!(config.cpu, None);
+    assert!(
+        refresh.cpu.is_some() && refresh.steps[0].cpu.is_none(),
+        "{refresh:?}"
+    );
+    assert!(job.cpu.is_some(), "{job:?}");
+    let cpu = scan.cpu.expect("the scan's CPU time");
+    assert!(cpu >= std::time::Duration::from_millis(15), "{cpu:?}");
+    assert!(
+        scan.with_split().contains("cores busy"),
+        "{}",
+        scan.with_split()
+    );
+    assert_eq!(scan.steps[0].cpu, None, "not the part's");
+    // each said by itself, as -v does: the same, and said
+    let got: Arc<Mutex<Vec<Step>>> = Arc::default();
+    let into = got.clone();
+    trace::set_sink(Some((
+        argus_core::trace::Form::Each,
+        Arc::new(move |s: Step| into.lock().unwrap().push(s)),
+    )));
+    trace::step("scan", || "scan".into(), || trace::part("files", || ()));
+    trace::set_sink(None);
+    let got = got.lock().unwrap().clone();
+    let cpus: Vec<(&str, bool)> = got
+        .iter()
+        .map(|s| (s.kind.as_str(), s.cpu.is_some()))
+        .collect();
+    assert_eq!(cpus, [("files", false), ("scan", true)]);
+    assert!(got[1].to_string().contains("cores busy)"), "{}", got[1]);
+}
