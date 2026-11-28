@@ -409,10 +409,12 @@ pub struct Concurrency {
 #[serde(rename_all = "lowercase")]
 pub enum RepoThreads {
     /// One each: the statuses run side by side already, and more only
-    /// wait on each other.
+    /// wait on each other. A repo read alone is still left to gix.
     #[default]
     Single,
-    /// gix's default: as many as it likes, every core for a big repo.
+    /// gix's default: as many as it likes, every core for a big repo. With
+    /// repos read side by side, that's for each of them: threads times
+    /// `disk`.
     Default,
 }
 
