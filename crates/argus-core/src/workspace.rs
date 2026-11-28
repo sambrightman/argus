@@ -183,6 +183,8 @@ pub const BRANCHES_FIRST: usize = 10;
 pub struct StatusReader {
     kept: Option<Arc<status::KeptRepos>>,
     opts: status::StatusOptions,
+    /// How many threads each status takes when read with others.
+    together: crate::config::RepoThreads,
 }
 
 impl StatusReader {
@@ -196,9 +198,10 @@ impl StatusReader {
 
     /// Reading `n` statuses side by side: each takes one thread for its
     /// files, rather than every core, the statuses being parallel already
-    /// (with them all, a scan waited on its own threads).
+    /// (with them all, a scan waited on its own threads); unless
+    /// `concurrency.threads_per_repo` says gix's default.
     pub fn together(mut self, n: usize) -> Self {
-        if n > 1 {
+        if n > 1 && self.together == crate::config::RepoThreads::Single {
             self.opts.threads = Some(1);
         }
         self
@@ -268,6 +271,7 @@ impl Workspace {
                 branches_first: self.branches_first,
                 ..self.config.status_options()
             },
+            together: self.config.concurrency.threads_per_repo,
         }
     }
 
@@ -1243,12 +1247,16 @@ mod tests {
     use super::*;
 
     /// Statuses read side by side take a thread each for their files; one
-    /// read alone takes what gix likes (every core, for a big repo).
+    /// read alone takes what gix likes (every core, for a big repo). Set
+    /// to gix's default, all take what gix likes.
     #[test]
     fn statuses_read_together_take_a_thread_each() {
         let ws = Workspace::new(Config::default(), State::default()).unwrap();
         assert_eq!(ws.status_reader().opts.threads, None);
         assert_eq!(ws.status_reader().together(1).opts.threads, None);
         assert_eq!(ws.status_reader().together(2).opts.threads, Some(1));
+        let config = Config::parse("[concurrency]\nthreads_per_repo = 'default'").unwrap();
+        let ws = Workspace::new(config, State::default()).unwrap();
+        assert_eq!(ws.status_reader().together(2).opts.threads, None);
     }
 }

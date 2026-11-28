@@ -382,7 +382,7 @@ impl IgnoreIssues {
 #[serde(
     default,
     deny_unknown_fields,
-    expecting = "a table: [concurrency] with disk and network"
+    expecting = "a table: [concurrency] with disk, network and threads_per_repo"
 )]
 pub struct Concurrency {
     /// Discovery and status: file system calls on this machine, mostly
@@ -394,6 +394,26 @@ pub struct Concurrency {
     /// git's `fetch.parallel` if set above 0, else the CPU count up to 8
     /// (forges and ssh limit simultaneous connections).
     pub network: usize,
+    /// Threads each repo's status may use to check its files, when many
+    /// repos are read at once (a scan, a refresh of many): the repos run
+    /// side by side already, `disk` of them. (gix also runs two threads of
+    /// its own for each status, whichever.) A repo read alone always uses
+    /// what gix likes.
+    pub threads_per_repo: RepoThreads,
+}
+
+/// How many threads a repo's status checks its files on, read with others.
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum RepoThreads {
+    /// One each: the statuses run side by side already, and more only
+    /// wait on each other.
+    #[default]
+    Single,
+    /// gix's default: as many as it likes, every core for a big repo.
+    Default,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
@@ -1197,6 +1217,20 @@ mod tests {
     }
 
     #[test]
+    fn threads_per_repo_are_single_unless_set_to_gixs_default() {
+        assert_eq!(
+            Config::default().concurrency.threads_per_repo,
+            RepoThreads::Single
+        );
+        let c = Config::parse("[concurrency]\nthreads_per_repo = 'default'").unwrap();
+        assert_eq!(c.concurrency.threads_per_repo, RepoThreads::Default);
+        let c = Config::parse("[concurrency]\nthreads_per_repo = 'single'").unwrap();
+        assert_eq!(c.concurrency.threads_per_repo, RepoThreads::Single);
+        // inverse: what isn't one of them is refused
+        assert!(Config::parse("[concurrency]\nthreads_per_repo = 'adaptive'").is_err());
+    }
+
+    #[test]
     fn disk_concurrency_zero_is_the_performance_cores() {
         assert_eq!(
             Config::default().concurrency.disk,
@@ -1403,7 +1437,8 @@ mod tests {
             c.concurrency,
             Concurrency {
                 disk: 2,
-                network: 5
+                network: 5,
+                threads_per_repo: RepoThreads::Single,
             }
         );
         let c = Config::parse(
