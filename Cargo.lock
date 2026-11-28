@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "argus-git"
-version = "0.6.0-pre.2"
+version = "0.6.0-pre.3"
 dependencies = [
  "anyhow",
  "argus-git-core",
@@ -141,7 +141,7 @@ dependencies = [
 
 [[package]]
 name = "argus-git-core"
-version = "0.6.0-pre.2"
+version = "0.6.0-pre.3"
 dependencies = [
  "argus-git-core",
  "criterion",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "argus-git-forge"
-version = "0.6.0-pre.2"
+version = "0.6.0-pre.3"
 dependencies = [
  "argus-git-core",
  "serde",
@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "argus-git-tui"
-version = "0.6.0-pre.2"
+version = "0.6.0-pre.3"
 dependencies = [
  "argus-git-core",
  "criterion",
