@@ -132,7 +132,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "clap_complete",
- "jiff 0.2.39",
+ "jiff 0.2.43",
  "predicates",
  "serde",
  "serde_json",
@@ -148,7 +148,7 @@ dependencies = [
  "gix",
  "globset",
  "indexmap",
- "jiff 0.2.39",
+ "jiff 0.2.43",
  "pretty_assertions",
  "proptest",
  "rayon",
@@ -186,7 +186,7 @@ dependencies = [
  "crossbeam-channel",
  "crossterm",
  "insta",
- "jiff 0.2.39",
+ "jiff 0.2.43",
  "nucleo-matcher",
  "pretty_assertions",
  "proptest",
@@ -2278,13 +2278,12 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jiff"
-version = "0.2.39"
+version = "0.2.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ac703058abac89e5c39b0b879dce2b6b14a4ba36600c7e7e3d0c60a6883ef3c"
+checksum = "26699905cc795a23e3949585cc7ba3ee8ade090872a27e4316304a777297894a"
 dependencies = [
- "defmt 1.2.0",
- "jiff-core 0.1.2",
- "jiff-static 0.2.39",
+ "jiff-core 0.1.8",
+ "jiff-static 0.2.43",
  "jiff-tzdb-platform 0.1.3",
  "log",
  "portable-atomic",
@@ -2311,11 +2310,10 @@ dependencies = [
 
 [[package]]
 name = "jiff-core"
-version = "0.1.2"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aee43309eb53bafb8c36d35d6e444769c8f8e6206a9fbf7546f5db9d7d4a0e93"
+checksum = "e599b80292e597019b8b3e392de3f4bea2959ddfb8c7dff60e035e9e311a2c1b"
 dependencies = [
- "defmt 1.2.0",
  "log",
 ]
 
@@ -2330,11 +2328,11 @@ dependencies = [
 
 [[package]]
 name = "jiff-static"
-version = "0.2.39"
+version = "0.2.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6dc32470c67eb7d0e9ccb74303fa925313dc04cecb1aa048beaa6f391e36a93d"
+checksum = "4b4ff49b2887190c760b86207b55cdcaabbdecaf7a0660d68aa2ed6f652abf0a"
 dependencies = [
- "jiff-core 0.1.2",
+ "jiff-core 0.1.8",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -4099,9 +4097,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "ureq"
-version = "3.5.1"
+version = "3.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7be76686bdf7198002062423ca0d8cf9b75a27c8e1de804513b97e97b555d9d"
+checksum = "3ac5cecf619ca81f66a96482db09687c9f7465af65f4300a8c30cca05bd5a59d"
 dependencies = [
  "base64 0.23.1",
  "cookie_store",
