@@ -1165,8 +1165,9 @@ on upgrading, what's new, what's fixed. Then:
 5. `git tag -a v1.2.3 -m "argus 1.2.3" && git push origin v1.2.3`. The
    release workflow takes the version's section of CHANGELOG.md (with
    `parse-changelog`) as the release's notes, and stops before anything
-   is built if it has none; builds; makes the GitHub release; and
-   publishes the crates.
+   is built if it has none; builds; publishes the crates; and, once
+   they're out, makes the GitHub release (none for a version `cargo
+   install` can't install).
 
 **A pre-release** (`1.2.0-pre.1`, then `-pre.2`; any label, `beta`,
 `rc`: what makes one is the `-`): steps 2 to 5, quicker, the full
