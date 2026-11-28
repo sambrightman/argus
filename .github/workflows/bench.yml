@@ -54,7 +54,7 @@ jobs:
           docker build --platform linux/amd64 -t "$image" .github/bench
           echo "$BENCHER_API_KEY" | docker login registry.bencher.dev -u "$BENCHER_PROJECT" --password-stdin
           docker push "$image"
-      - uses: bencherdev/bencher@7de3c69a85380826613050826b4bce062be2f07d # v0.6.16
+      - uses: bencherdev/bencher@b2484bc6734c8e6da4fad141bd13527a11da3988 # v0.6.17
         if: env.BENCHER_API_KEY != ''
       # A t-test on main's last 10-20 runs: with fewer, run-to-run noise
       # can't be told from a slowdown (two runs flagged 1.6%), so no alerts;
